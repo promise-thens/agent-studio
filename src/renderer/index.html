@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN" data-color-mode="dark" data-dark-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Grok Build Desktop</title>
+    <!-- 仅允许加载应用自身资源，降低渲染层被注入的风险。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+  </head>
+
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
