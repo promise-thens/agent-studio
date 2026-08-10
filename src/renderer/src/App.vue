@@ -22,7 +22,13 @@ import {
   PhWarningCircle as WarningCircle,
   PhX as X
 } from '@phosphor-icons/vue'
-import type { GrokAgentEvent, GrokPermissionRequest, GrokStatus } from '../../shared/grok'
+import type {
+  AgentEvent,
+  AgentPermissionRequest,
+  AgentPlanEntry,
+  AgentRuntimeStatus,
+  AgentToolEvent
+} from '../../shared/agent'
 import type {
   ProviderConfigInput,
   ProviderConfigSummary,
@@ -30,6 +36,11 @@ import type {
   ProviderModelOption,
   ProviderTestResult
 } from '../../shared/provider'
+import {
+  createAgentEventGuard,
+  createAgentMessageKey,
+  createAgentToolKey
+} from './agent-event-consumer'
 import ModelSelector from './components/ModelSelector.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
 
@@ -46,17 +57,21 @@ interface ToolActivity {
   status: string
 }
 
-const status = ref<GrokStatus>({ state: 'idle', message: '尚未连接 Grok Build' })
+const status = ref<AgentRuntimeStatus>({
+  runtimeId: 'grok',
+  state: 'idle',
+  message: '尚未连接 Grok Build'
+})
 const providerSummary = ref<ProviderConfigSummary | null>(null)
 const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
 const showProviderSettings = ref(false)
 const workspace = ref('')
 const prompt = ref('')
-const permission = ref<GrokPermissionRequest | null>(null)
+const permission = ref<AgentPermissionRequest | null>(null)
 const showInspector = ref(true)
 const composer = ref<HTMLTextAreaElement | null>(null)
 const messageList = ref<HTMLElement | null>(null)
-const planEntries = ref<Array<{ content: string; priority: string; status: string }>>([])
+const planEntries = ref<AgentPlanEntry[]>([])
 const toolActivities = ref<ToolActivity[]>([])
 const messages = ref<ChatMessage[]>([
   {
@@ -67,6 +82,7 @@ const messages = ref<ChatMessage[]>([
 ])
 
 const cleanupListeners: Array<() => void> = []
+const acceptAgentEvent = createAgentEventGuard()
 
 const isConnected = computed(() => status.value.state === 'ready' || status.value.state === 'busy')
 const isBusy = computed(() => status.value.state === 'busy' || status.value.state === 'connecting')
@@ -86,7 +102,7 @@ const showProviderScreen = computed(
   () => providerBootState.value !== 'ready' || showProviderSettings.value
 )
 const statusLabel = computed(() => {
-  const labels: Record<GrokStatus['state'], string> = {
+  const labels: Record<AgentRuntimeStatus['state'], string> = {
     idle: '未连接',
     connecting: '连接中',
     ready: '已连接',
@@ -216,34 +232,42 @@ async function respondPermission(optionId?: string): Promise<void> {
   permission.value = null
 }
 
+/** 输入法正在确认候选词时保留 Enter，等待 compositionend 完成 v-model 更新。 */
 function handleComposerKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault()
-    void sendPrompt()
-  }
+  if (event.key !== 'Enter' || event.shiftKey) return
+  if (event.isComposing || event.keyCode === 229) return
+
+  event.preventDefault()
+  void sendPrompt()
 }
 
-function handleAgentEvent(event: GrokAgentEvent): void {
+function handleAgentEvent(event: AgentEvent): void {
+  if (!acceptAgentEvent(event)) return
+
   if (event.kind === 'agent-message' && event.text) {
-    appendStreamChunk('assistant', event.text, event.messageId)
+    appendStreamChunk('assistant', event.text, createAgentMessageKey(event))
   } else if (event.kind === 'agent-thought' && event.text) {
-    appendStreamChunk('thought', event.text, event.messageId)
+    appendStreamChunk('thought', event.text, createAgentMessageKey(event))
   } else if (event.kind === 'tool-call' || event.kind === 'tool-update') {
     upsertToolActivity(event)
   } else if (event.kind === 'plan') {
-    planEntries.value = event.entries ?? []
+    planEntries.value = event.entries
   } else if (event.kind === 'turn-complete') {
+    if (permission.value?.taskId === event.taskId && permission.value.turnId === event.turnId) {
+      permission.value = null
+    }
     const lastMessage = messages.value.at(-1)
     if (lastMessage) lastMessage.streaming = false
+  } else if (event.kind === 'error') {
+    appendMessage('error', event.message)
   }
 }
 
 function appendStreamChunk(
   role: Extract<ChatMessage['role'], 'assistant' | 'thought'>,
   text: string,
-  messageId?: string
+  id: string
 ): void {
-  const id = messageId ?? `${role}-stream`
   const lastMessage = messages.value.at(-1)
 
   if (lastMessage?.id === id && lastMessage.role === role) {
@@ -259,8 +283,8 @@ function appendMessage(role: ChatMessage['role'], text: string): void {
   scrollMessagesToBottom()
 }
 
-function upsertToolActivity(event: GrokAgentEvent): void {
-  const id = event.toolCallId ?? crypto.randomUUID()
+function upsertToolActivity(event: AgentToolEvent): void {
+  const id = createAgentToolKey(event)
   const current = toolActivities.value.find((item) => item.id === id)
 
   if (current) {

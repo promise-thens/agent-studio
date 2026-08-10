@@ -46,6 +46,7 @@ textarea {
 .workspace-layout {
   display: grid;
   grid-template-columns: 54px 248px minmax(420px, 1fr) 310px;
+  grid-template-rows: minmax(0, 1fr);
   height: calc(100% - var(--titlebar-height));
 }
 
@@ -316,6 +317,8 @@ button:disabled {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   background: var(--app-bg);
 }
 
@@ -376,6 +379,7 @@ button:disabled {
 }
 
 .message-list {
+  min-height: 0;
   overflow-y: auto;
   scroll-behavior: smooth;
 }
