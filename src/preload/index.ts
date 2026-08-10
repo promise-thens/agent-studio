@@ -1,11 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type {
-  GrokAgentEvent,
-  GrokDesktopApi,
-  GrokPermissionRequest,
-  GrokStatus
-} from '../shared/grok'
+import type { AgentEvent, AgentPermissionRequest, AgentRuntimeStatus } from '../shared/agent'
+import type { GrokDesktopApi } from '../shared/grok'
 import type { ProviderDesktopApi } from '../shared/provider'
 
 /** 统一包装事件订阅，组件卸载时可主动清理监听器。 */
@@ -24,9 +20,9 @@ const grokApi: GrokDesktopApi = {
   cancel: () => ipcRenderer.invoke('grok:cancel'),
   respondPermission: (requestId, optionId) =>
     ipcRenderer.invoke('grok:respond-permission', requestId, optionId),
-  onStatus: (listener) => subscribe<GrokStatus>('grok:status', listener),
-  onEvent: (listener) => subscribe<GrokAgentEvent>('grok:event', listener),
-  onPermission: (listener) => subscribe<GrokPermissionRequest>('grok:permission', listener)
+  onStatus: (listener) => subscribe<AgentRuntimeStatus>('grok:status', listener),
+  onEvent: (listener) => subscribe<AgentEvent>('grok:event', listener),
+  onPermission: (listener) => subscribe<AgentPermissionRequest>('grok:permission', listener)
 }
 
 const providerApi: ProviderDesktopApi = {

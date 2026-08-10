@@ -1,57 +1,35 @@
-export type GrokConnectionState = 'idle' | 'connecting' | 'ready' | 'busy' | 'error'
+import type {
+  AgentEvent,
+  AgentPermissionOption,
+  AgentPermissionRequest,
+  AgentRuntimeState,
+  AgentRuntimeStatus
+} from './agent'
 
-export interface GrokStatus {
-  state: GrokConnectionState
-  message: string
-  workspace?: string
-  sessionId?: string
-}
+/** @deprecated 领域状态已迁移到 AgentRuntimeState；P0-04 前保留旧名称兼容现有 API。 */
+export type GrokConnectionState = AgentRuntimeState
 
-export interface GrokAgentEvent {
-  kind:
-    | 'agent-message'
-    | 'agent-thought'
-    | 'tool-call'
-    | 'tool-update'
-    | 'plan'
-    | 'usage'
-    | 'turn-complete'
-    | 'stderr'
-    | 'raw'
-  text?: string
-  messageId?: string
-  toolCallId?: string
-  title?: string
-  status?: string
-  entries?: Array<{
-    content: string
-    priority: string
-    status: string
-  }>
-  payload?: unknown
-}
+/** @deprecated 请使用 AgentRuntimeStatus。 */
+export type GrokStatus = AgentRuntimeStatus
 
-export interface GrokPermissionOption {
-  optionId: string
-  name: string
-  kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always'
-}
+/** @deprecated 请使用 AgentEvent。 */
+export type GrokAgentEvent = AgentEvent
 
-export interface GrokPermissionRequest {
-  id: string
-  title: string
-  options: GrokPermissionOption[]
-}
+/** @deprecated 请使用 AgentPermissionOption。 */
+export type GrokPermissionOption = AgentPermissionOption
+
+/** @deprecated 请使用 AgentPermissionRequest。 */
+export type GrokPermissionRequest = AgentPermissionRequest
 
 export interface GrokDesktopApi {
-  getStatus: () => Promise<GrokStatus>
+  getStatus: () => Promise<AgentRuntimeStatus>
   chooseWorkspace: () => Promise<string | null>
-  connect: (workspace: string) => Promise<GrokStatus>
-  disconnect: () => Promise<GrokStatus>
+  connect: (workspace: string) => Promise<AgentRuntimeStatus>
+  disconnect: () => Promise<AgentRuntimeStatus>
   sendPrompt: (prompt: string) => Promise<void>
   cancel: () => Promise<void>
   respondPermission: (requestId: string, optionId?: string) => Promise<void>
-  onStatus: (listener: (status: GrokStatus) => void) => () => void
-  onEvent: (listener: (event: GrokAgentEvent) => void) => () => void
-  onPermission: (listener: (request: GrokPermissionRequest) => void) => () => void
+  onStatus: (listener: (status: AgentRuntimeStatus) => void) => () => void
+  onEvent: (listener: (event: AgentEvent) => void) => () => void
+  onPermission: (listener: (request: AgentPermissionRequest) => void) => () => void
 }
