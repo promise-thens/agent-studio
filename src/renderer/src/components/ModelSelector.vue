@@ -264,7 +264,7 @@ function errorMessage(error: unknown): string {
   min-height: 25px;
   padding: 0 7px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 10px;
   color: var(--text-3);
   background: transparent;
   cursor: pointer;
@@ -300,7 +300,7 @@ function errorMessage(error: unknown): string {
   max-height: min(330px, 48vh);
   overflow: hidden;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-soft);
   color: var(--text-1);
   background: var(--surface-2);
   box-shadow: 0 18px 48px rgb(2 5 9 / 46%);
@@ -336,7 +336,7 @@ function errorMessage(error: unknown): string {
   min-height: 35px;
   padding: 7px 8px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 10px;
   color: var(--text-2);
   text-align: left;
   background: transparent;
@@ -400,7 +400,7 @@ function errorMessage(error: unknown): string {
   min-height: 26px;
   padding: 0 8px;
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: 10px;
   color: var(--text-2);
   background: var(--surface-1);
   font-size: 9px;

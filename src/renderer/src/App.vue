@@ -1,19 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   PhArrowClockwise as ArrowClockwise,
+  PhCaretDown as CaretDown,
   PhCaretRight as CaretRight,
-  PhChatCircleDots as ChatCircleDots,
   PhCheckCircle as CheckCircle,
   PhCircleNotch as CircleNotch,
-  PhCode as Code,
-  PhFileCode as FileCode,
-  PhFolderOpen as FolderOpen,
-  PhGearSix as GearSix,
-  PhGitBranch as GitBranch,
-  PhMagnifyingGlass as MagnifyingGlass,
   PhPaperPlaneTilt as PaperPlaneTilt,
-  PhPlus as Plus,
   PhRobot as Robot,
   PhShieldCheck as ShieldCheck,
   PhSidebarSimple as SidebarSimple,
@@ -43,12 +36,42 @@ import {
 } from './agent-event-consumer'
 import ModelSelector from './components/ModelSelector.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
+import WorkspaceSidebar, {
+  type SidebarProjectItem,
+  type SidebarSessionItem
+} from './components/WorkspaceSidebar.vue'
 
 interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'thought' | 'error'
   text: string
   streaming?: boolean
+  /**
+   * 仅挂在“本轮结果锚点”消息上的整轮总耗时。
+   * 一条用户指令只保留一个总时长，不按中间思考/片段拆分计时。
+   */
+  turnDurationMs?: number
+}
+
+/**
+ * 会话时间线中的“一轮对话”：
+ * 一条用户指令 + 本轮全部思考 + 正式回复 + 错误，聚合为同一组，
+ * 用来消除思考/回复碎片各自成卡的割裂感。
+ */
+interface ConversationTurn {
+  id: string
+  user?: ChatMessage
+  thoughts: ChatMessage[]
+  answers: ChatMessage[]
+  errors: ChatMessage[]
+  /** 本轮冻结总耗时；运行中为空，改读实时计时。 */
+  durationMs?: number
+  /** 本轮是否仍有流式输出。 */
+  streaming: boolean
+  /** 是否属于当前正在执行的这一轮。 */
+  active: boolean
+  /** 是否展示处理区（思考、占位或已有耗时）。 */
+  showProcess: boolean
 }
 
 interface ToolActivity {
@@ -71,8 +94,22 @@ const permission = ref<AgentPermissionRequest | null>(null)
 const showInspector = ref(true)
 const composer = ref<HTMLTextAreaElement | null>(null)
 const messageList = ref<HTMLElement | null>(null)
+/** 当前消息列表滚动位置对应的轮次锚点，驱动左侧导航高亮。 */
+const activeTurnAnchorId = ref<string | null>(null)
+/** 程序化滚动时暂时忽略滚动监听，避免锚点高亮来回跳。 */
+let ignoreAnchorScrollSync = false
+let ignoreAnchorScrollTimer: ReturnType<typeof setTimeout> | null = null
 const planEntries = ref<AgentPlanEntry[]>([])
 const toolActivities = ref<ToolActivity[]>([])
+/** 当前激活会话 ID，先用本地 UI 状态驱动侧栏高亮。 */
+const activeSessionId = ref('welcome-session')
+/** 最近会话列表：发送首条用户消息后写入标题，暂不做持久化。 */
+const recentSessions = ref<SidebarSessionItem[]>([
+  {
+    id: 'welcome-session',
+    title: '新对话'
+  }
+])
 const messages = ref<ChatMessage[]>([
   {
     id: 'welcome',
@@ -83,13 +120,383 @@ const messages = ref<ChatMessage[]>([
 
 const cleanupListeners: Array<() => void> = []
 const acceptAgentEvent = createAgentEventGuard()
+/** 驱动整轮任务耗时的实时刷新。 */
+const nowTick = ref(Date.now())
+let durationTimer: ReturnType<typeof setInterval> | null = null
+/** 当前这一轮用户指令的开始时间；一条指令只对应一个计时器。 */
+const turnStartedAt = ref<number | null>(null)
+/** 当前这一轮结束时间；结束后冻结总耗时。 */
+const turnEndedAt = ref<number | null>(null)
+/** 当前把“整轮耗时”徽章挂在哪条消息上；运行中跟着最新输出走，结束后固定在最终回复。 */
+const turnDurationAnchorId = ref<string | null>(null)
+/** 本轮开始时的消息分界，结束时只在本轮消息里挑选耗时锚点。 */
+const turnMessageStartIndex = ref(0)
+/**
+ * 思考折叠的用户手动覆盖。
+ * 未记录时：执行中默认展开，结束后默认收起（贴近 Codex）。
+ */
+const thoughtExpandOverride = ref<Record<string, boolean>>({})
+
+/** 是否存在仍在流式输出的消息。 */
+const hasStreamingMessage = computed(() => messages.value.some((item) => item.streaming))
+/** 已进入执行态，但还没有任何流式消息时，展示占位提示。 */
+const showExecutionPlaceholder = computed(
+  () => status.value.state === 'busy' && !hasStreamingMessage.value && turnStartedAt.value != null
+)
+/** 当前这一轮是否仍在计时（发送后到整轮结束前）。 */
+const isTurnTiming = computed(() => turnStartedAt.value != null && turnEndedAt.value == null)
+
+/**
+ * 把毫秒格式化成用户可读耗时。
+ * 小于 1 分钟显示秒，超过后显示分秒，方便判断是否还在执行。
+ */
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, ms) / 1000
+  if (totalSeconds < 60) {
+    return `${totalSeconds < 10 ? totalSeconds.toFixed(1) : Math.floor(totalSeconds)}s`
+  }
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = Math.floor(totalSeconds % 60)
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`
+}
+
+/** 当前这一轮的总耗时文案；运行中实时跳，结束后读冻结值。 */
+const turnDurationLabel = computed(() => {
+  if (turnStartedAt.value == null) return ''
+  const end = turnEndedAt.value ?? nowTick.value
+  return formatDuration(end - turnStartedAt.value)
+})
+
+/**
+ * 从思考正文提取一行短摘要，让用户先看到“正在想什么”，
+ * 而不是只面对大段原始思维文本。
+ */
+function deriveThoughtSummary(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim()
+  if (!compact) return '整理思路'
+  // 优先取第一句，避免摘要被长段落淹没。
+  const sentence = compact.split(/(?<=[。！？.!?])\s+/)[0] ?? compact
+  return sentence.length > 42 ? `${sentence.slice(0, 42)}…` : sentence
+}
+
+/**
+ * 把扁平消息流归并为 Codex 风格的“一轮一组”。
+ * 规则：遇到 user 开启新轮；其后的 thought/assistant/error 都归入同一轮，
+ * 直到下一条 user。欢迎语这类无用户消息的助手气泡单独成组。
+ */
+const timelineTurns = computed<ConversationTurn[]>(() => {
+  const turns: ConversationTurn[] = []
+  let current: ConversationTurn | null = null
+
+  const pushTurn = (turn: ConversationTurn): void => {
+    turns.push(turn)
+  }
+
+  const ensureTurn = (seedId: string): ConversationTurn => {
+    if (current) return current
+    current = {
+      id: seedId,
+      thoughts: [],
+      answers: [],
+      errors: [],
+      streaming: false,
+      active: false,
+      showProcess: false
+    }
+    return current
+  }
+
+  for (const message of messages.value) {
+    if (message.role === 'user') {
+      if (current) pushTurn(current)
+      current = {
+        id: message.id,
+        user: message,
+        thoughts: [],
+        answers: [],
+        errors: [],
+        streaming: false,
+        active: false,
+        showProcess: false
+      }
+      continue
+    }
+
+    const turn = ensureTurn(message.id)
+    if (message.role === 'thought') turn.thoughts.push(message)
+    else if (message.role === 'assistant') turn.answers.push(message)
+    else turn.errors.push(message)
+
+    if (message.streaming) turn.streaming = true
+    if (message.turnDurationMs != null) turn.durationMs = message.turnDurationMs
+  }
+
+  if (current) pushTurn(current)
+
+  // 标记当前执行轮：优先最后一轮带用户指令的分组。
+  if (turns.length > 0 && (isTurnTiming.value || showExecutionPlaceholder.value)) {
+    const activeTurn = [...turns].reverse().find((item) => item.user) ?? turns.at(-1)
+    if (activeTurn) activeTurn.active = true
+  }
+
+  for (const turn of turns) {
+    // 处理区只在“有思考或仍在执行”时出现；无思考的历史轮直接展示正式回复。
+    turn.showProcess = Boolean(
+      turn.user && (turn.thoughts.length > 0 || turn.active || turn.streaming)
+    )
+  }
+
+  return turns
+})
+
+/**
+ * 左侧锚点只对应“有用户指令”的轮次。
+ * 欢迎语等无用户消息的气泡不占锚点，避免导航被系统提示污染。
+ */
+const turnAnchors = computed(() =>
+  timelineTurns.value
+    .filter((turn) => Boolean(turn.user))
+    .map((turn, index) => {
+      const raw = turn.user?.text.replace(/\s+/g, ' ').trim() ?? ''
+      const label = raw
+        ? raw.length > 24
+          ? `${raw.slice(0, 24)}…`
+          : raw
+        : `第 ${index + 1} 轮对话`
+      return {
+        id: turn.id,
+        index: index + 1,
+        label,
+        active: turn.active || turn.streaming
+      }
+    })
+)
+
+/** 生成稳定的 DOM 锚点 id，供滚动定位与左侧导航共用。 */
+/** 计算某个轮次在锚点序列中的序号（仅统计有用户指令的轮次）。 */
+function turnAnchorNumber(turnId: string): number {
+  const index = turnAnchors.value.findIndex((item) => item.id === turnId)
+  return index >= 0 ? index + 1 : 0
+}
+
+/** 生成锚点悬停标题，方便快速辨认这一轮在说什么。 */
+function turnAnchorTitle(turn: ConversationTurn, turnIndex: number): string {
+  const anchor = turnAnchors.value.find((item) => item.id === turn.id)
+  if (anchor) return `第 ${anchor.index} 轮：${anchor.label}`
+  return `第 ${turnIndex + 1} 轮对话`
+}
+
+/** 生成锚点无障碍标签。 */
+function turnAnchorAriaLabel(turn: ConversationTurn, turnIndex: number): string {
+  const n = turnAnchorNumber(turn.id) || turnIndex + 1
+  return `跳转到第 ${n} 轮对话`
+}
+
+function turnAnchorDomId(turnId: string): string {
+  return `turn-anchor-${turnId}`
+}
+
+/** 根据当前滚动位置，同步左侧锚点高亮到最近的一轮对话。 */
+function syncActiveTurnAnchor(): void {
+  if (ignoreAnchorScrollSync) return
+  const root = messageList.value
+  if (!root) return
+
+  const anchors = turnAnchors.value
+  if (!anchors.length) {
+    activeTurnAnchorId.value = null
+    return
+  }
+
+  const rootRect = root.getBoundingClientRect()
+  // 以视口上方 28% 作为“当前阅读线”，更接近用户实际注视位置。
+  const focusY = rootRect.top + root.clientHeight * 0.28
+  let currentId = anchors[0]?.id ?? null
+
+  for (const anchor of anchors) {
+    const el = root.querySelector<HTMLElement>(`#${CSS.escape(turnAnchorDomId(anchor.id))}`)
+    if (!el) continue
+    const top = el.getBoundingClientRect().top
+    if (top <= focusY) currentId = anchor.id
+    else break
+  }
+
+  // 滚到接近底部时，直接点亮最后一轮，避免最后一轮很难被激活。
+  if (root.scrollTop + root.clientHeight >= root.scrollHeight - 24) {
+    currentId = anchors.at(-1)?.id ?? currentId
+  }
+
+  activeTurnAnchorId.value = currentId
+}
+
+/** 点击左侧锚点后，平滑滚到对应轮次顶部。 */
+function scrollToTurnAnchor(turnId: string): void {
+  const root = messageList.value
+  if (!root) return
+  const target = root.querySelector<HTMLElement>(`#${CSS.escape(turnAnchorDomId(turnId))}`)
+  if (!target) return
+
+  ignoreAnchorScrollSync = true
+  if (ignoreAnchorScrollTimer) clearTimeout(ignoreAnchorScrollTimer)
+  activeTurnAnchorId.value = turnId
+
+  const top = Math.max(0, target.offsetTop - 18)
+  root.scrollTo({ top, behavior: 'smooth' })
+
+  ignoreAnchorScrollTimer = setTimeout(() => {
+    ignoreAnchorScrollSync = false
+    syncActiveTurnAnchor()
+  }, 360)
+}
+
+/** 处理区标题：执行中强调“正在处理”，结束后改为“已处理”。 */
+function processTitle(turn: ConversationTurn): string {
+  if (turn.active || turn.streaming) return '正在处理'
+  return '已处理'
+}
+
+/** 读取某一轮应展示的耗时文案；活跃轮用实时值，历史轮用冻结值。 */
+function turnDurationText(turn: ConversationTurn): string {
+  // 当前执行轮优先读实时总计时，保证用户始终只看到“这一条指令”的进度。
+  if (turn.active || turn.streaming) return turnDurationLabel.value
+  if (turn.durationMs != null) return formatDuration(turn.durationMs)
+  return ''
+}
+
+/** 本轮是否显示耗时徽章。 */
+function shouldShowTurnDuration(turn: ConversationTurn): boolean {
+  return Boolean(turnDurationText(turn))
+}
+
+/** 折叠态下展示的思考摘要，多段思考时拼成一段可读预览。 */
+function turnThoughtSummary(turn: ConversationTurn): string {
+  const merged = turn.thoughts
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join(' ')
+  if (!merged) {
+    return turn.active || turn.streaming ? '已收到任务，正在组织思路与下一步动作' : '查看思考过程'
+  }
+  return deriveThoughtSummary(merged)
+}
+
+/**
+ * 思考区是否展开。
+ * 用户点过折叠按钮后以手动状态为准；否则执行中展开、结束后收起。
+ */
+function isThoughtExpanded(turn: ConversationTurn): boolean {
+  const override = thoughtExpandOverride.value[turn.id]
+  if (override != null) return override
+  return turn.active || turn.streaming
+}
+
+/** 切换某一轮思考过程的展开/收起。 */
+function toggleThoughtExpanded(turnId: string): void {
+  const turn = timelineTurns.value.find((item) => item.id === turnId)
+  if (!turn) return
+  const next = !isThoughtExpanded(turn)
+  thoughtExpandOverride.value = {
+    ...thoughtExpandOverride.value,
+    [turnId]: next
+  }
+}
+
+/** 启动/停止整轮耗时刷新定时器。 */
+function syncDurationTimer(): void {
+  if (isTurnTiming.value || status.value.state === 'busy' || hasStreamingMessage.value) {
+    if (durationTimer) return
+    durationTimer = setInterval(() => {
+      nowTick.value = Date.now()
+    }, 200)
+    return
+  }
+
+  if (!durationTimer) return
+  clearInterval(durationTimer)
+  durationTimer = null
+}
+
+/** 将仍在流式输出的消息统一收尾。 */
+function finalizeStreamingMessages(): void {
+  for (const message of messages.value) {
+    if (!message.streaming) continue
+    message.streaming = false
+  }
+}
+
+/**
+ * 结束当前这一轮计时，并把唯一的总耗时徽章沉淀到最终回复上。
+ * 优先挂在最后一条助手消息；没有则挂在本轮最后一条非用户消息。
+ */
+function completeCurrentTurn(): void {
+  if (turnStartedAt.value == null) {
+    finalizeStreamingMessages()
+    syncDurationTimer()
+    return
+  }
+
+  const endedAt = Date.now()
+  turnEndedAt.value = endedAt
+  finalizeStreamingMessages()
+
+  const durationMs = Math.max(0, endedAt - turnStartedAt.value)
+  // 只在本轮新增消息里找锚点，避免误挂到上一轮回复。
+  const turnMessages = messages.value.slice(turnMessageStartIndex.value)
+  const anchor =
+    [...turnMessages].reverse().find((item) => item.role === 'assistant') ??
+    [...turnMessages].reverse().find((item) => item.role === 'thought') ??
+    [...turnMessages].reverse().find((item) => item.role !== 'user')
+
+  if (anchor) {
+    // 清掉本轮其他消息上的整轮耗时，保证一条指令永远只有一个总时长。
+    for (const message of turnMessages) {
+      if (message.id !== anchor.id && message.turnDurationMs != null) {
+        delete message.turnDurationMs
+      }
+    }
+    anchor.turnDurationMs = durationMs
+    turnDurationAnchorId.value = anchor.id
+  }
+
+  // 计时状态回到空闲，后续新指令重新开始。
+  turnStartedAt.value = null
+  turnEndedAt.value = null
+  turnMessageStartIndex.value = messages.value.length
+  syncDurationTimer()
+}
+
+/** 开始新一轮用户指令的计时。 */
+function beginCurrentTurn(): void {
+  const now = Date.now()
+  turnStartedAt.value = now
+  turnEndedAt.value = null
+  turnDurationAnchorId.value = null
+  // 记录分界：本轮耗时锚点只会落在此索引之后的消息上。
+  turnMessageStartIndex.value = messages.value.length
+  nowTick.value = now
+  syncDurationTimer()
+}
 
 const isConnected = computed(() => status.value.state === 'ready' || status.value.state === 'busy')
 const isBusy = computed(() => status.value.state === 'busy' || status.value.state === 'connecting')
 const canSend = computed(() => Boolean(prompt.value.trim()) && status.value.state === 'ready')
-const workspaceName = computed(
-  () => workspace.value.split('/').filter(Boolean).at(-1) ?? '未选择目录'
-)
+const workspaceName = computed(() => {
+  // Windows 与 POSIX 路径都按最后一级目录名展示，避免侧栏出现完整盘符路径。
+  const segments = workspace.value.split(/[\\/]/).filter(Boolean)
+  return segments.at(-1) ?? '未选择目录'
+})
+/** 侧栏项目列表目前只映射当前工作区，后续再扩展多项目历史。 */
+const sidebarProjects = computed<SidebarProjectItem[]>(() => {
+  if (!workspace.value) return []
+  return [
+    {
+      id: workspace.value,
+      name: workspaceName.value,
+      path: workspace.value
+    }
+  ]
+})
+const activeProjectId = computed(() => workspace.value || '')
 const currentModel = computed<ProviderModelOption | null>(() => {
   const summary = providerSummary.value
   if (!summary?.modelId) return null
@@ -110,6 +517,35 @@ const statusLabel = computed(() => {
     error: '连接异常'
   }
   return labels[status.value.state]
+})
+
+// 轮次增减时校正锚点高亮，避免指向已消失的历史 id。
+watch(
+  turnAnchors,
+  (anchors) => {
+    if (!anchors.length) {
+      activeTurnAnchorId.value = null
+      return
+    }
+    if (!anchors.some((item) => item.id === activeTurnAnchorId.value)) {
+      activeTurnAnchorId.value = anchors.at(-1)?.id ?? null
+    }
+    void nextTick(() => syncActiveTurnAnchor())
+  },
+  { deep: true }
+)
+
+// Runtime 进入/离开执行态时，维护“一条指令一个总计时”。
+watch([hasStreamingMessage, () => status.value.state], ([, state], previous) => {
+  const previousState = previous?.[1]
+  // 发送时可能已经 beginCurrentTurn；这里只在尚未计时时补启动。
+  if (state === 'busy' && previousState !== 'busy' && turnStartedAt.value == null) {
+    beginCurrentTurn()
+  }
+  if (state !== 'busy' && previousState === 'busy') {
+    completeCurrentTurn()
+  }
+  syncDurationTimer()
 })
 
 onMounted(async () => {
@@ -135,7 +571,58 @@ onMounted(async () => {
   workspace.value = status.value.workspace ?? ''
 })
 
-onBeforeUnmount(() => cleanupListeners.forEach((cleanup) => cleanup()))
+onBeforeUnmount(() => {
+  cleanupListeners.forEach((cleanup) => cleanup())
+  if (durationTimer) {
+    clearInterval(durationTimer)
+    durationTimer = null
+  }
+  if (ignoreAnchorScrollTimer) {
+    clearTimeout(ignoreAnchorScrollTimer)
+    ignoreAnchorScrollTimer = null
+  }
+})
+
+/** 从用户首条消息生成侧栏最近项标题，超长时截断保持列表清爽。 */
+function deriveSessionTitle(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim()
+  if (!compact) return '新对话'
+  return compact.length > 28 ? `${compact.slice(0, 28)}…` : compact
+}
+
+/** 开始新对话：清空当前消息流，并在侧栏置顶一个空白会话。 */
+function startNewChat(): void {
+  const sessionId = crypto.randomUUID()
+  activeSessionId.value = sessionId
+  recentSessions.value = [
+    { id: sessionId, title: '新对话' },
+    ...recentSessions.value.filter((item) => item.title !== '新对话')
+  ].slice(0, 12)
+  planEntries.value = []
+  toolActivities.value = []
+  // 新会话清空折叠覆盖，避免旧轮次状态串到新对话。
+  thoughtExpandOverride.value = {}
+  messages.value = [
+    {
+      id: 'welcome',
+      role: 'assistant',
+      text: workspace.value
+        ? '新对话已就绪。直接描述你想改动或排查的内容即可。'
+        : '选择一个工作目录，我会通过当前模型配置启动 Grok Build Runtime。'
+    }
+  ]
+}
+
+/** 切换最近会话目前只更新高亮；完整历史恢复留给后续存储计划。 */
+function selectSession(sessionId: string): void {
+  activeSessionId.value = sessionId
+}
+
+/** 选择项目时复用现有选目录流程；已选中的当前项目不重复弹窗。 */
+async function selectProject(projectId: string): Promise<void> {
+  if (projectId && projectId === workspace.value) return
+  await chooseWorkspace()
+}
 
 async function chooseWorkspace(): Promise<void> {
   const selected = await window.grok.chooseWorkspace()
@@ -211,6 +698,17 @@ async function sendPrompt(): Promise<void> {
   if (!text || !canSend.value) return
 
   prompt.value = ''
+  // 一条用户指令只开一个总计时，从发送当下就开始。
+  beginCurrentTurn()
+  // 用首条有效用户消息刷新侧栏“最近”标题，贴近 Codex 的会话列表体感。
+  const current = recentSessions.value.find((item) => item.id === activeSessionId.value)
+  if (current && (current.title === '新对话' || current.title.startsWith('新对话'))) {
+    current.title = deriveSessionTitle(text)
+    recentSessions.value = [
+      current,
+      ...recentSessions.value.filter((item) => item.id !== current.id)
+    ]
+  }
   appendMessage('user', text)
   await nextTick()
   composer.value?.focus()
@@ -218,12 +716,15 @@ async function sendPrompt(): Promise<void> {
   try {
     await window.grok.sendPrompt(text)
   } catch (error) {
+    completeCurrentTurn()
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
 }
 
 async function cancelTurn(): Promise<void> {
   await window.grok.cancel()
+  // 取消后立即收束本轮总计时，避免界面一直显示“已执行”。
+  completeCurrentTurn()
 }
 
 async function respondPermission(optionId?: string): Promise<void> {
@@ -256,9 +757,10 @@ function handleAgentEvent(event: AgentEvent): void {
     if (permission.value?.taskId === event.taskId && permission.value.turnId === event.turnId) {
       permission.value = null
     }
-    const lastMessage = messages.value.at(-1)
-    if (lastMessage) lastMessage.streaming = false
+    // 整轮完成：只沉淀一个总耗时，不给中间片段分别计时。
+    completeCurrentTurn()
   } else if (event.kind === 'error') {
+    completeCurrentTurn()
     appendMessage('error', event.message)
   }
 }
@@ -272,9 +774,31 @@ function appendStreamChunk(
 
   if (lastMessage?.id === id && lastMessage.role === role) {
     lastMessage.text += text
+    lastMessage.streaming = true
   } else {
-    messages.value.push({ id, role, text, streaming: true })
+    // 新的正式回复开始时，先收起仍在进行的思考气泡，保持时间线干净。
+    if (role === 'assistant') {
+      for (const message of messages.value) {
+        if (message.role === 'thought' && message.streaming) {
+          message.streaming = false
+        }
+      }
+    }
+
+    messages.value.push({
+      id,
+      role,
+      text,
+      streaming: true
+    })
   }
+
+  // 运行中把唯一的总耗时徽章跟随到最新输出，仍然只有一个计时。
+  if (isTurnTiming.value) {
+    turnDurationAnchorId.value = id
+  }
+
+  syncDurationTimer()
   scrollMessagesToBottom()
 }
 
@@ -301,7 +825,10 @@ function upsertToolActivity(event: AgentToolEvent): void {
 
 function scrollMessagesToBottom(): void {
   void nextTick(() => {
-    if (messageList.value) messageList.value.scrollTop = messageList.value.scrollHeight
+    if (!messageList.value) return
+    messageList.value.scrollTop = messageList.value.scrollHeight
+    // 新消息到来后同步锚点高亮，保证最新一轮始终可被点亮。
+    syncActiveTurnAnchor()
   })
 }
 </script>
@@ -342,50 +869,20 @@ function scrollMessagesToBottom(): void {
     </div>
 
     <div v-else class="workspace-layout" :class="{ 'inspector-hidden': !showInspector }">
-      <nav class="activity-rail" aria-label="主导航">
-        <button class="rail-button active" title="对话">
-          <ChatCircleDots :size="21" weight="fill" />
-        </button>
-        <button class="rail-button" title="文件"><FileCode :size="21" /></button>
-        <button class="rail-button" title="终端"><TerminalWindow :size="21" /></button>
-        <button class="rail-button" title="Git"><GitBranch :size="21" /></button>
-        <span class="rail-spacer" />
-        <button class="rail-button" title="设置" @click="openProviderSettings">
-          <GearSix :size="21" />
-        </button>
-      </nav>
-
-      <aside class="session-sidebar">
-        <div class="sidebar-header">
-          <strong>会话</strong>
-          <button class="icon-button" title="新建会话"><Plus :size="16" /></button>
-        </div>
-
-        <label class="search-field">
-          <MagnifyingGlass :size="15" />
-          <input aria-label="搜索会话" placeholder="搜索会话" />
-        </label>
-
-        <button class="session-item active">
-          <span class="session-icon"><Code :size="16" /></span>
-          <span class="session-copy">
-            <strong>新会话</strong>
-            <small>{{ workspaceName }}</small>
-          </span>
-          <CaretRight :size="14" />
-        </button>
-
-        <div class="workspace-card">
-          <div class="workspace-card-copy">
-            <FolderOpen :size="17" />
-            <div>
-              <strong>{{ workspaceName }}</strong>
-              <small>{{ workspace || '选择项目目录后开始工作' }}</small>
-            </div>
-          </div>
-          <button class="secondary-button" @click="chooseWorkspace">选择目录</button>
-        </div>
-      </aside>
+      <WorkspaceSidebar
+        brand-name="Agent Studio"
+        :workspace-path="workspace"
+        :workspace-name="workspaceName"
+        :projects="sidebarProjects"
+        :sessions="recentSessions"
+        :active-session-id="activeSessionId"
+        :active-project-id="activeProjectId"
+        @new-chat="startNewChat"
+        @open-project="chooseWorkspace"
+        @open-settings="openProviderSettings"
+        @select-session="selectSession"
+        @select-project="selectProject"
+      />
 
       <main class="chat-panel">
         <header class="chat-header">
@@ -410,33 +907,134 @@ function scrollMessagesToBottom(): void {
           </div>
         </header>
 
-        <section ref="messageList" class="message-list" aria-live="polite">
+        <section
+          ref="messageList"
+          class="message-list"
+          aria-live="polite"
+          @scroll.passive="syncActiveTurnAnchor"
+        >
+          <!-- 按“一轮指令”聚合渲染；有用户指令的轮次在左侧生成可跳转锚点 -->
           <article
-            v-for="message in messages"
-            :key="message.id"
-            class="message"
-            :data-role="message.role"
+            v-for="(turn, turnIndex) in timelineTurns"
+            :id="turn.user ? turnAnchorDomId(turn.id) : undefined"
+            :key="turn.id"
+            class="turn-group"
+            :data-anchor="turn.user ? 'true' : 'false'"
+            :data-active-anchor="turn.user && activeTurnAnchorId === turn.id ? 'true' : 'false'"
           >
-            <div class="message-avatar">
-              <Robot v-if="message.role === 'assistant'" :size="17" weight="fill" />
-              <Code v-else-if="message.role === 'thought'" :size="17" />
-              <WarningCircle v-else-if="message.role === 'error'" :size="17" weight="fill" />
-              <span v-else>你</span>
+            <!-- 左侧锚点：仅用户发起的轮次显示，点击可回到该轮顶部 -->
+            <button
+              v-if="turn.user"
+              type="button"
+              class="turn-anchor-dot"
+              :class="{
+                active: activeTurnAnchorId === turn.id,
+                live: turn.active || turn.streaming
+              }"
+              :title="turnAnchorTitle(turn, turnIndex)"
+              :aria-label="turnAnchorAriaLabel(turn, turnIndex)"
+              :aria-current="activeTurnAnchorId === turn.id ? 'true' : undefined"
+              @click="scrollToTurnAnchor(turn.id)"
+            >
+              <span class="turn-anchor-index">{{ turnAnchorNumber(turn.id) }}</span>
+            </button>
+
+            <div class="turn-group-main">
+            <div v-if="turn.user" class="turn-user">
+              <div class="turn-user-bubble">
+                <p>{{ turn.user.text }}</p>
+              </div>
             </div>
-            <div class="message-body">
-              <span class="message-author">
-                {{
-                  message.role === 'user'
-                    ? '你'
-                    : message.role === 'thought'
-                      ? '思考过程'
-                      : message.role === 'error'
-                        ? '运行提示'
-                        : 'Grok Build'
-                }}
-              </span>
-              <p>{{ message.text }}</p>
-              <span v-if="message.streaming" class="stream-caret" />
+
+            <div
+              v-if="turn.showProcess"
+              class="turn-process"
+              :data-active="turn.active || turn.streaming ? 'true' : 'false'"
+            >
+              <button
+                type="button"
+                class="turn-process-toggle"
+                :aria-expanded="isThoughtExpanded(turn) ? 'true' : 'false'"
+                :title="isThoughtExpanded(turn) ? '收起思考过程' : '展开思考过程'"
+                @click="toggleThoughtExpanded(turn.id)"
+              >
+                <span class="turn-process-leading">
+                  <CircleNotch v-if="turn.active || turn.streaming" :size="14" class="spin" />
+                  <CaretDown v-else-if="isThoughtExpanded(turn)" :size="14" />
+                  <CaretRight v-else :size="14" />
+                  <span class="turn-process-title">{{ processTitle(turn) }}</span>
+                  <span
+                    v-if="shouldShowTurnDuration(turn)"
+                    class="message-duration"
+                    :data-live="turn.active || turn.streaming ? 'true' : 'false'"
+                  >
+                    <span
+                      >{{ turn.active || turn.streaming ? '已执行' : '耗时' }}
+                      {{ turnDurationText(turn) }}</span
+                    >
+                  </span>
+                </span>
+                <span class="message-summary" :title="turnThoughtSummary(turn)">
+                  {{ turnThoughtSummary(turn) }}
+                </span>
+              </button>
+
+              <div v-if="isThoughtExpanded(turn)" class="turn-process-body">
+                <div v-if="turn.thoughts.length" class="turn-thoughts">
+                  <p v-for="thought in turn.thoughts" :key="thought.id">
+                    {{ thought.text }}<span v-if="thought.streaming" class="stream-caret" />
+                  </p>
+                </div>
+                <p v-else class="turn-process-placeholder">
+                  任务处理中，思考内容会在这里完整展开，也可随时收起。
+                </p>
+              </div>
+            </div>
+
+            <div
+              v-if="turn.answers.length"
+              class="turn-answer"
+              :data-streaming="turn.answers.some((item) => item.streaming) ? 'true' : 'false'"
+            >
+              <div class="turn-answer-avatar">
+                <Robot :size="17" weight="fill" />
+              </div>
+              <div class="turn-answer-body">
+                <div class="message-meta">
+                  <span class="message-author">Grok Build</span>
+                  <!-- 无思考的轮次把整轮耗时挂在最终回复上，保证一条指令仍只有一个计时 -->
+                  <span
+                    v-if="!turn.showProcess && shouldShowTurnDuration(turn)"
+                    class="message-duration"
+                    :data-live="turn.active || turn.streaming ? 'true' : 'false'"
+                  >
+                    <span
+                      >{{ turn.active || turn.streaming ? '已执行' : '耗时' }}
+                      {{ turnDurationText(turn) }}</span
+                    >
+                  </span>
+                </div>
+                <div class="turn-answer-content">
+                  <p v-for="answer in turn.answers" :key="answer.id">
+                    {{ answer.text }}<span v-if="answer.streaming" class="stream-caret" />
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="turn.errors.length" class="turn-error">
+              <div class="turn-answer-avatar" data-role="error">
+                <WarningCircle :size="17" weight="fill" />
+              </div>
+              <div class="turn-answer-body">
+                <div class="message-meta">
+                  <span class="message-author">运行提示</span>
+                </div>
+                <div class="turn-answer-content">
+                  <p v-for="error in turn.errors" :key="error.id">{{ error.text }}</p>
+                </div>
+              </div>
+            </div>
             </div>
           </article>
         </section>
