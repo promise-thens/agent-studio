@@ -4,3 +4,12 @@ out
 .DS_Store
 .eslintcache
 *.log*
+.gitnexus/
+.env
+.env.*
+!.env.example
+*.har
+*.trace
+*.dmp
+*.crash
+*.ips

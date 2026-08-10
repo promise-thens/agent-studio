@@ -23,6 +23,15 @@ import {
   PhX as X
 } from '@phosphor-icons/vue'
 import type { GrokAgentEvent, GrokPermissionRequest, GrokStatus } from '../../shared/grok'
+import type {
+  ProviderConfigInput,
+  ProviderConfigSummary,
+  ProviderConnectionInput,
+  ProviderModelOption,
+  ProviderTestResult
+} from '../../shared/provider'
+import ModelSelector from './components/ModelSelector.vue'
+import ProviderOnboarding from './components/ProviderOnboarding.vue'
 
 interface ChatMessage {
   id: string
@@ -38,6 +47,9 @@ interface ToolActivity {
 }
 
 const status = ref<GrokStatus>({ state: 'idle', message: '尚未连接 Grok Build' })
+const providerSummary = ref<ProviderConfigSummary | null>(null)
+const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
+const showProviderSettings = ref(false)
 const workspace = ref('')
 const prompt = ref('')
 const permission = ref<GrokPermissionRequest | null>(null)
@@ -50,7 +62,7 @@ const messages = ref<ChatMessage[]>([
   {
     id: 'welcome',
     role: 'assistant',
-    text: '选择一个工作目录，我会通过 ACP 连接本机的 Grok Build。'
+    text: '选择一个工作目录，我会通过当前模型配置启动 Grok Build Runtime。'
   }
 ])
 
@@ -61,6 +73,17 @@ const isBusy = computed(() => status.value.state === 'busy' || status.value.stat
 const canSend = computed(() => Boolean(prompt.value.trim()) && status.value.state === 'ready')
 const workspaceName = computed(
   () => workspace.value.split('/').filter(Boolean).at(-1) ?? '未选择目录'
+)
+const currentModel = computed<ProviderModelOption | null>(() => {
+  const summary = providerSummary.value
+  if (!summary?.modelId) return null
+  return {
+    modelId: summary.modelId,
+    ...(summary.modelDisplayName ? { displayName: summary.modelDisplayName } : {})
+  }
+})
+const showProviderScreen = computed(
+  () => providerBootState.value !== 'ready' || showProviderSettings.value
 )
 const statusLabel = computed(() => {
   const labels: Record<GrokStatus['state'], string> = {
@@ -74,9 +97,6 @@ const statusLabel = computed(() => {
 })
 
 onMounted(async () => {
-  status.value = await window.grok.getStatus()
-  workspace.value = status.value.workspace ?? ''
-
   cleanupListeners.push(
     window.grok.onStatus((nextStatus) => {
       status.value = nextStatus
@@ -87,6 +107,16 @@ onMounted(async () => {
       permission.value = request
     })
   )
+
+  try {
+    providerSummary.value = await window.provider.getSummary()
+    providerBootState.value = providerSummary.value.configured ? 'ready' : 'needs-provider'
+  } catch {
+    providerBootState.value = 'needs-provider'
+  }
+
+  status.value = await window.grok.getStatus()
+  workspace.value = status.value.workspace ?? ''
 })
 
 onBeforeUnmount(() => cleanupListeners.forEach((cleanup) => cleanup()))
@@ -96,6 +126,51 @@ async function chooseWorkspace(): Promise<void> {
   if (!selected) return
   workspace.value = selected
   await connectAgent()
+}
+
+function listProviderModels(input: ProviderConnectionInput): Promise<ProviderTestResult> {
+  return window.provider.listModels(input)
+}
+
+function loadSavedModels(): Promise<ProviderTestResult> {
+  return window.provider.listModels()
+}
+
+function saveProvider(input: ProviderConfigInput): Promise<ProviderConfigSummary> {
+  return window.provider.save(input)
+}
+
+function handleProviderSaved(summary: ProviderConfigSummary): void {
+  providerSummary.value = summary
+  providerBootState.value = summary.configured ? 'ready' : 'needs-provider'
+  showProviderSettings.value = false
+}
+
+async function selectProviderModel(model: ProviderModelOption): Promise<ProviderConfigSummary> {
+  return window.provider.selectModel(model)
+}
+
+function handleModelChanged(summary: ProviderConfigSummary): void {
+  providerSummary.value = summary
+}
+
+function handleModelError(message: string): void {
+  appendMessage('error', message)
+}
+
+function openProviderSettings(): void {
+  showProviderSettings.value = true
+}
+
+function closeProviderSettings(): void {
+  if (providerSummary.value?.configured) showProviderSettings.value = false
+}
+
+async function clearProvider(): Promise<void> {
+  providerSummary.value = await window.provider.clear()
+  providerBootState.value = 'needs-provider'
+  showProviderSettings.value = false
+  workspace.value = ''
 }
 
 async function connectAgent(): Promise<void> {
@@ -213,9 +288,10 @@ function scrollMessagesToBottom(): void {
       <div class="titlebar-spacer" />
       <div class="titlebar-brand">
         <Robot :size="16" weight="fill" />
-        <span>Grok Build Desktop</span>
+        <span>Agent Studio</span>
       </div>
       <button
+        v-if="!showProviderScreen"
         class="icon-button no-drag"
         title="切换检查器"
         @click="showInspector = !showInspector"
@@ -224,7 +300,24 @@ function scrollMessagesToBottom(): void {
       </button>
     </header>
 
-    <div class="workspace-layout" :class="{ 'inspector-hidden': !showInspector }">
+    <section v-if="providerBootState === 'loading'" class="provider-loading" aria-live="polite">
+      <CircleNotch :size="22" class="spin" />
+      <p>正在读取模型配置</p>
+    </section>
+
+    <div v-else-if="showProviderScreen" class="provider-screen">
+      <ProviderOnboarding
+        :initial-summary="providerSummary"
+        :list-models="listProviderModels"
+        :save-provider="saveProvider"
+        :clear-provider="providerSummary?.configured ? clearProvider : undefined"
+        :can-cancel="Boolean(providerSummary?.configured)"
+        @saved="handleProviderSaved"
+        @cancelled="closeProviderSettings"
+      />
+    </div>
+
+    <div v-else class="workspace-layout" :class="{ 'inspector-hidden': !showInspector }">
       <nav class="activity-rail" aria-label="主导航">
         <button class="rail-button active" title="对话">
           <ChatCircleDots :size="21" weight="fill" />
@@ -233,7 +326,9 @@ function scrollMessagesToBottom(): void {
         <button class="rail-button" title="终端"><TerminalWindow :size="21" /></button>
         <button class="rail-button" title="Git"><GitBranch :size="21" /></button>
         <span class="rail-spacer" />
-        <button class="rail-button" title="设置"><GearSix :size="21" /></button>
+        <button class="rail-button" title="设置" @click="openProviderSettings">
+          <GearSix :size="21" />
+        </button>
       </nav>
 
       <aside class="session-sidebar">
@@ -333,7 +428,20 @@ function scrollMessagesToBottom(): void {
               @keydown="handleComposerKeydown"
             />
             <div class="composer-footer">
-              <span><kbd>Enter</kbd> 发送，<kbd>Shift Enter</kbd> 换行</span>
+              <div class="composer-context">
+                <ModelSelector
+                  :model="currentModel"
+                  :load-models="loadSavedModels"
+                  :select-model="selectProviderModel"
+                  :busy="isBusy"
+                  :disabled="!providerSummary?.configured"
+                  @changed="handleModelChanged"
+                  @error="handleModelError"
+                />
+                <span class="composer-shortcuts">
+                  <kbd>Enter</kbd> 发送，<kbd>Shift Enter</kbd> 换行
+                </span>
+              </div>
               <button v-if="status.state === 'busy'" class="stop-button" @click="cancelTurn">
                 <Stop :size="15" weight="fill" />停止
               </button>

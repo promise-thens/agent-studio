@@ -6,6 +6,7 @@ import type {
   GrokPermissionRequest,
   GrokStatus
 } from '../shared/grok'
+import type { ProviderDesktopApi } from '../shared/provider'
 
 /** 统一包装事件订阅，组件卸载时可主动清理监听器。 */
 function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
@@ -28,15 +29,26 @@ const grokApi: GrokDesktopApi = {
   onPermission: (listener) => subscribe<GrokPermissionRequest>('grok:permission', listener)
 }
 
+const providerApi: ProviderDesktopApi = {
+  getSummary: () => ipcRenderer.invoke('provider:get-summary'),
+  listModels: (input) => ipcRenderer.invoke('provider:list-models', input),
+  save: (input) => ipcRenderer.invoke('provider:save', input),
+  selectModel: (model) => ipcRenderer.invoke('provider:select-model', model),
+  clear: () => ipcRenderer.invoke('provider:clear')
+}
+
 if (process.contextIsolated) {
   contextBridge.exposeInMainWorld('electron', electronAPI)
   contextBridge.exposeInMainWorld('grok', grokApi)
+  contextBridge.exposeInMainWorld('provider', providerApi)
 } else {
   // 非隔离模式仅用于兼容旧环境，正式窗口默认启用上下文隔离。
   const unsafeGlobal = globalThis as unknown as {
     electron: typeof electronAPI
     grok: GrokDesktopApi
+    provider: ProviderDesktopApi
   }
   unsafeGlobal.electron = electronAPI
   unsafeGlobal.grok = grokApi
+  unsafeGlobal.provider = providerApi
 }

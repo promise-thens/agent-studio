@@ -1,5 +1,5 @@
-appId: com.promise-thens.grok-build-desktop
-productName: Grok Build Desktop
+appId: com.promise-thens.agent-studio
+productName: Agent Studio
 directories:
   buildResources: build
 files:
@@ -12,7 +12,7 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: grok-build-desktop
+  executableName: agent-studio
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

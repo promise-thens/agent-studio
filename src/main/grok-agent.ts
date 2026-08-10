@@ -1,11 +1,17 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import * as acp from '@agentclientprotocol/sdk'
 import type { GrokAgentEvent, GrokPermissionRequest, GrokStatus } from '../shared/grok'
+import type { ProviderRuntimeConfig } from './provider/provider-config-store'
+import {
+  AGENT_STUDIO_MODEL_ALIAS,
+  AGENT_STUDIO_MODEL_API_KEY_ENV,
+  writeGrokProviderConfig
+} from './provider/grok-provider-config'
 
 type StatusListener = (status: GrokStatus) => void
 type EventListener = (event: GrokAgentEvent) => void
@@ -13,6 +19,12 @@ type PermissionListener = (request: GrokPermissionRequest) => void
 
 interface PendingPermission {
   resolve: (response: acp.RequestPermissionResponse) => void
+}
+
+export interface GrokAgentBridgeOptions {
+  userDataPath: string
+  getProviderConfig: () => ProviderRuntimeConfig | null
+  redactText: (text: string) => string
 }
 
 /**
@@ -28,7 +40,8 @@ export class GrokAgentBridge {
   constructor(
     private readonly onStatus: StatusListener,
     private readonly onEvent: EventListener,
-    private readonly onPermission: PermissionListener
+    private readonly onPermission: PermissionListener,
+    private readonly options: GrokAgentBridgeOptions
   ) {}
 
   getStatus(): GrokStatus {
@@ -43,24 +56,55 @@ export class GrokAgentBridge {
     await this.disconnect(false)
     this.updateStatus({ state: 'connecting', message: '正在启动 Grok Build', workspace })
 
+    const providerConfig = this.options.getProviderConfig()
+    if (!providerConfig) {
+      const message = '模型服务配置不可用，请重新配置 URL、Key 和模型。'
+      this.updateStatus({ state: 'error', message, workspace })
+      throw new Error(message)
+    }
+
+    let grokHome: string
+    try {
+      grokHome = await writeGrokProviderConfig(this.options.userDataPath, providerConfig)
+    } catch (error) {
+      const message = this.redactError(error)
+      this.updateStatus({ state: 'error', message: `无法生成 Grok 配置：${message}`, workspace })
+      throw new Error(message)
+    }
+
     const binary = this.resolveBinary()
-    const child = spawn(binary, ['--no-auto-update', 'agent', 'stdio'], {
-      cwd: workspace,
-      env: {
-        ...process.env,
-        PATH: `${join(homedir(), '.grok/bin')}:${process.env.PATH ?? ''}`
-      },
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
+    const child = spawn(
+      binary,
+      ['--no-auto-update', 'agent', '--no-leader', '-m', AGENT_STUDIO_MODEL_ALIAS, 'stdio'],
+      {
+        cwd: workspace,
+        env: buildRuntimeEnvironment(providerConfig, grokHome),
+        stdio: ['pipe', 'pipe', 'pipe']
+      }
+    )
 
     this.process = child
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (text: string) => {
-      const cleanText = text.trim()
+      const cleanText = this.safeRedact(text).trim()
       if (cleanText) this.onEvent({ kind: 'stderr', text: cleanText })
     })
 
+    child.once('error', (error) => {
+      if (this.process !== child) return
+      this.process = null
+      this.connection = null
+      this.sessionId = null
+      this.updateStatus({
+        state: 'error',
+        message: `无法启动 Grok Build：${this.redactError(error)}`,
+        workspace
+      })
+    })
+
     child.on('exit', (code) => {
+      // 旧进程退出时不得清空已经建立的新连接。
+      if (this.process !== child) return
       this.process = null
       this.connection = null
       this.sessionId = null
@@ -92,7 +136,7 @@ export class GrokAgentBridge {
         protocolVersion: acp.PROTOCOL_VERSION,
         clientCapabilities: {},
         clientInfo: {
-          name: 'grok-build-desktop',
+          name: 'agent-studio',
           version: '0.1.0'
         }
       })
@@ -112,7 +156,7 @@ export class GrokAgentBridge {
       return this.status
     } catch (error) {
       await this.disconnect(false)
-      const message = error instanceof Error ? error.message : String(error)
+      const message = this.redactError(error)
       this.updateStatus({
         state: 'error',
         message: `连接失败：${message}`,
@@ -154,9 +198,9 @@ export class GrokAgentBridge {
       this.onEvent({ kind: 'turn-complete', payload: response })
       this.updateStatus({ ...this.status, state: 'ready', message: 'Grok Build 已连接' })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = this.redactError(error)
       this.updateStatus({ ...this.status, state: 'error', message: `执行失败：${message}` })
-      throw error
+      throw new Error(message)
     }
   }
 
@@ -248,4 +292,64 @@ export class GrokAgentBridge {
     this.status = status
     this.onStatus(status)
   }
+
+  private safeRedact(text: string): string {
+    try {
+      return this.options.redactText(text)
+    } catch {
+      return '敏感错误信息已隐藏。'
+    }
+  }
+
+  private redactError(error: unknown): string {
+    return this.safeRedact(error instanceof Error ? error.message : String(error))
+  }
+}
+
+const RUNTIME_ENV_ALLOWLIST = [
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'SystemRoot',
+  'WINDIR',
+  'COMSPEC',
+  'PATHEXT',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'no_proxy'
+] as const
+
+/** 构造当前 Grok 进程专属的最小环境，避免无关宿主密钥随进程继承。 */
+function buildRuntimeEnvironment(
+  providerConfig: ProviderRuntimeConfig,
+  grokHome: string
+): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {}
+  for (const name of RUNTIME_ENV_ALLOWLIST) {
+    const value = process.env[name]
+    if (value) environment[name] = value
+  }
+
+  environment.PATH = [join(homedir(), '.grok/bin'), process.env.PATH]
+    .filter(Boolean)
+    .join(delimiter)
+  environment.GROK_HOME = grokHome
+  if (providerConfig.authMode === 'bearer' && providerConfig.apiKey) {
+    environment[AGENT_STUDIO_MODEL_API_KEY_ENV] = providerConfig.apiKey
+  }
+  return environment
 }

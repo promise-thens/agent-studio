@@ -53,6 +53,24 @@ textarea {
   grid-template-columns: 54px 248px minmax(420px, 1fr);
 }
 
+.provider-screen,
+.provider-loading {
+  height: calc(100% - var(--titlebar-height));
+}
+
+.provider-loading {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 10px;
+  color: var(--text-3);
+}
+
+.provider-loading p {
+  margin: 0;
+  font-size: 11px;
+}
+
 .activity-rail {
   display: flex;
   flex-direction: column;
@@ -475,6 +493,17 @@ button:disabled {
   font-size: 9px;
 }
 
+.composer-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-shortcuts {
+  white-space: nowrap;
+}
+
 kbd {
   padding: 1px 4px;
   border: 1px solid var(--border);
@@ -692,6 +721,12 @@ kbd {
   }
 
   .inspector-panel {
+    display: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .composer-shortcuts {
     display: none;
   }
 }
