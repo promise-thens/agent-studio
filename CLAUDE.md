@@ -14,9 +14,8 @@
 - 用户只要求讨论、诊断或审查时，不得擅自修改代码。
 - 开发前可以使用GitNexus更新索引。
 - 如果发现node版本不合适，可以是用nvm相关内容切换版本。
-- 更新AGENTS.md时，同步更新CLAUDE.md
+- 更新CLAUDE.md时，同步更新AGENTS.md
 - 每个代码块需要加上备注备注使用中文
-
 ## 3. 项目定位
 
 Agent Studio 是一个本地多 Agent 工作台，核心关系为：
