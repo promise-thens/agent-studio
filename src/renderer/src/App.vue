@@ -272,26 +272,7 @@ const turnAnchors = computed(() =>
     })
 )
 
-/** 生成稳定的 DOM 锚点 id，供滚动定位与左侧导航共用。 */
-/** 计算某个轮次在锚点序列中的序号（仅统计有用户指令的轮次）。 */
-function turnAnchorNumber(turnId: string): number {
-  const index = turnAnchors.value.findIndex((item) => item.id === turnId)
-  return index >= 0 ? index + 1 : 0
-}
-
-/** 生成锚点悬停标题，方便快速辨认这一轮在说什么。 */
-function turnAnchorTitle(turn: ConversationTurn, turnIndex: number): string {
-  const anchor = turnAnchors.value.find((item) => item.id === turn.id)
-  if (anchor) return `第 ${anchor.index} 轮：${anchor.label}`
-  return `第 ${turnIndex + 1} 轮对话`
-}
-
-/** 生成锚点无障碍标签。 */
-function turnAnchorAriaLabel(turn: ConversationTurn, turnIndex: number): string {
-  const n = turnAnchorNumber(turn.id) || turnIndex + 1
-  return `跳转到第 ${n} 轮对话`
-}
-
+/** 生成稳定的 DOM 锚点 id，供滚动定位与左侧固定导航共用。 */
 function turnAnchorDomId(turnId: string): string {
   return `turn-anchor-${turnId}`
 }
@@ -907,137 +888,141 @@ function scrollMessagesToBottom(): void {
           </div>
         </header>
 
-        <section
-          ref="messageList"
-          class="message-list"
-          aria-live="polite"
-          @scroll.passive="syncActiveTurnAnchor"
-        >
-          <!-- 按“一轮指令”聚合渲染；有用户指令的轮次在左侧生成可跳转锚点 -->
-          <article
-            v-for="(turn, turnIndex) in timelineTurns"
-            :id="turn.user ? turnAnchorDomId(turn.id) : undefined"
-            :key="turn.id"
-            class="turn-group"
-            :data-anchor="turn.user ? 'true' : 'false'"
-            :data-active-anchor="turn.user && activeTurnAnchorId === turn.id ? 'true' : 'false'"
-          >
-            <!-- 左侧锚点：仅用户发起的轮次显示，点击可回到该轮顶部 -->
+        <!-- 消息舞台：左侧固定锚点轨，右侧才是会滚动的对话列表 -->
+        <div class="message-stage" :class="{ 'has-anchors': turnAnchors.length > 0 }">
+          <nav v-if="turnAnchors.length" class="turn-anchor-rail" aria-label="对话轮次锚点">
+            <div class="turn-anchor-track" aria-hidden="true" />
             <button
-              v-if="turn.user"
+              v-for="anchor in turnAnchors"
+              :key="anchor.id"
               type="button"
               class="turn-anchor-dot"
               :class="{
-                active: activeTurnAnchorId === turn.id,
-                live: turn.active || turn.streaming
+                active: activeTurnAnchorId === anchor.id,
+                live: anchor.active
               }"
-              :title="turnAnchorTitle(turn, turnIndex)"
-              :aria-label="turnAnchorAriaLabel(turn, turnIndex)"
-              :aria-current="activeTurnAnchorId === turn.id ? 'true' : undefined"
-              @click="scrollToTurnAnchor(turn.id)"
+              :title="`第 ${anchor.index} 轮：${anchor.label}`"
+              :aria-label="`跳转到第 ${anchor.index} 轮对话`"
+              :aria-current="activeTurnAnchorId === anchor.id ? 'true' : undefined"
+              @click="scrollToTurnAnchor(anchor.id)"
             >
-              <span class="turn-anchor-index">{{ turnAnchorNumber(turn.id) }}</span>
+              <span class="turn-anchor-index">{{ anchor.index }}</span>
             </button>
+          </nav>
 
-            <div class="turn-group-main">
-            <div v-if="turn.user" class="turn-user">
-              <div class="turn-user-bubble">
-                <p>{{ turn.user.text }}</p>
-              </div>
-            </div>
-
-            <div
-              v-if="turn.showProcess"
-              class="turn-process"
-              :data-active="turn.active || turn.streaming ? 'true' : 'false'"
+          <section
+            ref="messageList"
+            class="message-list"
+            aria-live="polite"
+            @scroll.passive="syncActiveTurnAnchor"
+          >
+            <!-- 按“一轮指令”聚合渲染；锚点目标 id 仍挂在轮次容器上 -->
+            <article
+              v-for="turn in timelineTurns"
+              :id="turn.user ? turnAnchorDomId(turn.id) : undefined"
+              :key="turn.id"
+              class="turn-group"
+              :data-anchor="turn.user ? 'true' : 'false'"
+              :data-active-anchor="turn.user && activeTurnAnchorId === turn.id ? 'true' : 'false'"
             >
-              <button
-                type="button"
-                class="turn-process-toggle"
-                :aria-expanded="isThoughtExpanded(turn) ? 'true' : 'false'"
-                :title="isThoughtExpanded(turn) ? '收起思考过程' : '展开思考过程'"
-                @click="toggleThoughtExpanded(turn.id)"
+              <div v-if="turn.user" class="turn-user">
+                <div class="turn-user-bubble">
+                  <p>{{ turn.user.text }}</p>
+                </div>
+              </div>
+
+              <div
+                v-if="turn.showProcess"
+                class="turn-process"
+                :data-active="turn.active || turn.streaming ? 'true' : 'false'"
               >
-                <span class="turn-process-leading">
-                  <CircleNotch v-if="turn.active || turn.streaming" :size="14" class="spin" />
-                  <CaretDown v-else-if="isThoughtExpanded(turn)" :size="14" />
-                  <CaretRight v-else :size="14" />
-                  <span class="turn-process-title">{{ processTitle(turn) }}</span>
-                  <span
-                    v-if="shouldShowTurnDuration(turn)"
-                    class="message-duration"
-                    :data-live="turn.active || turn.streaming ? 'true' : 'false'"
-                  >
+                <button
+                  type="button"
+                  class="turn-process-toggle"
+                  :aria-expanded="isThoughtExpanded(turn) ? 'true' : 'false'"
+                  :title="isThoughtExpanded(turn) ? '收起思考过程' : '展开思考过程'"
+                  @click="toggleThoughtExpanded(turn.id)"
+                >
+                  <span class="turn-process-leading">
+                    <CircleNotch v-if="turn.active || turn.streaming" :size="14" class="spin" />
+                    <CaretDown v-else-if="isThoughtExpanded(turn)" :size="14" />
+                    <CaretRight v-else :size="14" />
+                    <span class="turn-process-title">{{ processTitle(turn) }}</span>
                     <span
-                      >{{ turn.active || turn.streaming ? '已执行' : '耗时' }}
-                      {{ turnDurationText(turn) }}</span
+                      v-if="shouldShowTurnDuration(turn)"
+                      class="message-duration"
+                      :data-live="turn.active || turn.streaming ? 'true' : 'false'"
                     >
+                      <span
+                        >{{ turn.active || turn.streaming ? '已执行' : '耗时' }}
+                        {{ turnDurationText(turn) }}</span
+                      >
+                    </span>
                   </span>
-                </span>
-                <span class="message-summary" :title="turnThoughtSummary(turn)">
-                  {{ turnThoughtSummary(turn) }}
-                </span>
-              </button>
-
-              <div v-if="isThoughtExpanded(turn)" class="turn-process-body">
-                <div v-if="turn.thoughts.length" class="turn-thoughts">
-                  <p v-for="thought in turn.thoughts" :key="thought.id">
-                    {{ thought.text }}<span v-if="thought.streaming" class="stream-caret" />
-                  </p>
-                </div>
-                <p v-else class="turn-process-placeholder">
-                  任务处理中，思考内容会在这里完整展开，也可随时收起。
-                </p>
-              </div>
-            </div>
-
-            <div
-              v-if="turn.answers.length"
-              class="turn-answer"
-              :data-streaming="turn.answers.some((item) => item.streaming) ? 'true' : 'false'"
-            >
-              <div class="turn-answer-avatar">
-                <Robot :size="17" weight="fill" />
-              </div>
-              <div class="turn-answer-body">
-                <div class="message-meta">
-                  <span class="message-author">Grok Build</span>
-                  <!-- 无思考的轮次把整轮耗时挂在最终回复上，保证一条指令仍只有一个计时 -->
-                  <span
-                    v-if="!turn.showProcess && shouldShowTurnDuration(turn)"
-                    class="message-duration"
-                    :data-live="turn.active || turn.streaming ? 'true' : 'false'"
-                  >
-                    <span
-                      >{{ turn.active || turn.streaming ? '已执行' : '耗时' }}
-                      {{ turnDurationText(turn) }}</span
-                    >
+                  <span class="message-summary" :title="turnThoughtSummary(turn)">
+                    {{ turnThoughtSummary(turn) }}
                   </span>
-                </div>
-                <div class="turn-answer-content">
-                  <p v-for="answer in turn.answers" :key="answer.id">
-                    {{ answer.text }}<span v-if="answer.streaming" class="stream-caret" />
+                </button>
+
+                <div v-if="isThoughtExpanded(turn)" class="turn-process-body">
+                  <div v-if="turn.thoughts.length" class="turn-thoughts">
+                    <p v-for="thought in turn.thoughts" :key="thought.id">
+                      {{ thought.text }}<span v-if="thought.streaming" class="stream-caret" />
+                    </p>
+                  </div>
+                  <p v-else class="turn-process-placeholder">
+                    任务处理中，思考内容会在这里完整展开，也可随时收起。
                   </p>
                 </div>
               </div>
-            </div>
 
-            <div v-if="turn.errors.length" class="turn-error">
-              <div class="turn-answer-avatar" data-role="error">
-                <WarningCircle :size="17" weight="fill" />
-              </div>
-              <div class="turn-answer-body">
-                <div class="message-meta">
-                  <span class="message-author">运行提示</span>
+              <div
+                v-if="turn.answers.length"
+                class="turn-answer"
+                :data-streaming="turn.answers.some((item) => item.streaming) ? 'true' : 'false'"
+              >
+                <div class="turn-answer-avatar">
+                  <Robot :size="17" weight="fill" />
                 </div>
-                <div class="turn-answer-content">
-                  <p v-for="error in turn.errors" :key="error.id">{{ error.text }}</p>
+                <div class="turn-answer-body">
+                  <div class="message-meta">
+                    <span class="message-author">Grok Build</span>
+                    <!-- 无思考的轮次把整轮耗时挂在最终回复上，保证一条指令仍只有一个计时 -->
+                    <span
+                      v-if="!turn.showProcess && shouldShowTurnDuration(turn)"
+                      class="message-duration"
+                      :data-live="turn.active || turn.streaming ? 'true' : 'false'"
+                    >
+                      <span
+                        >{{ turn.active || turn.streaming ? '已执行' : '耗时' }}
+                        {{ turnDurationText(turn) }}</span
+                      >
+                    </span>
+                  </div>
+                  <div class="turn-answer-content">
+                    <p v-for="answer in turn.answers" :key="answer.id">
+                      {{ answer.text }}<span v-if="answer.streaming" class="stream-caret" />
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-            </div>
-          </article>
-        </section>
+
+              <div v-if="turn.errors.length" class="turn-error">
+                <div class="turn-answer-avatar" data-role="error">
+                  <WarningCircle :size="17" weight="fill" />
+                </div>
+                <div class="turn-answer-body">
+                  <div class="message-meta">
+                    <span class="message-author">运行提示</span>
+                  </div>
+                  <div class="turn-answer-content">
+                    <p v-for="error in turn.errors" :key="error.id">{{ error.text }}</p>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </section>
+        </div>
 
         <footer class="composer-wrap">
           <div class="composer" :class="{ disabled: !isConnected }">

@@ -257,25 +257,59 @@ button:disabled {
   color: var(--danger);
 }
 
-/* ?????????? + ?????? */
-.turn-anchor-dot:not(.active) .message-list {
-  position: relative;
+/* 消息舞台：左侧固定锚点轨 + 右侧可滚动对话 */
+.message-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   min-height: 0;
-  overflow-y: auto;
-  scroll-behavior: smooth;
-  padding: 18px 0 10px;
+  height: 100%;
+  overflow: hidden;
 }
 
+/* 有用户轮次时才腾出左侧固定锚点列，避免欢迎页留白 */
+.message-stage.has-anchors {
+  grid-template-columns: 28px minmax(0, 1fr);
+}
 
-/* 左侧轮次锚点：每轮用户对话一个点，随内容滚动并支持点击跳转 */
-.turn-anchor-dot {
+/* 固定锚点轨：不在 message-list 内，因此不会跟随消息滚动 */
+.turn-anchor-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  min-height: 0;
+  height: 100%;
+  padding: 28px 0 24px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.turn-anchor-rail::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.turn-anchor-track {
   position: absolute;
-  top: 18px;
-  left: 15px;
-  z-index: 2;
+  top: 36px;
+  bottom: 32px;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: color-mix(in srgb, var(--border) 78%, transparent);
+  pointer-events: none;
+}
+
+.turn-anchor-dot {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: 0 0 auto;
   width: 14px;
   height: 14px;
   padding: 0;
@@ -301,12 +335,9 @@ button:disabled {
   outline: none;
 }
 
-.turn-anchor-dot.active,
-.turn-group[data-active-anchor='true'] .turn-anchor-dot {
+.turn-anchor-dot.active {
   width: 18px;
   height: 18px;
-  left: 13px;
-  top: 16px;
   border-color: color-mix(in srgb, var(--accent) 72%, white);
   color: var(--accent-ink);
   background: color-mix(in srgb, var(--accent) 88%, white);
@@ -333,55 +364,33 @@ button:disabled {
   display: none;
 }
 
-.turn-group[data-anchor='true'] {
+/* 消息列表：唯一纵向滚动容器，锚点轨不在这里面 */
+.message-list {
   position: relative;
-  scroll-margin-top: 18px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  padding: 18px 0 10px;
 }
-
-/* 仅用户轮次画时间线：圆点之间用竖线串起来，随内容一起滚动 */
-.turn-group[data-anchor='true']::before {
-  content: '';
-  position: absolute;
-  top: 32px;
-  bottom: -26px;
-  left: 22px;
-  width: 1px;
-  background: color-mix(in srgb, var(--border) 78%, transparent);
-  pointer-events: none;
-}
-
-.turn-group[data-anchor='true']:last-child::before {
-  bottom: auto;
-  height: 0;
-}
-
 
 /* 一轮对话容器：用户指令、处理过程、正式回复归为一组 */
 .turn-group {
-  position: relative;
-  display: block;
-  width: 100%;
-  padding: 8px 0 18px;
-}
-
-/* 轮次正文保持居中阅读宽度；左侧锚点独立落在对话区边缘 */
-.turn-group-main {
   display: flex;
   flex-direction: column;
   gap: 12px;
   max-width: 820px;
   margin: 0 auto;
-  padding: 0 24px 0 28px;
+  padding: 8px 28px 18px;
+  scroll-margin-top: 18px;
 }
 
 .turn-group + .turn-group {
   margin-top: 8px;
   padding-top: 18px;
-}
-
-.turn-group + .turn-group .turn-group-main {
   border-top: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
-  padding-top: 18px;
 }
 
 /* 用户消息靠右，做成圆润气泡，贴近 Codex 的指令区 */
