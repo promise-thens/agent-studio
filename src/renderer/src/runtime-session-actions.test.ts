@@ -66,6 +66,24 @@ describe('Runtime 会话操作', () => {
     expect(connect).not.toHaveBeenCalled()
   })
 
+  it('断开失败时不连接并保留旧会话', async () => {
+    const connect = vi.fn()
+
+    await expect(
+      rebuildRuntimeSession({
+        status: readyStatus,
+        workspace: '/tmp/project',
+        chooseWorkspace: vi.fn(),
+        disconnect: vi.fn(async () => {
+          throw new Error('断开失败')
+        }),
+        connect
+      })
+    ).rejects.toThrow('断开失败')
+
+    expect(connect).not.toHaveBeenCalled()
+  })
+
   it('发送判断同时校验文本、ready 状态和 Prompt 能力', () => {
     expect(canSendRuntimePrompt('执行测试', readyStatus, true)).toBe(true)
     expect(canSendRuntimePrompt('执行测试', readyStatus, false)).toBe(false)

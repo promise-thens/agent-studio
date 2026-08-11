@@ -34,6 +34,7 @@ import {
   createAgentMessageKey,
   createAgentToolKey
 } from './agent-event-consumer'
+import { unwrapDesktopIpcResult } from './desktop-ipc-result'
 import ModelSelector from './components/ModelSelector.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
 import WorkspaceSidebar, {
@@ -563,12 +564,12 @@ watch([hasStreamingMessage, () => status.value.state], ([, state], previous) => 
 
 onMounted(async () => {
   cleanupListeners.push(
-    window.grok.onStatus((nextStatus) => {
+    window.agent.onStatus((nextStatus) => {
       status.value = nextStatus
       workspace.value = nextStatus.workspace ?? workspace.value
     }),
-    window.grok.onEvent(handleAgentEvent),
-    window.grok.onPermission((request) => {
+    window.agent.onEvent(handleAgentEvent),
+    window.agent.onPermission((request) => {
       permission.value = request
     })
   )
@@ -580,8 +581,12 @@ onMounted(async () => {
     providerBootState.value = 'needs-provider'
   }
 
-  status.value = await window.grok.getStatus()
-  workspace.value = status.value.workspace ?? ''
+  try {
+    status.value = unwrapDesktopIpcResult(await window.agent.getStatus())
+    workspace.value = status.value.workspace ?? ''
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
 })
 
 onBeforeUnmount(() => {
@@ -611,9 +616,10 @@ async function startNewChat(): Promise<void> {
     const result = await rebuildRuntimeSession({
       status: status.value,
       workspace: workspace.value,
-      chooseWorkspace: window.grok.chooseWorkspace,
-      connect: window.grok.connect,
-      disconnect: window.grok.disconnect
+      chooseWorkspace: async () => unwrapDesktopIpcResult(await window.app.chooseWorkspace()),
+      connect: async (nextWorkspace) =>
+        unwrapDesktopIpcResult(await window.agent.connect(nextWorkspace)),
+      disconnect: async () => unwrapDesktopIpcResult(await window.agent.disconnect())
     })
     if (!result) return
 
@@ -654,10 +660,14 @@ async function selectProject(projectId: string): Promise<void> {
 }
 
 async function chooseWorkspace(): Promise<void> {
-  const selected = await window.grok.chooseWorkspace()
-  if (!selected) return
-  workspace.value = selected
-  await connectAgent()
+  try {
+    const selected = unwrapDesktopIpcResult(await window.app.chooseWorkspace())
+    if (!selected) return
+    workspace.value = selected
+    await connectAgent()
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
 }
 
 function listProviderModels(input: ProviderConnectionInput): Promise<ProviderTestResult> {
@@ -712,14 +722,18 @@ async function connectAgent(): Promise<void> {
   }
 
   try {
-    await window.grok.connect(workspace.value)
+    unwrapDesktopIpcResult(await window.agent.connect(workspace.value))
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
 }
 
 async function disconnectAgent(): Promise<void> {
-  await window.grok.disconnect()
+  try {
+    unwrapDesktopIpcResult(await window.agent.disconnect())
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
 }
 
 async function sendPrompt(): Promise<void> {
@@ -743,7 +757,7 @@ async function sendPrompt(): Promise<void> {
   composer.value?.focus()
 
   try {
-    await window.grok.sendPrompt(text)
+    unwrapDesktopIpcResult(await window.agent.sendPrompt(text))
   } catch (error) {
     completeCurrentTurn()
     appendMessage('error', error instanceof Error ? error.message : String(error))
@@ -751,15 +765,23 @@ async function sendPrompt(): Promise<void> {
 }
 
 async function cancelTurn(): Promise<void> {
-  await window.grok.cancel()
-  // 取消后立即收束本轮总计时，避免界面一直显示“已执行”。
-  completeCurrentTurn()
+  try {
+    unwrapDesktopIpcResult(await window.agent.cancel())
+    // 主进程接受取消请求后才收束本轮计时，失败时保留执行态反馈。
+    completeCurrentTurn()
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
 }
 
 async function respondPermission(optionId?: string): Promise<void> {
   if (!permission.value) return
-  await window.grok.respondPermission(permission.value.id, optionId)
-  permission.value = null
+  try {
+    unwrapDesktopIpcResult(await window.agent.respondPermission(permission.value.id, optionId))
+    permission.value = null
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
 }
 
 /** 输入法正在确认候选词时保留 Enter，等待 compositionend 完成 v-model 更新。 */

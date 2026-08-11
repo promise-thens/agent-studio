@@ -1,50 +1,31 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { electronAPI } from '@electron-toolkit/preload'
-import type { AgentEvent, AgentPermissionRequest, AgentRuntimeStatus } from '../shared/agent'
-import type { GrokDesktopApi } from '../shared/grok'
-import type { ProviderDesktopApi } from '../shared/provider'
+import {
+  createAgentDesktopApi,
+  createAppDesktopApi,
+  createProviderDesktopApi,
+  type NarrowIpcRenderer
+} from './desktop-api'
 
-/** 统一包装事件订阅，组件卸载时可主动清理监听器。 */
-function subscribe<T>(channel: string, listener: (payload: T) => void): () => void {
-  const handler = (_event: Electron.IpcRendererEvent, payload: T): void => listener(payload)
-  ipcRenderer.on(channel, handler)
-  return () => ipcRenderer.removeListener(channel, handler)
-}
-
-const grokApi: GrokDesktopApi = {
-  getStatus: () => ipcRenderer.invoke('grok:get-status'),
-  chooseWorkspace: () => ipcRenderer.invoke('grok:choose-workspace'),
-  connect: (workspace) => ipcRenderer.invoke('grok:connect', workspace),
-  disconnect: () => ipcRenderer.invoke('grok:disconnect'),
-  sendPrompt: (prompt) => ipcRenderer.invoke('grok:send-prompt', prompt),
-  cancel: () => ipcRenderer.invoke('grok:cancel'),
-  respondPermission: (requestId, optionId) =>
-    ipcRenderer.invoke('grok:respond-permission', requestId, optionId),
-  onStatus: (listener) => subscribe<AgentRuntimeStatus>('grok:status', listener),
-  onEvent: (listener) => subscribe<AgentEvent>('grok:event', listener),
-  onPermission: (listener) => subscribe<AgentPermissionRequest>('grok:permission', listener)
-}
-
-const providerApi: ProviderDesktopApi = {
-  getSummary: () => ipcRenderer.invoke('provider:get-summary'),
-  listModels: (input) => ipcRenderer.invoke('provider:list-models', input),
-  save: (input) => ipcRenderer.invoke('provider:save', input),
-  selectModel: (model) => ipcRenderer.invoke('provider:select-model', model),
-  clear: () => ipcRenderer.invoke('provider:clear')
-}
-
-if (process.contextIsolated) {
-  contextBridge.exposeInMainWorld('electron', electronAPI)
-  contextBridge.exposeInMainWorld('grok', grokApi)
-  contextBridge.exposeInMainWorld('provider', providerApi)
-} else {
-  // 非隔离模式仅用于兼容旧环境，正式窗口默认启用上下文隔离。
-  const unsafeGlobal = globalThis as unknown as {
-    electron: typeof electronAPI
-    grok: GrokDesktopApi
-    provider: ProviderDesktopApi
+/**
+ * 只在上下文隔离开启时暴露三组窄 API。
+ * 安全基线不满足时显式失败，禁止降级注入任意 Electron 能力。
+ */
+export function exposeDesktopApis(
+  contextIsolated: boolean,
+  exposeInMainWorld: (apiKey: string, api: unknown) => void,
+  renderer: NarrowIpcRenderer
+): void {
+  if (!contextIsolated) {
+    throw new Error('Agent Studio 需要启用 contextIsolation。')
   }
-  unsafeGlobal.electron = electronAPI
-  unsafeGlobal.grok = grokApi
-  unsafeGlobal.provider = providerApi
+
+  exposeInMainWorld('agent', createAgentDesktopApi(renderer))
+  exposeInMainWorld('app', createAppDesktopApi(renderer))
+  exposeInMainWorld('provider', createProviderDesktopApi(renderer))
 }
+
+exposeDesktopApis(
+  process.contextIsolated,
+  (apiKey, api) => contextBridge.exposeInMainWorld(apiKey, api),
+  ipcRenderer
+)

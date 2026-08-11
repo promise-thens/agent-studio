@@ -1,0 +1,37 @@
+import { describe, expect, it } from 'vitest'
+import { AGENT_INVOKE_CHANNELS, AGENT_PUSH_CHANNELS } from './agent-ipc'
+import { APP_INVOKE_CHANNELS } from './app-ipc'
+
+describe('桌面 IPC 静态契约', () => {
+  it('所有 Agent 与 App channel 都固定且唯一', () => {
+    const channels = [
+      ...Object.values(AGENT_INVOKE_CHANNELS),
+      ...Object.values(AGENT_PUSH_CHANNELS),
+      ...Object.values(APP_INVOKE_CHANNELS)
+    ]
+
+    expect(new Set(channels).size).toBe(channels.length)
+    expect(channels).toEqual([
+      'agent:get-status',
+      'agent:connect',
+      'agent:disconnect',
+      'agent:send-prompt',
+      'agent:cancel',
+      'agent:respond-permission',
+      'agent:status',
+      'agent:event',
+      'agent:permission',
+      'app:choose-workspace'
+    ])
+  })
+
+  it('中性契约不包含旧 Grok channel', () => {
+    const channels = [
+      ...Object.values(AGENT_INVOKE_CHANNELS),
+      ...Object.values(AGENT_PUSH_CHANNELS),
+      ...Object.values(APP_INVOKE_CHANNELS)
+    ]
+
+    expect(channels.every((channel) => !channel.startsWith('grok:'))).toBe(true)
+  })
+})

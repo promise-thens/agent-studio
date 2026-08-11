@@ -1,11 +1,11 @@
-import type { ElectronAPI } from '@electron-toolkit/preload'
-import type { GrokDesktopApi } from '../shared/grok'
+import type { AgentDesktopApi } from '../shared/agent-ipc'
+import type { AppDesktopApi } from '../shared/app-ipc'
 import type { ProviderDesktopApi } from '../shared/provider'
 
 declare global {
   interface Window {
-    electron: ElectronAPI
-    grok: GrokDesktopApi
+    agent: AgentDesktopApi
+    app: AppDesktopApi
     provider: ProviderDesktopApi
   }
 }

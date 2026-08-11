@@ -1,26 +1,31 @@
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  ipcMain,
-  safeStorage,
-  shell,
-  type IpcMainInvokeEvent
-} from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
+import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
 import type {
   ProviderConfigInput,
   ProviderConfigSummary,
   ProviderConnectionInput,
   ProviderModelOption
 } from '../shared/provider'
+import { registerAgentIpcHandlers } from './agent/ipc'
+import { registerAppIpcHandlers } from './app-ipc'
 import { GrokAgentBridge } from './grok-agent'
+import type { DesktopIpcMain } from './ipc-types'
 import { ProviderConfigStore, type ProviderRuntimeConfig } from './provider/provider-config-store'
 import { ProviderConnectionTester } from './provider/provider-connection-tester'
 import { clearGrokProviderConfig } from './provider/grok-provider-config'
+import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
+import {
+  assertTrustedIpcSender,
+  sendToTrustedRenderer,
+  toDesktopIpcError,
+  type RendererTrustOptions
+} from './security/ipc-sender-validation'
 import { redactSensitiveError, redactSensitiveText } from './security/sensitive-redaction'
 
 let mainWindow: BrowserWindow | null = null
@@ -80,10 +85,11 @@ async function initializeServices(): Promise<void> {
   await providerStore.initialize()
 
   providerTester = new ProviderConnectionTester({ redact: redactProviderText })
+  const rendererTrust = createRendererTrustOptions()
   agent = new GrokAgentBridge(
-    (status) => mainWindow?.webContents.send('grok:status', status),
-    (event) => mainWindow?.webContents.send('grok:event', event),
-    (request) => mainWindow?.webContents.send('grok:permission', request),
+    (status) => sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.status, status),
+    (event) => sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.event, event),
+    (request) => sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.permission, request),
     {
       userDataPath: app.getPath('userData'),
       getProviderConfig: () => requireProviderStore().getRuntimeConfig(),
@@ -94,89 +100,98 @@ async function initializeServices(): Promise<void> {
 
 /** 注册渲染层可调用的最小 IPC 接口。 */
 function registerIpcHandlers(): void {
-  ipcMain.handle('grok:get-status', (event) => {
-    assertTrustedSender(event)
-    return requireAgent().getStatus()
-  })
-  ipcMain.handle('grok:choose-workspace', async (event) => {
-    assertTrustedSender(event)
-    const options: Electron.OpenDialogOptions = {
-      title: '选择 Agent Studio 工作目录',
-      properties: ['openDirectory', 'createDirectory']
+  const rendererTrust = createRendererTrustOptions()
+  const desktopIpcMain: DesktopIpcMain = {
+    handle: (channel, listener) => {
+      ipcMain.handle(channel, (event, ...args) => listener(event, ...args))
     }
-    const result = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, options)
+  }
+  const assertTrustedSender = (event: Parameters<typeof assertTrustedIpcSender>[0]): void => {
+    assertTrustedIpcSender(event, rendererTrust)
+  }
+
+  registerAgentIpcHandlers({
+    ipcMain: desktopIpcMain,
+    assertTrustedSender,
+    getAgent: () => agent,
+    statPath: stat,
+    sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
+  })
+
+  registerAppIpcHandlers({
+    ipcMain: desktopIpcMain,
+    assertTrustedSender,
+    chooseWorkspace: openWorkspaceDialog,
+    sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
+  })
+
+  registerProviderIpcHandlers({
+    ipcMain: desktopIpcMain,
+    assertTrustedSender,
+    operations: {
+      getSummary: () => requireProviderStore().getSummary(),
+      listModels: (input?: ProviderConnectionInput) =>
+        runProviderOperation(async () => {
+          const resolvedInput = input
+            ? attachStoredCredential(input)
+            : toConnectionInput(requireProviderRuntimeConfig())
+          return requireProviderTester().listModels(resolvedInput)
+        }),
+      save: (input: ProviderConfigInput) =>
+        runProviderOperation(async () => {
+          const resolvedInput = validateProviderConfigInput(attachStoredCredential(input))
+          const result = await requireProviderTester().testInference(resolvedInput)
+          if (!result.ok) throw new Error(result.message)
+          return persistProviderConfig(resolvedInput)
+        }),
+      selectModel: (model: ProviderModelOption) =>
+        runProviderOperation(async () => {
+          const current = requireProviderRuntimeConfig()
+          if (!model || typeof model.modelId !== 'string') throw new Error('请选择有效模型。')
+
+          const nextInput = validateProviderConfigInput({
+            ...current,
+            modelId: model.modelId,
+            modelDisplayName: model.displayName
+          })
+          const result = await requireProviderTester().testInference(nextInput)
+          if (!result.ok) throw new Error(result.message)
+          return persistProviderConfig(nextInput)
+        }),
+      clear: () =>
+        runProviderOperation(async () => {
+          await requireAgent().disconnect()
+          const summary = await requireProviderStore().clear()
+          await clearGrokProviderConfig(app.getPath('userData'))
+          return summary
+        })
+    }
+  })
+}
+
+/** 打开目录选择器；用户取消属于成功结果，不改变当前工作区。 */
+async function openWorkspaceDialog(): Promise<string | null> {
+  const options: Electron.OpenDialogOptions = {
+    title: '选择 Agent Studio 工作目录',
+    properties: ['openDirectory', 'createDirectory']
+  }
+  const currentWindow = mainWindow
+  const result =
+    currentWindow && !currentWindow.isDestroyed()
+      ? await dialog.showOpenDialog(currentWindow, options)
       : await dialog.showOpenDialog(options)
-    return result.canceled ? null : result.filePaths[0]
-  })
-  ipcMain.handle('grok:connect', (event, workspace: string) => {
-    assertTrustedSender(event)
-    return requireAgent().connect(workspace)
-  })
-  ipcMain.handle('grok:disconnect', (event) => {
-    assertTrustedSender(event)
-    return requireAgent().disconnect()
-  })
-  ipcMain.handle('grok:send-prompt', (event, prompt: string) => {
-    assertTrustedSender(event)
-    return requireAgent().sendPrompt(prompt)
-  })
-  ipcMain.handle('grok:cancel', (event) => {
-    assertTrustedSender(event)
-    return requireAgent().cancel()
-  })
-  ipcMain.handle('grok:respond-permission', (event, requestId: string, optionId?: string) => {
-    assertTrustedSender(event)
-    return requireAgent().respondPermission(requestId, optionId)
-  })
+  return result.canceled ? null : (result.filePaths[0] ?? null)
+}
 
-  ipcMain.handle('provider:get-summary', (event) => {
-    assertTrustedSender(event)
-    return requireProviderStore().getSummary()
-  })
-  ipcMain.handle('provider:list-models', async (event, input?: ProviderConnectionInput) => {
-    assertTrustedSender(event)
-    return runProviderOperation(async () => {
-      const resolvedInput = input
-        ? attachStoredCredential(input)
-        : toConnectionInput(requireProviderRuntimeConfig())
-      return requireProviderTester().listModels(resolvedInput)
-    })
-  })
-  ipcMain.handle('provider:save', async (event, input: ProviderConfigInput) => {
-    assertTrustedSender(event)
-    return runProviderOperation(async () => {
-      const resolvedInput = validateProviderConfigInput(attachStoredCredential(input))
-      const result = await requireProviderTester().testInference(resolvedInput)
-      if (!result.ok) throw new Error(result.message)
-      return persistProviderConfig(resolvedInput)
-    })
-  })
-  ipcMain.handle('provider:select-model', async (event, model: ProviderModelOption) => {
-    assertTrustedSender(event)
-    return runProviderOperation(async () => {
-      const current = requireProviderRuntimeConfig()
-      if (!model || typeof model.modelId !== 'string') throw new Error('请选择有效模型。')
-
-      const nextInput = validateProviderConfigInput({
-        ...current,
-        modelId: model.modelId,
-        modelDisplayName: model.displayName
-      })
-      const result = await requireProviderTester().testInference(nextInput)
-      if (!result.ok) throw new Error(result.message)
-      return persistProviderConfig(nextInput)
-    })
-  })
-  ipcMain.handle('provider:clear', async (event) => {
-    assertTrustedSender(event)
-    return runProviderOperation(async () => {
-      await requireAgent().disconnect()
-      const summary = await requireProviderStore().clear()
-      await clearGrokProviderConfig(app.getPath('userData'))
-      return summary
-    })
-  })
+/** 来源验证与事件推送都动态读取当前窗口，兼容 macOS 关闭后重建窗口。 */
+function createRendererTrustOptions(): RendererTrustOptions {
+  return {
+    getMainWindow: () => mainWindow,
+    ...(is.dev && process.env.ELECTRON_RENDERER_URL
+      ? { developmentUrl: process.env.ELECTRON_RENDERER_URL }
+      : {}),
+    productionFileUrl: pathToFileURL(join(__dirname, '../renderer/index.html')).href
+  }
 }
 
 /** Provider 变更需要与已连接 Runtime 保持事务一致，失败时恢复旧配置。 */
@@ -242,7 +257,9 @@ async function runProviderOperation<T>(operation: () => Promise<T>): Promise<T> 
   try {
     return await operation()
   } catch (error) {
-    throw new Error(redactSensitiveError(error, getKnownSecrets()))
+    throw new Error(
+      toDesktopIpcError(error, (value) => redactSensitiveError(value, getKnownSecrets())).message
+    )
   }
 }
 
@@ -253,12 +270,6 @@ function redactProviderText(text: string): string {
 function getKnownSecrets(): string[] {
   const apiKey = providerStore?.getRuntimeConfig()?.apiKey
   return apiKey ? [apiKey] : []
-}
-
-function assertTrustedSender(event: IpcMainInvokeEvent): void {
-  if (!mainWindow || event.sender !== mainWindow.webContents) {
-    throw new Error('拒绝来自未知窗口的 IPC 调用。')
-  }
 }
 
 function requireAgent(): GrokAgentBridge {
