@@ -40,6 +40,8 @@ import WorkspaceSidebar, {
   type SidebarProjectItem,
   type SidebarSessionItem
 } from './components/WorkspaceSidebar.vue'
+import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
+import { canSendRuntimePrompt, rebuildRuntimeSession } from './runtime-session-actions'
 
 interface ChatMessage {
   id: string
@@ -460,7 +462,37 @@ function beginCurrentTurn(): void {
 
 const isConnected = computed(() => status.value.state === 'ready' || status.value.state === 'busy')
 const isBusy = computed(() => status.value.state === 'busy' || status.value.state === 'connecting')
-const canSend = computed(() => Boolean(prompt.value.trim()) && status.value.state === 'ready')
+const { resolveCapability, isAvailable } = useRuntimeCapabilities(status)
+const promptCapability = computed(() => resolveCapability('session.prompt.text', '发送文本 Prompt'))
+const planCapability = computed(() => resolveCapability('event.plan', '展示执行计划'))
+const toolCapability = computed(() => resolveCapability('event.tool', '展示工具活动'))
+const createSessionCapability = computed(() => resolveCapability('session.create', '创建新对话'))
+const connectCapability = computed(() => resolveCapability('runtime.connect', '连接 Runtime'))
+const canSend = computed(() =>
+  canSendRuntimePrompt(prompt.value, status.value, promptCapability.value.available)
+)
+const promptCapabilityMessage = computed(
+  () => promptCapability.value.reason ?? promptCapability.value.notice
+)
+const planEmptyMessage = computed(
+  () =>
+    planCapability.value.reason ??
+    planCapability.value.notice ??
+    'Runtime 返回执行计划后会显示在这里。'
+)
+const toolEmptyMessage = computed(
+  () =>
+    toolCapability.value.reason ??
+    toolCapability.value.notice ??
+    'Runtime 返回工具活动后会显示在这里。'
+)
+const newChatDisabled = computed(
+  () => isBusy.value || !isAvailable('runtime.connect') || !isAvailable('session.create')
+)
+const newChatDisabledReason = computed(() => {
+  if (isBusy.value) return 'Runtime 正在执行或连接中，暂时不能创建新对话。'
+  return connectCapability.value.reason ?? createSessionCapability.value.reason ?? ''
+})
 const workspaceName = computed(() => {
   // Windows 与 POSIX 路径都按最后一级目录名展示，避免侧栏出现完整盘符路径。
   const segments = workspace.value.split(/[\\/]/).filter(Boolean)
@@ -571,13 +603,36 @@ function deriveSessionTitle(text: string): string {
   return compact.length > 28 ? `${compact.slice(0, 28)}…` : compact
 }
 
-/** 开始新对话：清空当前消息流，并在侧栏置顶一个空白会话。 */
-function startNewChat(): void {
-  const sessionId = crypto.randomUUID()
+/** 只有 Runtime 确认建立新会话后才重置本地视图，避免 UI 清空但上下文仍延续。 */
+async function startNewChat(): Promise<void> {
+  if (newChatDisabled.value) return
+
+  try {
+    const result = await rebuildRuntimeSession({
+      status: status.value,
+      workspace: workspace.value,
+      chooseWorkspace: window.grok.chooseWorkspace,
+      connect: window.grok.connect,
+      disconnect: window.grok.disconnect
+    })
+    if (!result) return
+
+    workspace.value = result.workspace
+    status.value = result.status
+    resetConversationForRuntimeSession(result.status.runtimeSessionId)
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
+}
+
+/** 清理仅属于旧 Runtime session 的 Renderer 状态，并保留不可恢复的最近记录。 */
+function resetConversationForRuntimeSession(sessionId: string): void {
   activeSessionId.value = sessionId
   recentSessions.value = [
     { id: sessionId, title: '新对话' },
-    ...recentSessions.value.filter((item) => item.title !== '新对话')
+    ...recentSessions.value.filter(
+      (item) => item.id !== sessionId && item.id !== 'welcome-session' && item.title !== '新对话'
+    )
   ].slice(0, 12)
   planEntries.value = []
   toolActivities.value = []
@@ -587,16 +642,9 @@ function startNewChat(): void {
     {
       id: 'welcome',
       role: 'assistant',
-      text: workspace.value
-        ? '新对话已就绪。直接描述你想改动或排查的内容即可。'
-        : '选择一个工作目录，我会通过当前模型配置启动 Grok Build Runtime。'
+      text: '新的 Grok Runtime 会话已就绪。直接描述你想改动或排查的内容即可。'
     }
   ]
-}
-
-/** 切换最近会话目前只更新高亮；完整历史恢复留给后续存储计划。 */
-function selectSession(sessionId: string): void {
-  activeSessionId.value = sessionId
 }
 
 /** 选择项目时复用现有选目录流程；已选中的当前项目不重复弹窗。 */
@@ -826,6 +874,8 @@ function scrollMessagesToBottom(): void {
         v-if="!showProviderScreen"
         class="icon-button no-drag"
         title="切换检查器"
+        aria-label="切换检查器"
+        :aria-pressed="showInspector"
         @click="showInspector = !showInspector"
       >
         <SidebarSimple :size="17" />
@@ -858,10 +908,13 @@ function scrollMessagesToBottom(): void {
         :sessions="recentSessions"
         :active-session-id="activeSessionId"
         :active-project-id="activeProjectId"
+        :new-chat-disabled="newChatDisabled"
+        :new-chat-disabled-reason="newChatDisabledReason"
+        :recent-sessions-disabled="true"
+        recent-sessions-disabled-reason="历史恢复将在 P0-06 接入；当前条目仅为本地记录。"
         @new-chat="startNewChat"
         @open-project="chooseWorkspace"
         @open-settings="openProviderSettings"
-        @select-session="selectSession"
         @select-project="selectProject"
       />
 
@@ -1029,7 +1082,8 @@ function scrollMessagesToBottom(): void {
             <textarea
               ref="composer"
               v-model="prompt"
-              :disabled="!isConnected || isBusy"
+              :disabled="status.state !== 'ready' || !promptCapability.available"
+              :aria-describedby="promptCapabilityMessage ? 'prompt-capability-message' : undefined"
               rows="1"
               placeholder="让 Grok Build 阅读、修改或验证这个项目"
               @keydown="handleComposerKeydown"
@@ -1056,13 +1110,24 @@ function scrollMessagesToBottom(): void {
                 v-else
                 class="send-button"
                 :disabled="!canSend"
-                title="发送"
+                :title="promptCapabilityMessage || '发送'"
+                :aria-describedby="
+                  promptCapabilityMessage ? 'prompt-capability-message' : undefined
+                "
                 @click="sendPrompt"
               >
                 <PaperPlaneTilt :size="17" weight="fill" />
               </button>
             </div>
           </div>
+          <p
+            v-if="promptCapabilityMessage"
+            id="prompt-capability-message"
+            class="capability-message"
+            role="status"
+          >
+            {{ promptCapabilityMessage }}
+          </p>
         </footer>
       </main>
 
@@ -1085,9 +1150,9 @@ function scrollMessagesToBottom(): void {
               <p>{{ entry.content }}</p>
             </div>
           </div>
-          <div v-else class="empty-state">
+          <div v-else class="empty-state" role="status" aria-live="polite">
             <ShieldCheck :size="24" />
-            <p>复杂任务开始后，计划会显示在这里。</p>
+            <p>{{ planEmptyMessage }}</p>
           </div>
         </section>
 
@@ -1105,9 +1170,9 @@ function scrollMessagesToBottom(): void {
               </div>
             </div>
           </div>
-          <div v-else class="empty-state compact">
+          <div v-else class="empty-state compact" role="status" aria-live="polite">
             <TerminalWindow :size="22" />
-            <p>工具调用和文件操作会实时出现。</p>
+            <p>{{ toolEmptyMessage }}</p>
           </div>
         </section>
       </aside>
@@ -1119,14 +1184,20 @@ function scrollMessagesToBottom(): void {
         role="dialog"
         aria-modal="true"
         aria-labelledby="permission-title"
+        aria-describedby="permission-description"
       >
         <header>
           <div class="permission-icon"><ShieldCheck :size="22" weight="fill" /></div>
           <div>
             <h2 id="permission-title">需要你的确认</h2>
-            <p>{{ permission.title }}</p>
+            <p id="permission-description">{{ permission.title }}</p>
           </div>
-          <button class="icon-button" title="取消" @click="respondPermission()">
+          <button
+            class="icon-button"
+            title="取消权限请求"
+            aria-label="取消权限请求"
+            @click="respondPermission()"
+          >
             <X :size="17" />
           </button>
         </header>

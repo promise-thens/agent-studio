@@ -8,14 +8,58 @@ export type AgentRuntimeState = 'idle' | 'connecting' | 'ready' | 'busy' | 'erro
 export type AgentExecutionState =
   'pending' | 'running' | 'waiting-permission' | 'completed' | 'failed' | 'cancelled'
 
-/** Runtime 能力的真实支持程度；不支持时必须显式使用 unsupported。 */
+/** Runtime 事件映射的实现成熟度；能力矩阵使用下方独立的正交三轴。 */
 export type AgentCapabilityState = 'native' | 'simulated' | 'experimental' | 'unsupported'
 
-/** Runtime 对单项能力的事实声明；reason 用于解释降级或不支持原因。 */
+/** P0-03 固定能力集合；新增能力时必须同时更新完整矩阵构造与验收测试。 */
+export const AGENT_CAPABILITY_IDS = [
+  'runtime.connect',
+  'session.create',
+  'session.prompt.text',
+  'session.cancel',
+  'session.load',
+  'session.resume',
+  'event.agent-message',
+  'event.agent-thought',
+  'event.plan',
+  'event.tool',
+  'event.diff',
+  'permission.request',
+  'usage.context',
+  'usage.turn'
+] as const
+
+export type AgentCapabilityId = (typeof AGENT_CAPABILITY_IDS)[number]
+
+/** 能力由 Runtime 原生提供、Agent Studio 模拟、明确不支持或尚未确认。 */
+export type AgentCapabilitySupport = 'native' | 'simulated' | 'unsupported' | 'unknown'
+
+/** 已支持能力的实现成熟度；未知或不支持能力不得携带该字段。 */
+export type AgentCapabilityMaturity = 'stable' | 'experimental'
+
+/** 能力结论处于未验证、静态/协议声明或真实运行验证阶段。 */
+export type AgentCapabilityVerification = 'unverified' | 'declared' | 'verified'
+
+/** 能力结论的最强证据来源，不透传 Runtime 协议原始对象。 */
+export type AgentCapabilityEvidenceSource = 'static' | 'protocol' | 'runtime' | 'fallback'
+
+/** Runtime 对单项能力的规范化事实声明；reason 用于解释降级、实验性或模拟行为。 */
 export interface AgentCapability {
-  capabilityId: string
-  state: AgentCapabilityState
+  capabilityId: AgentCapabilityId
+  support: AgentCapabilitySupport
+  maturity?: AgentCapabilityMaturity
+  verification: AgentCapabilityVerification
+  source: AgentCapabilityEvidenceSource
   reason?: string
+}
+
+/** 单次 Runtime 观察得到的完整能力快照；能力项必须覆盖全部固定 ID。 */
+export interface AgentRuntimeCapabilitySnapshot {
+  runtimeId: AgentRuntimeId
+  runtimeVersion?: string
+  protocolVersion?: string
+  observedAt: string
+  capabilities: Record<AgentCapabilityId, AgentCapability>
 }
 
 /** Renderer 可消费的 Runtime 状态摘要，不包含协议对象或进程实现细节。 */
@@ -25,6 +69,7 @@ export interface AgentRuntimeStatus {
   message: string
   workspace?: string
   runtimeSessionId?: string
+  capabilitySnapshot?: AgentRuntimeCapabilitySnapshot
 }
 
 /** 可持久化的任务摘要；时间字段统一使用 ISO 8601 字符串。 */

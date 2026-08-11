@@ -255,13 +255,13 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[P0-03 Runtime 能力矩阵](docs/superpowers/plans/2026-08-10-p0-03-runtime-capability-matrix.md)
+- 当前计划：[P0-04 中性 Agent IPC 边界](docs/superpowers/plans/2026-08-10-p0-04-agent-ipc-boundary.md)
 - 状态：待开始
 - 完成度：任务步骤 `0/9`，验收标准 `0/3`
-- 当前完成：P0-02 已完成 AgentEvent 有序封套、UTF-8 限长、Grok active turn/终态保护、权限载荷边界和 Renderer 顺序守卫
-- 兼容边界：继续保留 `window.grok`、`grok:*` IPC 和 `GrokAgentBridge`；历史存储、时间线 UI 与 Permission Broker 仍由后续计划完成
-- 下一项：[P0-04 中性 Agent IPC 边界](docs/superpowers/plans/2026-08-10-p0-04-agent-ipc-boundary.md)
-- 最近验证：2026-08-10，P0-02 在 Node.js `v22.22.0`、pnpm `10.33.0` 下通过完整 ESLint、`77` 个 Vitest、typecheck、build、diff-check，以及连接、真实 Prompt、工具、取消、异常退出和重连的开发版走查
+- 当前完成：P0-03 已完成 `14` 项固定 Runtime 能力、支持/成熟度/验证度正交矩阵、ACP 标准握手映射、运行证据提升、Renderer 能力门禁、真实新会话重建和最近会话降级说明
+- 兼容边界：继续保留 `window.grok`、`grok:*` IPC 和 `GrokAgentBridge`；能力快照不持久化，历史恢复、Diff/Usage viewer、中性 Agent IPC 与正式 Runtime Adapter 仍由后续计划完成
+- 下一项：[P0-05 Grok ACP Adapter 迁移](docs/superpowers/plans/2026-08-10-p0-05-grok-acp-adapter-migration.md)
+- 最近验证：2026-08-11，P0-03 在 Node.js `v22.22.0`、pnpm `10.33.0` 下通过完整 ESLint、`108` 个 Vitest、typecheck、build、diff-check，以及目录选择、连接、真实 Prompt、执行中门禁、停止收束、真实新会话、最近会话禁用、检查器切换和断开的开发版走查
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

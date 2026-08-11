@@ -17,7 +17,7 @@
 |---|---:|---|---|---|
 | 01 | 5 | [统一 Agent 领域契约](2026-08-10-p0-01-agent-domain-contract.md) | 已完成 | — |
 | 02 | 5 | [Agent 事件归一化](2026-08-10-p0-02-agent-event-normalization.md) | 已完成 | P0-01 |
-| 03 | 4 | [Runtime 能力矩阵](2026-08-10-p0-03-runtime-capability-matrix.md) | 待开始 | P0-01、P0-02 |
+| 03 | 4 | [Runtime 能力矩阵](2026-08-10-p0-03-runtime-capability-matrix.md) | 已完成 | P0-01、P0-02 |
 | 04 | 5 | [中性 Agent IPC 边界](2026-08-10-p0-04-agent-ipc-boundary.md) | 待开始 | P0-01 |
 | 05 | 5 | [Grok ACP Adapter 迁移](2026-08-10-p0-05-grok-acp-adapter-migration.md) | 待开始 | P0-01 至 P0-04 |
 | 06 | 4 | [任务与会话历史](2026-08-10-p0-06-task-session-history.md) | 待开始 | P0-01、P0-02、P0-05 |

@@ -6,10 +6,13 @@ import { Readable, Writable } from 'node:stream'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import * as acp from '@agentclientprotocol/sdk'
 import type {
+  AgentCapabilityId,
+  AgentCapabilityMaturity,
   AgentCapabilityState,
   AgentDiff,
   AgentEvent,
   AgentPermissionRequest,
+  AgentRuntimeCapabilitySnapshot,
   AgentRuntimeStatus,
   AgentTurnOutcome,
   AgentTurnUsage
@@ -19,6 +22,11 @@ import {
   type AgentEventDraft,
   type AgentEventDraftBase
 } from './agent/event-normalizer'
+import {
+  createAgentRuntimeCapabilitySnapshot,
+  updateAgentRuntimeCapabilitySnapshot,
+  type AgentCapabilityInput
+} from './agent/runtime-capabilities'
 import type { ProviderRuntimeConfig } from './provider/provider-config-store'
 import {
   AGENT_STUDIO_MODEL_ALIAS,
@@ -34,6 +42,44 @@ type TextRedactor = (text: string) => string
 const GROK_RUNTIME_ID = 'grok' as const
 const MAX_PERMISSION_PAYLOAD_BYTES = 256 * 1024
 const MAX_PERMISSION_DISPLAY_TEXT_BYTES = 4 * 1024
+
+/** Grok 当前已由代码路径确认的静态能力；会话加载与恢复留给完整矩阵自动补为未知。 */
+const GROK_STATIC_CAPABILITIES: readonly AgentCapabilityInput[] = [
+  ...[
+    'runtime.connect',
+    'session.create',
+    'session.prompt.text',
+    'session.cancel',
+    'event.agent-message',
+    'event.agent-thought',
+    'event.plan',
+    'event.tool',
+    'event.diff',
+    'permission.request'
+  ].map((capabilityId): AgentCapabilityInput => ({
+    capabilityId: capabilityId as AgentCapabilityId,
+    support: 'native',
+    maturity: 'stable',
+    verification: 'declared',
+    source: 'static'
+  })),
+  {
+    capabilityId: 'usage.context',
+    support: 'native',
+    maturity: 'experimental',
+    verification: 'declared',
+    source: 'static',
+    reason: 'Grok ACP Context Usage 当前按实验性能力接入。'
+  },
+  {
+    capabilityId: 'usage.turn',
+    support: 'native',
+    maturity: 'experimental',
+    verification: 'declared',
+    source: 'static',
+    reason: 'Grok ACP Turn Usage 当前按实验性能力接入。'
+  }
+]
 
 interface PendingPermission {
   turnId: string
@@ -65,18 +111,23 @@ export class GrokAgentBridge {
   private sessionId: string | null = null
   private activeTurn: ActiveTurn | null = null
   private pendingPermissions = new Map<string, PendingPermission>()
-  private status: AgentRuntimeStatus = {
-    runtimeId: GROK_RUNTIME_ID,
-    state: 'idle',
-    message: '尚未连接 Grok Build'
-  }
+  private capabilitySnapshot: AgentRuntimeCapabilitySnapshot
+  private status: AgentRuntimeStatus
 
   constructor(
     private readonly onStatus: StatusListener,
     private readonly onEvent: EventListener,
     private readonly onPermission: PermissionListener,
     private readonly options: GrokAgentBridgeOptions
-  ) {}
+  ) {
+    this.capabilitySnapshot = createGrokCapabilitySnapshot((text) => this.safeRedact(text))
+    this.status = {
+      runtimeId: GROK_RUNTIME_ID,
+      state: 'idle',
+      message: '尚未连接 Grok Build',
+      capabilitySnapshot: this.capabilitySnapshot
+    }
+  }
 
   getStatus(): AgentRuntimeStatus {
     return this.status
@@ -131,6 +182,7 @@ export class GrokAgentBridge {
       this.process = null
       this.connection = null
       this.sessionId = null
+      this.resetCapabilitySnapshot()
       this.updateStatus({
         state: 'error',
         message,
@@ -150,6 +202,7 @@ export class GrokAgentBridge {
       this.process = null
       this.connection = null
       this.sessionId = null
+      this.resetCapabilitySnapshot()
       if (this.status.state !== 'idle') {
         this.updateStatus({
           state: code === 0 && !hadActiveTurn ? 'idle' : 'error',
@@ -174,29 +227,15 @@ export class GrokAgentBridge {
     this.connection = connection
 
     try {
-      await connection.initialize({
-        protocolVersion: acp.PROTOCOL_VERSION,
-        clientCapabilities: {},
-        clientInfo: {
-          name: 'agent-studio',
-          version: '0.1.0'
-        }
-      })
-      // 异步初始化完成后重新核对身份，旧连接不得覆盖新连接或新进程状态。
-      if (this.process !== child || this.connection !== connection) return this.status
+      const runtimeSessionId = await this.initializeRuntimeSession(connection, child, workspace)
+      if (!runtimeSessionId) return this.status
 
-      const session = await connection.newSession({
-        cwd: workspace,
-        mcpServers: []
-      })
-      if (this.process !== child || this.connection !== connection) return this.status
-
-      this.sessionId = session.sessionId
+      this.sessionId = runtimeSessionId
       this.updateStatus({
         state: 'ready',
         message: 'Grok Build 已连接',
         workspace,
-        runtimeSessionId: session.sessionId
+        runtimeSessionId
       })
       return this.status
     } catch (error) {
@@ -231,6 +270,7 @@ export class GrokAgentBridge {
     this.connection = null
     this.sessionId = null
     process?.kill()
+    this.resetCapabilitySnapshot()
 
     if (updateStatus) {
       this.updateStatus({ state: 'idle', message: '已断开 Grok Build' })
@@ -260,8 +300,12 @@ export class GrokAgentBridge {
     }
     this.activeTurn = activeTurn
 
-    const currentStatus = this.status
-    this.updateStatus({ ...currentStatus, state: 'busy', message: 'Grok Build 正在处理' })
+    this.updateStatus({
+      state: 'busy',
+      message: 'Grok Build 正在处理',
+      workspace: this.status.workspace,
+      runtimeSessionId
+    })
 
     try {
       const response = await connection.prompt({
@@ -270,9 +314,15 @@ export class GrokAgentBridge {
       })
       if (this.activeTurn !== activeTurn) return
 
+      this.verifyCapability('session.prompt.text', 'stable', undefined, false)
       this.emitDraft(activeTurn, mapGrokPromptResponse(response, runtimeSessionId))
       if (this.connection === connection && this.sessionId === runtimeSessionId) {
-        this.updateStatus({ ...this.status, state: 'ready', message: 'Grok Build 已连接' })
+        this.updateStatus({
+          state: 'ready',
+          message: 'Grok Build 已连接',
+          workspace: this.status.workspace,
+          runtimeSessionId
+        })
       }
     } catch (error) {
       if (this.activeTurn !== activeTurn) return
@@ -291,7 +341,12 @@ export class GrokAgentBridge {
         outcome: 'failed'
       })
       if (this.connection === connection && this.sessionId === runtimeSessionId) {
-        this.updateStatus({ ...this.status, state: 'ready', message: 'Grok Build 已连接' })
+        this.updateStatus({
+          state: 'ready',
+          message: 'Grok Build 已连接',
+          workspace: this.status.workspace,
+          runtimeSessionId
+        })
       }
     }
   }
@@ -304,6 +359,9 @@ export class GrokAgentBridge {
     this.cancelPendingPermissions(activeTurn.turnId)
     try {
       await activeTurn.connection.cancel({ sessionId: activeTurn.runtimeSessionId })
+      if (this.activeTurn === activeTurn) {
+        this.verifyCapability('session.cancel', 'stable')
+      }
     } catch (error) {
       if (this.activeTurn !== activeTurn) return
       activeTurn.cancelRequested = false
@@ -364,6 +422,8 @@ export class GrokAgentBridge {
       return Promise.resolve({ outcome: { outcome: 'cancelled' } })
     }
 
+    this.verifyCapability('permission.request', 'stable')
+
     return new Promise((resolve) => {
       // 先登记再通知 Renderer，避免同步响应早于 pending 状态建立。
       this.pendingPermissions.set(id, {
@@ -400,6 +460,7 @@ export class GrokAgentBridge {
     const event = activeTurn.normalizer.normalize(draft)
     if (!event) return
 
+    this.verifyEventCapability(event)
     if (event.kind === 'turn-complete' && this.activeTurn === activeTurn) {
       this.cancelPendingPermissions(activeTurn.turnId)
     }
@@ -442,9 +503,128 @@ export class GrokAgentBridge {
     return existsSync(bundledPath) ? bundledPath : 'grok'
   }
 
-  private updateStatus(status: Omit<AgentRuntimeStatus, 'runtimeId'>): void {
-    this.status = { ...status, runtimeId: GROK_RUNTIME_ID }
+  /**
+   * 完成 ACP 握手与新会话创建。每个异步边界后都核对连接身份，旧连接不得推进能力快照或创建会话。
+   */
+  private async initializeRuntimeSession(
+    connection: acp.ClientSideConnection,
+    child: ChildProcessWithoutNullStreams,
+    workspace: string
+  ): Promise<string | null> {
+    const initializeResponse = await connection.initialize({
+      protocolVersion: acp.PROTOCOL_VERSION,
+      clientCapabilities: {},
+      clientInfo: {
+        name: 'agent-studio',
+        version: '0.1.0'
+      }
+    })
+    if (this.process !== child || this.connection !== connection) return null
+
+    this.capabilitySnapshot = mapGrokInitializeCapabilitySnapshot(
+      this.capabilitySnapshot,
+      initializeResponse,
+      (text) => this.safeRedact(text)
+    )
+
+    const session = await connection.newSession({
+      cwd: workspace,
+      mcpServers: []
+    })
+    if (this.process !== child || this.connection !== connection) return null
+    this.verifyCapability('runtime.connect', 'stable', undefined, false)
+    this.verifyCapability('session.create', 'stable', undefined, false)
+    return session.sessionId
+  }
+
+  /** 所有状态统一附加当前能力快照，禁止协议对象或旧快照从调用方混入。 */
+  private updateStatus(status: Omit<AgentRuntimeStatus, 'runtimeId' | 'capabilitySnapshot'>): void {
+    this.status = {
+      ...status,
+      runtimeId: GROK_RUNTIME_ID,
+      capabilitySnapshot: this.capabilitySnapshot
+    }
     this.onStatus(this.status)
+  }
+
+  /** 新连接、断开和失败均恢复静态基线，避免旧 Runtime 版本与验证结果泄漏到下一连接。 */
+  private resetCapabilitySnapshot(): void {
+    this.capabilitySnapshot = createGrokCapabilitySnapshot((text) => this.safeRedact(text))
+  }
+
+  /** 将真实运行证据提升为 verified；同一能力只在首次提升时发布状态，避免事件流刷屏。 */
+  private verifyCapability(
+    capabilityId: AgentCapabilityId,
+    maturity: AgentCapabilityMaturity,
+    reason?: string,
+    publish = true
+  ): void {
+    const current = this.capabilitySnapshot.capabilities[capabilityId]
+    if (current.verification === 'verified' && current.source === 'runtime') return
+
+    this.capabilitySnapshot = updateAgentRuntimeCapabilitySnapshot(
+      this.capabilitySnapshot,
+      {
+        capabilityId,
+        support: 'native',
+        maturity,
+        verification: 'verified',
+        source: 'runtime',
+        ...(reason ? { reason } : {})
+      },
+      { redactText: (text) => this.safeRedact(text) }
+    )
+    if (publish) this.publishCapabilitySnapshot()
+  }
+
+  /** 已安全归一化的事件才可作为能力运行证据，Renderer 不参与能力推断。 */
+  private verifyEventCapability(event: AgentEvent): void {
+    switch (event.kind) {
+      case 'agent-message':
+        this.verifyCapability('event.agent-message', 'stable')
+        break
+      case 'agent-thought':
+        this.verifyCapability('event.agent-thought', 'stable')
+        break
+      case 'plan':
+        this.verifyCapability('event.plan', 'stable')
+        break
+      case 'tool-call':
+      case 'tool-update':
+        this.verifyCapability('event.tool', 'stable')
+        break
+      case 'diff':
+        this.verifyCapability('event.diff', 'stable')
+        break
+      case 'usage':
+        this.verifyCapability(
+          event.usage.scope === 'context' ? 'usage.context' : 'usage.turn',
+          'experimental',
+          'Grok Runtime 已返回实验性 Usage 数据。'
+        )
+        break
+      case 'turn-complete':
+        if (event.usage) {
+          this.verifyCapability(
+            'usage.turn',
+            'experimental',
+            'Grok Runtime 已返回实验性 Turn Usage 数据。'
+          )
+        }
+        break
+      case 'error':
+        break
+    }
+  }
+
+  /** 只复用当前中性状态字段，用新快照重新发布；不会传播 Runtime 原始握手数据。 */
+  private publishCapabilitySnapshot(): void {
+    this.updateStatus({
+      state: this.status.state,
+      message: this.status.message,
+      ...(this.status.workspace ? { workspace: this.status.workspace } : {}),
+      ...(this.status.runtimeSessionId ? { runtimeSessionId: this.status.runtimeSessionId } : {})
+    })
   }
 
   private safeRedact(text: string): string {
@@ -458,6 +638,79 @@ export class GrokAgentBridge {
   private redactError(error: unknown): string {
     return this.safeRedact(error instanceof Error ? error.message : String(error))
   }
+}
+
+/** 创建 Grok 静态基线，完整矩阵会把未声明的加载与恢复能力保守标为尚未验证。 */
+function createGrokCapabilitySnapshot(redactText?: TextRedactor): AgentRuntimeCapabilitySnapshot {
+  return createAgentRuntimeCapabilitySnapshot({
+    runtimeId: GROK_RUNTIME_ID,
+    capabilities: GROK_STATIC_CAPABILITIES,
+    ...(redactText ? { redactText } : {})
+  })
+}
+
+/**
+ * 仅投影 ACP initialize 标准字段并校验协商版本；_meta、认证方式和其他扩展字段全部丢弃。
+ */
+export function mapGrokInitializeCapabilitySnapshot(
+  baseline: AgentRuntimeCapabilitySnapshot,
+  response: acp.InitializeResponse,
+  redactText: TextRedactor
+): AgentRuntimeCapabilitySnapshot {
+  if (response.protocolVersion !== acp.PROTOCOL_VERSION) {
+    throw new Error(
+      `ACP 协议版本不兼容：Runtime 返回 ${response.protocolVersion}，客户端支持 ${acp.PROTOCOL_VERSION}。`
+    )
+  }
+
+  const runtimeVersion = response.agentInfo?.version?.trim()
+  let snapshot = createAgentRuntimeCapabilitySnapshot({
+    runtimeId: GROK_RUNTIME_ID,
+    ...(runtimeVersion ? { runtimeVersion: redactText(runtimeVersion) } : {}),
+    protocolVersion: String(response.protocolVersion),
+    capabilities: Object.values(baseline.capabilities),
+    redactText
+  })
+
+  snapshot = updateAgentRuntimeCapabilitySnapshot(
+    snapshot,
+    response.agentCapabilities?.loadSession === true
+      ? {
+          capabilityId: 'session.load',
+          support: 'native',
+          maturity: 'stable',
+          verification: 'declared',
+          source: 'protocol'
+        }
+      : {
+          capabilityId: 'session.load',
+          support: 'unsupported',
+          verification: 'declared',
+          source: 'protocol',
+          reason: 'Grok Runtime 未声明 ACP session/load 支持。'
+        },
+    { redactText }
+  )
+
+  return updateAgentRuntimeCapabilitySnapshot(
+    snapshot,
+    response.agentCapabilities?.sessionCapabilities?.resume != null
+      ? {
+          capabilityId: 'session.resume',
+          support: 'native',
+          maturity: 'stable',
+          verification: 'declared',
+          source: 'protocol'
+        }
+      : {
+          capabilityId: 'session.resume',
+          support: 'unsupported',
+          verification: 'declared',
+          source: 'protocol',
+          reason: 'Grok Runtime 未声明 ACP session/resume 支持。'
+        },
+    { redactText }
+  )
 }
 
 /**

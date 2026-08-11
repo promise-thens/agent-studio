@@ -32,10 +32,22 @@ const props = withDefaults(
     sessions: SidebarSessionItem[]
     activeSessionId: string
     activeProjectId?: string
+    /** 连接或执行期间由上层禁用新对话，避免并发重建 Runtime 会话。 */
+    newChatDisabled?: boolean
+    /** 为禁用的新对话入口提供可读原因，不替代主区域的状态反馈。 */
+    newChatDisabledReason?: string
+    /** P0-06 接入历史恢复前，使用原生 disabled 阻止本地条目伪装成可恢复会话。 */
+    recentSessionsDisabled?: boolean
+    /** 禁用原因必须可见，同时提供给每个会话按钮的无障碍说明。 */
+    recentSessionsDisabledReason?: string
   }>(),
   {
     brandName: 'Agent Studio',
-    activeProjectId: ''
+    activeProjectId: '',
+    newChatDisabled: false,
+    newChatDisabledReason: '',
+    recentSessionsDisabled: true,
+    recentSessionsDisabledReason: '历史恢复将在 P0-06 接入；当前条目仅为本地记录。'
   }
 )
 
@@ -120,7 +132,14 @@ const filteredSessions = computed(() => {
 
     <!-- 主操作区：新对话与打开项目，对应 Codex 顶部动作列表 -->
     <div class="sidebar-actions">
-      <button class="sidebar-link" type="button" @click="emit('newChat')">
+      <button
+        class="sidebar-link"
+        type="button"
+        :disabled="newChatDisabled"
+        :title="newChatDisabledReason || '新对话'"
+        aria-label="新对话"
+        @click="emit('newChat')"
+      >
         <NotePencil :size="16" />
         <span>新对话</span>
       </button>
@@ -159,6 +178,13 @@ const filteredSessions = computed(() => {
       <!-- 最近分区：展示本地点会话标题列表 -->
       <section class="sidebar-section" aria-label="最近">
         <div class="section-label">最近</div>
+        <p
+          v-if="recentSessionsDisabled && recentSessionsDisabledReason"
+          id="recent-sessions-disabled-reason"
+          class="section-hint"
+        >
+          {{ recentSessionsDisabledReason }}
+        </p>
 
         <div v-if="filteredSessions.length" class="section-list">
           <button
@@ -166,8 +192,18 @@ const filteredSessions = computed(() => {
             :key="session.id"
             class="sidebar-item session-item"
             type="button"
-            :class="{ active: session.id === activeSessionId }"
-            :title="session.title"
+            :class="{ active: !recentSessionsDisabled && session.id === activeSessionId }"
+            :disabled="recentSessionsDisabled"
+            :aria-describedby="
+              recentSessionsDisabled && recentSessionsDisabledReason
+                ? 'recent-sessions-disabled-reason'
+                : undefined
+            "
+            :title="
+              recentSessionsDisabled && recentSessionsDisabledReason
+                ? `${session.title}：${recentSessionsDisabledReason}`
+                : session.title
+            "
             @click="emit('selectSession', session.id)"
           >
             <span>{{ session.title }}</span>
@@ -339,9 +375,14 @@ const filteredSessions = computed(() => {
   font-size: 13px;
 }
 
-.sidebar-link:hover,
-.sidebar-item:hover {
+.sidebar-link:not(:disabled):hover,
+.sidebar-item:not(:disabled):hover {
   background: rgba(255, 255, 255, 0.04);
+}
+
+.sidebar-link:disabled {
+  color: color-mix(in srgb, var(--text-3) 72%, transparent);
+  cursor: not-allowed;
 }
 
 .sidebar-link svg,
@@ -370,6 +411,13 @@ const filteredSessions = computed(() => {
   color: var(--text-3);
   font-size: 11px;
   font-weight: 600;
+}
+
+.section-hint {
+  margin: 0 10px 4px;
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .section-list {
@@ -402,6 +450,11 @@ const filteredSessions = computed(() => {
 
 .session-item {
   padding-left: 12px;
+}
+
+.session-item:disabled {
+  color: color-mix(in srgb, var(--text-3) 72%, transparent);
+  cursor: not-allowed;
 }
 
 .sidebar-empty {

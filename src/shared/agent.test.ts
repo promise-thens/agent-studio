@@ -1,10 +1,12 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type {
   AgentCapability,
+  AgentCapabilityId,
   AgentCapabilityState,
   AgentContextUsage,
   AgentEvent,
   AgentPermissionRequest,
+  AgentRuntimeCapabilitySnapshot,
   AgentRuntimeStatus,
   AgentSessionSummary,
   AgentTaskSummary,
@@ -12,6 +14,7 @@ import type {
   AgentTurnUsage,
   AgentUsage
 } from './agent'
+import { AGENT_CAPABILITY_IDS } from './agent'
 
 const timestamp = '2026-08-10T10:00:00.000Z'
 
@@ -68,7 +71,7 @@ describe('Agent 领域契约', () => {
     }
   })
 
-  it('Usage 使用非空判别联合，并保留 unsupported 能力状态', () => {
+  it('Usage 使用非空判别联合，并保持事件能力成熟度与 Runtime 能力矩阵相互独立', () => {
     const contextUsage: AgentContextUsage = {
       scope: 'context',
       usedTokens: 120,
@@ -84,20 +87,54 @@ describe('Agent 领域契约', () => {
     }
     const capabilityState: AgentCapabilityState = 'unsupported'
     const unsupportedCapability: AgentCapability = {
-      capabilityId: 'terminal-resume',
-      state: capabilityState,
+      capabilityId: 'session.resume',
+      support: 'unsupported',
+      verification: 'declared',
+      source: 'protocol',
       reason: '当前 Runtime 未声明恢复能力'
     }
 
     expectTypeOf<AgentUsage>().toEqualTypeOf<AgentContextUsage | AgentTurnUsage>()
+    expectTypeOf<AgentCapabilityId>().toEqualTypeOf<(typeof AGENT_CAPABILITY_IDS)[number]>()
+    expect(capabilityState).toBe('unsupported')
     expectSerializable(contextUsage)
     expectSerializable(turnUsage)
     expectSerializable(unsupportedCapability)
     expect(JSON.parse(JSON.stringify(unsupportedCapability))).toEqual({
-      capabilityId: 'terminal-resume',
-      state: 'unsupported',
+      capabilityId: 'session.resume',
+      support: 'unsupported',
+      verification: 'declared',
+      source: 'protocol',
       reason: '当前 Runtime 未声明恢复能力'
     })
+  })
+
+  it('固定能力 ID 完整且唯一，完整快照可克隆和 JSON 往返', () => {
+    expect(AGENT_CAPABILITY_IDS).toHaveLength(14)
+    expect(new Set(AGENT_CAPABILITY_IDS).size).toBe(AGENT_CAPABILITY_IDS.length)
+
+    const capabilities = Object.fromEntries(
+      AGENT_CAPABILITY_IDS.map((capabilityId) => [
+        capabilityId,
+        {
+          capabilityId,
+          support: 'unknown',
+          verification: 'unverified',
+          source: 'fallback',
+          reason: '当前 Runtime 尚未验证此能力'
+        }
+      ])
+    ) as AgentRuntimeCapabilitySnapshot['capabilities']
+    const snapshot: AgentRuntimeCapabilitySnapshot = {
+      runtimeId: 'grok',
+      runtimeVersion: '1.2.3',
+      protocolVersion: '1',
+      observedAt: timestamp,
+      capabilities
+    }
+
+    expect(Object.keys(snapshot.capabilities)).toEqual(AGENT_CAPABILITY_IDS)
+    expectSerializable(snapshot)
   })
 
   it('全部中性事件均可克隆和 JSON 往返，且不包含协议兜底字段', () => {

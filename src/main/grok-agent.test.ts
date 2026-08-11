@@ -1,9 +1,18 @@
 import * as acp from '@agentclientprotocol/sdk'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentEvent, AgentPermissionRequest } from '../shared/agent'
+import type {
+  AgentCapabilityId,
+  AgentCapabilityMaturity,
+  AgentEvent,
+  AgentPermissionRequest,
+  AgentRuntimeCapabilitySnapshot,
+  AgentRuntimeStatus
+} from '../shared/agent'
 import { AgentEventNormalizer, type AgentEventDraft } from './agent/event-normalizer'
 import {
   GrokAgentBridge,
+  mapGrokInitializeCapabilitySnapshot,
   mapGrokPermissionRequest,
   mapGrokPromptResponse,
   mapGrokSessionUpdate
@@ -12,6 +21,94 @@ import {
 const FAKE_SECRET = 'fake-test-secret'
 
 describe('Grok ACP 中性领域映射', () => {
+  it('initialize 只投影标准版本与 load/resume 能力，不透传协议扩展字段', () => {
+    const baseline = createBridgeHarness().bridge.getStatus().capabilitySnapshot!
+    const snapshot = mapGrokInitializeCapabilitySnapshot(
+      baseline,
+      {
+        protocolVersion: acp.PROTOCOL_VERSION,
+        agentCapabilities: {
+          loadSession: true,
+          sessionCapabilities: { resume: {} },
+          providers: { secret: FAKE_SECRET },
+          _meta: { instanceId: FAKE_SECRET }
+        },
+        agentInfo: {
+          name: 'grok-build',
+          version: '1.2.3',
+          _meta: { agentVersion: FAKE_SECRET }
+        },
+        authMethods: [{ id: FAKE_SECRET, name: FAKE_SECRET }],
+        _meta: {
+          agentVersion: FAKE_SECRET,
+          modelState: FAKE_SECRET,
+          deviceId: FAKE_SECRET
+        }
+      } as unknown as acp.InitializeResponse,
+      redactFakeText
+    )
+
+    expect(snapshot.runtimeVersion).toBe('1.2.3')
+    expect(snapshot.protocolVersion).toBe(String(acp.PROTOCOL_VERSION))
+    expect(snapshot.capabilities['session.load']).toMatchObject({
+      support: 'native',
+      maturity: 'stable',
+      verification: 'declared',
+      source: 'protocol'
+    })
+    expect(snapshot.capabilities['session.resume']).toMatchObject({
+      support: 'native',
+      maturity: 'stable',
+      verification: 'declared',
+      source: 'protocol'
+    })
+
+    const serialized = JSON.stringify(snapshot)
+    expect(serialized).not.toContain(FAKE_SECRET)
+    expect(serialized).not.toContain('_meta')
+    expect(serialized).not.toContain('authMethods')
+    expect(serialized).not.toContain('providers')
+    expect(serialized).not.toContain('instanceId')
+  })
+
+  it('initialize 未声明 load/resume 时记录协议负证据，agentInfo 缺失时不编造版本', () => {
+    const baseline = createBridgeHarness().bridge.getStatus().capabilitySnapshot!
+    const snapshot = mapGrokInitializeCapabilitySnapshot(
+      baseline,
+      {
+        protocolVersion: acp.PROTOCOL_VERSION,
+        agentCapabilities: {}
+      },
+      redactFakeText
+    )
+
+    expect(snapshot.runtimeVersion).toBeUndefined()
+    expect(snapshot.capabilities['session.load']).toMatchObject({
+      support: 'unsupported',
+      verification: 'declared',
+      source: 'protocol'
+    })
+    expect(snapshot.capabilities['session.load'].maturity).toBeUndefined()
+    expect(snapshot.capabilities['session.resume']).toMatchObject({
+      support: 'unsupported',
+      verification: 'declared',
+      source: 'protocol'
+    })
+    expect(snapshot.capabilities['session.resume'].maturity).toBeUndefined()
+  })
+
+  it('initialize 返回不兼容协议版本时立即拒绝', () => {
+    const baseline = createBridgeHarness().bridge.getStatus().capabilitySnapshot!
+
+    expect(() =>
+      mapGrokInitializeCapabilitySnapshot(
+        baseline,
+        { protocolVersion: acp.PROTOCOL_VERSION + 1, agentCapabilities: {} },
+        redactFakeText
+      )
+    ).toThrow('ACP 协议版本不兼容')
+  })
+
   it('映射文本、计划与上下文 Usage，并剥离协议扩展字段', () => {
     expect(
       mapUpdate({
@@ -294,6 +391,114 @@ describe('Grok ACP 中性领域映射', () => {
 })
 
 describe('GrokAgentBridge Turn 生命周期', () => {
+  it('初始与断开状态始终携带静态能力矩阵，并清除旧握手版本和运行验证', async () => {
+    const harness = createBridgeHarness()
+    const initialSnapshot = harness.bridge.getStatus().capabilitySnapshot!
+
+    expect(initialSnapshot.capabilities['session.load']).toMatchObject({
+      support: 'unknown',
+      verification: 'unverified',
+      source: 'fallback'
+    })
+    harness.internal.capabilitySnapshot = mapGrokInitializeCapabilitySnapshot(
+      initialSnapshot,
+      initializeResponse({ loadSession: true, resume: true, runtimeVersion: '1.2.3' }),
+      redactFakeText
+    )
+    harness.internal.verifyCapability('event.agent-message', 'stable', undefined, false)
+
+    await harness.bridge.disconnect()
+
+    const disconnected = harness.bridge.getStatus()
+    expect(disconnected.state).toBe('idle')
+    expect(disconnected.capabilitySnapshot?.runtimeVersion).toBeUndefined()
+    expect(disconnected.capabilitySnapshot?.protocolVersion).toBeUndefined()
+    expect(disconnected.capabilitySnapshot?.capabilities['event.agent-message']).toMatchObject({
+      verification: 'declared',
+      source: 'static'
+    })
+    expect(disconnected.capabilitySnapshot?.capabilities['session.load']).toMatchObject({
+      support: 'unknown',
+      verification: 'unverified',
+      source: 'fallback'
+    })
+  })
+
+  it('协议版本不匹配时不会创建 Runtime session', async () => {
+    const initialize = vi.fn().mockResolvedValue({
+      protocolVersion: acp.PROTOCOL_VERSION + 1,
+      agentCapabilities: {}
+    })
+    const newSession = vi.fn()
+    const connection = { initialize, newSession } as unknown as acp.ClientSideConnection
+    const harness = createBridgeHarness(connection, false)
+    const child = {} as ChildProcessWithoutNullStreams
+    harness.internal.process = child
+
+    await expect(
+      harness.internal.initializeRuntimeSession(connection, child, '/tmp/workspace')
+    ).rejects.toThrow('ACP 协议版本不兼容')
+    expect(newSession).not.toHaveBeenCalled()
+  })
+
+  it('握手与新会话成功后保存标准摘要，并验证连接和会话创建能力', async () => {
+    const initialize = vi
+      .fn()
+      .mockResolvedValue(
+        initializeResponse({ loadSession: true, resume: true, runtimeVersion: '1.2.3' })
+      )
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-2' })
+    const connection = { initialize, newSession } as unknown as acp.ClientSideConnection
+    const harness = createBridgeHarness(connection, false)
+    const child = {} as ChildProcessWithoutNullStreams
+    harness.internal.process = child
+
+    await expect(
+      harness.internal.initializeRuntimeSession(connection, child, '/tmp/workspace')
+    ).resolves.toBe('runtime-session-2')
+    expect(newSession).toHaveBeenCalledWith({ cwd: '/tmp/workspace', mcpServers: [] })
+    expect(harness.internal.capabilitySnapshot).toMatchObject({
+      runtimeVersion: '1.2.3',
+      protocolVersion: String(acp.PROTOCOL_VERSION)
+    })
+    expect(harness.internal.capabilitySnapshot.capabilities['runtime.connect']).toMatchObject({
+      verification: 'verified',
+      source: 'runtime'
+    })
+    expect(harness.internal.capabilitySnapshot.capabilities['session.create']).toMatchObject({
+      verification: 'verified',
+      source: 'runtime'
+    })
+  })
+
+  it('旧连接晚到的 initialize 结果不能覆盖新连接或继续创建 session', async () => {
+    let resolveInitialize: ((response: acp.InitializeResponse) => void) | undefined
+    const initialize = vi.fn().mockImplementation(
+      () =>
+        new Promise<acp.InitializeResponse>((resolve) => {
+          resolveInitialize = resolve
+        })
+    )
+    const newSession = vi.fn()
+    const oldConnection = { initialize, newSession } as unknown as acp.ClientSideConnection
+    const harness = createBridgeHarness(oldConnection, false)
+    const oldChild = {} as ChildProcessWithoutNullStreams
+    harness.internal.process = oldChild
+    const oldSnapshot = harness.internal.capabilitySnapshot
+
+    const initialization = harness.internal.initializeRuntimeSession(
+      oldConnection,
+      oldChild,
+      '/tmp/workspace'
+    )
+    harness.internal.connection = {} as acp.ClientSideConnection
+    resolveInitialize?.(initializeResponse({ loadSession: true, resume: true }))
+
+    await expect(initialization).resolves.toBeNull()
+    expect(newSession).not.toHaveBeenCalled()
+    expect(harness.internal.capabilitySnapshot).toBe(oldSnapshot)
+  })
+
   it('首个终态统一取消当前 Turn 权限，并拒绝重复终态', () => {
     const harness = createBridgeHarness()
     let permissionResponse: acp.RequestPermissionResponse | undefined
@@ -332,6 +537,12 @@ describe('GrokAgentBridge Turn 生命周期', () => {
     harness.internal.emitDraft(harness.activeTurn, turnCompleteDraft('cancelled'))
 
     expect(cancel).toHaveBeenCalledWith({ sessionId: 'runtime-session-1' })
+    expect(
+      harness.bridge.getStatus().capabilitySnapshot?.capabilities['session.cancel']
+    ).toMatchObject({
+      verification: 'verified',
+      source: 'runtime'
+    })
     expect(harness.events.map((event) => event.kind)).toEqual(['tool-update', 'turn-complete'])
     expect(harness.internal.activeTurn).toBeNull()
   })
@@ -367,6 +578,70 @@ describe('GrokAgentBridge Turn 生命周期', () => {
 
     expect(harness.events).toHaveLength(1)
     expect(harness.events[0]).toMatchObject({ kind: 'agent-message', text: '当前事件' })
+    expect(
+      harness.bridge.getStatus().capabilitySnapshot?.capabilities['event.agent-message']
+    ).toMatchObject({ verification: 'verified', source: 'runtime' })
+  })
+
+  it('思考、计划、工具、Diff 与 Context Usage 首次到达后提升对应能力', () => {
+    const harness = createBridgeHarness()
+
+    for (const update of [
+      {
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: '正在分析' }
+      },
+      {
+        sessionUpdate: 'plan',
+        entries: [{ content: '执行测试', priority: 'high', status: 'in_progress' }]
+      },
+      {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool-1',
+        title: '修改文件',
+        content: [{ type: 'diff', path: '/tmp/test.ts', oldText: null, newText: 'after' }]
+      },
+      {
+        sessionUpdate: 'usage_update',
+        used: 120,
+        size: 4096
+      }
+    ] satisfies acp.SessionUpdate[]) {
+      harness.internal.handleSessionUpdate(notification(update), harness.connection)
+    }
+
+    for (const capabilityId of [
+      'event.agent-thought',
+      'event.plan',
+      'event.tool',
+      'event.diff',
+      'usage.context'
+    ] as const) {
+      expect(
+        harness.bridge.getStatus().capabilitySnapshot?.capabilities[capabilityId]
+      ).toMatchObject({ verification: 'verified', source: 'runtime' })
+    }
+    expect(
+      harness.bridge.getStatus().capabilitySnapshot?.capabilities['usage.context']
+    ).toMatchObject({ maturity: 'experimental' })
+  })
+
+  it('有效权限请求到达后提升权限能力，响应仍按原有 pending 门禁回传', async () => {
+    const harness = createBridgeHarness()
+    const responsePromise = harness.internal.requestPermission(
+      permissionRequest({ optionId: 'allow-once' }),
+      harness.connection
+    )
+
+    expect(harness.permissions).toHaveLength(1)
+    expect(
+      harness.bridge.getStatus().capabilitySnapshot?.capabilities['permission.request']
+    ).toMatchObject({ verification: 'verified', source: 'runtime' })
+
+    harness.bridge.respondPermission(harness.permissions[0].id, 'allow-once')
+    await expect(responsePromise).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'allow-once' }
+    })
   })
 
   it('超限权限不进入 Renderer，并生成有限的可恢复错误', async () => {
@@ -405,6 +680,47 @@ describe('GrokAgentBridge Turn 生命周期', () => {
     expect(harness.events[1]).toMatchObject({ kind: 'turn-complete', outcome: 'failed' })
     expect(harness.internal.activeTurn).toBeNull()
   })
+
+  it('Prompt 成功后提升文本与 Turn Usage 能力，busy/ready 保留同一握手摘要', async () => {
+    const prompt = vi.fn().mockResolvedValue({
+      stopReason: 'end_turn',
+      usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 }
+    })
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createBridgeHarness(connection, false)
+    harness.internal.capabilitySnapshot = mapGrokInitializeCapabilitySnapshot(
+      harness.internal.capabilitySnapshot,
+      initializeResponse({ loadSession: true, resume: true, runtimeVersion: '1.2.3' }),
+      redactFakeText
+    )
+    harness.internal.updateStatus({
+      state: 'ready',
+      message: 'Grok Build 已连接',
+      workspace: '/tmp/workspace',
+      runtimeSessionId: 'runtime-session-1'
+    })
+
+    await harness.bridge.sendPrompt('执行测试')
+
+    const busyStatus = harness.statuses.find((status) => status.state === 'busy')
+    expect(busyStatus?.capabilitySnapshot?.runtimeVersion).toBe('1.2.3')
+    expect(busyStatus?.capabilitySnapshot?.protocolVersion).toBe(String(acp.PROTOCOL_VERSION))
+    expect(harness.bridge.getStatus()).toMatchObject({
+      state: 'ready',
+      workspace: '/tmp/workspace',
+      runtimeSessionId: 'runtime-session-1'
+    })
+    expect(
+      harness.bridge.getStatus().capabilitySnapshot?.capabilities['session.prompt.text']
+    ).toMatchObject({ verification: 'verified', source: 'runtime' })
+    expect(harness.bridge.getStatus().capabilitySnapshot?.capabilities['usage.turn']).toMatchObject(
+      {
+        maturity: 'experimental',
+        verification: 'verified',
+        source: 'runtime'
+      }
+    )
+  })
 })
 
 function notification(update: acp.SessionUpdate): acp.SessionNotification {
@@ -417,6 +733,26 @@ function mapUpdate(update: acp.SessionUpdate): ReturnType<typeof mapGrokSessionU
 
 function redactFakeText(text: string): string {
   return text.replaceAll(FAKE_SECRET, '[REDACTED]')
+}
+
+/** 只构造测试需要的 ACP 标准握手字段，扩展字段由具体用例单独注入。 */
+function initializeResponse({
+  loadSession,
+  resume,
+  runtimeVersion
+}: {
+  loadSession: boolean
+  resume: boolean
+  runtimeVersion?: string
+}): acp.InitializeResponse {
+  return {
+    protocolVersion: acp.PROTOCOL_VERSION,
+    agentCapabilities: {
+      loadSession,
+      sessionCapabilities: resume ? { resume: {} } : {}
+    },
+    ...(runtimeVersion ? { agentInfo: { name: 'grok-build', version: runtimeVersion } } : {})
+  }
 }
 
 function permissionRequest({
@@ -462,10 +798,24 @@ interface TestPendingPermission {
 }
 
 interface GrokAgentBridgeTestAccess {
+  process: ChildProcessWithoutNullStreams | null
   connection: acp.ClientSideConnection | null
   sessionId: string | null
   activeTurn: TestActiveTurn | null
+  capabilitySnapshot: AgentRuntimeCapabilitySnapshot
   pendingPermissions: Map<string, TestPendingPermission>
+  initializeRuntimeSession: (
+    connection: acp.ClientSideConnection,
+    child: ChildProcessWithoutNullStreams,
+    workspace: string
+  ) => Promise<string | null>
+  updateStatus: (status: Omit<AgentRuntimeStatus, 'runtimeId' | 'capabilitySnapshot'>) => void
+  verifyCapability: (
+    capabilityId: AgentCapabilityId,
+    maturity: AgentCapabilityMaturity,
+    reason?: string,
+    publish?: boolean
+  ) => void
   emitDraft: (activeTurn: TestActiveTurn, draft: AgentEventDraft) => void
   handleSessionUpdate: (
     params: acp.SessionNotification,
@@ -488,11 +838,13 @@ function createBridgeHarness(
   activeTurn: TestActiveTurn
   events: AgentEvent[]
   permissions: AgentPermissionRequest[]
+  statuses: AgentRuntimeStatus[]
 } {
   const events: AgentEvent[] = []
   const permissions: AgentPermissionRequest[] = []
+  const statuses: AgentRuntimeStatus[] = []
   const bridge = new GrokAgentBridge(
-    () => undefined,
+    (status) => statuses.push(status),
     (event) => events.push(event),
     (request) => permissions.push(request),
     {
@@ -514,5 +866,5 @@ function createBridgeHarness(
   internal.sessionId = activeTurn.runtimeSessionId
   internal.activeTurn = createActiveTurn ? activeTurn : null
 
-  return { bridge, internal, connection, activeTurn, events, permissions }
+  return { bridge, internal, connection, activeTurn, events, permissions, statuses }
 }
