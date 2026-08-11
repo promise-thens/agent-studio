@@ -41,7 +41,7 @@
 - 相同文本 chunk 即使内容和 `messageId` 相同也必须保留；ACP 没有可用于 chunk 去重的原生 sequence。
 - 工具终态 `completed`、`failed`、`cancelled` 不得回退到 `pending` 或 `in_progress`；完全相同的工具 no-op 可丢弃。
 - 第一个 `turn-complete` 锁定 Turn；普通 `error` 只提供诊断，不自行锁定；终态后的普通事件和重复终态必须丢弃。
-- 权限请求继续走独立控制通道，但必须绑定当前 `taskId` 和 `turnId`；权限审计事件由 P0-08 完成。
+- 权限请求继续走独立控制通道，但必须绑定当前 `taskId` 和 `turnId`；权限审计事件由 P0-07 完成。
 
 **载荷限制：**
 

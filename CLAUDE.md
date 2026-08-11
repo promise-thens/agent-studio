@@ -14,8 +14,9 @@
 - 用户只要求讨论、诊断或审查时，不得擅自修改代码。
 - 开发前可以使用GitNexus更新索引。
 - 如果发现node版本不合适，可以是用nvm相关内容切换版本。
-- 更新CLAUDE.md时，同步更新AGENTS.md
+- 更新AGENTS.md时，同步更新CLAUDE.md
 - 每个代码块需要加上备注备注使用中文
+
 ## 3. 项目定位
 
 Agent Studio 是一个本地多 Agent 工作台，核心关系为：
@@ -66,7 +67,7 @@ src/
 
 docs/
 ├── product-vision.md         长期产品愿景与已确认边界
-├── superpowers/plans/        带日期的具体实施计划
+├── superpowers/plans/        按阶段与开发顺序编号的具体实施计划
 └── architecture/             只有形成稳定跨模块设计时才创建
 ```
 
@@ -243,8 +244,8 @@ git diff --check
 ## 14. 文档规则
 
 - 产品长期定位和已确认边界更新到 `docs/product-vision.md`。
-- 跨层或多步骤功能开发前，在 `docs/superpowers/plans/` 编写带日期的实施计划。
-- 计划文件名使用 `YYYY-MM-DD-topic.md`。
+- 跨层或多步骤功能开发前，在 `docs/superpowers/plans/` 编写独立实施计划，并通过 `roadmap-index.md` 维护开发顺序与依赖。
+- 计划文件名使用 `<phase>-<sequence>-<topic>.md`，例如 `p0-05-grok-acp-adapter-migration.md`；同一序号需要拆分时使用小写字母后缀，例如 `p2-04a-...`、`p2-04b-...`。历史归档可以使用明确的语义化名称，不添加日期前缀。
 - 实施计划至少写明目标、非目标、数据流、安全边界、文件范围、步骤和验收标准。
 - 实现与计划发生变化时同步更新文档，不允许文档长期描述不存在的行为。
 - README 只描述已经验证可用的当前能力，长期设想通过链接指向产品愿景。
@@ -255,13 +256,13 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[P0-04 中性 Agent IPC 边界](docs/superpowers/plans/2026-08-10-p0-04-agent-ipc-boundary.md)
-- 状态：待开始
-- 完成度：任务步骤 `0/9`，验收标准 `0/3`
-- 当前完成：P0-03 已完成 `14` 项固定 Runtime 能力、支持/成熟度/验证度正交矩阵、ACP 标准握手映射、运行证据提升、Renderer 能力门禁、真实新会话重建和最近会话降级说明
-- 兼容边界：继续保留 `window.grok`、`grok:*` IPC 和 `GrokAgentBridge`；能力快照不持久化，历史恢复、Diff/Usage viewer、中性 Agent IPC 与正式 Runtime Adapter 仍由后续计划完成
-- 下一项：[P0-05 Grok ACP Adapter 迁移](docs/superpowers/plans/2026-08-10-p0-05-grok-acp-adapter-migration.md)
-- 最近验证：2026-08-11，P0-03 在 Node.js `v22.22.0`、pnpm `10.33.0` 下通过完整 ESLint、`108` 个 Vitest、typecheck、build、diff-check，以及目录选择、连接、真实 Prompt、执行中门禁、停止收束、真实新会话、最近会话禁用、检查器切换和断开的开发版走查
+- 当前计划：[P0-05 Grok ACP Adapter 迁移](docs/superpowers/plans/p0-05-grok-acp-adapter-migration.md)
+- 状态：P0-04 已完成，P0-05 前置依赖已满足，待开始主体迁移
+- 完成度：任务步骤 `0/12`，验收标准 `0/6`
+- 当前完成：P0-04 已建立静态 `window.agent` / `window.app` / `window.provider` 边界、可信主窗口与 main frame 来源校验、UTF-8 输入限制、有限错误封套、可信推送、窄 Preload API 和 Renderer 统一解包；已删除 `window.electron`、`window.grok`、全部 `grok:*`、`GrokDesktopApi` 与 `@electron-toolkit/preload`
+- 兼容边界：P0-05 开始前主进程仍使用 `GrokAgentBridge`，Provider DTO 与切模重连事务保持不变；能力快照不持久化，历史恢复、Diff/Usage viewer、后台 Task Executor 与第二 Runtime 仍由后续计划完成
+- 下一步：先冻结 P0-05 迁移前行为与 GitNexus HIGH/CRITICAL 调用链，再建立最小 Adapter、AgentService 和单执行槽 Controller
+- 最近验证：2026-08-11，P0-04 在 Node.js `v22.22.0`、pnpm `10.33.0` 下通过完整 ESLint、`166` 个 Vitest、typecheck、build、`build:unpack`、diff-check、旧边界静态搜索和 GitNexus 检测；开发版完成断开重连、两次唯一 Prompt、Provider 同配置测试保存与 Runtime 重连，以及真实权限允许、拒绝、取消三种响应，均正确收束并恢复 ready
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

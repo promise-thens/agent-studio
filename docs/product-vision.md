@@ -2,7 +2,7 @@
 
 > 状态：讨论草案
 > 创建日期：2026-08-07
-> 核心共识：多 Agent Runtime × 多 Model Provider × 多 Capability Pack
+> 核心共识：以 Project / Task 为产品骨架，多 Agent Runtime × 多 Model Provider × 多 Capability Pack 为开放能力底座
 
 ## 1. 文档目的
 
@@ -18,7 +18,7 @@ Agent Studio 不应只是 Grok Build 的桌面外壳，也不以复刻 Codex Des
 
 一句话定位：
 
-> 一个支持多种代码 Agent 大脑、开放模型配置、可扩展桌面能力，并对执行过程进行透明审阅与安全控制的本地 AI 工作台。
+> 一个以本地项目和长任务为中心，允许 Agent 持续执行、产出真实文件并由用户审阅接管，同时支持开放 Runtime、模型服务和能力工具的桌面 AI 工作台。
 
 产品的核心组合关系是：
 
@@ -30,6 +30,30 @@ Agent Runtime × Model Provider × Capability Pack
 - **Model Provider** 决定实际使用哪个模型、接口和计费服务。
 - **Capability Pack** 决定 Agent 能操作哪些外部工具和桌面环境。
 - **Security & Governance** 统一负责权限、密钥、审计和回滚。
+
+### 2.1 用户可见的产品骨架
+
+`Agent Runtime × Model Provider × Capability Pack` 是系统供给侧组合，不应成为用户理解产品的第一道门槛。用户首先面对的是项目和任务：
+
+```text
+# 备注：以下是用户可见的产品对象，Runtime 私有会话不会成为并列导航层级。
+Project
+└── Task
+    ├── Turn 1..N
+    ├── Execution Environment（Local / Worktree）
+    ├── Timeline / Permission / Command Evidence
+    ├── Changes / Diff / Validation
+    └── Artifact / Review / Delivery
+```
+
+- **Project** 是持久化的本地工作范围，保存 canonical root、项目规则和任务索引。
+- **Task** 是用户可见、可恢复的长期目标或对话，同一个 Task 可以连续执行多个 Turn。
+- **Turn** 是用户的一次指令以及 Agent 对应的一次完整执行。
+- **Execution Environment** 决定任务写入用户当前目录还是隔离 Worktree；任务创建后不得静默切换。
+- **Timeline** 负责按执行顺序展示消息、计划、权限、命令和状态，只保存 Changes、Validation 与 Artifact 的受限引用，不复制它们的事实。
+- **Changes** 负责文件基线、TaskChangeSet、Diff、归因和 Validation；Diff 是 Changes 的审阅视图，不属于另一套 Artifact 数据源。
+- **Artifact** 是任务产生的命名、类型化可审阅结果，包括文本、Markdown、图片、HTML 预览，以及指向 Changes 或 Validation 的受限引用；它不复制 Git 基线、Diff 或验证事实。
+- Runtime session、Grok session 和 Codex thread 是 Task 的内部运行引用，不与 Task 并列成为用户必须管理的产品对象。
 
 ## 3. 为什么做这个项目
 
@@ -65,7 +89,7 @@ Grok Build、Codex 以及未来其他 Agent Runtime 在任务规划、上下文�
 Desktop Workbench
         │
 Unified Agent Core
-会话 / 任务 / 事件 / 审批 / Diff / 历史
+Project / Task / Turn / Environment / 事件 / 审批 / 历史
         │
         ├── Grok Build ACP Adapter
         ├── Codex app-server Adapter
@@ -109,7 +133,7 @@ Grok Build 是项目当前接入的第一个 Agent Runtime，通过 ACP 与桌�
 - 处理权限请求；
 - 停止当前任务。
 
-后续需要逐步将现有 `GrokAgentBridge`、`grok:*` IPC 和 `Grok*` 共享类型迁移为中性的 Agent 领域模型，再由 `GrokAcpAdapter` 负责协议适配。
+P0-04 已将通用 IPC 与共享类型迁移到中性的 Agent 边界；后续只需在 P0-05 把现有 `GrokAgentBridge` 收敛为 `GrokAcpAdapter`，让 Grok 专属协议继续停留在 Adapter 内。
 
 ### 5.2 Codex app-server
 
@@ -151,6 +175,14 @@ Grok ACP 与 Codex app-server 使用不同协议和生命周期，因此需要�
 - 不支持。
 
 不应为了界面统一而伪造后端并不具备的能力。
+
+统一层还必须明确产品标识与 Runtime 标识的所有权：
+
+- `projectId`、`taskId` 和 `turnId` 由 Agent Studio 创建和持有；
+- `runtimeSessionId`、Codex thread ID 或 Grok session ID 只作为受限的 Runtime 引用；
+- Adapter 接收产品层分配的 Task / Turn 上下文，不得自行把每次 Prompt 重新解释为一个新 Task；
+- 桌面端保存可审阅的任务索引、脱敏事件、Artifact 引用和执行快照；Runtime 继续拥有其原生上下文，桌面端只在能力已验证时请求原生恢复；
+- “可以重新打开历史”与“可以恢复 Runtime 上下文继续执行”必须作为两种不同能力展示。
 
 ## 6. Model Provider：模型层
 
@@ -240,14 +272,27 @@ Grok ACP 与 Codex app-server 使用不同协议和生命周期，因此需要�
 
 同一个 Chrome、Computer Use、Git 或浏览器能力，应尽可能同时服务 Grok 与 Codex，而不是为每个大脑重复开发。
 
-### 7.1 第一阶段能力
+Capability Pack 不直接被 Runtime 调用，也不自行创建另一套权限、时间线、Diff 或 Artifact。统一调用链是：
 
-- 文件读取和修改；
-- 终端执行；
-- Git 状态、Diff、检查点和回滚；
+```text
+# 备注：以下调用链保证 Capability 复用核心服务，而不是绕过主进程另建执行通道。
+Capability Manifest / ActionDescriptor
+→ Capability Registry
+→ Capability Executor
+→ Permission Broker
+→ 既有 Command Evidence / Changes / Validation / Artifact 服务
+```
+
+文件写入、命令执行、Git Review、Worktree 和 Artifact Registry 属于 Agent Studio 核心服务；Capability Pack 只能通过受限 Host Service 使用它们，不能把核心能力重新包装成拥有任意文件系统、Shell 或 IPC 的插件入口。
+
+### 7.1 第一阶段能力包
+
+- 项目识别、环境体检与受控验证入口；
 - MCP Server；
 - Skills；
-- 项目识别和环境体检。
+- 应用内受管浏览器；
+- Chrome Native Bridge；
+- macOS Computer Use Helper。
 
 ### 7.2 浏览器能力
 
@@ -298,9 +343,9 @@ macOS 首期可以基于公开系统能力实现：
 
 ## 8. 权限与安全原则
 
-无论操作来自 Grok、Codex 还是插件，都必须经过统一的 Permission Broker。
+Agent Studio 自有的文件、命令、Git、Worktree 和插件操作，以及 Runtime 明确上报的审批请求，都必须经过统一的 Permission Broker。
 
-大脑可以提出操作请求，但不能自行扩大权限范围。
+大脑可以提出操作请求，但不能借已知审批扩大权限范围。Permission Broker 不是 Runtime 进程沙箱；Runtime 未上报便自行执行的副作用必须由进程隔离、最小环境和能力可信度单独约束，产品不得伪称已被 Broker 拦截。
 
 ### 8.1 基本原则
 
@@ -348,17 +393,16 @@ macOS 首期可以基于公开系统能力实现：
 理想的基础任务闭环：
 
 ```text
-选择项目
-→ 环境和 Runtime 体检
-→ 选择 Agent 大脑
-→ 选择模型服务与模型
-→ 选择能力包和权限策略
-→ 输入任务或选择任务模板
-→ 查看执行时间线
-→ 审批敏感操作
-→ 查看 Diff、测试和成本
-→ 接受、拒绝或撤销修改
-→ 保存并恢复任务记录
+打开或注册项目
+→ 新建 Task 并选择 Local / Worktree
+→ 固定 Runtime、模型和权限快照
+→ 输入第一轮任务
+→ Agent 在主进程持续执行，切换页面不终止任务
+→ 查看执行时间线并审批敏感操作
+→ 查看文件、Diff、命令证据、测试和 Artifact；需要时再打开用户交互终端
+→ 继续输入下一轮修改要求
+→ 接受、撤销、保留或交付结果
+→ 稍后重新打开 Task，并在 Runtime 支持时继续原生上下文
 ```
 
 用户需要随时看见：
@@ -368,7 +412,10 @@ macOS 首期可以基于公开系统能力实现：
 - 已读取、修改和运行的内容；
 - 当前 Token、费用和耗时；
 - 哪些权限已授予；
-- 最终修改、验证和风险摘要。
+- 最终修改、验证和风险摘要；
+- 当前运行、排队和等待审批的后台 Task；
+- 当前任务绑定的 Local / Worktree 环境以及是否存在未审阅修改；
+- 可直接打开的 Artifact，以及它来自哪个 Turn、是否仍然可信。
 
 ## 10. 长期差异化方向
 
@@ -388,7 +435,7 @@ macOS 首期可以基于公开系统能力实现：
 - 一个大脑负责分析，另一个负责实现；
 - 一个大脑实现，另一个负责审查；
 - 当前大脑失败后，将任务和上下文移交另一个大脑；
-- 用户可以在任务中途主动切换大脑。
+- 用户可以在任务过程中主动发起有界 Runtime 接力，由新 Task 接收经过预览和确认的有限上下文，而不是原地改写当前 Task 的 Runtime。
 
 ### 10.3 自动路由
 
@@ -398,15 +445,37 @@ macOS 首期可以基于公开系统能力实现：
 
 ## 11. 分阶段路线
 
-### P0：统一核心骨架
+### P0：统一核心骨架与 Codex-style 单 Runtime 工作台
 
-- 抽象统一 Agent Backend；
-- 将现有 Grok 实现迁移为 Grok ACP Adapter；
-- 将 IPC 和共享类型从 Grok 专属命名迁移为 Agent 通用命名；
-- 建立统一事件模型；
-- 建立 Runtime 能力矩阵；
-- 明确 Runtime、Provider、Capability 和 Permission 四层；
-- 使用系统安全存储保存密钥。
+P0-01 至 P0-04 先完成统一领域、事件、能力和 IPC 基础；P0-04 保持当前中性 IPC 施工范围，不插入 Project、Worktree、终端或 Artifact 功能。P0-04 之后分成三个验收层：
+
+#### P0-A：本地可用闭环
+
+- 将现有 Grok 实现迁移为最小 Grok ACP Adapter，由 AgentService 持有 Task/Turn/session 绑定，由 TaskExecutor 持有活动执行槽；
+- 建立 Project、Task、Turn、Execution Environment 与版本化历史；
+- 建立可实施的 Permission Broker、后台生命周期和实时/历史一致时间线；
+- 完成单 Runtime Task 工作台；
+- 建立 AppCommandRunner、Runtime 命令证据、Git 基线、Diff 和 Validation 事实链；
+- 在新 Adapter 边界上复核现有 Provider、凭据、配置和工具子进程 Secret 隔离。
+
+P0-A 必须先用 Grok Runtime 证明一个真实 Local Task 可以跨多个 Turn 持续执行，Task A → Task B → Task A 能恢复正确上下文，切换页面不终止后台任务，命令、权限、Diff 和验证结果都有可追溯事实。
+
+#### P0-B：隔离交付闭环
+
+- 建立只支持文本、Markdown、图片和 Changes Diff 引用的基础 Artifact Registry/Viewer；
+- 提供受管 Git Worktree，所有 Runtime、Git Review 和 Artifact 都绑定同一 execution root；
+- 支持导出 tracked/untracked 结果包和 base commit manifest；
+- 支持在 Finder/终端打开受管 Worktree，但不自动应用回原项目、合并、提交或推送。
+
+P0-B 完成后，用户才真正拥有“隔离执行 → 审阅 → 带走结果”的首个 Codex-style 桌面交付闭环。第二个 Runtime 不应成为这条闭环成立的前置条件；终端、并行调度和更广泛的 Artifact 类型仍按 P0+ 单独验收。
+
+#### P0+：非首版阻塞增强
+
+- 用户交互式 Task Terminal；
+- 使用 sandboxed `WebContentsView` 的隔离 HTML Preview；
+- 多任务队列与有界并行调度。
+
+P0+ 不共同阻塞 P0-A/P0-B；只有确实需要交互终端、HTML 或并行调度的后续计划才依赖对应能力。
 
 ### P1：开放模型配置
 
@@ -417,27 +486,23 @@ macOS 首期可以基于公开系统能力实现：
 - 增加模型兼容性体检；
 - 明确展示能力和成本差异。
 
-这是距离当前实现最近，也最容易让用户直接感受到价值的阶段。
+P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService 边界上复核和补强；P1-06 至 P1-08 扩展模型来源和兼容深度，但不得阻塞 P0 的单 Runtime 工作台闭环。
 
 ### P2：接入 Codex app-server
 
-- Codex Runtime 状态和认证；
-- Model Provider 与模型选择；
-- Thread、Turn 和 Item；
-- 历史恢复；
-- Plan；
-- 命令执行；
-- 文件变更和 Diff；
-- 审批与 Usage；
-- 映射为统一 UI 事件。
+- 使用 Agent Studio `userData` 下的独立 `CODEX_HOME` 完成 binary、schema、app-server 生命周期和 ChatGPT 账号认证，不触碰用户默认 `~/.codex`；
+- 将 Thread、Turn、Item、Plan、Usage 和原生恢复绑定到产品 Task/Turn，fork 创建新 Task 而不是覆盖原 Task；
+- 先支持 account-backed Codex，App Provider 作为协议、模型健康和 Secret 隔离均验证后的条件分支；
+- 先交付单执行槽 Runtime 选择与启动，再把不可变启动快照接入队列和有界并行；
+- 将命令执行、审批、文件变化、Diff 和 Artifact 映射到既有 Permission、Command Evidence、Changes 和 Artifact 服务，不复制第二套工作台。
 
 ### P3：插件能力中心
 
-- 插件 Manifest；
+- Capability Manifest、ActionDescriptor 与 Registry；
+- Capability Executor 与核心 Permission Broker 接入；
 - MCP 和 Skills；
 - 插件管理器；
-- Capability Broker；
-- Permission Broker；
+- Capability 对既有 Timeline、Command Evidence、Changes、Validation 与 Artifact 的结果路由；
 - 受管浏览器；
 - Chrome 控制；
 - macOS Computer Use；
@@ -448,8 +513,8 @@ macOS 首期可以基于公开系统能力实现：
 - 双脑对比；
 - 大脑接力；
 - 自动路由；
-- 多任务并行；
-- 隔离 Git worktree；
+- 多 Runtime 任务编排；
+- 基于 P0 Task Worktree 的公平对比与接力；
 - 成本、速度、质量和成功率评估。
 
 ## 12. 当前非目标
@@ -470,7 +535,7 @@ macOS 首期可以基于公开系统能力实现：
 
 第一阶段不以插件数量或界面按钮数量衡量成功，而以完整闭环衡量：
 
-> 用户可以在同一个桌面应用中选择 Agent Runtime，配置一个真实可用的模型，安全地发起代码任务，查看执行过程，审批敏感操作，审阅文件变更，并保存或恢复任务记录。
+> 用户可以在同一个桌面应用中打开本地项目，创建可持续多轮执行的 Task，让一个真实可用的 Runtime 在 Local 或隔离 Worktree 中完成代码任务，并在应用内查看进度、审批敏感操作、审阅文件与验证结果、打开基础 Artifact、导出或打开隔离结果，以及重新打开或继续任务。
 
 进一步的质量指标包括：
 
@@ -478,7 +543,11 @@ macOS 首期可以基于公开系统能力实现：
 - 首个任务成功率；
 - 模型工具调用兼容率；
 - 用户能够正确理解 Agent 操作的比例；
-- 修改可审阅、可验证、可撤回；
+- 修改可审阅、可验证；满足基线、环境和内容一致性条件时可撤回，否则明确说明不能自动撤回；
+- 切换项目或 Task 不会让正在运行的任务静默丢失；
+- 用户已有脏改动与本任务新增修改可以明确区分；
+- 结果包可以追溯到明确 base commit，并覆盖 tracked/untracked 修改；系统不会自动应用、合并、提交或推送；
+- 若启用 P0+ 并行调度，并行写任务只在执行环境隔离、Runtime 能力和资源上限均满足时启动；
 - Runtime 和插件故障不会导致权限扩大或密钥泄露。
 
 ## 14. 待讨论问题
@@ -489,7 +558,7 @@ macOS 首期可以基于公开系统能力实现：
 2. Agent Studio 是否作为最终正式品牌名称？
 3. 哪些 Runtime 与 Provider 组合由项目官方维护？
 4. Provider 配置是否直接管理 Grok、Codex 的原生配置，还是使用 App 独立配置目录？
-5. 会话历史由桌面端统一保存，还是优先依赖各 Runtime？
+5. 不同 Runtime 的原生恢复能力应开放到什么粒度，哪些失败状态只允许查看而不能继续？
 6. 插件主要以 MCP、独立进程协议还是未来自定义 SDK 接入？
 7. Chrome 首期使用独立 Profile，还是连接用户现有登录态？
 8. Computer Use 首期是否只支持 macOS？

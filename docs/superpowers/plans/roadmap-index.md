@@ -1,0 +1,119 @@
+# Agent Studio 分阶段功能路线索引
+
+> 状态：P0-01 至 P0-04 已完成，下一项 P0-05
+>
+> 本索引只负责开发顺序、权重、依赖和进度导航；每一个实际功能只在对应独立 Markdown 中定义任务。产品愿景仍以 [product-vision.md](../../product-vision.md) 为唯一愿景来源。
+
+## 使用规则
+
+- **顺序优先于按钮数量：** 前置依赖未完成，不开始后续功能主体。
+- **权重 5：** 阻塞性基础能力或安全边界；权重 4：核心闭环；权重 3：增强能力；权重 2：有足够真实数据后再做的优化。
+- **三个验收层：** P0-A 是本地可用闭环；P0-B 是隔离交付闭环；P0+ 是不阻塞第一可用版本的增强能力。后续计划应依赖明确验收层或具体计划，不再使用含义模糊的“依赖整个 P0”。
+- **安全不是过度安全：** 只读项目元信息允许任务范围授权；写文件/执行命令展示影响；删除、外发数据、登录态、屏幕和剪贴板始终明确确认。不会做自研加密、逐文件弹窗、默认全盘扫描或未有生态就先做插件市场。
+- **状态说明：** P0-01 至 P0-04 已完成代码、自动验证和 Electron 验收，下一开发项明确为 P0-05。P1 前五项已有实现提交 `fe2a81a`，但仍列为“实现待复核”，不得把它们当作完全验收。
+- **产品主线：** 先用 Grok Runtime 做成首个 Codex-style 单 Runtime 工作台，再扩展 Provider 宽度、Codex Runtime、插件和多大脑协作。HTML 预览是 Artifact 的隔离扩展，不是产品本体。
+
+## P0：统一核心骨架与 Codex-style 单 Runtime 工作台
+
+### 已完成开发基础
+
+| 计划 | 权重 | 功能 | 状态 | 前置依赖 |
+|---|---:|---|---|---|
+| P0-01 | 5 | [统一 Agent 领域契约](p0-01-agent-domain-contract.md) | 已完成 | — |
+| P0-02 | 5 | [Agent 事件归一化](p0-02-agent-event-normalization.md) | 已完成 | P0-01 |
+| P0-03 | 4 | [Runtime 能力矩阵](p0-03-runtime-capability-matrix.md) | 已完成 | P0-01、P0-02 |
+| P0-04 | 5 | [中性 Agent IPC 边界](p0-04-agent-ipc-boundary.md) | 已完成 | P0-01 至 P0-03 |
+
+### P0-A：本地可用闭环
+
+推荐严格按下表顺序实施。P0-09 有意放在 P0-07、P0-08 之后，因为真实时间线需要消费权限历史与主进程执行状态，而不是先做一层将来必然返工的 UI 投影。
+
+| 开发顺序 | 计划 | 权重 | 功能 | 状态 | 前置依赖 |
+|---:|---|---:|---|---|---|
+| 1 | P0-05 | 5 | [Grok ACP Adapter 与任务编排边界](p0-05-grok-acp-adapter-migration.md) | 待开始 | P0-01 至 P0-04 |
+| 2 | P0-06 | 5 | [Project、Task、Turn 与历史恢复](p0-06-task-session-history.md) | 待开始 | P0-01、P0-02、P0-05 |
+| 3 | P0-07 | 5 | [核心权限 Broker](p0-07-core-permission-broker.md) | 待开始 | P0-04、P0-05、P0-06 |
+| 4 | P0-08 | 5 | [Task Executor 与后台生命周期](p0-08-task-executor-background-lifecycle.md) | 待开始 | P0-05、P0-06、P0-07 |
+| 5 | P0-09 | 4 | [执行时间线与结果审阅](p0-09-execution-timeline-review.md) | 待开始 | P0-02、P0-03、P0-06、P0-07、P0-08 |
+| 6 | P0-10 | 5 | [单 Runtime 任务工作台](p0-10-single-runtime-task-workbench.md) | 待开始 | P0-06、P0-08、P0-09 |
+| 7 | P0-11 | 5 | [Command Runner 与执行证据](p0-11-command-execution-evidence.md) | 待开始 | P0-06、P0-07、P0-08、P0-10 |
+| 8 | P0-12 | 5 | [项目 Git 基线与变更审阅](p0-12-project-git-change-review.md) | 待开始 | P0-06、P0-07、P0-08、P0-10、P0-11 |
+
+#### P0-A 验收门
+
+必须使用 Grok Runtime 完成：注册 Local Project → Task A 第一轮 → 新建 Task B → 切回 Task A 继续原生上下文 → 执行中切换页面但任务不中断 → 审阅实时/历史一致的 Timeline、Permission、Command Evidence、Diff 与 Validation → 停止、失败、应用重启后状态均准确。P0-05 完成后还必须在新 AgentService/Adapter 边界上复核 P1-01 至 P1-05，确认 Provider origin、凭据、Runtime 配置和工具子进程 Secret 隔离没有回归；不要求 P1-06 至 P1-08 才能通过本门。
+
+### P0-B：隔离交付闭环
+
+| 开发顺序 | 计划 | 权重 | 功能 | 状态 | 前置依赖 |
+|---:|---|---:|---|---|---|
+| 1 | P0-13 | 4 | [基础 Task Artifact Registry 与 Viewer](p0-13-task-artifact-registry-viewer.md) | 待开始 | P0-A |
+| 2 | P0-14 | 5 | [隔离 Task Worktree 与结果交付](p0-14-isolated-task-worktree.md) | 待开始 | P0-A、P0-13 |
+
+#### P0-B 验收门
+
+必须验证同一真实任务可以选择 Local 或受管 Worktree；Worktree 中的 Runtime、Git Review 和 Artifact 都只使用绑定的 execution root，原工作区保持不变。任务结束后用户可以审阅基础 Artifact，导出包含 tracked/untracked 修改和 base commit manifest 的结果包，或在 Finder/终端打开受管 Worktree；系统不得自动应用回原项目、合并、提交或推送。P0-B 通过后，才将首个 Codex-style 单 Runtime 桌面交付闭环标为完成；终端与并行调度继续由 P0+ 独立验收。
+
+### P0+：非首版阻塞增强
+
+这些计划不共同阻塞 P0-A/P0-B；只有明确需要相应能力的后续计划才依赖它们。
+
+| 推荐顺序 | 计划 | 权重 | 功能 | 状态 | 前置依赖 |
+|---:|---|---:|---|---|---|
+| 1 | P0-15 | 3 | [Task 用户交互终端](p0-15-integrated-task-terminal.md) | 待开始 | P0-11、P0-14 |
+| 2 | P0-16 | 4 | [隔离 HTML Preview](p0-16-isolated-html-preview.md) | 待开始 | P0-13、P0-14 |
+| 3 | P0-17 | 4 | [多任务队列与有界并行调度](p0-17-multi-task-scheduling.md) | 待开始 | P0-08、P0-10、P0-11、P0-14 |
+
+## P1：开放模型配置
+
+P1-01 至 P1-05 是现有单 Provider 基线的复核和补强，应在 P0-05 后穿插完成并最迟纳入 P0-A 验收；P1-06 至 P1-08 的 Provider 宽度扩展不得阻塞 P0-A/P0-B。
+
+| 顺序 | 权重 | 功能 | 状态 | 前置依赖 |
+|---|---:|---|---|---|
+| 01 | 5 | [Provider 输入与 URL 校验](p1-01-provider-input-validation.md) | 实现待复核 | 当前基线 |
+| 02 | 5 | [Provider 凭据安全存储](p1-02-provider-credential-storage.md) | 实现待复核 | P1-01 |
+| 03 | 4 | [Provider 模型发现与连通验证](p1-03-provider-model-discovery.md) | 实现待复核 | P1-01、P1-02 |
+| 04 | 4 | [Provider 首次引导与设置](p1-04-provider-onboarding-and-settings.md) | 实现待复核 | P1-01 至 P1-03 |
+| 05 | 5 | [Grok Provider Runtime 绑定](p1-05-grok-provider-runtime-binding.md) | 实现待复核 | P0-05、P1-01 至 P1-03 |
+| 06 | 4 | [多 Provider Profile 管理](p1-06-provider-profile-management.md) | 待开始 | P1-01 至 P1-05 |
+| 07 | 4 | [Provider 协议 Profile 与兼容契约](p1-07-provider-protocol-profiles.md) | 待开始 | P1-06 |
+| 08 | 4 | [模型兼容性体检](p1-08-model-compatibility-health-check.md) | 待开始 | P1-03、P1-07 |
+
+## P2：接入 Codex app-server
+
+P2-01、P2-02 先完成 account-backed Codex 的独立状态、账号、Thread/Turn 和恢复边界，不依赖 P1-07；P2-03 可在 P0-A 后先做协议/审批/命令映射，但以 P0-13/P0-14 作为 Artifact/Worktree 最终完成门。P2-04A 先交付单执行槽的 Runtime 选择，P2-04B 再接 P0-17 队列与并行。
+
+| 顺序 | 权重 | 功能 | 状态 | 前置依赖 |
+|---|---:|---|---|---|
+| 01 | 5 | [Codex 认证、状态隔离与生命周期](p2-01-codex-runtime-auth-and-lifecycle.md) | 待开始 | P0-A |
+| 02 | 5 | [Codex Thread、Turn 与原生恢复适配](p2-02-codex-thread-turn-adapter.md) | 待开始 | P0-A、P2-01 |
+| 03 | 5 | [Codex 操作与核心服务映射](p2-03-codex-command-diff-approval.md) | 待开始 | 启动：P0-A、P0-11、P2-02；完成门：P0-13、P0-14 |
+| 04A | 4 | [单执行槽跨 Runtime 选择与任务启动](p2-04a-cross-runtime-task-workbench.md) | 待开始 | P0-B、P2-01 至 P2-03；Codex `app-provider` 另依赖 P1-06 至 P1-08 |
+| 04B | 4 | [跨 Runtime Scheduler 与并行整合](p2-04b-cross-runtime-scheduler-integration.md) | 待开始 | P0-17、P2-04A |
+
+## P3：插件能力中心
+
+P3 统一沿用 `Manifest / ActionDescriptor → Registry → Executor → Permission Broker → 核心事实服务`，Capability 不直接调用 Runtime，也不复制 Timeline、Command Evidence、Changes、Validation 或 Artifact。P3-03 只提供项目体检这一首个内置 Capability，不重新定义通用 Action 契约。
+
+| 顺序 | 权重 | 功能 | 状态 | 前置依赖 |
+|---|---:|---|---|---|
+| 01 | 4 | [Capability Manifest、Action 契约与 Registry](p3-01-capability-pack-manifest.md) | 待开始 | P0-A |
+| 02 | 5 | [Capability 执行、权限与审计扩展](p3-02-capability-permission-and-audit.md) | 待开始 | P0-A、P3-01 |
+| 03 | 3 | [高级项目体检与自动化入口](p3-03-project-health-and-git-review.md) | 待开始 | P0-A、P3-01、P3-02 |
+| 04 | 4 | [MCP 与 Skills Host](p3-04-mcp-and-skills-host.md) | 待开始 | P3-01、P3-02 |
+| 05 | 3 | [应用内受管浏览器](p3-05-managed-browser.md) | 待开始 | P3-01、P3-02、P3-04 |
+| 06 | 3 | [Chrome Native Bridge](p3-06-chrome-native-bridge.md) | 待开始 | P3-02、P3-05 |
+| 07 | 3 | [macOS Computer Use Helper](p3-07-macos-computer-use-helper.md) | 待开始 | P3-02、产品确认 macOS 范围 |
+
+## P4：多大脑协作
+
+| 顺序 | 权重 | 功能 | 状态 | 前置依赖 |
+|---|---:|---|---|---|
+| 01 | 4 | [多 Runtime Worktree 与子任务编排](p4-01-isolated-git-worktree.md) | 待开始 | P0-B、P2-04B |
+| 02 | 3 | [双 Runtime 公平对比](p4-02-dual-runtime-comparison.md) | 待开始 | P4-01 |
+| 03 | 3 | [Runtime 有界接力](p4-03-runtime-handoff.md) | 待开始 | P0-B、P2-04A、P4-01 |
+| 04 | 2 | [Runtime 路由与评估](p4-04-runtime-routing-and-evaluation.md) | 待开始 | P4-02、P4-03 与足够本地历史 |
+
+## 历史文档
+
+- [provider-onboarding-history.md](provider-onboarding-history.md) 保留为提交 `fe2a81a` 对应的历史总计划；新的实施、复核和状态更新以本索引下的 P1 独立文档为准。
