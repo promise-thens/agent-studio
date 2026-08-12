@@ -6,6 +6,10 @@ export type DesktopIpcErrorCode =
   | 'invalid-workspace'
   | 'runtime-unavailable'
   | 'invalid-state'
+  | 'task-not-found'
+  | 'workspace-mismatch'
+  | 'session-restore-unsupported'
+  | 'session-not-found'
   | 'operation-failed'
 
 export interface DesktopIpcError {

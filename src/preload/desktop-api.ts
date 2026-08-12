@@ -1,4 +1,10 @@
-import type { AgentEvent, AgentPermissionRequest, AgentRuntimeStatus } from '../shared/agent'
+import type {
+  AgentEvent,
+  AgentPermissionRequest,
+  AgentRuntimeStatus,
+  AgentTaskRuntimeState,
+  AgentTurnExecutionResult
+} from '../shared/agent'
 import {
   AGENT_INVOKE_CHANNELS,
   AGENT_PUSH_CHANNELS,
@@ -45,12 +51,22 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.disconnect) as Promise<
         DesktopIpcResult<AgentRuntimeStatus>
       >,
-    sendPrompt: (prompt) =>
-      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.sendPrompt, { prompt }) as Promise<
+    createTask: (workspace) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.createTask, { workspace }) as Promise<
+        DesktopIpcResult<AgentTaskRuntimeState>
+      >,
+    startTurn: (taskId, prompt) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.startTurn, { taskId, prompt }) as Promise<
+        DesktopIpcResult<AgentTurnExecutionResult>
+      >,
+    cancelTurn: (taskId) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.cancelTurn, { taskId }) as Promise<
         DesktopIpcResult<null>
       >,
-    cancel: () =>
-      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.cancel) as Promise<DesktopIpcResult<null>>,
+    getTaskRuntimeState: (taskId) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId }) as Promise<
+        DesktopIpcResult<AgentTaskRuntimeState>
+      >,
     respondPermission: (requestId, optionId) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.respondPermission, {
         requestId,

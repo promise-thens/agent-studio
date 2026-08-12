@@ -20,6 +20,7 @@ import type {
   AgentPermissionRequest,
   AgentPlanEntry,
   AgentRuntimeStatus,
+  AgentTaskRuntimeState,
   AgentToolEvent
 } from '../../shared/agent'
 import type {
@@ -42,7 +43,11 @@ import WorkspaceSidebar, {
   type SidebarSessionItem
 } from './components/WorkspaceSidebar.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
-import { canSendRuntimePrompt, rebuildRuntimeSession } from './runtime-session-actions'
+import {
+  canSendRuntimePrompt,
+  chooseWorkspaceWhenIdle,
+  createAsyncSingleFlight
+} from './runtime-session-actions'
 
 interface ChatMessage {
   id: string
@@ -83,6 +88,17 @@ interface ToolActivity {
   status: string
 }
 
+/** P0-05 的 Renderer 内存 Task 视图；只保存展示状态，不持有 Runtime 私有 session。 */
+interface TaskViewState {
+  taskId: string
+  workspace: string
+  title: string
+  messages: ChatMessage[]
+  planEntries: AgentPlanEntry[]
+  toolActivities: ToolActivity[]
+  thoughtExpandOverride: Record<string, boolean>
+}
+
 const status = ref<AgentRuntimeStatus>({
   runtimeId: 'grok',
   state: 'idle',
@@ -93,6 +109,11 @@ const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
 const showProviderSettings = ref(false)
 const workspace = ref('')
 const prompt = ref('')
+const promptSubmissionPending = ref(false)
+/** 发送入口共享单飞门禁，并同步投影到 UI busy 状态。 */
+const runPromptSubmission = createAsyncSingleFlight((pending) => {
+  promptSubmissionPending.value = pending
+})
 const permission = ref<AgentPermissionRequest | null>(null)
 const showInspector = ref(true)
 const composer = ref<HTMLTextAreaElement | null>(null)
@@ -102,24 +123,64 @@ const activeTurnAnchorId = ref<string | null>(null)
 /** 程序化滚动时暂时忽略滚动监听，避免锚点高亮来回跳。 */
 let ignoreAnchorScrollSync = false
 let ignoreAnchorScrollTimer: ReturnType<typeof setTimeout> | null = null
-const planEntries = ref<AgentPlanEntry[]>([])
-const toolActivities = ref<ToolActivity[]>([])
-/** 当前激活会话 ID，先用本地 UI 状态驱动侧栏高亮。 */
-const activeSessionId = ref('welcome-session')
-/** 最近会话列表：发送首条用户消息后写入标题，暂不做持久化。 */
-const recentSessions = ref<SidebarSessionItem[]>([
-  {
-    id: 'welcome-session',
-    title: '新对话'
-  }
-])
-const messages = ref<ChatMessage[]>([
+const taskViews = ref<Record<string, TaskViewState>>({})
+const taskOrder = ref<string[]>([])
+/** 当前激活的产品 Task；Runtime session 始终只留在主进程。 */
+const activeTaskId = ref('')
+const welcomeMessages = ref<ChatMessage[]>([
   {
     id: 'welcome',
     role: 'assistant',
     text: '选择一个工作目录，我会通过当前模型配置启动 Grok Build Runtime。'
   }
 ])
+const emptyPlanEntries = ref<AgentPlanEntry[]>([])
+const emptyToolActivities = ref<ToolActivity[]>([])
+const emptyThoughtOverrides = ref<Record<string, boolean>>({})
+const activeTaskView = computed(() => taskViews.value[activeTaskId.value] ?? null)
+
+/** 当前 Task 的消息、计划和工具状态通过计算属性切换，A/B 视图不会串台。 */
+const messages = computed<ChatMessage[]>({
+  get: () => activeTaskView.value?.messages ?? welcomeMessages.value,
+  set: (value) => {
+    const view = activeTaskView.value
+    if (view) view.messages = value
+    else welcomeMessages.value = value
+  }
+})
+const planEntries = computed<AgentPlanEntry[]>({
+  get: () => activeTaskView.value?.planEntries ?? emptyPlanEntries.value,
+  set: (value) => {
+    const view = activeTaskView.value
+    if (view) view.planEntries = value
+    else emptyPlanEntries.value = value
+  }
+})
+const toolActivities = computed<ToolActivity[]>({
+  get: () => activeTaskView.value?.toolActivities ?? emptyToolActivities.value,
+  set: (value) => {
+    const view = activeTaskView.value
+    if (view) view.toolActivities = value
+    else emptyToolActivities.value = value
+  }
+})
+/** 当前 Task 的思考折叠覆盖；切换 Task 时自动读回各自状态。 */
+const thoughtExpandOverride = computed<Record<string, boolean>>({
+  get: () => activeTaskView.value?.thoughtExpandOverride ?? emptyThoughtOverrides.value,
+  set: (value) => {
+    const view = activeTaskView.value
+    if (view) view.thoughtExpandOverride = value
+    else emptyThoughtOverrides.value = value
+  }
+})
+const activeSessionId = computed(() => activeTaskId.value)
+/** 最近列表只展示当前工作区的内存 Task，重启恢复仍由 P0-06 负责。 */
+const recentSessions = computed<SidebarSessionItem[]>(() =>
+  taskOrder.value.flatMap((taskId) => {
+    const view = taskViews.value[taskId]
+    return view && view.workspace === workspace.value ? [{ id: taskId, title: view.title }] : []
+  })
+)
 
 const cleanupListeners: Array<() => void> = []
 const acceptAgentEvent = createAgentEventGuard()
@@ -134,12 +195,6 @@ const turnEndedAt = ref<number | null>(null)
 const turnDurationAnchorId = ref<string | null>(null)
 /** 本轮开始时的消息分界，结束时只在本轮消息里挑选耗时锚点。 */
 const turnMessageStartIndex = ref(0)
-/**
- * 思考折叠的用户手动覆盖。
- * 未记录时：执行中默认展开，结束后默认收起（贴近 Codex）。
- */
-const thoughtExpandOverride = ref<Record<string, boolean>>({})
-
 /** 是否存在仍在流式输出的消息。 */
 const hasStreamingMessage = computed(() => messages.value.some((item) => item.streaming))
 /** 已进入执行态，但还没有任何流式消息时，展示占位提示。 */
@@ -462,15 +517,24 @@ function beginCurrentTurn(): void {
 }
 
 const isConnected = computed(() => status.value.state === 'ready' || status.value.state === 'busy')
-const isBusy = computed(() => status.value.state === 'busy' || status.value.state === 'connecting')
+const isBusy = computed(
+  () =>
+    status.value.state === 'busy' ||
+    status.value.state === 'connecting' ||
+    isTurnTiming.value ||
+    promptSubmissionPending.value
+)
 const { resolveCapability, isAvailable } = useRuntimeCapabilities(status)
 const promptCapability = computed(() => resolveCapability('session.prompt.text', '发送文本 Prompt'))
 const planCapability = computed(() => resolveCapability('event.plan', '展示执行计划'))
 const toolCapability = computed(() => resolveCapability('event.tool', '展示工具活动'))
 const createSessionCapability = computed(() => resolveCapability('session.create', '创建新对话'))
 const connectCapability = computed(() => resolveCapability('runtime.connect', '连接 Runtime'))
-const canSend = computed(() =>
-  canSendRuntimePrompt(prompt.value, status.value, promptCapability.value.available)
+const canSend = computed(
+  () =>
+    !isTurnTiming.value &&
+    !promptSubmissionPending.value &&
+    canSendRuntimePrompt(prompt.value, status.value, promptCapability.value.available)
 )
 const promptCapabilityMessage = computed(
   () => promptCapability.value.reason ?? promptCapability.value.notice
@@ -488,10 +552,15 @@ const toolEmptyMessage = computed(
     'Runtime 返回工具活动后会显示在这里。'
 )
 const newChatDisabled = computed(
-  () => isBusy.value || !isAvailable('runtime.connect') || !isAvailable('session.create')
+  () =>
+    status.value.state !== 'ready' ||
+    isBusy.value ||
+    !isAvailable('runtime.connect') ||
+    !isAvailable('session.create')
 )
 const newChatDisabledReason = computed(() => {
   if (isBusy.value) return 'Runtime 正在执行或连接中，暂时不能创建新对话。'
+  if (status.value.state !== 'ready') return '请先连接 Runtime，再创建新对话。'
   return connectCapability.value.reason ?? createSessionCapability.value.reason ?? ''
 })
 const workspaceName = computed(() => {
@@ -570,7 +639,12 @@ onMounted(async () => {
     }),
     window.agent.onEvent(handleAgentEvent),
     window.agent.onPermission((request) => {
-      permission.value = request
+      if (request.taskId === activeTaskId.value) {
+        permission.value = request
+      } else {
+        // 非当前 Task 的权限不能污染正在查看的视图，也不能让 Runtime 永久等待。
+        void window.agent.respondPermission(request.id)
+      }
     })
   )
 
@@ -608,49 +682,71 @@ function deriveSessionTitle(text: string): string {
   return compact.length > 28 ? `${compact.slice(0, 28)}…` : compact
 }
 
-/** 只有 Runtime 确认建立新会话后才重置本地视图，避免 UI 清空但上下文仍延续。 */
+/** 只有主进程确认创建 Task 后才建立本地视图，避免 UI 伪造不存在的会话。 */
 async function startNewChat(): Promise<void> {
   if (newChatDisabled.value) return
 
   try {
-    const result = await rebuildRuntimeSession({
-      status: status.value,
-      workspace: workspace.value,
-      chooseWorkspace: async () => unwrapDesktopIpcResult(await window.app.chooseWorkspace()),
-      connect: async (nextWorkspace) =>
-        unwrapDesktopIpcResult(await window.agent.connect(nextWorkspace)),
-      disconnect: async () => unwrapDesktopIpcResult(await window.agent.disconnect())
-    })
-    if (!result) return
-
-    workspace.value = result.workspace
-    status.value = result.status
-    resetConversationForRuntimeSession(result.status.runtimeSessionId)
+    const task = unwrapDesktopIpcResult(await window.agent.createTask(workspace.value))
+    activateTaskView(task)
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
 }
 
-/** 清理仅属于旧 Runtime session 的 Renderer 状态，并保留不可恢复的最近记录。 */
-function resetConversationForRuntimeSession(sessionId: string): void {
-  activeSessionId.value = sessionId
-  recentSessions.value = [
-    { id: sessionId, title: '新对话' },
-    ...recentSessions.value.filter(
-      (item) => item.id !== sessionId && item.id !== 'welcome-session' && item.title !== '新对话'
-    )
-  ].slice(0, 12)
-  planEntries.value = []
-  toolActivities.value = []
-  // 新会话清空折叠覆盖，避免旧轮次状态串到新对话。
-  thoughtExpandOverride.value = {}
-  messages.value = [
-    {
-      id: 'welcome',
-      role: 'assistant',
-      text: '新的 Grok Runtime 会话已就绪。直接描述你想改动或排查的内容即可。'
+/** 建立或切换本地 Task 视图；每个 Task 持有独立消息、计划与工具活动数组。 */
+function activateTaskView(task: AgentTaskRuntimeState): void {
+  if (!taskViews.value[task.taskId]) {
+    taskViews.value[task.taskId] = {
+      taskId: task.taskId,
+      workspace: task.workspace,
+      title: '新对话',
+      messages: [
+        {
+          id: `welcome-${task.taskId}`,
+          role: 'assistant',
+          text: '新的 Agent Task 已就绪。直接描述你想改动或排查的内容即可。'
+        }
+      ],
+      planEntries: [],
+      toolActivities: [],
+      thoughtExpandOverride: {}
     }
-  ]
+  }
+
+  activeTaskId.value = task.taskId
+  taskOrder.value = [task.taskId, ...taskOrder.value.filter((id) => id !== task.taskId)].slice(
+    0,
+    12
+  )
+  permission.value = null
+  activeTurnAnchorId.value = null
+  void nextTick(() => syncActiveTurnAnchor())
+}
+
+/** 首次发送时懒创建 Task；后续 Turn 始终复用当前稳定 taskId。 */
+async function ensureActiveTask(): Promise<string> {
+  const current = activeTaskView.value
+  if (current?.workspace === workspace.value) return current.taskId
+
+  const task = unwrapDesktopIpcResult(await window.agent.createTask(workspace.value))
+  activateTaskView(task)
+  return task.taskId
+}
+
+/** 点击最近 Task 时先由主进程确认归属，再切换本地视图；session 恢复延迟到下一轮。 */
+async function selectTask(taskId: string): Promise<void> {
+  if (!taskId || taskId === activeTaskId.value || isBusy.value) return
+
+  try {
+    const task = unwrapDesktopIpcResult(await window.agent.getTaskRuntimeState(taskId))
+    if (task.workspace !== workspace.value) {
+      throw new Error('该 Task 不属于当前工作区。')
+    }
+    activateTaskView(task)
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
 }
 
 /** 选择项目时复用现有选目录流程；已选中的当前项目不重复弹窗。 */
@@ -661,9 +757,14 @@ async function selectProject(projectId: string): Promise<void> {
 
 async function chooseWorkspace(): Promise<void> {
   try {
-    const selected = unwrapDesktopIpcResult(await window.app.chooseWorkspace())
+    const selected = await chooseWorkspaceWhenIdle(
+      () => isBusy.value,
+      async () => unwrapDesktopIpcResult(await window.app.chooseWorkspace())
+    )
     if (!selected) return
     workspace.value = selected
+    activeTaskId.value =
+      taskOrder.value.find((taskId) => taskViews.value[taskId]?.workspace === selected) ?? ''
     await connectAgent()
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
@@ -713,6 +814,8 @@ async function clearProvider(): Promise<void> {
   providerBootState.value = 'needs-provider'
   showProviderSettings.value = false
   workspace.value = ''
+  activeTaskId.value = ''
+  permission.value = null
 }
 
 async function connectAgent(): Promise<void> {
@@ -740,35 +843,41 @@ async function sendPrompt(): Promise<void> {
   const text = prompt.value.trim()
   if (!text || !canSend.value) return
 
-  prompt.value = ''
-  // 一条用户指令只开一个总计时，从发送当下就开始。
-  beginCurrentTurn()
-  // 用首条有效用户消息刷新侧栏“最近”标题，贴近 Codex 的会话列表体感。
-  const current = recentSessions.value.find((item) => item.id === activeSessionId.value)
-  if (current && (current.title === '新对话' || current.title.startsWith('新对话'))) {
-    current.title = deriveSessionTitle(text)
-    recentSessions.value = [
-      current,
-      ...recentSessions.value.filter((item) => item.id !== current.id)
-    ]
-  }
-  appendMessage('user', text)
-  await nextTick()
-  composer.value?.focus()
+  await runPromptSubmission(async () => {
+    let turnStarted = false
 
-  try {
-    unwrapDesktopIpcResult(await window.agent.sendPrompt(text))
-  } catch (error) {
-    completeCurrentTurn()
-    appendMessage('error', error instanceof Error ? error.message : String(error))
-  }
+    try {
+      const taskId = await ensureActiveTask()
+      prompt.value = ''
+      // 一条用户指令只开一个总计时，从发送当下就开始。
+      beginCurrentTurn()
+      turnStarted = true
+
+      const current = taskViews.value[taskId]
+      if (current && (current.title === '新对话' || current.title.startsWith('新对话'))) {
+        current.title = deriveSessionTitle(text)
+        taskOrder.value = [taskId, ...taskOrder.value.filter((id) => id !== taskId)]
+      }
+
+      appendMessage('user', text)
+      await nextTick()
+      composer.value?.focus()
+      unwrapDesktopIpcResult(await window.agent.startTurn(taskId, text))
+    } catch (error) {
+      // 只收束本次已经启动的 Turn，创建 Task 失败不能误结束其他计时。
+      if (turnStarted) completeCurrentTurn()
+      appendMessage('error', error instanceof Error ? error.message : String(error))
+    }
+  })
 }
 
 async function cancelTurn(): Promise<void> {
+  const taskId = activeTaskId.value
+  if (!taskId) return
+
   try {
-    unwrapDesktopIpcResult(await window.agent.cancel())
-    // 主进程接受取消请求后才收束本轮计时，失败时保留执行态反馈。
-    completeCurrentTurn()
+    unwrapDesktopIpcResult(await window.agent.cancelTurn(taskId))
+    // 接受取消只表示请求已发出；等待真实 turn-complete 再收束计时与流式状态。
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
@@ -795,6 +904,7 @@ function handleComposerKeydown(event: KeyboardEvent): void {
 
 function handleAgentEvent(event: AgentEvent): void {
   if (!acceptAgentEvent(event)) return
+  if (event.taskId !== activeTaskId.value) return
 
   if (event.kind === 'agent-message' && event.text) {
     appendStreamChunk('assistant', event.text, createAgentMessageKey(event))
@@ -932,11 +1042,14 @@ function scrollMessagesToBottom(): void {
         :active-project-id="activeProjectId"
         :new-chat-disabled="newChatDisabled"
         :new-chat-disabled-reason="newChatDisabledReason"
-        :recent-sessions-disabled="true"
-        recent-sessions-disabled-reason="历史恢复将在 P0-06 接入；当前条目仅为本地记录。"
+        :workspace-actions-disabled="isBusy"
+        workspace-actions-disabled-reason="当前 Turn 收束后才能切换目录。"
+        :recent-sessions-disabled="isBusy"
+        recent-sessions-disabled-reason="当前 Turn 收束后才能切换 Task。"
         @new-chat="startNewChat"
         @open-project="chooseWorkspace"
         @open-settings="openProviderSettings"
+        @select-session="selectTask"
         @select-project="selectProject"
       />
 

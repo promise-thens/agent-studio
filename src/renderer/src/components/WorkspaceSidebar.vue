@@ -36,7 +36,11 @@ const props = withDefaults(
     newChatDisabled?: boolean
     /** 为禁用的新对话入口提供可读原因，不替代主区域的状态反馈。 */
     newChatDisabledReason?: string
-    /** P0-06 接入历史恢复前，使用原生 disabled 阻止本地条目伪装成可恢复会话。 */
+    /** 连接、提交或执行期间禁用所有目录入口，避免当前 Task 与工作区解绑。 */
+    workspaceActionsDisabled?: boolean
+    /** 目录入口共用同一禁用原因，并关联到原生 disabled 控件。 */
+    workspaceActionsDisabledReason?: string
+    /** 活动 Turn 期间使用原生 disabled 阻止切换 Task。 */
     recentSessionsDisabled?: boolean
     /** 禁用原因必须可见，同时提供给每个会话按钮的无障碍说明。 */
     recentSessionsDisabledReason?: string
@@ -46,8 +50,10 @@ const props = withDefaults(
     activeProjectId: '',
     newChatDisabled: false,
     newChatDisabledReason: '',
+    workspaceActionsDisabled: false,
+    workspaceActionsDisabledReason: '',
     recentSessionsDisabled: true,
-    recentSessionsDisabledReason: '历史恢复将在 P0-06 接入；当前条目仅为本地记录。'
+    recentSessionsDisabledReason: '当前 Turn 收束后才能切换 Task。'
   }
 )
 
@@ -143,7 +149,22 @@ const filteredSessions = computed(() => {
         <NotePencil :size="16" />
         <span>新对话</span>
       </button>
-      <button class="sidebar-link" type="button" @click="emit('openProject')">
+      <button
+        class="sidebar-link"
+        type="button"
+        :disabled="workspaceActionsDisabled"
+        :aria-describedby="
+          workspaceActionsDisabled && workspaceActionsDisabledReason
+            ? 'workspace-actions-disabled-reason'
+            : undefined
+        "
+        :title="
+          workspaceActionsDisabled && workspaceActionsDisabledReason
+            ? workspaceActionsDisabledReason
+            : '打开项目'
+        "
+        @click="emit('openProject')"
+      >
         <FolderOpen :size="16" />
         <span>打开项目</span>
       </button>
@@ -153,6 +174,13 @@ const filteredSessions = computed(() => {
       <!-- 项目分区：展示当前已选工作目录 -->
       <section class="sidebar-section" aria-label="项目">
         <div class="section-label">项目</div>
+        <p
+          v-if="workspaceActionsDisabled && workspaceActionsDisabledReason"
+          id="workspace-actions-disabled-reason"
+          class="section-hint"
+        >
+          {{ workspaceActionsDisabledReason }}
+        </p>
 
         <div v-if="filteredProjects.length" class="section-list">
           <button
@@ -161,7 +189,17 @@ const filteredSessions = computed(() => {
             class="sidebar-item"
             type="button"
             :class="{ active: project.id === activeProjectId }"
-            :title="project.path"
+            :disabled="workspaceActionsDisabled"
+            :aria-describedby="
+              workspaceActionsDisabled && workspaceActionsDisabledReason
+                ? 'workspace-actions-disabled-reason'
+                : undefined
+            "
+            :title="
+              workspaceActionsDisabled && workspaceActionsDisabledReason
+                ? `${project.path}：${workspaceActionsDisabledReason}`
+                : project.path
+            "
             @click="emit('selectProject', project.id)"
           >
             <FolderSimple :size="15" />
@@ -169,7 +207,23 @@ const filteredSessions = computed(() => {
           </button>
         </div>
 
-        <button v-else class="sidebar-empty" type="button" @click="emit('openProject')">
+        <button
+          v-else
+          class="sidebar-empty"
+          type="button"
+          :disabled="workspaceActionsDisabled"
+          :aria-describedby="
+            workspaceActionsDisabled && workspaceActionsDisabledReason
+              ? 'workspace-actions-disabled-reason'
+              : undefined
+          "
+          :title="
+            workspaceActionsDisabled && workspaceActionsDisabledReason
+              ? workspaceActionsDisabledReason
+              : '选择项目目录'
+          "
+          @click="emit('openProject')"
+        >
           <FolderSimple :size="15" />
           <span>{{ workspacePath ? '未匹配到项目' : '选择项目目录后开始工作' }}</span>
         </button>
@@ -192,7 +246,7 @@ const filteredSessions = computed(() => {
             :key="session.id"
             class="sidebar-item session-item"
             type="button"
-            :class="{ active: !recentSessionsDisabled && session.id === activeSessionId }"
+            :class="{ active: session.id === activeSessionId }"
             :disabled="recentSessionsDisabled"
             :aria-describedby="
               recentSessionsDisabled && recentSessionsDisabledReason
@@ -225,7 +279,24 @@ const filteredSessions = computed(() => {
           <small>{{ workspacePath || '选择项目目录后开始工作' }}</small>
         </div>
       </div>
-      <button class="footer-button" type="button" @click="emit('openProject')">
+      <button
+        class="footer-button"
+        type="button"
+        :disabled="workspaceActionsDisabled"
+        :aria-describedby="
+          workspaceActionsDisabled && workspaceActionsDisabledReason
+            ? 'workspace-actions-disabled-reason'
+            : undefined
+        "
+        :title="
+          workspaceActionsDisabled && workspaceActionsDisabledReason
+            ? workspaceActionsDisabledReason
+            : workspacePath
+              ? '切换目录'
+              : '选择目录'
+        "
+        @click="emit('openProject')"
+      >
         {{ workspacePath ? '切换目录' : '选择目录' }}
       </button>
     </div>
@@ -380,7 +451,10 @@ const filteredSessions = computed(() => {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.sidebar-link:disabled {
+.sidebar-link:disabled,
+.sidebar-item:disabled,
+.sidebar-empty:disabled,
+.footer-button:disabled {
   color: color-mix(in srgb, var(--text-3) 72%, transparent);
   cursor: not-allowed;
 }
@@ -452,11 +526,6 @@ const filteredSessions = computed(() => {
   padding-left: 12px;
 }
 
-.session-item:disabled {
-  color: color-mix(in srgb, var(--text-3) 72%, transparent);
-  cursor: not-allowed;
-}
-
 .sidebar-empty {
   min-height: 34px;
   padding: 0 10px;
@@ -469,7 +538,7 @@ const filteredSessions = computed(() => {
   cursor: default;
 }
 
-.sidebar-empty:not(.static):hover {
+.sidebar-empty:not(.static):not(:disabled):hover {
   color: var(--text-2);
   background: rgba(255, 255, 255, 0.04);
 }
@@ -531,7 +600,7 @@ const filteredSessions = computed(() => {
   font-weight: 650;
 }
 
-.footer-button:hover {
+.footer-button:not(:disabled):hover {
   color: var(--text-1);
   background: rgba(255, 255, 255, 0.04);
 }

@@ -29,8 +29,10 @@ describe('窄 Preload API', () => {
     await agent.getStatus()
     await agent.connect('/tmp/project')
     await agent.disconnect()
-    await agent.sendPrompt('执行测试')
-    await agent.cancel()
+    await agent.createTask('/tmp/project')
+    await agent.startTurn('task-1', '执行测试')
+    await agent.cancelTurn('task-1')
+    await agent.getTaskRuntimeState('task-1')
     await agent.respondPermission('request-1')
     await agent.respondPermission('request-2', 'allow-once')
     await app.chooseWorkspace()
@@ -39,8 +41,10 @@ describe('窄 Preload API', () => {
       [AGENT_INVOKE_CHANNELS.getStatus],
       [AGENT_INVOKE_CHANNELS.connect, { workspace: '/tmp/project' }],
       [AGENT_INVOKE_CHANNELS.disconnect],
-      [AGENT_INVOKE_CHANNELS.sendPrompt, { prompt: '执行测试' }],
-      [AGENT_INVOKE_CHANNELS.cancel],
+      [AGENT_INVOKE_CHANNELS.createTask, { workspace: '/tmp/project' }],
+      [AGENT_INVOKE_CHANNELS.startTurn, { taskId: 'task-1', prompt: '执行测试' }],
+      [AGENT_INVOKE_CHANNELS.cancelTurn, { taskId: 'task-1' }],
+      [AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId: 'task-1' }],
       [AGENT_INVOKE_CHANNELS.respondPermission, { requestId: 'request-1' }],
       [AGENT_INVOKE_CHANNELS.respondPermission, { requestId: 'request-2', optionId: 'allow-once' }],
       [APP_INVOKE_CHANNELS.chooseWorkspace]

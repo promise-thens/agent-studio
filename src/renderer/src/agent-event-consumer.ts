@@ -5,25 +5,27 @@ import type {
   AgentToolEvent
 } from '../../shared/agent'
 
-interface AgentTaskEventProgress {
+interface AgentTurnEventProgress {
   lastSequence: number
   terminal: boolean
 }
 
 /**
- * Renderer 按 taskId 记录已消费的最大 sequence，并在首个终态后锁定该任务。
+ * Renderer 按 taskId + turnId 记录已消费的最大 sequence，并在首个终态后锁定当前 Turn。
  * 这里只拒绝重复和晚到事件，不要求 sequence 无缺口，避免 IPC 丢帧后永久阻塞后续输出。
  */
 export function createAgentEventGuard(): (event: AgentEvent) => boolean {
-  const taskProgress = new Map<string, AgentTaskEventProgress>()
+  const turnProgress = new Map<string, AgentTurnEventProgress>()
 
   return (event) => {
     if (!Number.isSafeInteger(event.sequence) || event.sequence < 1) return false
 
-    const current = taskProgress.get(event.taskId)
+    // 稳定 Task 可以连续执行多个 Turn，终态只能关闭它所属的那一轮。
+    const turnKey = `${event.taskId}:${event.turnId}`
+    const current = turnProgress.get(turnKey)
     if (current?.terminal || event.sequence <= (current?.lastSequence ?? 0)) return false
 
-    taskProgress.set(event.taskId, {
+    turnProgress.set(turnKey, {
       lastSequence: event.sequence,
       terminal: event.kind === 'turn-complete'
     })
@@ -31,13 +33,13 @@ export function createAgentEventGuard(): (event: AgentEvent) => boolean {
   }
 }
 
-/** 同一任务的消息流保持稳定 key，不同任务、消息与思考流彼此隔离。 */
+/** 同一 Turn 的消息流保持稳定 key，不同任务、轮次、消息与思考流彼此隔离。 */
 export function createAgentMessageKey(event: AgentMessageEvent | AgentThoughtEvent): string {
   const streamId = event.messageId == null ? 'stream' : `id:${event.messageId}`
-  return `${event.taskId}:${event.kind}:${streamId}`
+  return `${event.taskId}:${event.turnId}:${event.kind}:${streamId}`
 }
 
-/** tool-call 与 tool-update 使用同一个任务级 key，确保更新落到同一条工具活动。 */
+/** tool-call 与 tool-update 使用同一个 Turn 级 key，避免跨轮次复用 toolCallId 时误合并。 */
 export function createAgentToolKey(event: AgentToolEvent): string {
-  return `${event.taskId}:tool:${event.toolCallId}`
+  return `${event.taskId}:${event.turnId}:tool:${event.toolCallId}`
 }

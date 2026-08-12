@@ -34,13 +34,24 @@ describe('Renderer AgentEvent 消费守卫', () => {
     expect(accept(messageEvent('task-1', 3))).toBe(true)
   })
 
-  it('首个终态后拒绝该任务的全部事件，但不影响其他任务', () => {
+  it('首个终态只锁定所属 Turn，并允许同一任务进入下一 Turn', () => {
     const accept = createAgentEventGuard()
+    const secondTurnMessage = {
+      ...messageEvent('task-1', 1),
+      turnId: 'task-1-turn-2'
+    }
+    const secondTurnComplete = {
+      ...turnCompleteEvent('task-1', 2),
+      turnId: 'task-1-turn-2'
+    }
 
     expect(accept(messageEvent('task-1', 1))).toBe(true)
     expect(accept(turnCompleteEvent('task-1', 2))).toBe(true)
+    expect(accept(secondTurnMessage)).toBe(true)
     expect(accept(messageEvent('task-1', 3))).toBe(false)
     expect(accept(turnCompleteEvent('task-1', 4))).toBe(false)
+    expect(accept(secondTurnComplete)).toBe(true)
+    expect(accept({ ...secondTurnMessage, sequence: 3 })).toBe(false)
     expect(accept(messageEvent('task-2', 1))).toBe(true)
   })
 
@@ -53,26 +64,33 @@ describe('Renderer AgentEvent 消费守卫', () => {
 })
 
 describe('Renderer AgentEvent 稳定 key', () => {
-  it('消息 key 按任务、种类与 messageId 隔离', () => {
+  it('消息 key 按任务、Turn、种类与 messageId 隔离', () => {
     const first = messageEvent('task-1', 1)
     const next = messageEvent('task-1', 2)
     const anotherTask = messageEvent('task-2', 1)
+    const anotherTurn = { ...messageEvent('task-1', 1), turnId: 'task-1-turn-2' }
     const thought = thoughtEvent('task-1', 3)
     const stream = messageEvent('task-1', 4, null)
 
     expect(createAgentMessageKey(first)).toBe(createAgentMessageKey(next))
     expect(createAgentMessageKey(first)).not.toBe(createAgentMessageKey(anotherTask))
+    expect(createAgentMessageKey(first)).not.toBe(createAgentMessageKey(anotherTurn))
     expect(createAgentMessageKey(first)).not.toBe(createAgentMessageKey(thought))
-    expect(createAgentMessageKey(stream)).toBe('task-1:agent-message:stream')
+    expect(createAgentMessageKey(stream)).toBe('task-1:task-1-turn:agent-message:stream')
   })
 
-  it('工具 call/update 在同一任务内合并，不同任务保持隔离', () => {
+  it('工具 call/update 只在同一 Turn 内合并，不同任务或 Turn 保持隔离', () => {
     const call = toolEvent('task-1', 1, 'tool-call')
     const update = toolEvent('task-1', 2, 'tool-update')
     const anotherTask = toolEvent('task-2', 1, 'tool-update')
+    const anotherTurn = {
+      ...toolEvent('task-1', 1, 'tool-update'),
+      turnId: 'task-1-turn-2'
+    }
 
     expect(createAgentToolKey(call)).toBe(createAgentToolKey(update))
     expect(createAgentToolKey(call)).not.toBe(createAgentToolKey(anotherTask))
+    expect(createAgentToolKey(call)).not.toBe(createAgentToolKey(anotherTurn))
   })
 })
 

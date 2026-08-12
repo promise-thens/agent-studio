@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentRuntimeStatus } from '../../shared/agent'
-import { canSendRuntimePrompt, rebuildRuntimeSession } from './runtime-session-actions'
+import {
+  canSendRuntimePrompt,
+  chooseWorkspaceWhenIdle,
+  createAsyncSingleFlight
+} from './runtime-session-actions'
 
 const readyStatus: AgentRuntimeStatus = {
   runtimeId: 'grok',
@@ -11,77 +15,51 @@ const readyStatus: AgentRuntimeStatus = {
 }
 
 describe('Runtime 会话操作', () => {
-  it('已连接时先断开再连接，并只返回带新 sessionId 的 ready 状态', async () => {
-    const calls: string[] = []
-    const nextStatus: AgentRuntimeStatus = {
-      ...readyStatus,
-      runtimeSessionId: 'session-new'
-    }
-
-    const result = await rebuildRuntimeSession({
-      status: readyStatus,
-      workspace: '/tmp/project',
-      chooseWorkspace: vi.fn(),
-      disconnect: vi.fn(async (): Promise<AgentRuntimeStatus> => {
-        calls.push('disconnect')
-        return { runtimeId: 'grok', state: 'idle', message: '已断开' }
-      }),
-      connect: vi.fn(async () => {
-        calls.push('connect')
-        return nextStatus
-      })
+  it('同一时刻只执行一次异步操作，并在完成后释放门禁', async () => {
+    let release!: () => void
+    const pendingStates: boolean[] = []
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
     })
+    const action = vi.fn(async () => blocked)
+    const runSingleFlight = createAsyncSingleFlight((pending) => pendingStates.push(pending))
 
-    expect(calls).toEqual(['disconnect', 'connect'])
-    expect(result).toEqual({ workspace: '/tmp/project', status: nextStatus })
+    const first = runSingleFlight(action)
+    const duplicate = runSingleFlight(action)
+
+    expect(action).toHaveBeenCalledTimes(1)
+    await expect(duplicate).resolves.toBe(false)
+    expect(pendingStates).toEqual([true])
+
+    release()
+    await expect(first).resolves.toBe(true)
+    await expect(runSingleFlight(action)).resolves.toBe(true)
+    expect(action).toHaveBeenCalledTimes(2)
+    expect(pendingStates).toEqual([true, false, true, false])
   })
 
-  it('连接失败或缺少 Runtime sessionId 时拒绝确认新对话', async () => {
-    await expect(
-      rebuildRuntimeSession({
-        status: { runtimeId: 'grok', state: 'idle', message: '未连接' },
-        workspace: '/tmp/project',
-        chooseWorkspace: vi.fn(),
-        disconnect: vi.fn(),
-        connect: vi.fn(async (): Promise<AgentRuntimeStatus> => ({
-          runtimeId: 'grok',
-          state: 'error',
-          message: '连接失败'
-        }))
-      })
-    ).rejects.toThrow('旧对话记录已保留')
+  it('初始 busy 时不打开目录选择器', async () => {
+    const chooseWorkspace = vi.fn(async () => '/tmp/other-project')
+
+    await expect(chooseWorkspaceWhenIdle(() => true, chooseWorkspace)).resolves.toBeNull()
+    expect(chooseWorkspace).not.toHaveBeenCalled()
   })
 
-  it('目录选择取消时不连接，也不生成本地伪会话', async () => {
-    const connect = vi.fn()
-    const result = await rebuildRuntimeSession({
-      status: { runtimeId: 'grok', state: 'idle', message: '未连接' },
-      workspace: '',
-      chooseWorkspace: vi.fn(async () => null),
-      disconnect: vi.fn(),
-      connect
+  it('目录选择等待期间转为 busy 时丢弃返回结果', async () => {
+    let busy = false
+    let resolveWorkspace!: (workspace: string | null) => void
+    const pickerResult = new Promise<string | null>((resolve) => {
+      resolveWorkspace = resolve
     })
+    const chooseWorkspace = vi.fn(() => pickerResult)
 
-    expect(result).toBeNull()
-    expect(connect).not.toHaveBeenCalled()
-  })
+    const selection = chooseWorkspaceWhenIdle(() => busy, chooseWorkspace)
+    expect(chooseWorkspace).toHaveBeenCalledTimes(1)
 
-  it('断开失败时不连接并保留旧会话', async () => {
-    const connect = vi.fn()
+    busy = true
+    resolveWorkspace('/tmp/other-project')
 
-    await expect(
-      rebuildRuntimeSession({
-        status: readyStatus,
-        workspace: '/tmp/project',
-        chooseWorkspace: vi.fn(),
-        disconnect: vi.fn(async () => {
-          throw new Error('断开失败')
-        }),
-        connect
-      })
-    ).rejects.toThrow('断开失败')
-
-    expect(connect).not.toHaveBeenCalled()
+    await expect(selection).resolves.toBeNull()
   })
 
   it('发送判断同时校验文本、ready 状态和 Prompt 能力', () => {

@@ -1,44 +1,39 @@
 import type { AgentRuntimeStatus } from '../../shared/agent'
 
-export interface RebuildRuntimeSessionOptions {
-  status: AgentRuntimeStatus
-  workspace: string
-  chooseWorkspace: () => Promise<string | null>
-  connect: (workspace: string) => Promise<AgentRuntimeStatus>
-  disconnect: () => Promise<AgentRuntimeStatus>
-}
+/**
+ * 创建一个异步单飞门禁；锁会在回调首次 await 前同步生效，避免 Enter 与点击重复启动同一操作。
+ */
+export function createAsyncSingleFlight(
+  onPendingChange: (pending: boolean) => void = () => undefined
+): (action: () => Promise<void>) => Promise<boolean> {
+  let pending = false
 
-export interface RebuildRuntimeSessionResult {
-  workspace: string
-  status: AgentRuntimeStatus & { state: 'ready'; runtimeSessionId: string }
+  return async (action): Promise<boolean> => {
+    if (pending) return false
+
+    pending = true
+    try {
+      onPendingChange(true)
+      await action()
+      return true
+    } finally {
+      pending = false
+      onPendingChange(false)
+    }
+  }
 }
 
 /**
- * 通过断开并重新连接创建真实 Runtime session；只有新会话确认 ready 后才允许上层清空界面。
+ * 目录选择只允许从 idle 状态开始；Picker 等待期间若进入 busy，则丢弃结果，禁止切换当前 Task。
  */
-export async function rebuildRuntimeSession(
-  options: RebuildRuntimeSessionOptions
-): Promise<RebuildRuntimeSessionResult | null> {
-  if (options.status.state === 'busy' || options.status.state === 'connecting') {
-    throw new Error('Runtime 正在执行或连接中，暂时不能创建新对话。')
-  }
+export async function chooseWorkspaceWhenIdle(
+  isBusy: () => boolean,
+  chooseWorkspace: () => Promise<string | null>
+): Promise<string | null> {
+  if (isBusy()) return null
 
-  const workspace = options.workspace || (await options.chooseWorkspace())
-  if (!workspace) return null
-
-  if (options.status.state === 'ready') {
-    await options.disconnect()
-  }
-
-  const nextStatus = await options.connect(workspace)
-  if (nextStatus.state !== 'ready' || !nextStatus.runtimeSessionId) {
-    throw new Error('Runtime 未返回可用的新会话，旧对话记录已保留。')
-  }
-
-  return {
-    workspace,
-    status: { ...nextStatus, state: 'ready', runtimeSessionId: nextStatus.runtimeSessionId }
-  }
+  const selected = await chooseWorkspace()
+  return isBusy() ? null : selected
 }
 
 /** 发送按钮和键盘 Enter 共用同一判断，避免键盘路径绕过能力门禁。 */

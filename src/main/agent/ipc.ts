@@ -1,10 +1,17 @@
 import { isAbsolute } from 'node:path'
-import type { AgentRuntimeStatus } from '../../shared/agent'
+import type {
+  AgentRuntimeStatus,
+  AgentTaskRuntimeState,
+  AgentTurnExecutionResult
+} from '../../shared/agent'
 import {
   AGENT_INVOKE_CHANNELS,
+  type AgentCancelTurnRequest,
   type AgentConnectRequest,
+  type AgentCreateTaskRequest,
+  type AgentGetTaskRuntimeStateRequest,
   type AgentRespondPermissionRequest,
-  type AgentSendPromptRequest
+  type AgentStartTurnRequest
 } from '../../shared/agent-ipc'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
 import type { DesktopIpcMain } from '../ipc-types'
@@ -13,10 +20,12 @@ import {
   runDesktopIpcOperation,
   type TrustedIpcInvokeEvent
 } from '../security/ipc-sender-validation'
+import { AgentServiceError } from './agent-service'
 
 const MAX_REQUEST_BYTES = 512 * 1024
 const MAX_WORKSPACE_BYTES = 4 * 1024
 const MAX_PROMPT_BYTES = 64 * 1024
+const MAX_TASK_ID_BYTES = 4 * 1024
 const MAX_REQUEST_ID_BYTES = 4 * 1024
 const MAX_OPTION_ID_BYTES = 256 * 1024
 
@@ -24,8 +33,10 @@ export interface AgentIpcRuntime {
   getStatus: () => AgentRuntimeStatus
   connect: (workspace: string) => Promise<AgentRuntimeStatus>
   disconnect: () => Promise<AgentRuntimeStatus>
-  sendPrompt: (prompt: string) => Promise<void>
-  cancel: () => Promise<void>
+  createTask: (workspace: string) => Promise<AgentTaskRuntimeState>
+  startTurn: (taskId: string, prompt: string) => Promise<AgentTurnExecutionResult>
+  cancelTurn: (taskId: string) => Promise<void>
+  getTaskRuntimeState: (taskId: string) => AgentTaskRuntimeState
   respondPermission: (requestId: string, optionId?: string) => void
 }
 
@@ -102,9 +113,24 @@ function readConnectRequest(args: unknown[]): AgentConnectRequest {
   return { workspace: readRequiredString(request, 'workspace', MAX_WORKSPACE_BYTES) }
 }
 
-function readPromptRequest(args: unknown[]): AgentSendPromptRequest {
-  const request = readRequest(args, ['prompt'])
-  return { prompt: readRequiredString(request, 'prompt', MAX_PROMPT_BYTES) }
+function readCreateTaskRequest(args: unknown[]): AgentCreateTaskRequest {
+  const request = readRequest(args, ['workspace'])
+  return { workspace: readRequiredString(request, 'workspace', MAX_WORKSPACE_BYTES) }
+}
+
+function readStartTurnRequest(args: unknown[]): AgentStartTurnRequest {
+  const request = readRequest(args, ['taskId', 'prompt'])
+  return {
+    taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES),
+    prompt: readRequiredString(request, 'prompt', MAX_PROMPT_BYTES)
+  }
+}
+
+function readTaskRequest(
+  args: unknown[]
+): AgentCancelTurnRequest | AgentGetTaskRuntimeStateRequest {
+  const request = readRequest(args, ['taskId'])
+  return { taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES) }
 }
 
 function readPermissionRequest(args: unknown[]): AgentRespondPermissionRequest {
@@ -156,16 +182,23 @@ function registerResultHandler<T>(
   operation: (args: unknown[]) => T | Promise<T>
 ): void {
   dependencies.ipcMain.handle(channel, (event, ...args): Promise<DesktopIpcResult<T>> =>
-    runDesktopIpcOperation(() => {
+    runDesktopIpcOperation(async () => {
       dependencies.assertTrustedSender(event)
-      return operation(args)
+      try {
+        return await operation(args)
+      } catch (error) {
+        if (error instanceof AgentServiceError) {
+          throw new DesktopIpcFailure(error.code, error.message)
+        }
+        throw error
+      }
     }, dependencies.sanitizeError)
   )
 }
 
 /**
  * 注册固定的 Agent IPC Handler。
- * 每次调用都先校验来源和请求边界，再委托当前 GrokAgentBridge。
+ * 每次调用都先校验来源和请求边界，再委托唯一 AgentService。
  */
 export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): void {
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.getStatus, (args) => {
@@ -186,18 +219,30 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
     return requireAgent(dependencies.getAgent).disconnect()
   })
 
-  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.sendPrompt, async (args) => {
-    const request = readPromptRequest(args)
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.createTask, async (args) => {
+    const request = readCreateTaskRequest(args)
+    await assertWorkspaceDirectory(request.workspace, dependencies.statPath)
     const agent = requireAgent(dependencies.getAgent)
     assertPromptState(agent.getStatus())
-    await agent.sendPrompt(request.prompt)
+    return agent.createTask(request.workspace)
+  })
+
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.startTurn, async (args) => {
+    const request = readStartTurnRequest(args)
+    const agent = requireAgent(dependencies.getAgent)
+    assertPromptState(agent.getStatus())
+    return agent.startTurn(request.taskId, request.prompt)
+  })
+
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.cancelTurn, async (args) => {
+    const request = readTaskRequest(args)
+    await requireAgent(dependencies.getAgent).cancelTurn(request.taskId)
     return null
   })
 
-  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.cancel, async (args) => {
-    assertNoArguments(args)
-    await requireAgent(dependencies.getAgent).cancel()
-    return null
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.getTaskRuntimeState, (args) => {
+    const request = readTaskRequest(args)
+    return requireAgent(dependencies.getAgent).getTaskRuntimeState(request.taskId)
   })
 
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.respondPermission, (args) => {

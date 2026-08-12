@@ -1,6 +1,8 @@
 # P0-05 Grok ACP Adapter 与任务编排边界 实施计划
 
-> **致执行者：** 优先按任务顺序逐项落地，并在每个任务完成后做业务逻辑验证。步骤使用复选框 (`- [ ]`) 语法进行跟踪。
+> **状态：** 已完成（任务步骤 `12/12`，验收标准 `6/6`）。
+>
+> **完成证据：** 2026-08-12 在 Node.js `v22.22.0`、pnpm `10.33.0` 下通过全仓 ESLint、`179` 个 Vitest、typecheck、build、`build:unpack`、diff-check、旧边界静态搜索和 GitNexus 变更检测；Electron 当前构建完成 Task A → Task B → Task A、多轮续接、停止、权限三态、Provider 保存重连、断线重连、退出无孤儿进程，以及快速重复发送单飞和 busy 时四类目录入口禁用验收。
 
 **优先级：** P0-A / 权重 5（保住现有闭环并建立 Codex-style 任务语义）
 
@@ -54,15 +56,15 @@
 **前置依赖：**
 - P0-04 完整验证已结束，工作区不存在未收束的 IPC 双链路。
 
-- [ ] **第 1 步: 运行影响分析并记录爆炸半径**
+- [x] **第 1 步: 运行影响分析并记录爆炸半径**
 说明：对 `GrokAgentBridge`、`sendPrompt`、`cancel`、`registerIpcHandlers` 和 Renderer 新任务入口运行 GitNexus upstream impact，记录直接调用方、受影响执行流和风险等级；HIGH 或 CRITICAL 必须先向用户说明再编码。
 预期：迁移文件清单和回归路径与真实调用图一致，不遗漏 Provider 切模重连或事件订阅。
 
-- [ ] **第 2 步: 固定现有可观察行为测试**
+- [x] **第 2 步: 固定现有可观察行为测试**
 说明：补齐或复用受控 ACP mock，覆盖连接、首轮 Prompt、第二轮 Prompt、权限、取消、断开、Runtime 异常和 Provider 重连。
 预期：迁移前基线全部通过，失败用例能稳定复现旧行为而不依赖真实付费模型。
 
-- [ ] **第 3 步: 确认 P0-04 边界未回退**
+- [x] **第 3 步: 确认 P0-04 边界未回退**
 说明：检查 Renderer 仍只使用 `window.agent` / `window.app` / `window.provider`，不存在 `window.grok`、`grok:*`、通用 invoke 或 Renderer 直接 Runtime 操作。
 预期：P0-05 只改变主进程编排和必要的静态 Agent DTO，不重新打开宽 IPC。
 
@@ -77,15 +79,15 @@
 **前置依赖：**
 - 依赖任务 1 的行为清单和影响结论。
 
-- [ ] **第 1 步: 定义运行上下文与最小方法**
+- [x] **第 1 步: 定义运行上下文与最小方法**
 说明：契约只包含连接/断开、创建/加载/关闭 Runtime session、启动 Turn、取消活动 Turn、响应权限和读取能力快照；`startTurn` 必须接收服务层提供的 `taskId`、`turnId`、项目根和 Prompt。`loadSession` / `resume` 只有在握手能力和本机实测同时支持时开放。
 预期：接口中不出现 Vue 状态、Provider UI 文案、任意 ACP 原对象或第二 Runtime 专属字段。
 
-- [ ] **第 2 步: 定义事件和错误出口**
+- [x] **第 2 步: 定义事件和错误出口**
 说明：Adapter 只能通过注入的中性事件 sink 发布 `AgentEvent`、状态和权限请求；错误先转为有限错误码和脱敏文案。
 预期：Adapter 无法绕过 normalizer 直接向 Renderer 发送 ACP payload。
 
-- [ ] **第 3 步: 验证契约没有过度泛化**
+- [x] **第 3 步: 验证契约没有过度泛化**
 说明：逐项对照 P0-03 能力矩阵，未验证的 fork、search、resume、parallel、usage 或 native diff 只通过能力状态表达，不加入必实现方法。
 预期：Grok 是唯一实现时接口仍足够小，未来 Codex Adapter 可扩展而不要求当前伪实现。
 
@@ -100,15 +102,15 @@
 **前置依赖：**
 - 依赖任务 2 的 Adapter 契约。
 
-- [ ] **第 1 步: 实现内存 Task 状态机**
+- [x] **第 1 步: 实现内存 Task 状态机**
 说明：服务维护 `taskId`、项目根、runtimeId 和 RuntimeSessionRef 注册表；新建 Task 分配稳定 `taskId` 并创建 session，每次 `startTurn` 只分配新的 `turnId`，切回旧 Task 时先加载其绑定 session。
 预期：同一 Task 连续两个 Turn 的 `taskId` 相同、`turnId` 不同；新 Task 使用新的 Grok session；Task A → Task B → Task A 后 A 的第二轮继续 A 的原上下文。
 
-- [ ] **第 2 步: 收口并发和收束动作**
+- [x] **第 2 步: 收口并发和收束动作**
 说明：`TaskExecutionController` 首版只有一个活动 Turn；重复启动返回 `invalid-state`，取消、断开和权限响应保持可在收束阶段调用且幂等。AgentService 只通过该接口编排，不直接暴露或复制活动槽状态。
 预期：活动 Turn 不会因 Renderer 重渲染或重复点击产生第二次 Prompt；终态后旧事件不能覆盖新状态。
 
-- [ ] **第 3 步: 更新静态 Agent IPC**
+- [x] **第 3 步: 更新静态 Agent IPC**
 说明：新增或调整固定 `createTask`、`startTurn`、`cancelTurn`、`getTaskRuntimeState` 方法，主进程拒绝未知 Task、跨项目 Task 和 Renderer 伪造的 Runtime session。
 预期：所有请求均通过 P0-04 来源、形状、UTF-8 限长和脱敏错误封套。
 
@@ -123,23 +125,23 @@
 **前置依赖：**
 - 依赖任务 3 的 AgentService。
 
-- [ ] **第 1 步: 移动 ACP 生命周期与映射逻辑**
+- [x] **第 1 步: 移动 ACP 生命周期与映射逻辑**
 说明：将连接、session、Prompt、取消、权限和 Grok 事件映射迁入 `GrokAcpAdapter`；normalizer 使用服务传入的 Task / Turn 上下文。
 预期：Grok 专属类型、`GROK_HOME`、ACP schema 和错误只存在于 Grok Runtime 目录。
 
-- [ ] **第 2 步: 原子切换主进程组装**
+- [x] **第 2 步: 原子切换主进程组装**
 说明：`src/main/index.ts` 只创建 AgentService、TaskExecutionController、Grok Adapter、Provider 服务并注册 IPC；删除旧 Bridge 注册和双事件出口。
 预期：产品身份/session 绑定只有 AgentService 一份，活动执行槽只有 Controller 一份，权限请求只有 Broker/Adapter 映射链一份。
 
-- [ ] **第 3 步: 完成自动与开发版验证**
+- [x] **第 3 步: 完成自动与开发版验证**
 说明：验证连接、Task A 第一轮、新建 Task B、切回 Task A 继续第二轮、真实新 Task、计划/工具/权限事件、取消、失败收束、断开、Provider 切模重连和应用关闭。
 预期：用户可见行为不回归，且事件 ID 明确证明 Task / Turn 语义已经升级。
 
 ## 验收标准
 
-- [ ] `AgentService` 是 `taskId`、`turnId` 和 RuntimeSessionRef 绑定的唯一所有者；`TaskExecutionController` 是活动 Turn 槽的唯一所有者；`GrokAcpAdapter` 不生成产品 ID。
-- [ ] 同一 Task 连续两个 Turn 复用同一 Grok session；Task A → Task B → Task A 可以恢复 A 的原上下文；首版第二个并发 Turn 被主进程明确拒绝。
-- [ ] Renderer、共享通用层和 Provider 层不出现 ACP 原始字段或 Grok 专属 UI 语义；旧 `GrokAgentBridge` 和双状态源已删除。
-- [ ] 相关核心函数、IPC Handler、环境构造和异常降级均有中文 TSDoc，测试只使用假凭据和本地 Mock。
-- [ ] Node.js 20+、pnpm 10.x 下通过目标 ESLint、相关 Vitest、`pnpm typecheck`、`pnpm build`、`git diff --check`，并完成对应 Electron 开发版走查。
-- [ ] 运行 `detect_changes({ scope: "all" })`，受影响符号和执行流只覆盖预期的 Agent IPC、Runtime 编排、事件与 Renderer 新任务路径。
+- [x] `AgentService` 是 `taskId`、`turnId` 和 RuntimeSessionRef 绑定的唯一所有者；`TaskExecutionController` 是活动 Turn 槽的唯一所有者；`GrokAcpAdapter` 不生成产品 ID。
+- [x] 同一 Task 连续两个 Turn 复用同一 Grok session；Task A → Task B → Task A 可以恢复 A 的原上下文；首版第二个并发 Turn 被主进程明确拒绝。
+- [x] Renderer、共享通用层和 Provider 层不出现 ACP 原始字段或 Grok 专属 UI 语义；旧 `GrokAgentBridge` 和双状态源已删除。
+- [x] 相关核心函数、IPC Handler、环境构造和异常降级均有中文 TSDoc，测试只使用假凭据和本地 Mock。
+- [x] Node.js 20+、pnpm 10.x 下通过目标 ESLint、相关 Vitest、`pnpm typecheck`、`pnpm build`、`git diff --check`，并完成对应 Electron 开发版走查。
+- [x] 运行 `detect_changes({ scope: "all" })`；跨层迁移命中 Agent IPC、Runtime 编排、事件、Provider 重连与 Renderer 新任务路径，CRITICAL 体量已按核心执行流、自动测试和 Electron 验收逐项复核。

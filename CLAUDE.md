@@ -256,18 +256,18 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[P0-05 Grok ACP Adapter 迁移](docs/superpowers/plans/p0-05-grok-acp-adapter-migration.md)
-- 状态：P0-04 已完成，P0-05 前置依赖已满足，待开始主体迁移
-- 完成度：任务步骤 `0/12`，验收标准 `0/6`
-- 当前完成：P0-04 已建立静态 `window.agent` / `window.app` / `window.provider` 边界、可信主窗口与 main frame 来源校验、UTF-8 输入限制、有限错误封套、可信推送、窄 Preload API 和 Renderer 统一解包；已删除 `window.electron`、`window.grok`、全部 `grok:*`、`GrokDesktopApi` 与 `@electron-toolkit/preload`
-- 兼容边界：P0-05 开始前主进程仍使用 `GrokAgentBridge`，Provider DTO 与切模重连事务保持不变；能力快照不持久化，历史恢复、Diff/Usage viewer、后台 Task Executor 与第二 Runtime 仍由后续计划完成
-- 下一步：先冻结 P0-05 迁移前行为与 GitNexus HIGH/CRITICAL 调用链，再建立最小 Adapter、AgentService 和单执行槽 Controller
-- 最近验证：2026-08-11，P0-04 在 Node.js `v22.22.0`、pnpm `10.33.0` 下通过完整 ESLint、`166` 个 Vitest、typecheck、build、`build:unpack`、diff-check、旧边界静态搜索和 GitNexus 检测；开发版完成断开重连、两次唯一 Prompt、Provider 同配置测试保存与 Runtime 重连，以及真实权限允许、拒绝、取消三种响应，均正确收束并恢复 ready
+- 当前计划：[P0-06 Project、Task、Turn 与历史恢复](docs/superpowers/plans/p0-06-task-session-history.md)
+- 状态：P0-05 已完成，P0-06 前置依赖已满足，待开始 Project Registry、Task/Turn 持久化与重启恢复
+- 完成度：任务步骤 `0/12`，验收标准 `0/7`
+- 当前完成：P0-05 已建立最小 `AgentRuntimeAdapter`、`AgentService`、单执行槽 `TaskExecutionController` 和 `GrokAcpAdapter`；产品 `taskId` / `turnId`、Runtime session 绑定、取消、权限和中性事件由主进程统一编排，Renderer 支持内存多 Task 切换与同 Task 多 Turn，旧 `GrokAgentBridge` 已删除
+- 兼容边界：能力快照、Task 与 Turn 仍仅在内存中；历史持久化、重启恢复、Diff/Usage viewer、后台 Task Executor 与第二 Runtime 仍由后续计划完成，Provider DTO、凭据存储和切模重连事务保持不变
+- 下一步：先为 P0-06 冻结 Project / Task / Turn 持久化白名单、容量上限和重启降级语义，再建立版本化 Project Registry 与原子历史存储
+- 最近验证：2026-08-12，P0-05 在 Node.js `v22.22.0`、pnpm `10.33.0` 下通过完整 ESLint、`179` 个 Vitest、typecheck、build、`build:unpack`、diff-check、旧边界静态搜索和 GitNexus 变更检测；Electron 当前构建完成 Task A → Task B → Task A、多轮续接、停止、权限三态、Provider 保存重连、断线重连、退出无孤儿进程，以及快速重复发送单飞和 busy 时四类目录入口禁用验收
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **agent-studio** (875 symbols, 1893 relationships, 73 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **agent-studio** (1715 symbols, 4200 relationships, 146 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 

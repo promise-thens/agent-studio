@@ -15,8 +15,10 @@ describe('桌面 IPC 静态契约', () => {
       'agent:get-status',
       'agent:connect',
       'agent:disconnect',
-      'agent:send-prompt',
-      'agent:cancel',
+      'agent:create-task',
+      'agent:start-turn',
+      'agent:cancel-turn',
+      'agent:get-task-runtime-state',
       'agent:respond-permission',
       'agent:status',
       'agent:event',
@@ -33,5 +35,7 @@ describe('桌面 IPC 静态契约', () => {
     ]
 
     expect(channels.every((channel) => !channel.startsWith('grok:'))).toBe(true)
+    expect(channels).not.toContain('agent:send-prompt')
+    expect(channels).not.toContain('agent:cancel')
   })
 })

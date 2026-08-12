@@ -72,6 +72,26 @@ export interface AgentRuntimeStatus {
   capabilitySnapshot?: AgentRuntimeCapabilitySnapshot
 }
 
+/** Renderer 可查询的内存 Task 状态；Runtime 私有 session 引用不得进入此 DTO。 */
+export interface AgentTaskRuntimeState {
+  taskId: string
+  runtimeId: AgentRuntimeId
+  workspace: string
+  state: AgentExecutionState
+  activeTurnId?: string
+  lastTurnId?: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** 一次 Turn 完成后的有限结果；身份由 AgentService 分配，协议对象不得进入共享层。 */
+export interface AgentTurnExecutionResult {
+  taskId: string
+  turnId: string
+  outcome: AgentTurnOutcome
+  task: AgentTaskRuntimeState
+}
+
 /** 可持久化的任务摘要；时间字段统一使用 ISO 8601 字符串。 */
 export interface AgentTaskSummary {
   taskId: string

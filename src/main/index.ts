@@ -11,15 +11,17 @@ import type {
   ProviderConnectionInput,
   ProviderModelOption
 } from '../shared/provider'
+import { AgentService } from './agent/agent-service'
 import { registerAgentIpcHandlers } from './agent/ipc'
+import { TaskExecutionController } from './agent/task-execution-controller'
 import { registerAppIpcHandlers } from './app-ipc'
-import { GrokAgentBridge } from './grok-agent'
 import type { DesktopIpcMain } from './ipc-types'
 import { ProviderConfigStore, type ProviderRuntimeConfig } from './provider/provider-config-store'
 import { ProviderConnectionTester } from './provider/provider-connection-tester'
 import { clearGrokProviderConfig } from './provider/grok-provider-config'
 import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
+import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
 import {
   assertTrustedIpcSender,
   sendToTrustedRenderer,
@@ -29,7 +31,8 @@ import {
 import { redactSensitiveError, redactSensitiveText } from './security/sensitive-redaction'
 
 let mainWindow: BrowserWindow | null = null
-let agent: GrokAgentBridge | null = null
+let agentService: AgentService | null = null
+let runtimeAdapter: GrokAcpAdapter | null = null
 let providerStore: ProviderConfigStore | null = null
 let providerTester: ProviderConnectionTester | null = null
 
@@ -86,16 +89,37 @@ async function initializeServices(): Promise<void> {
 
   providerTester = new ProviderConnectionTester({ redact: redactProviderText })
   const rendererTrust = createRendererTrustOptions()
-  agent = new GrokAgentBridge(
-    (status) => sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.status, status),
-    (event) => sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.event, event),
-    (request) => sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.permission, request),
+  const adapter = new GrokAcpAdapter(
+    {
+      onStatus: (status) =>
+        sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.status, status),
+      onEvent: (event) => {
+        // 先收束主进程状态，再向 Renderer 发布，避免 UI 先看到终态而执行槽尚未释放。
+        agentService?.handleRuntimeEvent(event)
+        sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.event, event)
+      },
+      onPermission: (request) => {
+        const service = agentService
+        if (!service) {
+          runtimeAdapter?.respondPermission(request.id)
+          return
+        }
+
+        // 权限必须先登记到 Service；Renderer 不可达时立即取消，禁止 Runtime 永久等待。
+        service.handlePermissionRequest(request)
+        if (!sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.permission, request)) {
+          service.respondPermission(request.id)
+        }
+      }
+    },
     {
       userDataPath: app.getPath('userData'),
       getProviderConfig: () => requireProviderStore().getRuntimeConfig(),
       redactText: redactProviderText
     }
   )
+  runtimeAdapter = adapter
+  agentService = new AgentService(adapter, new TaskExecutionController())
 }
 
 /** 注册渲染层可调用的最小 IPC 接口。 */
@@ -113,7 +137,7 @@ function registerIpcHandlers(): void {
   registerAgentIpcHandlers({
     ipcMain: desktopIpcMain,
     assertTrustedSender,
-    getAgent: () => agent,
+    getAgent: () => agentService,
     statPath: stat,
     sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
   })
@@ -160,7 +184,7 @@ function registerIpcHandlers(): void {
         }),
       clear: () =>
         runProviderOperation(async () => {
-          await requireAgent().disconnect()
+          await requireAgentService().disconnect()
           const summary = await requireProviderStore().clear()
           await clearGrokProviderConfig(app.getPath('userData'))
           return summary
@@ -196,12 +220,16 @@ function createRendererTrustOptions(): RendererTrustOptions {
 
 /** Provider 变更需要与已连接 Runtime 保持事务一致，失败时恢复旧配置。 */
 async function persistProviderConfig(input: ProviderConfigInput): Promise<ProviderConfigSummary> {
-  const currentAgent = requireAgent()
+  const currentAgent = requireAgentService()
   const store = requireProviderStore()
   const previous = store.getRuntimeConfig()
   const status = currentAgent.getStatus()
 
-  if (status.state === 'busy' || status.state === 'connecting') {
+  if (
+    currentAgent.hasInFlightOperation() ||
+    status.state === 'busy' ||
+    status.state === 'connecting'
+  ) {
     throw new Error('任务执行中，结束后才能修改模型配置。')
   }
 
@@ -209,7 +237,7 @@ async function persistProviderConfig(input: ProviderConfigInput): Promise<Provid
   const nextSummary = await store.save(input, { testedAt: new Date().toISOString() })
   if (!workspace) return nextSummary
 
-  await currentAgent.disconnect(false)
+  await currentAgent.disconnect()
   try {
     await currentAgent.connect(workspace)
     return nextSummary
@@ -272,9 +300,9 @@ function getKnownSecrets(): string[] {
   return apiKey ? [apiKey] : []
 }
 
-function requireAgent(): GrokAgentBridge {
-  if (!agent) throw new Error('Agent Runtime 尚未初始化。')
-  return agent
+function requireAgentService(): AgentService {
+  if (!agentService) throw new Error('Agent Runtime 尚未初始化。')
+  return agentService
 }
 
 function requireProviderStore(): ProviderConfigStore {
@@ -308,7 +336,8 @@ app
   })
 
 app.on('before-quit', () => {
-  void agent?.disconnect(false)
+  // 退出路径直接终止 Adapter，避免等待 ACP cancel 阻塞应用关闭。
+  void runtimeAdapter?.disconnect()
 })
 
 app.on('window-all-closed', () => {

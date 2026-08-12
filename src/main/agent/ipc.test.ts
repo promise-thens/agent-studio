@@ -1,9 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentRuntimeStatus } from '../../shared/agent'
+import type {
+  AgentRuntimeStatus,
+  AgentTaskRuntimeState,
+  AgentTurnExecutionResult
+} from '../../shared/agent'
 import { AGENT_INVOKE_CHANNELS } from '../../shared/agent-ipc'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
 import type { DesktopIpcHandler } from '../ipc-types'
 import { DesktopIpcFailure, type TrustedIpcInvokeEvent } from '../security/ipc-sender-validation'
+import { AgentServiceError } from './agent-service'
 import { registerAgentIpcHandlers, type AgentIpcRuntime } from './ipc'
 
 const event = {} as TrustedIpcInvokeEvent
@@ -26,6 +31,20 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
       workspace: '/tmp/project',
       runtimeSessionId: 'session-1'
     } satisfies AgentRuntimeStatus)
+  const task: AgentTaskRuntimeState = {
+    taskId: 'task-1',
+    runtimeId: 'grok',
+    workspace: '/tmp/project',
+    state: 'pending',
+    createdAt: '2026-08-11T00:00:00.000Z',
+    updatedAt: '2026-08-11T00:00:00.000Z'
+  }
+  const turn: AgentTurnExecutionResult = {
+    taskId: 'task-1',
+    turnId: 'turn-1',
+    outcome: 'completed',
+    task: { ...task, state: 'completed', lastTurnId: 'turn-1' }
+  }
   const runtime: AgentIpcRuntime = {
     getStatus: vi.fn(() => status),
     connect: vi.fn(async () => status),
@@ -34,8 +53,10 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
       state: 'idle',
       message: '已断开'
     })),
-    sendPrompt: vi.fn(async () => undefined),
-    cancel: vi.fn(async () => undefined),
+    createTask: vi.fn(async () => task),
+    startTurn: vi.fn(async () => turn),
+    cancelTurn: vi.fn(async () => undefined),
+    getTaskRuntimeState: vi.fn(() => task),
     respondPermission: vi.fn()
   }
   const assertTrustedSender = vi.fn()
@@ -68,7 +89,7 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
 }
 
 describe('Agent IPC Handler', () => {
-  it('只注册固定的六个 Agent invoke channel', () => {
+  it('只注册固定的八个 Agent invoke channel', () => {
     const fixture = createFixture()
     expect([...fixture.handlers.keys()]).toEqual(Object.values(AGENT_INVOKE_CHANNELS))
   })
@@ -124,41 +145,78 @@ describe('Agent IPC Handler', () => {
     expect(fixture.runtime.connect).toHaveBeenCalledOnce()
   })
 
-  it('Prompt 只在 ready 状态委托，并保留原始首尾内容', async () => {
+  it('创建 Task 复用目录验证，公共响应不包含 Runtime session 引用', async () => {
+    const fixture = createFixture()
+    const result = await fixture.invoke<AgentTaskRuntimeState>(AGENT_INVOKE_CHANNELS.createTask, {
+      workspace: '/tmp/project'
+    })
+
+    expect(result).toMatchObject({ ok: true, value: { taskId: 'task-1' } })
+    expect(fixture.statPath).toHaveBeenCalledWith('/tmp/project')
+    expect(fixture.runtime.createTask).toHaveBeenCalledWith('/tmp/project')
+    expect(JSON.stringify(result)).not.toContain('runtimeSessionId')
+  })
+
+  it('Turn 只在 ready 状态委托，并保留 Task ID 与 Prompt 首尾内容', async () => {
     const fixture = createFixture()
     const prompt = '  请执行测试  '
 
-    const result = await fixture.invoke(AGENT_INVOKE_CHANNELS.sendPrompt, { prompt })
+    const result = await fixture.invoke(AGENT_INVOKE_CHANNELS.startTurn, {
+      taskId: 'task-1',
+      prompt
+    })
 
-    expect(result).toEqual({ ok: true, value: null })
-    expect(fixture.runtime.sendPrompt).toHaveBeenCalledWith(prompt)
+    expect(result).toMatchObject({ ok: true, value: { taskId: 'task-1', turnId: 'turn-1' } })
+    expect(fixture.runtime.startTurn).toHaveBeenCalledWith('task-1', prompt)
   })
 
   it('接受 null prototype 的普通请求对象', async () => {
     const fixture = createFixture()
-    const request = Object.create(null) as { prompt: string }
+    const request = Object.create(null) as { taskId: string; prompt: string }
+    request.taskId = 'task-1'
     request.prompt = '执行测试'
 
-    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.sendPrompt, request)).toEqual({
+    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.startTurn, request)).toMatchObject({
       ok: true,
-      value: null
+      value: { taskId: 'task-1' }
     })
   })
 
-  it('Runtime 执行期 Prompt 失败由 Bridge 自行收束时仍返回成功委托', async () => {
+  it('Runtime 返回有限 Turn 结果时原样封装成功响应', async () => {
     const fixture = createFixture()
-    vi.mocked(fixture.runtime.sendPrompt).mockResolvedValue(undefined)
-
-    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.sendPrompt, { prompt: '执行测试' })).toEqual({
-      ok: true,
-      value: null
+    vi.mocked(fixture.runtime.startTurn).mockResolvedValue({
+      taskId: 'task-1',
+      turnId: 'turn-failed',
+      outcome: 'failed',
+      task: {
+        taskId: 'task-1',
+        runtimeId: 'grok',
+        workspace: '/tmp/project',
+        state: 'failed',
+        lastTurnId: 'turn-failed',
+        createdAt: '2026-08-11T00:00:00.000Z',
+        updatedAt: '2026-08-11T00:00:01.000Z'
+      }
     })
+
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.startTurn, {
+        taskId: 'task-1',
+        prompt: '执行测试'
+      })
+    ).toMatchObject({ ok: true, value: { outcome: 'failed' } })
   })
 
   it('无返回值操作统一返回 null，并保留权限幂等委托', async () => {
     const fixture = createFixture()
 
-    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.cancel)).toEqual({ ok: true, value: null })
+    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.cancelTurn, { taskId: 'task-1' })).toEqual({
+      ok: true,
+      value: null
+    })
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId: 'task-1' })
+    ).toMatchObject({ ok: true, value: { taskId: 'task-1' } })
     expect(
       await fixture.invoke(AGENT_INVOKE_CHANNELS.respondPermission, {
         requestId: 'request-1',
@@ -170,20 +228,43 @@ describe('Agent IPC Handler', () => {
 
   it.each([
     ['额外参数', AGENT_INVOKE_CHANNELS.getStatus, [{}], 'invalid-input'],
-    ['数组请求', AGENT_INVOKE_CHANNELS.sendPrompt, [['执行测试']], 'invalid-input'],
-    ['Date 请求', AGENT_INVOKE_CHANNELS.sendPrompt, [new Date()], 'invalid-input'],
-    ['Map 请求', AGENT_INVOKE_CHANNELS.sendPrompt, [new Map()], 'invalid-input'],
+    ['数组请求', AGENT_INVOKE_CHANNELS.startTurn, [['执行测试']], 'invalid-input'],
+    ['Date 请求', AGENT_INVOKE_CHANNELS.startTurn, [new Date()], 'invalid-input'],
+    ['Map 请求', AGENT_INVOKE_CHANNELS.startTurn, [new Map()], 'invalid-input'],
     [
-      '未知字段',
-      AGENT_INVOKE_CHANNELS.sendPrompt,
-      [{ prompt: '执行测试', taskId: 'fake' }],
+      '伪造 Runtime session 字段',
+      AGENT_INVOKE_CHANNELS.startTurn,
+      [{ prompt: '执行测试', taskId: 'task-1', runtimeSessionId: 'fake-session' }],
       'invalid-input'
     ],
-    ['空白 Prompt', AGENT_INVOKE_CHANNELS.sendPrompt, [{ prompt: '   ' }], 'invalid-input'],
-    ['NUL Prompt', AGENT_INVOKE_CHANNELS.sendPrompt, [{ prompt: '执行\0测试' }], 'invalid-input'],
+    [
+      '空白 Prompt',
+      AGENT_INVOKE_CHANNELS.startTurn,
+      [{ taskId: 'task-1', prompt: '   ' }],
+      'invalid-input'
+    ],
+    [
+      'NUL Prompt',
+      AGENT_INVOKE_CHANNELS.startTurn,
+      [{ taskId: 'task-1', prompt: '执行\0测试' }],
+      'invalid-input'
+    ],
+    [
+      '空白 Task ID',
+      AGENT_INVOKE_CHANNELS.startTurn,
+      [{ taskId: '   ', prompt: '执行测试' }],
+      'invalid-input'
+    ],
+    ['NUL Task ID', AGENT_INVOKE_CHANNELS.cancelTurn, [{ taskId: 'task\0-1' }], 'invalid-input'],
     [
       '相对目录',
       AGENT_INVOKE_CHANNELS.connect,
+      [{ workspace: 'relative/path' }],
+      'invalid-workspace'
+    ],
+    [
+      '创建 Task 的相对目录',
+      AGENT_INVOKE_CHANNELS.createTask,
       [{ workspace: 'relative/path' }],
       'invalid-workspace'
     ]
@@ -211,16 +292,23 @@ describe('Agent IPC Handler', () => {
     const exactAscii = 'a'.repeat(64 * 1024)
     const exactEmoji = '😀'.repeat((64 * 1024) / 4)
 
-    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.sendPrompt, { prompt: exactAscii })).toEqual({
-      ok: true,
-      value: null
-    })
-    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.sendPrompt, { prompt: exactEmoji })).toEqual({
-      ok: true,
-      value: null
-    })
     expect(
-      await fixture.invoke(AGENT_INVOKE_CHANNELS.sendPrompt, { prompt: `${exactAscii}a` })
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.startTurn, {
+        taskId: 'task-1',
+        prompt: exactAscii
+      })
+    ).toMatchObject({ ok: true })
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.startTurn, {
+        taskId: 'task-1',
+        prompt: exactEmoji
+      })
+    ).toMatchObject({ ok: true })
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.startTurn, {
+        taskId: 'task-1',
+        prompt: `${exactAscii}a`
+      })
     ).toMatchObject({ ok: false, error: { code: 'payload-too-large' } })
   })
 
@@ -249,6 +337,20 @@ describe('Agent IPC Handler', () => {
       event
     )) as DesktopIpcResult<unknown>
     expect(result).toMatchObject({ ok: false, error: { code: 'runtime-unavailable' } })
+  })
+
+  it('AgentService 有限错误码跨 IPC 保持稳定', async () => {
+    const fixture = createFixture()
+    vi.mocked(fixture.runtime.getTaskRuntimeState).mockImplementation(() => {
+      throw new AgentServiceError('task-not-found', '未找到指定 Task。')
+    })
+
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId: 'missing-task' })
+    ).toEqual({
+      ok: false,
+      error: { code: 'task-not-found', message: '未找到指定 Task。' }
+    })
   })
 
   it('未知异常只返回脱敏后的 operation-failed', async () => {
