@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import type {
   AgentPermissionRequest,
   AgentRuntimeCapabilitySnapshot,
@@ -15,6 +18,8 @@ import type {
 import { AgentRuntimeAdapterError } from './agent-runtime-adapter'
 import { AgentService, AgentServiceError } from './agent-service'
 import { TaskExecutionController } from './task-execution-controller'
+import { ProjectRegistry } from '../project/project-registry'
+import { TaskStore } from './task-store'
 
 const WORKSPACE = '/tmp/agent-studio-project'
 
@@ -114,6 +119,54 @@ describe('AgentService Task / Turn 编排', () => {
       new AgentServiceError('operation-failed', '模型绑定失败。')
     )
     expect(adapter.loadSession).not.toHaveBeenCalled()
+  })
+
+  it('重启后 resumeTask 重新校验 Project，resume 失败但连接可信时回退 load', async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), 'agent-service-resume-'))
+    const projectPath = join(userDataPath, 'project')
+    await mkdir(projectPath)
+    try {
+      const registry = new ProjectRegistry({ userDataPath, createId: () => 'project-1' })
+      await registry.initialize()
+      const project = await registry.register(projectPath)
+      const store = new TaskStore({ projectRegistry: registry })
+      await store.initialize()
+      await store.createTask({
+        taskId: 'task-1',
+        projectId: project.projectId,
+        root: project.canonicalRoot,
+        runtimeId: 'grok',
+        session: {
+          runtimeId: 'grok',
+          runtimeSessionId: 'persisted-session',
+          workspace: project.canonicalRoot
+        },
+        capabilitySnapshot: restoreSnapshot({ resume: true, load: true })
+      })
+      const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+      adapter.resumeSession.mockRejectedValueOnce(
+        new AgentRuntimeAdapterError('session-not-found', 'resume session 不存在。')
+      )
+      const service = new AgentService(adapter, new TaskExecutionController(), {
+        projectRegistry: registry,
+        taskStore: store
+      })
+
+      await expect(service.resumeTask('task-1')).resolves.toMatchObject({
+        resumed: true,
+        method: 'load',
+        task: { taskId: 'task-1' }
+      })
+      expect(adapter.connect).toHaveBeenCalledWith(project.canonicalRoot)
+      expect(adapter.resumeSession).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimeSessionId: 'persisted-session' })
+      )
+      expect(adapter.loadSession).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimeSessionId: 'persisted-session' })
+      )
+    } finally {
+      await rm(userDataPath, { recursive: true, force: true })
+    }
   })
 
   it('单执行槽拒绝第二个 Turn，取消请求和终态收束保持幂等', async () => {
@@ -219,6 +272,51 @@ describe('AgentService Task / Turn 编排', () => {
     expect(controller.getActiveTurn()).toBeNull()
     expect(service.getTaskRuntimeState(task.taskId).state).toBe('cancelled')
     expect(service.getSelectedTaskId()).toBeNull()
+
+    turnResult.resolve({ outcome: 'cancelled' })
+    await execution
+  })
+
+  it('断开时等待历史队列并把持久化 Turn 收束为 cancelled', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const turnResult = deferred<AgentRuntimeTurnResult>()
+    adapter.startTurn.mockImplementationOnce(() => turnResult.promise)
+    const historyWrite = deferred<void>()
+    const taskStore = {
+      listTaskRecords: vi.fn(() => []),
+      createTask: vi.fn(async () => undefined),
+      createTurn: vi.fn(async () => undefined),
+      markTurnDispatched: vi.fn(async () => undefined),
+      appendEvent: vi.fn(() => historyWrite.promise),
+      setPermissionState: vi.fn(async () => undefined),
+      finishTurn: vi.fn(async () => undefined)
+    }
+    let idIndex = 0
+    const service = new AgentService(adapter, new TaskExecutionController(), {
+      createId: () => ['task-a', 'turn-a1'][idIndex++]!,
+      taskStore: taskStore as never
+    })
+    const task = await service.createTask(WORKSPACE)
+    const execution = service.startTurn(task.taskId, '等待落盘')
+    await vi.waitFor(() => expect(adapter.startTurn).toHaveBeenCalledOnce())
+    service.handleRuntimeEvent({
+      runtimeId: 'grok',
+      runtimeSessionId: 'runtime-session-1',
+      capabilityState: 'native',
+      taskId: task.taskId,
+      turnId: 'turn-a1',
+      sequence: 1,
+      observedAt: '2026-08-12T00:00:00.000Z',
+      kind: 'agent-message',
+      text: '输出'
+    })
+
+    const disconnecting = service.disconnect()
+    await Promise.resolve()
+    expect(taskStore.finishTurn).not.toHaveBeenCalled()
+    historyWrite.resolve()
+    await disconnecting
+    expect(taskStore.finishTurn).toHaveBeenCalledWith('task-a', 'turn-a1', 'cancelled')
 
     turnResult.resolve({ outcome: 'cancelled' })
     await execution

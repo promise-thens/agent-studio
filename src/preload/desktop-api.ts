@@ -13,6 +13,7 @@ import {
 import { APP_INVOKE_CHANNELS, type AppDesktopApi } from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import type { ProviderDesktopApi } from '../shared/provider'
+import { TASK_INVOKE_CHANNELS, type TaskDesktopApi } from '../shared/task-ipc'
 
 export interface NarrowIpcRenderer {
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -43,16 +44,16 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getStatus) as Promise<
         DesktopIpcResult<AgentRuntimeStatus>
       >,
-    connect: (workspace) =>
-      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.connect, { workspace }) as Promise<
+    connect: (projectId) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.connect, { projectId }) as Promise<
         DesktopIpcResult<AgentRuntimeStatus>
       >,
     disconnect: () =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.disconnect) as Promise<
         DesktopIpcResult<AgentRuntimeStatus>
       >,
-    createTask: (workspace) =>
-      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.createTask, { workspace }) as Promise<
+    createTask: (projectId) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.createTask, { projectId }) as Promise<
         DesktopIpcResult<AgentTaskRuntimeState>
       >,
     startTurn: (taskId, prompt) =>
@@ -80,12 +81,68 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
   }
 }
 
-/** 创建只包含目录选择能力的 App API。 */
+/** 创建只包含 Project 注册与历史清理能力的 App API。 */
 export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopApi {
   return {
-    chooseWorkspace: () =>
-      ipcRenderer.invoke(APP_INVOKE_CHANNELS.chooseWorkspace) as Promise<
-        DesktopIpcResult<string | null>
+    chooseProject: () =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.chooseProject) as ReturnType<
+        AppDesktopApi['chooseProject']
+      >,
+    listProjects: () =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.listProjects) as ReturnType<
+        AppDesktopApi['listProjects']
+      >,
+    removeProject: (projectId) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.removeProject, { projectId }) as ReturnType<
+        AppDesktopApi['removeProject']
+      >,
+    previewProjectHistoryDeletion: (projectId) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.previewProjectHistoryDeletion, {
+        projectId
+      }) as ReturnType<AppDesktopApi['previewProjectHistoryDeletion']>,
+    deleteProjectHistory: (projectId, token) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.deleteProjectHistory, {
+        projectId,
+        token
+      }) as ReturnType<AppDesktopApi['deleteProjectHistory']>
+  }
+}
+
+/** 创建不暴露存储路径的 Task 历史 API。 */
+export function createTaskDesktopApi(ipcRenderer: NarrowIpcRenderer): TaskDesktopApi {
+  return {
+    list: (projectId, cursor, limit) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.list, {
+        projectId,
+        ...(cursor === undefined ? {} : { cursor }),
+        ...(limit === undefined ? {} : { limit })
+      }) as ReturnType<TaskDesktopApi['list']>,
+    get: (taskId) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.get, { taskId }) as ReturnType<TaskDesktopApi['get']>,
+    listTurns: (taskId, cursor, limit) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.listTurns, {
+        taskId,
+        ...(cursor === undefined ? {} : { cursor }),
+        ...(limit === undefined ? {} : { limit })
+      }) as ReturnType<TaskDesktopApi['listTurns']>,
+    listEvents: (taskId, turnId, afterSequence, limit) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.listEvents, {
+        taskId,
+        turnId,
+        ...(afterSequence === undefined ? {} : { afterSequence }),
+        ...(limit === undefined ? {} : { limit })
+      }) as ReturnType<TaskDesktopApi['listEvents']>,
+    resume: (taskId) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.resume, { taskId }) as ReturnType<
+        TaskDesktopApi['resume']
+      >,
+    previewDelete: (taskId) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.previewDelete, { taskId }) as ReturnType<
+        TaskDesktopApi['previewDelete']
+      >,
+    delete: (taskId, token) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.delete, { taskId, token }) as ReturnType<
+        TaskDesktopApi['delete']
       >
   }
 }

@@ -1,0 +1,159 @@
+import type {
+  AgentCapabilityState,
+  AgentDiff,
+  AgentExecutionState,
+  AgentPlanEntry,
+  AgentRuntimeId,
+  AgentTaskRuntimeState,
+  AgentToolStatus,
+  AgentTurnOutcome,
+  AgentTurnUsage,
+  AgentUsage
+} from './agent'
+
+/** Project 当前目录可用性；历史查看不依赖目录仍然存在。 */
+export type ProjectAvailability =
+  | { state: 'available' }
+  | { state: 'unavailable'; message: string }
+  | { state: 'version-unsupported'; message: string }
+  | { state: 'corrupt'; message: string }
+
+/** Renderer 可见的 Project 摘要，不授予任意路径读取能力。 */
+export interface ProjectSummary {
+  projectId: string
+  canonicalRoot: string
+  displayName: string
+  status: 'active' | 'removed'
+  availability: ProjectAvailability
+  registeredAt: string
+  lastOpenedAt: string
+  removedAt?: string
+  revision: number
+}
+
+/** 历史状态独立增加 interrupted，避免扩大实时执行状态机。 */
+export type HistoryExecutionState = AgentExecutionState | 'interrupted'
+
+/** 单轮实际使用的模型事实，不随之后的 Provider 设置变化。 */
+export interface TurnModelSnapshot {
+  modelId: string
+  displayName?: string
+}
+
+/** P0-06 只正式支持用户当前 Project 根目录。 */
+export interface LocalExecutionEnvironmentSummary {
+  kind: 'local'
+  projectId: string
+}
+
+/** Runtime 原生恢复能力的有限摘要，不包含私有 session identifier。 */
+export interface RuntimeResumeSummary {
+  resumed: boolean
+  method?: 'resume' | 'load'
+  message: string
+  task?: AgentTaskRuntimeState
+}
+
+/** 最近 Task 列表使用的有限字段。 */
+export interface TaskHistorySummary {
+  taskId: string
+  projectId: string
+  runtimeId: AgentRuntimeId
+  title: string
+  state: HistoryExecutionState
+  turnCount: number
+  resumable: boolean
+  resumeMessage?: string
+  createdAt: string
+  updatedAt: string
+  revision: number
+}
+
+/** Task 详情保持环境与权限策略中性，不暴露 Runtime 私有引用。 */
+export interface TaskHistoryDetail extends TaskHistorySummary {
+  environment: LocalExecutionEnvironmentSummary
+  permissionPolicy: { kind: 'legacy-runtime' }
+}
+
+/** 已持久化 Turn 的审阅记录。 */
+export interface TurnHistoryRecord {
+  turnId: string
+  taskId: string
+  promptDisplayText: string
+  model: TurnModelSnapshot
+  state: HistoryExecutionState
+  createdAt: string
+  dispatchedAt?: string
+  endedAt?: string
+  usage?: AgentTurnUsage
+  historyTruncated?: true
+  truncationReason?: 'event-count' | 'event-bytes' | 'turn-bytes'
+  eventCount: number
+  eventBytes: number
+  artifactIds?: string[]
+  validationIds?: string[]
+  revision: number
+}
+
+/** 历史事件基座明确排除 runtimeSessionId。 */
+export interface PersistedAgentEventBase {
+  runtimeId: AgentRuntimeId
+  capabilityState: AgentCapabilityState
+  taskId: string
+  turnId: string
+  sequence: number
+  observedAt: string
+  truncated?: true
+}
+
+export type PersistedAgentEvent =
+  | (PersistedAgentEventBase & { kind: 'agent-message'; text: string; messageId?: string })
+  | (PersistedAgentEventBase & { kind: 'agent-thought'; text: string; messageId?: string })
+  | (PersistedAgentEventBase & {
+      kind: 'tool-call'
+      toolCallId: string
+      title: string
+      status?: AgentToolStatus
+    })
+  | (PersistedAgentEventBase & {
+      kind: 'tool-update'
+      toolCallId: string
+      title?: string
+      status?: AgentToolStatus
+    })
+  | (PersistedAgentEventBase & { kind: 'plan'; entries: AgentPlanEntry[] })
+  | (PersistedAgentEventBase & { kind: 'diff'; diffs: AgentDiff[]; toolCallId?: string })
+  | (PersistedAgentEventBase & { kind: 'usage'; usage: AgentUsage })
+  | (PersistedAgentEventBase & {
+      kind: 'turn-complete'
+      outcome: AgentTurnOutcome
+      usage?: AgentTurnUsage
+    })
+  | (PersistedAgentEventBase & {
+      kind: 'error'
+      message: string
+      recoverable: boolean
+      code?: string
+    })
+
+export interface CursorPage<T> {
+  items: T[]
+  nextCursor?: string
+}
+
+export type TaskHistoryPage = CursorPage<TaskHistorySummary>
+export type TurnHistoryPage = CursorPage<TurnHistoryRecord>
+export type PersistedAgentEventPage = CursorPage<PersistedAgentEvent>
+
+/** 删除预览绑定 revision 与短期 token，确认时必须重新校验。 */
+export interface DeletionPreview {
+  targetType: 'task' | 'project-history'
+  targetId: string
+  revision: number
+  fileCount: number
+  turnCount: number
+  bytes: number
+  exclusions: string[]
+  token: string
+  expiresAt: string
+}

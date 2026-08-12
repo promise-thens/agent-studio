@@ -194,7 +194,7 @@ button:disabled {
 
 .chat-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -374,6 +374,53 @@ button:disabled {
   overflow-y: auto;
   scroll-behavior: smooth;
   padding: 18px 0 10px;
+}
+
+.history-readonly-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 22px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: var(--radius-soft);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.history-readonly-banner p {
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+/* 只读说明允许收缩，继续按钮只占自身宽度，避免挤出工作台边界。 */
+.history-readonly-banner > div {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.history-readonly-banner .secondary-button {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 100%;
+  padding: 0 12px;
+}
+
+.history-load-more {
+  align-self: center;
+  margin: 6px auto;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  color: var(--text-2);
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+}
+
+.history-load-more:disabled {
+  color: var(--text-3);
+  cursor: wait;
 }
 
 /* 一轮对话容器：用户指令、处理过程、正式回复归为一组 */
@@ -828,7 +875,9 @@ kbd {
 
 .permission-dialog {
   width: min(470px, 100%);
+  max-height: calc(100vh - 48px);
   padding: 18px;
+  overflow-y: auto;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-panel);
   background: var(--surface-2);
@@ -863,10 +912,12 @@ kbd {
   color: var(--text-2);
   font-size: 11px;
   line-height: 1.55;
+  overflow-wrap: anywhere;
 }
 
 .permission-options {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 18px;
@@ -874,8 +925,22 @@ kbd {
 
 .permission-options .primary-button,
 .permission-options .secondary-button {
+  flex: 0 1 auto;
+  min-width: 0;
   width: auto;
+  max-width: 100%;
+  height: auto;
+  min-height: 32px;
   padding: 0 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  text-align: center;
+}
+
+/* Runtime 可能返回多项长文案，按可用宽度均衡换行。 */
+.runtime-permission-dialog .permission-options > button {
+  flex: 1 1 180px;
 }
 
 .spin {
@@ -903,6 +968,16 @@ kbd {
 
   .inspector-panel {
     display: none;
+  }
+
+  .history-readonly-banner {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .history-readonly-banner .secondary-button {
+    align-self: flex-start;
   }
 }
 

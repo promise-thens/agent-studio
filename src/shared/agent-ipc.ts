@@ -25,11 +25,11 @@ export const AGENT_PUSH_CHANNELS = {
 } as const
 
 export interface AgentConnectRequest {
-  workspace: string
+  projectId: string
 }
 
 export interface AgentCreateTaskRequest {
-  workspace: string
+  projectId: string
 }
 
 export interface AgentStartTurnRequest {
@@ -53,9 +53,9 @@ export interface AgentRespondPermissionRequest {
 /** Renderer 只能通过固定方法控制当前 Agent Runtime。 */
 export interface AgentDesktopApi {
   getStatus: () => Promise<DesktopIpcResult<AgentRuntimeStatus>>
-  connect: (workspace: string) => Promise<DesktopIpcResult<AgentRuntimeStatus>>
+  connect: (projectId: string) => Promise<DesktopIpcResult<AgentRuntimeStatus>>
   disconnect: () => Promise<DesktopIpcResult<AgentRuntimeStatus>>
-  createTask: (workspace: string) => Promise<DesktopIpcResult<AgentTaskRuntimeState>>
+  createTask: (projectId: string) => Promise<DesktopIpcResult<AgentTaskRuntimeState>>
   startTurn: (taskId: string, prompt: string) => Promise<DesktopIpcResult<AgentTurnExecutionResult>>
   cancelTurn: (taskId: string) => Promise<DesktopIpcResult<null>>
   getTaskRuntimeState: (taskId: string) => Promise<DesktopIpcResult<AgentTaskRuntimeState>>

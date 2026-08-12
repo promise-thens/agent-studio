@@ -26,10 +26,10 @@ export function createAsyncSingleFlight(
 /**
  * 目录选择只允许从 idle 状态开始；Picker 等待期间若进入 busy，则丢弃结果，禁止切换当前 Task。
  */
-export async function chooseWorkspaceWhenIdle(
+export async function chooseWorkspaceWhenIdle<T>(
   isBusy: () => boolean,
-  chooseWorkspace: () => Promise<string | null>
-): Promise<string | null> {
+  chooseWorkspace: () => Promise<T | null>
+): Promise<T | null> {
   if (isBusy()) return null
 
   const selected = await chooseWorkspace()
@@ -43,4 +43,19 @@ export function canSendRuntimePrompt(
   promptCapabilityAvailable: boolean
 ): boolean {
   return Boolean(prompt.trim()) && status.state === 'ready' && promptCapabilityAvailable
+}
+
+/**
+ * 判断 Project 是否需要发起 Runtime 连接。
+ * 只有 Provider、Project 和当前交互状态都允许时才连接；同目录已 ready 时避免重复重启会话。
+ */
+export function shouldConnectProject(
+  status: AgentRuntimeStatus,
+  targetWorkspace: string,
+  providerConfigured: boolean,
+  projectExecutable: boolean,
+  blocked: boolean
+): boolean {
+  if (!targetWorkspace || !providerConfigured || !projectExecutable || blocked) return false
+  return status.state !== 'ready' || status.workspace !== targetWorkspace
 }

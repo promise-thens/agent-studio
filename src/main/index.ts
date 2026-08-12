@@ -1,5 +1,4 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
-import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
@@ -13,11 +12,14 @@ import type {
 } from '../shared/provider'
 import { AgentService } from './agent/agent-service'
 import { registerAgentIpcHandlers } from './agent/ipc'
+import { registerTaskIpcHandlers } from './agent/task-ipc'
+import { TaskStore } from './agent/task-store'
 import { TaskExecutionController } from './agent/task-execution-controller'
 import { registerAppIpcHandlers } from './app-ipc'
 import type { DesktopIpcMain } from './ipc-types'
 import { ProviderConfigStore, type ProviderRuntimeConfig } from './provider/provider-config-store'
 import { ProviderConnectionTester } from './provider/provider-connection-tester'
+import { ProjectRegistry } from './project/project-registry'
 import { clearGrokProviderConfig } from './provider/grok-provider-config'
 import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
@@ -35,6 +37,8 @@ let agentService: AgentService | null = null
 let runtimeAdapter: GrokAcpAdapter | null = null
 let providerStore: ProviderConfigStore | null = null
 let providerTester: ProviderConnectionTester | null = null
+let projectRegistry: ProjectRegistry | null = null
+let taskStore: TaskStore | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -86,6 +90,10 @@ async function initializeServices(): Promise<void> {
     }
   })
   await providerStore.initialize()
+  projectRegistry = new ProjectRegistry({ userDataPath: app.getPath('userData') })
+  await projectRegistry.initialize()
+  taskStore = new TaskStore({ projectRegistry })
+  await taskStore.initialize()
 
   providerTester = new ProviderConnectionTester({ redact: redactProviderText })
   const rendererTrust = createRendererTrustOptions()
@@ -119,7 +127,18 @@ async function initializeServices(): Promise<void> {
     }
   )
   runtimeAdapter = adapter
-  agentService = new AgentService(adapter, new TaskExecutionController())
+  agentService = new AgentService(adapter, new TaskExecutionController(), {
+    projectRegistry,
+    taskStore,
+    getTurnModel: () => {
+      const config = requireProviderRuntimeConfig()
+      return {
+        modelId: config.modelId,
+        ...(config.modelDisplayName ? { displayName: config.modelDisplayName } : {})
+      }
+    },
+    redactText: redactProviderText
+  })
 }
 
 /** 注册渲染层可调用的最小 IPC 接口。 */
@@ -138,14 +157,40 @@ function registerIpcHandlers(): void {
     ipcMain: desktopIpcMain,
     assertTrustedSender,
     getAgent: () => agentService,
-    statPath: stat,
     sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
   })
 
   registerAppIpcHandlers({
     ipcMain: desktopIpcMain,
     assertTrustedSender,
-    chooseWorkspace: openWorkspaceDialog,
+    chooseProject: chooseProject,
+    listProjects: () => requireProjectRegistry().list(),
+    removeProject: (projectId) => requireProjectRegistry().remove(projectId),
+    previewProjectHistoryDeletion: (projectId) =>
+      requireTaskStore().previewProjectDeletion(projectId),
+    deleteProjectHistory: (projectId, token) =>
+      requireTaskStore().deleteProjectHistory(projectId, token),
+    sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
+  })
+
+  registerTaskIpcHandlers({
+    ipcMain: desktopIpcMain,
+    assertTrustedSender,
+    getHistory: () => {
+      const store = taskStore
+      const service = agentService
+      if (!store || !service) return null
+      return {
+        listTasks: (projectId, cursor, limit) => store.listTasks(projectId, cursor, limit),
+        getTaskDetail: (taskId) => store.getTaskDetail(taskId),
+        listTurns: (taskId, cursor, limit) => store.listTurns(taskId, cursor, limit),
+        listEvents: (taskId, turnId, afterSequence, limit) =>
+          store.listEvents(taskId, turnId, afterSequence, limit),
+        resumeTask: (taskId) => service.resumeTask(taskId),
+        previewTaskDeletion: (taskId) => store.previewTaskDeletion(taskId),
+        deleteTask: (taskId, token) => store.deleteTask(taskId, token)
+      }
+    },
     sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
   })
 
@@ -205,6 +250,12 @@ async function openWorkspaceDialog(): Promise<string | null> {
       ? await dialog.showOpenDialog(currentWindow, options)
       : await dialog.showOpenDialog(options)
   return result.canceled ? null : (result.filePaths[0] ?? null)
+}
+
+/** Dialog 返回的路径只留在主进程，由 Registry 注册后再返回有限 Project 摘要。 */
+async function chooseProject(): Promise<import('../shared/task-history').ProjectSummary | null> {
+  const selected = await openWorkspaceDialog()
+  return selected ? requireProjectRegistry().register(selected) : null
 }
 
 /** 来源验证与事件推送都动态读取当前窗口，兼容 macOS 关闭后重建窗口。 */
@@ -315,25 +366,46 @@ function requireProviderTester(): ProviderConnectionTester {
   return providerTester
 }
 
-app
-  .whenReady()
-  .then(async () => {
-    electronApp.setAppUserModelId('com.promise-thens.agent-studio')
-    app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
-    await initializeServices()
-    registerIpcHandlers()
-    createWindow()
+function requireProjectRegistry(): ProjectRegistry {
+  if (!projectRegistry) throw new Error('Project Registry 尚未初始化。')
+  return projectRegistry
+}
 
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+function requireTaskStore(): TaskStore {
+  if (!taskStore) throw new Error('Task 历史服务尚未初始化。')
+  return taskStore
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) app.quit()
+
+app.on('second-instance', () => {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
+  window.focus()
+})
+
+if (hasSingleInstanceLock)
+  app
+    .whenReady()
+    .then(async () => {
+      electronApp.setAppUserModelId('com.promise-thens.agent-studio')
+      app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
+      await initializeServices()
+      registerIpcHandlers()
+      createWindow()
+
+      app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      })
     })
-  })
-  .catch((error) => {
-    const message = redactSensitiveError(error)
-    console.error(`[Agent Studio] 启动失败：${message}`)
-    dialog.showErrorBox('Agent Studio 启动失败', message)
-    app.quit()
-  })
+    .catch((error) => {
+      const message = redactSensitiveError(error)
+      console.error(`[Agent Studio] 启动失败：${message}`)
+      dialog.showErrorBox('Agent Studio 启动失败', message)
+      app.quit()
+    })
 
 app.on('before-quit', () => {
   // 退出路径直接终止 Adapter，避免等待 ACP cancel 阻塞应用关闭。

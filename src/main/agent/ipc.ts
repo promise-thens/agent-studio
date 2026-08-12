@@ -1,4 +1,3 @@
-import { isAbsolute } from 'node:path'
 import type {
   AgentRuntimeStatus,
   AgentTaskRuntimeState,
@@ -23,7 +22,7 @@ import {
 import { AgentServiceError } from './agent-service'
 
 const MAX_REQUEST_BYTES = 512 * 1024
-const MAX_WORKSPACE_BYTES = 4 * 1024
+const MAX_PROJECT_ID_BYTES = 4 * 1024
 const MAX_PROMPT_BYTES = 64 * 1024
 const MAX_TASK_ID_BYTES = 4 * 1024
 const MAX_REQUEST_ID_BYTES = 4 * 1024
@@ -31,9 +30,9 @@ const MAX_OPTION_ID_BYTES = 256 * 1024
 
 export interface AgentIpcRuntime {
   getStatus: () => AgentRuntimeStatus
-  connect: (workspace: string) => Promise<AgentRuntimeStatus>
+  connect: (projectId: string) => Promise<AgentRuntimeStatus>
   disconnect: () => Promise<AgentRuntimeStatus>
-  createTask: (workspace: string) => Promise<AgentTaskRuntimeState>
+  createTask: (projectId: string) => Promise<AgentTaskRuntimeState>
   startTurn: (taskId: string, prompt: string) => Promise<AgentTurnExecutionResult>
   cancelTurn: (taskId: string) => Promise<void>
   getTaskRuntimeState: (taskId: string) => AgentTaskRuntimeState
@@ -44,7 +43,6 @@ export interface AgentIpcDependencies {
   ipcMain: DesktopIpcMain
   assertTrustedSender: (event: TrustedIpcInvokeEvent) => void
   getAgent: () => AgentIpcRuntime | null
-  statPath: (path: string) => Promise<{ isDirectory: () => boolean }>
   sanitizeError: (error: unknown) => string
 }
 
@@ -109,13 +107,13 @@ function readRequiredString(
 }
 
 function readConnectRequest(args: unknown[]): AgentConnectRequest {
-  const request = readRequest(args, ['workspace'])
-  return { workspace: readRequiredString(request, 'workspace', MAX_WORKSPACE_BYTES) }
+  const request = readRequest(args, ['projectId'])
+  return { projectId: readRequiredString(request, 'projectId', MAX_PROJECT_ID_BYTES) }
 }
 
 function readCreateTaskRequest(args: unknown[]): AgentCreateTaskRequest {
-  const request = readRequest(args, ['workspace'])
-  return { workspace: readRequiredString(request, 'workspace', MAX_WORKSPACE_BYTES) }
+  const request = readRequest(args, ['projectId'])
+  return { projectId: readRequiredString(request, 'projectId', MAX_PROJECT_ID_BYTES) }
 }
 
 function readStartTurnRequest(args: unknown[]): AgentStartTurnRequest {
@@ -142,25 +140,6 @@ function readPermissionRequest(args: unknown[]): AgentRespondPermissionRequest {
   return {
     requestId,
     optionId: readRequiredString(request, 'optionId', MAX_OPTION_ID_BYTES)
-  }
-}
-
-async function assertWorkspaceDirectory(
-  workspace: string,
-  statPath: AgentIpcDependencies['statPath']
-): Promise<void> {
-  if (!isAbsolute(workspace)) {
-    throw new DesktopIpcFailure('invalid-workspace', '请选择有效的绝对目录。')
-  }
-
-  try {
-    const stats = await statPath(workspace)
-    if (!stats.isDirectory()) {
-      throw new DesktopIpcFailure('invalid-workspace', '请选择现有目录。')
-    }
-  } catch (error) {
-    if (error instanceof DesktopIpcFailure) throw error
-    throw new DesktopIpcFailure('invalid-workspace', '请选择现有目录。')
   }
 }
 
@@ -208,10 +187,9 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
 
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.connect, async (args) => {
     const request = readConnectRequest(args)
-    await assertWorkspaceDirectory(request.workspace, dependencies.statPath)
     const agent = requireAgent(dependencies.getAgent)
     assertConnectState(agent.getStatus())
-    return agent.connect(request.workspace)
+    return agent.connect(request.projectId)
   })
 
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.disconnect, (args) => {
@@ -221,10 +199,9 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
 
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.createTask, async (args) => {
     const request = readCreateTaskRequest(args)
-    await assertWorkspaceDirectory(request.workspace, dependencies.statPath)
     const agent = requireAgent(dependencies.getAgent)
     assertPromptState(agent.getStatus())
-    return agent.createTask(request.workspace)
+    return agent.createTask(request.projectId)
   })
 
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.startTurn, async (args) => {

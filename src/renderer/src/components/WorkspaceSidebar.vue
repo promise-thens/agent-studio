@@ -14,6 +14,7 @@ import {
 export interface SidebarSessionItem {
   id: string
   title: string
+  state?: string
 }
 
 /** 侧栏展示用的项目条目，路径只用于展示与高亮，不直接访问文件系统。 */
@@ -21,6 +22,8 @@ export interface SidebarProjectItem {
   id: string
   name: string
   path: string
+  status: 'active' | 'removed'
+  availability: 'available' | 'unavailable' | 'version-unsupported' | 'corrupt'
 }
 
 const props = withDefaults(
@@ -44,6 +47,8 @@ const props = withDefaults(
     recentSessionsDisabled?: boolean
     /** 禁用原因必须可见，同时提供给每个会话按钮的无障碍说明。 */
     recentSessionsDisabledReason?: string
+    hasMoreSessions?: boolean
+    loadingMoreSessions?: boolean
   }>(),
   {
     brandName: 'Agent Studio',
@@ -53,7 +58,9 @@ const props = withDefaults(
     workspaceActionsDisabled: false,
     workspaceActionsDisabledReason: '',
     recentSessionsDisabled: true,
-    recentSessionsDisabledReason: '当前 Turn 收束后才能切换 Task。'
+    recentSessionsDisabledReason: '当前 Turn 收束后才能切换 Task。',
+    hasMoreSessions: false,
+    loadingMoreSessions: false
   }
 )
 
@@ -63,6 +70,10 @@ const emit = defineEmits<{
   openSettings: []
   selectSession: [sessionId: string]
   selectProject: [projectId: string]
+  deleteSession: [sessionId: string]
+  removeProject: [projectId: string]
+  deleteProjectHistory: [projectId: string]
+  loadMoreSessions: []
 }>()
 
 /** 本地搜索只过滤侧栏列表，不触发主进程查询。 */
@@ -183,28 +194,40 @@ const filteredSessions = computed(() => {
         </p>
 
         <div v-if="filteredProjects.length" class="section-list">
-          <button
-            v-for="project in filteredProjects"
-            :key="project.id"
-            class="sidebar-item"
-            type="button"
-            :class="{ active: project.id === activeProjectId }"
-            :disabled="workspaceActionsDisabled"
-            :aria-describedby="
-              workspaceActionsDisabled && workspaceActionsDisabledReason
-                ? 'workspace-actions-disabled-reason'
-                : undefined
-            "
-            :title="
-              workspaceActionsDisabled && workspaceActionsDisabledReason
-                ? `${project.path}：${workspaceActionsDisabledReason}`
-                : project.path
-            "
-            @click="emit('selectProject', project.id)"
-          >
-            <FolderSimple :size="15" />
-            <span>{{ project.name }}</span>
-          </button>
+          <div v-for="project in filteredProjects" :key="project.id" class="sidebar-item-row">
+            <button
+              class="sidebar-item sidebar-item-main"
+              type="button"
+              :class="{ active: project.id === activeProjectId }"
+              :disabled="workspaceActionsDisabled"
+              :title="project.path"
+              @click="emit('selectProject', project.id)"
+            >
+              <FolderSimple :size="15" />
+              <span>{{ project.name }}</span>
+              <small v-if="project.availability !== 'available'">不可执行</small>
+            </button>
+            <button
+              class="sidebar-row-action"
+              type="button"
+              :disabled="workspaceActionsDisabled"
+              :title="`从项目列表移除：${project.name}`"
+              :aria-label="`从项目列表移除：${project.name}`"
+              @click.stop="emit('removeProject', project.id)"
+            >
+              移除
+            </button>
+            <button
+              class="sidebar-row-action danger"
+              type="button"
+              :disabled="workspaceActionsDisabled"
+              :title="`删除项目本地历史：${project.name}`"
+              :aria-label="`删除项目本地历史：${project.name}`"
+              @click.stop="emit('deleteProjectHistory', project.id)"
+            >
+              删历史
+            </button>
+          </div>
         </div>
 
         <button
@@ -241,26 +264,37 @@ const filteredSessions = computed(() => {
         </p>
 
         <div v-if="filteredSessions.length" class="section-list">
+          <div v-for="session in filteredSessions" :key="session.id" class="sidebar-item-row">
+            <button
+              class="sidebar-item sidebar-item-main session-item"
+              type="button"
+              :class="{ active: session.id === activeSessionId }"
+              :disabled="recentSessionsDisabled"
+              :title="session.title"
+              @click="emit('selectSession', session.id)"
+            >
+              <span>{{ session.title }}</span>
+            </button>
+            <button
+              class="sidebar-row-action danger"
+              type="button"
+              :disabled="recentSessionsDisabled"
+              :title="`删除 Task：${session.title}`"
+              :aria-label="`删除 Task：${session.title}`"
+              @click.stop="emit('deleteSession', session.id)"
+            >
+              删除
+            </button>
+          </div>
           <button
-            v-for="session in filteredSessions"
-            :key="session.id"
-            class="sidebar-item session-item"
+            v-if="hasMoreSessions"
+            class="load-more-button"
             type="button"
-            :class="{ active: session.id === activeSessionId }"
-            :disabled="recentSessionsDisabled"
-            :aria-describedby="
-              recentSessionsDisabled && recentSessionsDisabledReason
-                ? 'recent-sessions-disabled-reason'
-                : undefined
-            "
-            :title="
-              recentSessionsDisabled && recentSessionsDisabledReason
-                ? `${session.title}：${recentSessionsDisabledReason}`
-                : session.title
-            "
-            @click="emit('selectSession', session.id)"
+            :disabled="loadingMoreSessions || recentSessionsDisabled"
+            :aria-busy="loadingMoreSessions"
+            @click="emit('loadMoreSessions')"
           >
-            <span>{{ session.title }}</span>
+            {{ loadingMoreSessions ? '正在加载…' : '加载更多任务' }}
           </button>
         </div>
 
@@ -505,6 +539,54 @@ const filteredSessions = computed(() => {
   border-radius: var(--radius-soft);
   color: var(--text-2);
   font-size: 13px;
+}
+
+.sidebar-item-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.sidebar-item-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-item-main small {
+  margin-left: auto;
+  color: var(--warning);
+  font-size: 9px;
+}
+
+.sidebar-row-action,
+.load-more-button {
+  border: 0;
+  border-radius: var(--radius-soft);
+  color: var(--text-3);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.sidebar-row-action {
+  flex: 0 0 auto;
+  padding: 6px 5px;
+}
+
+.sidebar-row-action:not(:disabled):hover,
+.load-more-button:not(:disabled):hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-row-action.danger:not(:disabled):hover {
+  color: var(--danger);
+}
+
+.load-more-button {
+  width: 100%;
+  padding: 8px;
 }
 
 .sidebar-item span {

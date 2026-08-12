@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { AGENT_INVOKE_CHANNELS, AGENT_PUSH_CHANNELS } from './agent-ipc'
 import { APP_INVOKE_CHANNELS } from './app-ipc'
+import { TASK_INVOKE_CHANNELS } from './task-ipc'
 
 describe('桌面 IPC 静态契约', () => {
   it('所有 Agent 与 App channel 都固定且唯一', () => {
     const channels = [
       ...Object.values(AGENT_INVOKE_CHANNELS),
       ...Object.values(AGENT_PUSH_CHANNELS),
-      ...Object.values(APP_INVOKE_CHANNELS)
+      ...Object.values(APP_INVOKE_CHANNELS),
+      ...Object.values(TASK_INVOKE_CHANNELS)
     ]
 
     expect(new Set(channels).size).toBe(channels.length)
@@ -23,7 +25,18 @@ describe('桌面 IPC 静态契约', () => {
       'agent:status',
       'agent:event',
       'agent:permission',
-      'app:choose-workspace'
+      'app:choose-project',
+      'app:list-projects',
+      'app:remove-project',
+      'app:preview-project-history-deletion',
+      'app:delete-project-history',
+      'task:list',
+      'task:get',
+      'task:list-turns',
+      'task:list-events',
+      'task:resume',
+      'task:preview-delete',
+      'task:delete'
     ])
   })
 
@@ -31,11 +44,13 @@ describe('桌面 IPC 静态契约', () => {
     const channels = [
       ...Object.values(AGENT_INVOKE_CHANNELS),
       ...Object.values(AGENT_PUSH_CHANNELS),
-      ...Object.values(APP_INVOKE_CHANNELS)
+      ...Object.values(APP_INVOKE_CHANNELS),
+      ...Object.values(TASK_INVOKE_CHANNELS)
     ]
 
     expect(channels.every((channel) => !channel.startsWith('grok:'))).toBe(true)
     expect(channels).not.toContain('agent:send-prompt')
     expect(channels).not.toContain('agent:cancel')
+    expect(channels).not.toContain('app:choose-workspace')
   })
 })

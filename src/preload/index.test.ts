@@ -19,10 +19,15 @@ describe('Preload 最终暴露面', () => {
     Object.defineProperty(process, 'contextIsolated', { configurable: true, value: true })
   })
 
-  it('只暴露 agent、app 和 provider', async () => {
+  it('只暴露 agent、app、task 和 provider', async () => {
     await import('./index')
 
-    expect(exposeInMainWorld.mock.calls.map(([name]) => name)).toEqual(['agent', 'app', 'provider'])
+    expect(exposeInMainWorld.mock.calls.map(([name]) => name)).toEqual([
+      'agent',
+      'app',
+      'task',
+      'provider'
+    ])
   })
 
   it('上下文隔离关闭时不暴露 API 并显式失败', async () => {

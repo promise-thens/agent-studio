@@ -238,9 +238,6 @@ git diff --check
 - 提交信息使用 Conventional Commits，例如 `feat:`、`fix:`、`docs:`、`refactor:`、`test:`、`chore:`。
 - 未经用户要求，不擅自推送、创建 Release 或修改远程仓库设置。
 
-
-
-
 ## 14. 文档规则
 
 - 产品长期定位和已确认边界更新到 `docs/product-vision.md`。
@@ -257,14 +254,15 @@ git diff --check
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
 - 当前计划：[P0-06 Project、Task、Turn 与历史恢复](docs/superpowers/plans/p0-06-task-session-history.md)
-- 状态：P0-05 已完成，P0-06 前置依赖已满足，待开始 Project Registry、Task/Turn 持久化与重启恢复
-- 完成度：任务步骤 `0/12`，验收标准 `0/7`
-- 当前完成：P0-05 已建立最小 `AgentRuntimeAdapter`、`AgentService`、单执行槽 `TaskExecutionController` 和 `GrokAcpAdapter`；产品 `taskId` / `turnId`、Runtime session 绑定、取消、权限和中性事件由主进程统一编排，Renderer 支持内存多 Task 切换与同 Task 多 Turn，旧 `GrokAgentBridge` 已删除
-- 兼容边界：能力快照、Task 与 Turn 仍仅在内存中；历史持久化、重启恢复、Diff/Usage viewer、后台 Task Executor 与第二 Runtime 仍由后续计划完成，Provider DTO、凭据存储和切模重连事务保持不变
-- 下一步：先为 P0-06 冻结 Project / Task / Turn 持久化白名单、容量上限和重启降级语义，再建立版本化 Project Registry 与原子历史存储
-- 最近验证：2026-08-12，P0-05 在 Node.js `v22.22.0`、pnpm `10.33.0` 下通过完整 ESLint、`179` 个 Vitest、typecheck、build、`build:unpack`、diff-check、旧边界静态搜索和 GitNexus 变更检测；Electron 当前构建完成 Task A → Task B → Task A、多轮续接、停止、权限三态、Provider 保存重连、断线重连、退出无孤儿进程，以及快速重复发送单飞和 busy 时四类目录入口禁用验收
+- 状态：P0-06 已完成代码、自动验证与 Electron 真机验收，P0-07 前置依赖已满足
+- 完成度：任务步骤 `12/12`，验收标准 `7/7`
+- 当前完成：已建立版本化 Project Registry、Task/Turn 与事件块存储、原子 JSON、逐记录 quarantine、未知新 schema 保留、256 MiB/100 Project/500 Task/100 Turn/2000 event 有界策略、重启 `interrupted` 收束、`resume → 安全 load`、两阶段物理删除、分页历史和 Renderer 只读/继续/删除入口
+- 兼容边界：Task 固定 Project、Runtime 与 Local 环境，每个 Turn 单独保存实际模型快照；历史只保存规范化、二次脱敏和限长的展示事件，不保存 Runtime raw payload、Secret、原始环境、屏幕或剪贴板；删除不触碰项目目录、Worktree 或 Runtime 原生历史
+- 下一步：按路线图开始 P0-07 核心权限 Broker，继续复用 P0-06 的持久化权限事件与 `interrupted` / `cancelled` 历史状态，不提前建设 P0-08 后台执行器
+- 最近验证：2026-08-12，P0-06 在 Node.js `v22.22.0`、pnpm `10.33.0` 下通过完整 ESLint、30 个文件 / `201` 个 Vitest、typecheck、build、`build:unpack`、diff-check、AGENTS/CLAUDE 一致性和 GitNexus 变更检测；Electron 真机使用隔离 Project 与本机已保存 Provider 凭据完成注册、多轮、Task A → B → A、重启只读、恢复成功/失败、Project 不可用、`interrupted`、`cancelled`、损坏隔离和 Task/Project 本地历史物理删除验收，项目文件与 Runtime 原生历史未被删除
 
 <!-- gitnexus:start -->
+
 # GitNexus — Code Intelligence
 
 This project is indexed by GitNexus as **agent-studio** (1715 symbols, 4200 relationships, 146 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
@@ -288,22 +286,22 @@ This project is indexed by GitNexus as **agent-studio** (1715 symbols, 4200 rela
 
 ## Resources
 
-| Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/agent-studio/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/agent-studio/clusters` | All functional areas |
-| `gitnexus://repo/agent-studio/processes` | All execution flows |
-| `gitnexus://repo/agent-studio/process/{name}` | Step-by-step execution trace |
+| Resource                                      | Use for                                  |
+| --------------------------------------------- | ---------------------------------------- |
+| `gitnexus://repo/agent-studio/context`        | Codebase overview, check index freshness |
+| `gitnexus://repo/agent-studio/clusters`       | All functional areas                     |
+| `gitnexus://repo/agent-studio/processes`      | All execution flows                      |
+| `gitnexus://repo/agent-studio/process/{name}` | Step-by-step execution trace             |
 
 ## CLI
 
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+| Task                                         | Read this skill file                                        |
+| -------------------------------------------- | ----------------------------------------------------------- |
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md`       |
+| Blast radius / "What breaks if I change X?"  | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?"             | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md`       |
+| Rename / extract / split / refactor          | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md`     |
+| Tools, resources, schema reference           | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md`           |
+| Index, status, clean, wiki CLI commands      | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md`             |
 
 <!-- gitnexus:end -->

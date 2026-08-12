@@ -30,6 +30,7 @@ import type {
   ProviderModelOption,
   ProviderTestResult
 } from '../../shared/provider'
+import type { DeletionPreview } from '../../shared/task-history'
 import {
   createAgentEventGuard,
   createAgentMessageKey,
@@ -43,14 +44,18 @@ import WorkspaceSidebar, {
   type SidebarSessionItem
 } from './components/WorkspaceSidebar.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
+import { useTaskHistory } from './composables/useTaskHistory'
+import { projectTaskHistory } from './task-history-projector'
 import {
   canSendRuntimePrompt,
   chooseWorkspaceWhenIdle,
-  createAsyncSingleFlight
+  createAsyncSingleFlight,
+  shouldConnectProject
 } from './runtime-session-actions'
 
 interface ChatMessage {
   id: string
+  turnId?: string
   role: 'user' | 'assistant' | 'thought' | 'error'
   text: string
   streaming?: boolean
@@ -68,6 +73,7 @@ interface ChatMessage {
  */
 interface ConversationTurn {
   id: string
+  turnId?: string
   user?: ChatMessage
   thoughts: ChatMessage[]
   answers: ChatMessage[]
@@ -91,8 +97,10 @@ interface ToolActivity {
 /** P0-05 的 Renderer 内存 Task 视图；只保存展示状态，不持有 Runtime 私有 session。 */
 interface TaskViewState {
   taskId: string
+  projectId: string
   workspace: string
   title: string
+  mode: 'live' | 'history'
   messages: ChatMessage[]
   planEntries: AgentPlanEntry[]
   toolActivities: ToolActivity[]
@@ -108,11 +116,26 @@ const providerSummary = ref<ProviderConfigSummary | null>(null)
 const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
 const showProviderSettings = ref(false)
 const workspace = ref('')
+const taskHistory = useTaskHistory()
+type HistoryConfirmationKind = 'task-delete' | 'project-remove' | 'project-history-delete'
+const historyConfirmation = ref<{
+  kind: HistoryConfirmationKind
+  targetId: string
+  title: string
+  preview?: DeletionPreview
+} | null>(null)
+const historyConfirmationPending = ref(false)
+const resumePending = ref(false)
 const prompt = ref('')
 const promptSubmissionPending = ref(false)
+const projectConnectionPending = ref(false)
 /** 发送入口共享单飞门禁，并同步投影到 UI busy 状态。 */
 const runPromptSubmission = createAsyncSingleFlight((pending) => {
   promptSubmissionPending.value = pending
+})
+/** Project 切换和手工连接共用单飞门禁，避免快速点击并发重建 Runtime。 */
+const runProjectConnection = createAsyncSingleFlight((pending) => {
+  projectConnectionPending.value = pending
 })
 const permission = ref<AgentPermissionRequest | null>(null)
 const showInspector = ref(true)
@@ -174,12 +197,9 @@ const thoughtExpandOverride = computed<Record<string, boolean>>({
   }
 })
 const activeSessionId = computed(() => activeTaskId.value)
-/** 最近列表只展示当前工作区的内存 Task，重启恢复仍由 P0-06 负责。 */
+/** 最近列表由主进程持久化历史提供，重启后不依赖 Renderer 内存。 */
 const recentSessions = computed<SidebarSessionItem[]>(() =>
-  taskOrder.value.flatMap((taskId) => {
-    const view = taskViews.value[taskId]
-    return view && view.workspace === workspace.value ? [{ id: taskId, title: view.title }] : []
-  })
+  taskHistory.tasks.value.map((task) => ({ id: task.taskId, title: task.title }))
 )
 
 const cleanupListeners: Array<() => void> = []
@@ -250,10 +270,11 @@ const timelineTurns = computed<ConversationTurn[]>(() => {
     turns.push(turn)
   }
 
-  const ensureTurn = (seedId: string): ConversationTurn => {
+  const ensureTurn = (seedId: string, turnId?: string): ConversationTurn => {
     if (current) return current
     current = {
       id: seedId,
+      ...(turnId ? { turnId } : {}),
       thoughts: [],
       answers: [],
       errors: [],
@@ -269,6 +290,7 @@ const timelineTurns = computed<ConversationTurn[]>(() => {
       if (current) pushTurn(current)
       current = {
         id: message.id,
+        turnId: message.turnId,
         user: message,
         thoughts: [],
         answers: [],
@@ -280,7 +302,7 @@ const timelineTurns = computed<ConversationTurn[]>(() => {
       continue
     }
 
-    const turn = ensureTurn(message.id)
+    const turn = ensureTurn(message.id, message.turnId)
     if (message.role === 'thought') turn.thoughts.push(message)
     else if (message.role === 'assistant') turn.answers.push(message)
     else turn.errors.push(message)
@@ -522,7 +544,8 @@ const isBusy = computed(
     status.value.state === 'busy' ||
     status.value.state === 'connecting' ||
     isTurnTiming.value ||
-    promptSubmissionPending.value
+    promptSubmissionPending.value ||
+    projectConnectionPending.value
 )
 const { resolveCapability, isAvailable } = useRuntimeCapabilities(status)
 const promptCapability = computed(() => resolveCapability('session.prompt.text', '发送文本 Prompt'))
@@ -532,6 +555,8 @@ const createSessionCapability = computed(() => resolveCapability('session.create
 const connectCapability = computed(() => resolveCapability('runtime.connect', '连接 Runtime'))
 const canSend = computed(
   () =>
+    activeTaskView.value?.mode !== 'history' &&
+    Boolean(providerSummary.value?.configured) &&
     !isTurnTiming.value &&
     !promptSubmissionPending.value &&
     canSendRuntimePrompt(prompt.value, status.value, promptCapability.value.available)
@@ -539,6 +564,23 @@ const canSend = computed(
 const promptCapabilityMessage = computed(
   () => promptCapability.value.reason ?? promptCapability.value.notice
 )
+const activeProjectExecutable = computed(
+  () =>
+    taskHistory.activeProject.value?.status === 'active' &&
+    taskHistory.activeProject.value.availability.state === 'available'
+)
+const activeProjectExecutionReason = computed(() => {
+  const project = taskHistory.activeProject.value
+  if (!project) return '请先选择 Project。'
+  if (project.status !== 'active') return '该 Project 已从列表移除，仅保留历史。'
+  return project.availability.state === 'available' ? '' : project.availability.message
+})
+const composerDisabledMessage = computed(() => {
+  if (activeTaskView.value?.mode === 'history') return '当前为只读历史，继续任务成功后才能输入。'
+  if (!providerSummary.value?.configured) return '请先配置 Provider。'
+  if (!activeProjectExecutable.value) return activeProjectExecutionReason.value
+  return promptCapabilityMessage.value
+})
 const planEmptyMessage = computed(
   () =>
     planCapability.value.reason ??
@@ -555,11 +597,15 @@ const newChatDisabled = computed(
   () =>
     status.value.state !== 'ready' ||
     isBusy.value ||
+    !activeProjectExecutable.value ||
+    !providerSummary.value?.configured ||
     !isAvailable('runtime.connect') ||
     !isAvailable('session.create')
 )
 const newChatDisabledReason = computed(() => {
   if (isBusy.value) return 'Runtime 正在执行或连接中，暂时不能创建新对话。'
+  if (!providerSummary.value?.configured) return '请先配置 Provider。'
+  if (!activeProjectExecutable.value) return activeProjectExecutionReason.value
   if (status.value.state !== 'ready') return '请先连接 Runtime，再创建新对话。'
   return connectCapability.value.reason ?? createSessionCapability.value.reason ?? ''
 })
@@ -568,18 +614,19 @@ const workspaceName = computed(() => {
   const segments = workspace.value.split(/[\\/]/).filter(Boolean)
   return segments.at(-1) ?? '未选择目录'
 })
-/** 侧栏项目列表目前只映射当前工作区，后续再扩展多项目历史。 */
+/** 侧栏 Project 直接映射持久化 Registry。 */
 const sidebarProjects = computed<SidebarProjectItem[]>(() => {
-  if (!workspace.value) return []
-  return [
-    {
-      id: workspace.value,
-      name: workspaceName.value,
-      path: workspace.value
-    }
-  ]
+  return taskHistory.projects.value
+    .filter((project) => project.status === 'active')
+    .map((project) => ({
+      id: project.projectId,
+      name: project.displayName,
+      path: project.canonicalRoot,
+      status: project.status,
+      availability: project.availability.state
+    }))
 })
-const activeProjectId = computed(() => workspace.value || '')
+const activeProjectId = computed(() => taskHistory.activeProjectId.value)
 const currentModel = computed<ProviderModelOption | null>(() => {
   const summary = providerSummary.value
   if (!summary?.modelId) return null
@@ -589,7 +636,9 @@ const currentModel = computed<ProviderModelOption | null>(() => {
   }
 })
 const showProviderScreen = computed(
-  () => providerBootState.value !== 'ready' || showProviderSettings.value
+  () =>
+    showProviderSettings.value ||
+    (providerBootState.value !== 'ready' && taskHistory.projects.value.length === 0)
 )
 const statusLabel = computed(() => {
   const labels: Record<AgentRuntimeStatus['state'], string> = {
@@ -635,7 +684,7 @@ onMounted(async () => {
   cleanupListeners.push(
     window.agent.onStatus((nextStatus) => {
       status.value = nextStatus
-      workspace.value = nextStatus.workspace ?? workspace.value
+      syncWorkspaceDisplay(nextStatus.workspace)
     }),
     window.agent.onEvent(handleAgentEvent),
     window.agent.onPermission((request) => {
@@ -656,8 +705,16 @@ onMounted(async () => {
   }
 
   try {
+    await taskHistory.initialize()
+    workspace.value = taskHistory.activeProject.value?.canonicalRoot ?? workspace.value
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
+
+  try {
     status.value = unwrapDesktopIpcResult(await window.agent.getStatus())
-    workspace.value = status.value.workspace ?? ''
+    syncWorkspaceDisplay(status.value.workspace)
+    if (activeProjectId.value) await ensureProjectConnected(activeProjectId.value)
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
@@ -687,20 +744,24 @@ async function startNewChat(): Promise<void> {
   if (newChatDisabled.value) return
 
   try {
-    const task = unwrapDesktopIpcResult(await window.agent.createTask(workspace.value))
+    const task = unwrapDesktopIpcResult(await window.agent.createTask(activeProjectId.value))
     activateTaskView(task)
+    await taskHistory.refreshTasks()
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
 }
 
 /** 建立或切换本地 Task 视图；每个 Task 持有独立消息、计划与工具活动数组。 */
-function activateTaskView(task: AgentTaskRuntimeState): void {
-  if (!taskViews.value[task.taskId]) {
+function activateTaskView(task: AgentTaskRuntimeState, mode: 'live' | 'history' = 'live'): void {
+  const existing = taskViews.value[task.taskId]
+  if (!existing) {
     taskViews.value[task.taskId] = {
       taskId: task.taskId,
+      projectId: activeProjectId.value,
       workspace: task.workspace,
       title: '新对话',
+      mode,
       messages: [
         {
           id: `welcome-${task.taskId}`,
@@ -712,6 +773,11 @@ function activateTaskView(task: AgentTaskRuntimeState): void {
       toolActivities: [],
       thoughtExpandOverride: {}
     }
+  } else {
+    // 历史恢复成功后保留已有投影，只切换为主进程确认过的 live 执行状态。
+    existing.projectId = activeProjectId.value
+    existing.workspace = task.workspace
+    existing.mode = mode
   }
 
   activeTaskId.value = task.taskId
@@ -727,45 +793,74 @@ function activateTaskView(task: AgentTaskRuntimeState): void {
 /** 首次发送时懒创建 Task；后续 Turn 始终复用当前稳定 taskId。 */
 async function ensureActiveTask(): Promise<string> {
   const current = activeTaskView.value
-  if (current?.workspace === workspace.value) return current.taskId
+  if (current?.projectId === activeProjectId.value && current.mode === 'live') return current.taskId
 
-  const task = unwrapDesktopIpcResult(await window.agent.createTask(workspace.value))
+  const task = unwrapDesktopIpcResult(await window.agent.createTask(activeProjectId.value))
   activateTaskView(task)
+  await taskHistory.refreshTasks()
   return task.taskId
 }
 
-/** 点击最近 Task 时先由主进程确认归属，再切换本地视图；session 恢复延迟到下一轮。 */
+/** 点击最近 Task 时先装配只读历史，再自动连接所属 Project；选择动作不会自动恢复 session。 */
 async function selectTask(taskId: string): Promise<void> {
   if (!taskId || taskId === activeTaskId.value || isBusy.value) return
 
   try {
-    const task = unwrapDesktopIpcResult(await window.agent.getTaskRuntimeState(taskId))
-    if (task.workspace !== workspace.value) {
-      throw new Error('该 Task 不属于当前工作区。')
+    await taskHistory.openTask(taskId)
+    const detail = taskHistory.openedTask.value
+    if (!detail) throw new Error('未找到 Task 历史。')
+    const projection = projectTaskHistory(
+      taskHistory.openedTurns.value,
+      taskHistory.eventsByTurn.value
+    )
+    taskViews.value[taskId] = {
+      taskId,
+      projectId: detail.projectId,
+      workspace: workspace.value,
+      title: detail.title,
+      mode: 'history',
+      messages: projection.messages,
+      planEntries: projection.planEntries,
+      toolActivities: projection.toolActivities,
+      thoughtExpandOverride: {}
     }
-    activateTaskView(task)
+    activeTaskId.value = taskId
+    permission.value = null
+    await ensureProjectConnected(detail.projectId)
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
 }
 
-/** 选择项目时复用现有选目录流程；已选中的当前项目不重复弹窗。 */
+/** 选择已有 Project 后自动连接 Runtime；连接失败不回滚已经加载的本地历史。 */
 async function selectProject(projectId: string): Promise<void> {
-  if (projectId && projectId === workspace.value) return
-  await chooseWorkspace()
+  if (!projectId || isBusy.value) return
+  try {
+    if (projectId !== activeProjectId.value) {
+      await taskHistory.selectProject(projectId)
+      workspace.value = taskHistory.activeProject.value?.canonicalRoot ?? ''
+      activeTaskId.value = ''
+    }
+    await ensureProjectConnected(projectId)
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
+}
+
+function syncWorkspaceDisplay(runtimeWorkspace?: string): void {
+  workspace.value = taskHistory.activeProject.value?.canonicalRoot ?? runtimeWorkspace ?? ''
 }
 
 async function chooseWorkspace(): Promise<void> {
   try {
     const selected = await chooseWorkspaceWhenIdle(
       () => isBusy.value,
-      async () => unwrapDesktopIpcResult(await window.app.chooseWorkspace())
+      () => taskHistory.chooseProject()
     )
     if (!selected) return
-    workspace.value = selected
-    activeTaskId.value =
-      taskOrder.value.find((taskId) => taskViews.value[taskId]?.workspace === selected) ?? ''
-    await connectAgent()
+    workspace.value = selected.canonicalRoot
+    activeTaskId.value = ''
+    await ensureProjectConnected(selected.projectId)
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
@@ -813,22 +908,50 @@ async function clearProvider(): Promise<void> {
   providerSummary.value = await window.provider.clear()
   providerBootState.value = 'needs-provider'
   showProviderSettings.value = false
-  workspace.value = ''
+  syncWorkspaceDisplay()
   activeTaskId.value = ''
   permission.value = null
 }
 
+/**
+ * 确保目标 Project 的 Runtime 已连接。
+ * 连接失败只展示有限错误，不清空 Project/Task 历史，也不隐式恢复历史 session。
+ */
+async function ensureProjectConnected(projectId: string): Promise<boolean> {
+  const project = taskHistory.projects.value.find((item) => item.projectId === projectId)
+  if (!project) return false
+
+  const executable = project.status === 'active' && project.availability.state === 'available'
+  if (
+    !shouldConnectProject(
+      status.value,
+      project.canonicalRoot,
+      Boolean(providerSummary.value?.configured),
+      executable,
+      isBusy.value
+    )
+  ) {
+    return status.value.state === 'ready' && status.value.workspace === project.canonicalRoot
+  }
+
+  let connected = false
+  await runProjectConnection(async () => {
+    try {
+      unwrapDesktopIpcResult(await window.agent.connect(projectId))
+      connected = true
+    } catch (error) {
+      appendMessage('error', error instanceof Error ? error.message : String(error))
+    }
+  })
+  return connected
+}
+
 async function connectAgent(): Promise<void> {
-  if (!workspace.value) {
+  if (!activeProjectId.value) {
     await chooseWorkspace()
     return
   }
-
-  try {
-    unwrapDesktopIpcResult(await window.agent.connect(workspace.value))
-  } catch (error) {
-    appendMessage('error', error instanceof Error ? error.message : String(error))
-  }
+  await ensureProjectConnected(activeProjectId.value)
 }
 
 async function disconnectAgent(): Promise<void> {
@@ -863,10 +986,12 @@ async function sendPrompt(): Promise<void> {
       await nextTick()
       composer.value?.focus()
       unwrapDesktopIpcResult(await window.agent.startTurn(taskId, text))
+      await taskHistory.refreshTasks()
     } catch (error) {
       // 只收束本次已经启动的 Turn，创建 Task 失败不能误结束其他计时。
       if (turnStarted) completeCurrentTurn()
       appendMessage('error', error instanceof Error ? error.message : String(error))
+      await taskHistory.refreshTasks().catch(() => undefined)
     }
   })
 }
@@ -920,10 +1045,114 @@ function handleAgentEvent(event: AgentEvent): void {
     }
     // 整轮完成：只沉淀一个总耗时，不给中间片段分别计时。
     completeCurrentTurn()
+    void taskHistory.refreshTasks()
   } else if (event.kind === 'error') {
     completeCurrentTurn()
     appendMessage('error', event.message)
   }
+}
+
+async function resumeHistoryTask(): Promise<void> {
+  if (resumePending.value) return
+  resumePending.value = true
+  try {
+    const result = await taskHistory.resumeOpenedTask()
+    if (!result.resumed || !result.task) throw new Error(result.message)
+    activateTaskView(result.task, 'live')
+    await taskHistory.refreshTasks()
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    resumePending.value = false
+  }
+}
+
+function refreshOpenedHistoryProjection(): void {
+  const taskId = taskHistory.openedTask.value?.taskId
+  if (!taskId) return
+  const view = taskViews.value[taskId]
+  if (!view || view.mode !== 'history') return
+  const projection = projectTaskHistory(
+    taskHistory.openedTurns.value,
+    taskHistory.eventsByTurn.value
+  )
+  view.messages = projection.messages
+  view.planEntries = projection.planEntries
+  view.toolActivities = projection.toolActivities
+}
+
+async function loadMoreHistoryTurns(): Promise<void> {
+  await taskHistory.loadMoreTurns()
+  refreshOpenedHistoryProjection()
+}
+
+async function loadMoreHistoryEvents(turnId: string): Promise<void> {
+  await taskHistory.loadMoreEvents(turnId)
+  refreshOpenedHistoryProjection()
+}
+
+async function requestTaskDeletion(taskId: string): Promise<void> {
+  const task = taskHistory.tasks.value.find((item) => item.taskId === taskId)
+  if (!task) return
+  const preview = await taskHistory.previewTaskDeletion(taskId)
+  historyConfirmation.value = { kind: 'task-delete', targetId: taskId, title: task.title, preview }
+}
+
+function requestProjectRemoval(projectId: string): void {
+  const project = taskHistory.projects.value.find((item) => item.projectId === projectId)
+  if (!project) return
+  historyConfirmation.value = {
+    kind: 'project-remove',
+    targetId: projectId,
+    title: project.displayName
+  }
+}
+
+async function requestProjectHistoryDeletion(projectId: string): Promise<void> {
+  const project = taskHistory.projects.value.find((item) => item.projectId === projectId)
+  if (!project) return
+  const preview = await taskHistory.previewProjectDeletion(projectId)
+  historyConfirmation.value = {
+    kind: 'project-history-delete',
+    targetId: projectId,
+    title: project.displayName,
+    preview
+  }
+}
+
+async function confirmHistoryAction(): Promise<void> {
+  const confirmation = historyConfirmation.value
+  if (!confirmation || historyConfirmationPending.value) return
+  historyConfirmationPending.value = true
+  try {
+    if (confirmation.kind === 'task-delete' && confirmation.preview) {
+      await taskHistory.deleteTask(confirmation.targetId, confirmation.preview.token)
+      delete taskViews.value[confirmation.targetId]
+      taskOrder.value = taskOrder.value.filter((id) => id !== confirmation.targetId)
+      if (activeTaskId.value === confirmation.targetId) activeTaskId.value = ''
+    } else if (confirmation.kind === 'project-remove') {
+      await taskHistory.removeProject(confirmation.targetId)
+      activeTaskId.value = ''
+      syncWorkspaceDisplay()
+    } else if (confirmation.preview) {
+      await taskHistory.deleteProjectHistory(confirmation.targetId, confirmation.preview.token)
+      for (const [taskId, view] of Object.entries(taskViews.value)) {
+        if (view.projectId === confirmation.targetId) delete taskViews.value[taskId]
+      }
+      if (taskHistory.activeProjectId.value === confirmation.targetId) activeTaskId.value = ''
+    }
+    historyConfirmation.value = null
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    historyConfirmationPending.value = false
+  }
+}
+
+function formatHistoryBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
 }
 
 function appendStreamChunk(
@@ -1046,11 +1275,17 @@ function scrollMessagesToBottom(): void {
         workspace-actions-disabled-reason="当前 Turn 收束后才能切换目录。"
         :recent-sessions-disabled="isBusy"
         recent-sessions-disabled-reason="当前 Turn 收束后才能切换 Task。"
+        :has-more-sessions="Boolean(taskHistory.taskCursor.value)"
+        :loading-more-sessions="taskHistory.loadingMoreTasks.value"
         @new-chat="startNewChat"
         @open-project="chooseWorkspace"
         @open-settings="openProviderSettings"
         @select-session="selectTask"
         @select-project="selectProject"
+        @delete-session="requestTaskDeletion"
+        @remove-project="requestProjectRemoval"
+        @delete-project-history="requestProjectHistoryDeletion"
+        @load-more-sessions="taskHistory.loadMoreTasks"
       />
 
       <main class="chat-panel">
@@ -1075,6 +1310,40 @@ function scrollMessagesToBottom(): void {
             </button>
           </div>
         </header>
+
+        <section
+          v-if="activeTaskView?.mode === 'history'"
+          class="history-readonly-banner"
+          aria-labelledby="history-readonly-title"
+          aria-describedby="history-readonly-description"
+        >
+          <div>
+            <strong id="history-readonly-title">只读历史</strong>
+            <p id="history-readonly-description" role="status">
+              正在查看本地历史，Runtime 尚未恢复。
+              {{
+                taskHistory.openedTask.value?.resumable
+                  ? activeProjectExecutionReason
+                  : taskHistory.openedTask.value?.resumeMessage
+              }}
+            </p>
+          </div>
+          <button
+            class="secondary-button"
+            type="button"
+            :disabled="
+              isBusy ||
+              resumePending ||
+              !providerSummary?.configured ||
+              !activeProjectExecutable ||
+              !taskHistory.openedTask.value?.resumable
+            "
+            title="重新验证 Runtime 并继续此 Task"
+            @click="resumeHistoryTask"
+          >
+            {{ resumePending ? '正在继续…' : '继续任务' }}
+          </button>
+        </section>
 
         <!-- 消息舞台：左侧固定锚点轨，右侧才是会滚动的对话列表 -->
         <div class="message-stage" :class="{ 'has-anchors': turnAnchors.length > 0 }">
@@ -1104,6 +1373,16 @@ function scrollMessagesToBottom(): void {
             aria-live="polite"
             @scroll.passive="syncActiveTurnAnchor"
           >
+            <button
+              v-if="activeTaskView?.mode === 'history' && taskHistory.turnCursor.value"
+              class="history-load-more"
+              type="button"
+              :disabled="taskHistory.loadingMoreTurns.value"
+              :aria-busy="taskHistory.loadingMoreTurns.value"
+              @click="loadMoreHistoryTurns"
+            >
+              {{ taskHistory.loadingMoreTurns.value ? '正在加载…' : '加载更早轮次' }}
+            </button>
             <!-- 按“一轮指令”聚合渲染；锚点目标 id 仍挂在轮次容器上 -->
             <article
               v-for="turn in timelineTurns"
@@ -1208,6 +1487,23 @@ function scrollMessagesToBottom(): void {
                   </div>
                 </div>
               </div>
+              <button
+                v-if="
+                  activeTaskView?.mode === 'history' &&
+                  turn.turnId &&
+                  taskHistory.hasMoreEvents(turn.turnId)
+                "
+                class="history-load-more"
+                type="button"
+                :disabled="taskHistory.loadingEventTurnIds.value.includes(turn.turnId)"
+                @click="loadMoreHistoryEvents(turn.turnId)"
+              >
+                {{
+                  taskHistory.loadingEventTurnIds.value.includes(turn.turnId)
+                    ? '正在加载…'
+                    : '加载本轮更多事件'
+                }}
+              </button>
             </article>
           </section>
         </div>
@@ -1217,8 +1513,13 @@ function scrollMessagesToBottom(): void {
             <textarea
               ref="composer"
               v-model="prompt"
-              :disabled="status.state !== 'ready' || !promptCapability.available"
-              :aria-describedby="promptCapabilityMessage ? 'prompt-capability-message' : undefined"
+              :disabled="
+                status.state !== 'ready' ||
+                !promptCapability.available ||
+                activeTaskView?.mode === 'history' ||
+                !providerSummary?.configured
+              "
+              :aria-describedby="composerDisabledMessage ? 'prompt-capability-message' : undefined"
               rows="1"
               placeholder="让 Grok Build 阅读、修改或验证这个项目"
               @keydown="handleComposerKeydown"
@@ -1245,9 +1546,9 @@ function scrollMessagesToBottom(): void {
                 v-else
                 class="send-button"
                 :disabled="!canSend"
-                :title="promptCapabilityMessage || '发送'"
+                :title="composerDisabledMessage || '发送'"
                 :aria-describedby="
-                  promptCapabilityMessage ? 'prompt-capability-message' : undefined
+                  composerDisabledMessage ? 'prompt-capability-message' : undefined
                 "
                 @click="sendPrompt"
               >
@@ -1256,12 +1557,12 @@ function scrollMessagesToBottom(): void {
             </div>
           </div>
           <p
-            v-if="promptCapabilityMessage"
+            v-if="composerDisabledMessage"
             id="prompt-capability-message"
             class="capability-message"
             role="status"
           >
-            {{ promptCapabilityMessage }}
+            {{ composerDisabledMessage }}
           </p>
         </footer>
       </main>
@@ -1315,7 +1616,7 @@ function scrollMessagesToBottom(): void {
 
     <div v-if="permission" class="modal-backdrop" @click.self="respondPermission()">
       <section
-        class="permission-dialog"
+        class="permission-dialog runtime-permission-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="permission-title"
@@ -1344,6 +1645,67 @@ function scrollMessagesToBottom(): void {
             @click="respondPermission(option.optionId)"
           >
             {{ option.name }}
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <div
+      v-if="historyConfirmation"
+      class="modal-backdrop"
+      @click.self="!historyConfirmationPending && (historyConfirmation = null)"
+    >
+      <section
+        class="permission-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="history-confirmation-title"
+        aria-describedby="history-confirmation-description"
+        @keydown.esc="!historyConfirmationPending && (historyConfirmation = null)"
+      >
+        <header>
+          <div class="permission-icon"><WarningCircle :size="22" weight="fill" /></div>
+          <div>
+            <h2 id="history-confirmation-title">
+              {{
+                historyConfirmation.kind === 'project-remove'
+                  ? '从项目列表移除'
+                  : '删除 Agent Studio 本地历史'
+              }}
+            </h2>
+            <p id="history-confirmation-description">
+              <template v-if="historyConfirmation.kind === 'project-remove'">
+                将移除“{{
+                  historyConfirmation.title
+                }}”的列表入口并保留墓碑和已有历史；项目目录不会被删除。
+              </template>
+              <template v-else>
+                将删除“{{ historyConfirmation.title }}”的本地历史：
+                {{ historyConfirmation.preview?.fileCount }} 个文件，
+                {{ historyConfirmation.preview?.turnCount }} 个 Turn，
+                {{ formatHistoryBytes(historyConfirmation.preview?.bytes ?? 0) }}。 不会删除{{
+                  historyConfirmation.preview?.exclusions.join('、')
+                }}。
+              </template>
+            </p>
+          </div>
+        </header>
+        <div class="permission-options">
+          <button
+            class="secondary-button"
+            type="button"
+            :disabled="historyConfirmationPending"
+            @click="historyConfirmation = null"
+          >
+            取消
+          </button>
+          <button
+            class="primary-button"
+            type="button"
+            :disabled="historyConfirmationPending"
+            @click="confirmHistoryAction"
+          >
+            {{ historyConfirmationPending ? '正在处理…' : '确认' }}
           </button>
         </div>
       </section>

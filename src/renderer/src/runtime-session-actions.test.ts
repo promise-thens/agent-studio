@@ -3,7 +3,8 @@ import type { AgentRuntimeStatus } from '../../shared/agent'
 import {
   canSendRuntimePrompt,
   chooseWorkspaceWhenIdle,
-  createAsyncSingleFlight
+  createAsyncSingleFlight,
+  shouldConnectProject
 } from './runtime-session-actions'
 
 const readyStatus: AgentRuntimeStatus = {
@@ -67,5 +68,16 @@ describe('Runtime 会话操作', () => {
     expect(canSendRuntimePrompt('执行测试', readyStatus, false)).toBe(false)
     expect(canSendRuntimePrompt('   ', readyStatus, true)).toBe(false)
     expect(canSendRuntimePrompt('执行测试', { ...readyStatus, state: 'busy' }, true)).toBe(false)
+  })
+
+  it('Project 切换只在具备执行条件且目标目录尚未连接时触发连接', () => {
+    expect(shouldConnectProject(readyStatus, '/tmp/project', true, true, false)).toBe(false)
+    expect(shouldConnectProject(readyStatus, '/tmp/other-project', true, true, false)).toBe(true)
+    expect(
+      shouldConnectProject({ ...readyStatus, state: 'idle' }, '/tmp/project', true, true, false)
+    ).toBe(true)
+    expect(shouldConnectProject(readyStatus, '/tmp/other-project', false, true, false)).toBe(false)
+    expect(shouldConnectProject(readyStatus, '/tmp/other-project', true, false, false)).toBe(false)
+    expect(shouldConnectProject(readyStatus, '/tmp/other-project', true, true, true)).toBe(false)
   })
 })

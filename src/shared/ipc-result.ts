@@ -10,6 +10,14 @@ export type DesktopIpcErrorCode =
   | 'workspace-mismatch'
   | 'session-restore-unsupported'
   | 'session-not-found'
+  | 'project-not-found'
+  | 'project-unavailable'
+  | 'history-not-found'
+  | 'history-corrupt'
+  | 'history-version-unsupported'
+  | 'history-capacity-exceeded'
+  | 'task-turn-limit-reached'
+  | 'deletion-token-invalid'
   | 'operation-failed'
 
 export interface DesktopIpcError {

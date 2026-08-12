@@ -18,7 +18,6 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
   runtime: AgentIpcRuntime
   status: AgentRuntimeStatus
   assertTrustedSender: ReturnType<typeof vi.fn>
-  statPath: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<DesktopIpcResult<T>>
 } {
   const handlers = new Map<string, DesktopIpcHandler>()
@@ -60,8 +59,6 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
     respondPermission: vi.fn()
   }
   const assertTrustedSender = vi.fn()
-  const statPath = vi.fn(async () => ({ isDirectory: () => true }))
-
   registerAgentIpcHandlers({
     ipcMain: {
       handle: (channel, handler) => {
@@ -70,7 +67,6 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
     },
     assertTrustedSender,
     getAgent: () => runtime,
-    statPath,
     sanitizeError: (error) => (error instanceof Error ? error.message : String(error))
   })
 
@@ -79,7 +75,6 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
     runtime,
     status,
     assertTrustedSender,
-    statPath,
     invoke: async <T>(channel: string, ...args: unknown[]) => {
       const handler = handlers.get(channel)
       if (!handler) throw new Error(`缺少 Handler: ${channel}`)
@@ -108,27 +103,25 @@ describe('Agent IPC Handler', () => {
       ok: false,
       error: { code: 'forbidden', message: '拒绝此 IPC 调用。' }
     })
-    expect(fixture.statPath).not.toHaveBeenCalled()
     expect(fixture.runtime.connect).not.toHaveBeenCalled()
   })
 
-  it('连接前验证目录并把原始 workspace 委托给 Runtime', async () => {
+  it('连接只接收 projectId 并委托给 Runtime 服务', async () => {
     const fixture = createFixture({ runtimeId: 'grok', state: 'idle', message: '未连接' })
-    const workspace = '/tmp/project with spaces '
+    const projectId = 'project-1'
 
     const result = await fixture.invoke<AgentRuntimeStatus>(AGENT_INVOKE_CHANNELS.connect, {
-      workspace
+      projectId
     })
 
     expect(result.ok).toBe(true)
-    expect(fixture.statPath).toHaveBeenCalledWith(workspace)
-    expect(fixture.runtime.connect).toHaveBeenCalledWith(workspace)
+    expect(fixture.runtime.connect).toHaveBeenCalledWith(projectId)
   })
 
   it.each(['connecting', 'busy'] as const)('在 %s 状态拒绝连接', async (state) => {
     const fixture = createFixture({ runtimeId: 'grok', state, message: state })
     const result = await fixture.invoke(AGENT_INVOKE_CHANNELS.connect, {
-      workspace: '/tmp/project'
+      projectId: 'project-1'
     })
 
     expect(result).toMatchObject({ ok: false, error: { code: 'invalid-state' } })
@@ -138,22 +131,21 @@ describe('Agent IPC Handler', () => {
   it.each(['idle', 'error', 'ready'] as const)('在 %s 状态允许连接委托', async (state) => {
     const fixture = createFixture({ runtimeId: 'grok', state, message: state })
     const result = await fixture.invoke(AGENT_INVOKE_CHANNELS.connect, {
-      workspace: '/tmp/project'
+      projectId: 'project-1'
     })
 
     expect(result.ok).toBe(true)
     expect(fixture.runtime.connect).toHaveBeenCalledOnce()
   })
 
-  it('创建 Task 复用目录验证，公共响应不包含 Runtime session 引用', async () => {
+  it('创建 Task 只接收 projectId，公共响应不包含 Runtime session 引用', async () => {
     const fixture = createFixture()
     const result = await fixture.invoke<AgentTaskRuntimeState>(AGENT_INVOKE_CHANNELS.createTask, {
-      workspace: '/tmp/project'
+      projectId: 'project-1'
     })
 
     expect(result).toMatchObject({ ok: true, value: { taskId: 'task-1' } })
-    expect(fixture.statPath).toHaveBeenCalledWith('/tmp/project')
-    expect(fixture.runtime.createTask).toHaveBeenCalledWith('/tmp/project')
+    expect(fixture.runtime.createTask).toHaveBeenCalledWith('project-1')
     expect(JSON.stringify(result)).not.toContain('runtimeSessionId')
   })
 
@@ -257,34 +249,21 @@ describe('Agent IPC Handler', () => {
     ],
     ['NUL Task ID', AGENT_INVOKE_CHANNELS.cancelTurn, [{ taskId: 'task\0-1' }], 'invalid-input'],
     [
-      '相对目录',
+      '伪造 workspace 字段',
       AGENT_INVOKE_CHANNELS.connect,
-      [{ workspace: 'relative/path' }],
-      'invalid-workspace'
+      [{ workspace: '/tmp/project' }],
+      'invalid-input'
     ],
     [
-      '创建 Task 的相对目录',
+      '创建 Task 伪造 workspace 字段',
       AGENT_INVOKE_CHANNELS.createTask,
-      [{ workspace: 'relative/path' }],
-      'invalid-workspace'
+      [{ workspace: '/tmp/project' }],
+      'invalid-input'
     ]
   ] as const)('拒绝%s', async (_name, channel, args, code) => {
     const fixture = createFixture()
     const result = await fixture.invoke(channel, ...args)
     expect(result).toMatchObject({ ok: false, error: { code } })
-  })
-
-  it('拒绝文件路径和不存在目录', async () => {
-    const fixture = createFixture()
-    fixture.statPath.mockResolvedValueOnce({ isDirectory: () => false })
-    expect(
-      await fixture.invoke(AGENT_INVOKE_CHANNELS.connect, { workspace: '/tmp/file.txt' })
-    ).toMatchObject({ ok: false, error: { code: 'invalid-workspace' } })
-
-    fixture.statPath.mockRejectedValueOnce(new Error('ENOENT'))
-    expect(
-      await fixture.invoke(AGENT_INVOKE_CHANNELS.connect, { workspace: '/tmp/missing' })
-    ).toMatchObject({ ok: false, error: { code: 'invalid-workspace' } })
   })
 
   it('按 UTF-8 字节接受临界 Prompt，并拒绝超过一个字节的内容', async () => {
@@ -329,7 +308,6 @@ describe('Agent IPC Handler', () => {
       ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
       assertTrustedSender: vi.fn(),
       getAgent: () => null,
-      statPath: vi.fn(),
       sanitizeError: String
     })
 

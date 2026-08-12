@@ -1,10 +1,12 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import { AGENT_INVOKE_CHANNELS, AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
 import { APP_INVOKE_CHANNELS } from '../shared/app-ipc'
+import { TASK_INVOKE_CHANNELS } from '../shared/task-ipc'
 import {
   createAgentDesktopApi,
   createAppDesktopApi,
   createProviderDesktopApi,
+  createTaskDesktopApi,
   type NarrowIpcRenderer
 } from './desktop-api'
 
@@ -21,33 +23,38 @@ function createIpcRenderer(): MockIpcRenderer {
 }
 
 describe('窄 Preload API', () => {
-  it('Agent/App 方法只调用固定 channel 并包装对象请求', async () => {
+  it('Agent/App/Task 方法只调用固定 channel 并包装对象请求', async () => {
     const ipcRenderer = createIpcRenderer()
     const agent = createAgentDesktopApi(ipcRenderer)
     const app = createAppDesktopApi(ipcRenderer)
+    const task = createTaskDesktopApi(ipcRenderer)
 
     await agent.getStatus()
-    await agent.connect('/tmp/project')
+    await agent.connect('project-1')
     await agent.disconnect()
-    await agent.createTask('/tmp/project')
+    await agent.createTask('project-1')
     await agent.startTurn('task-1', '执行测试')
     await agent.cancelTurn('task-1')
     await agent.getTaskRuntimeState('task-1')
     await agent.respondPermission('request-1')
     await agent.respondPermission('request-2', 'allow-once')
-    await app.chooseWorkspace()
+    await app.chooseProject()
+    await task.list('project-1')
+    await task.resume('task-1')
 
     expect(ipcRenderer.invoke.mock.calls).toEqual([
       [AGENT_INVOKE_CHANNELS.getStatus],
-      [AGENT_INVOKE_CHANNELS.connect, { workspace: '/tmp/project' }],
+      [AGENT_INVOKE_CHANNELS.connect, { projectId: 'project-1' }],
       [AGENT_INVOKE_CHANNELS.disconnect],
-      [AGENT_INVOKE_CHANNELS.createTask, { workspace: '/tmp/project' }],
+      [AGENT_INVOKE_CHANNELS.createTask, { projectId: 'project-1' }],
       [AGENT_INVOKE_CHANNELS.startTurn, { taskId: 'task-1', prompt: '执行测试' }],
       [AGENT_INVOKE_CHANNELS.cancelTurn, { taskId: 'task-1' }],
       [AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId: 'task-1' }],
       [AGENT_INVOKE_CHANNELS.respondPermission, { requestId: 'request-1' }],
       [AGENT_INVOKE_CHANNELS.respondPermission, { requestId: 'request-2', optionId: 'allow-once' }],
-      [APP_INVOKE_CHANNELS.chooseWorkspace]
+      [APP_INVOKE_CHANNELS.chooseProject],
+      [TASK_INVOKE_CHANNELS.list, { projectId: 'project-1' }],
+      [TASK_INVOKE_CHANNELS.resume, { taskId: 'task-1' }]
     ])
   })
 

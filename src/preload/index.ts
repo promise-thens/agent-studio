@@ -3,6 +3,7 @@ import {
   createAgentDesktopApi,
   createAppDesktopApi,
   createProviderDesktopApi,
+  createTaskDesktopApi,
   type NarrowIpcRenderer
 } from './desktop-api'
 
@@ -21,6 +22,7 @@ export function exposeDesktopApis(
 
   exposeInMainWorld('agent', createAgentDesktopApi(renderer))
   exposeInMainWorld('app', createAppDesktopApi(renderer))
+  exposeInMainWorld('task', createTaskDesktopApi(renderer))
   exposeInMainWorld('provider', createProviderDesktopApi(renderer))
 }
 
