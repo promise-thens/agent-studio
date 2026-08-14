@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  AgentPermissionDecision,
   AgentPermissionRequest,
   AgentRuntimeStatus,
   AgentTaskRuntimeState,
@@ -21,7 +22,8 @@ export const AGENT_INVOKE_CHANNELS = {
 export const AGENT_PUSH_CHANNELS = {
   status: 'agent:status',
   event: 'agent:event',
-  permission: 'agent:permission'
+  permission: 'agent:permission',
+  permissionCancelled: 'agent:permission-cancelled'
 } as const
 
 export interface AgentConnectRequest {
@@ -46,8 +48,18 @@ export interface AgentGetTaskRuntimeStateRequest {
 }
 
 export interface AgentRespondPermissionRequest {
-  requestId: string
-  optionId?: string
+  approvalId: string
+  taskId: string
+  turnId: string
+  decision: AgentPermissionDecision
+}
+
+/** 主进程只用审批身份通知 Renderer 移除已失效项，不暴露 Runtime requestId。 */
+export interface AgentPermissionCancellation {
+  approvalId: string
+  taskId: string
+  turnId: string
+  reason: 'cancelled'
 }
 
 /** Renderer 只能通过固定方法控制当前 Agent Runtime。 */
@@ -59,8 +71,9 @@ export interface AgentDesktopApi {
   startTurn: (taskId: string, prompt: string) => Promise<DesktopIpcResult<AgentTurnExecutionResult>>
   cancelTurn: (taskId: string) => Promise<DesktopIpcResult<null>>
   getTaskRuntimeState: (taskId: string) => Promise<DesktopIpcResult<AgentTaskRuntimeState>>
-  respondPermission: (requestId: string, optionId?: string) => Promise<DesktopIpcResult<null>>
+  respondPermission: (request: AgentRespondPermissionRequest) => Promise<DesktopIpcResult<null>>
   onStatus: (listener: (status: AgentRuntimeStatus) => void) => () => void
   onEvent: (listener: (event: AgentEvent) => void) => () => void
   onPermission: (listener: (request: AgentPermissionRequest) => void) => () => void
+  onPermissionCancelled: (listener: (request: AgentPermissionCancellation) => void) => () => void
 }

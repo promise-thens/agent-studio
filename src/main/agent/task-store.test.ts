@@ -1,7 +1,7 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, open, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRuntimeCapabilitySnapshot } from '../../shared/agent'
 import { ProjectRegistry } from '../project/project-registry'
 import { AtomicJsonWriter } from '../storage/atomic-json-file'
@@ -71,7 +71,12 @@ function capabilitySnapshot(): AgentRuntimeCapabilitySnapshot {
   }
 }
 
-async function createStore(): Promise<{
+async function createStore(
+  options: {
+    writer?: AtomicJsonWriter
+    createId?: () => string
+  } = {}
+): Promise<{
   store: TaskStore
   registry: ProjectRegistry
   userDataPath: string
@@ -83,7 +88,11 @@ async function createStore(): Promise<{
   const registry = new ProjectRegistry({ userDataPath, createId: () => 'project-1' })
   await registry.initialize()
   const project = await registry.register(projectPath)
-  const store = new TaskStore({ projectRegistry: registry, createId: () => 'delete-token' })
+  const store = new TaskStore({
+    projectRegistry: registry,
+    writer: options.writer,
+    createId: options.createId ?? (() => 'delete-token')
+  })
   await store.initialize()
   await store.createTask({
     taskId: 'task-1',
@@ -191,6 +200,242 @@ describe('TaskStore', () => {
     await expect(store.deleteTask('task-1', preview.token)).rejects.toThrow()
   })
 
+  it('删除准备 rollback 会恢复仍有效的一次性 token，commit 后不可再次使用', async () => {
+    const { store } = await createStore()
+    const preview = await store.previewTaskDeletion('task-1')
+    const firstPreparation = store.prepareTaskDeletion('task-1', preview.token)
+    firstPreparation.rollback()
+
+    const retryPreparation = store.prepareTaskDeletion('task-1', preview.token)
+    await retryPreparation.commit()
+    expect(() => store.getTaskDetail('task-1')).toThrow('未找到指定 Task 历史')
+    expect(() => store.prepareTaskDeletion('task-1', preview.token)).toThrow()
+  })
+
+  it('Task 删除 reservation 拒绝后续写入，rollback 后恢复写入与 token', async () => {
+    const { store } = await createStore()
+    const preview = await store.previewTaskDeletion('task-1')
+    const preparation = store.prepareTaskDeletion('task-1', preview.token)
+
+    await expect(
+      store.createTurn({
+        taskId: 'task-1',
+        turnId: 'turn-blocked',
+        promptDisplayText: '不应落盘',
+        model: { modelId: 'model-1' }
+      })
+    ).rejects.toMatchObject({ code: 'invalid-state' })
+    expect(preparation.rollback()).toBe(true)
+
+    await expect(
+      store.createTurn({
+        taskId: 'task-1',
+        turnId: 'turn-allowed',
+        promptDisplayText: '恢复写入',
+        model: { modelId: 'model-1' }
+      })
+    ).resolves.toMatchObject({ turnId: 'turn-allowed' })
+  })
+
+  it('Task 删除等待已有写入排空，提交后不会重建幽灵目录', async () => {
+    const { store, registry, project } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '测试',
+      model: { modelId: 'model-1' }
+    })
+    await store.finishTurn('task-1', 'turn-1', 'completed')
+    const preview = await store.previewTaskDeletion('task-1')
+    const writer = (store as unknown as { writer: AtomicJsonWriter }).writer
+    const originalWrite = writer.write.bind(writer)
+    const writeStarted = deferred<void>()
+    const releaseWrite = deferred<void>()
+    let blockTaskRecord = true
+    writer.write = async (path, value) => {
+      if (blockTaskRecord && path.endsWith('/turn-1/turn.json')) {
+        blockTaskRecord = false
+        writeStarted.resolve()
+        await releaseWrite.promise
+      }
+      return originalWrite(path, value)
+    }
+
+    const mutation = store.appendEvent({
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-12T00:00:00.000Z',
+      kind: 'agent-message',
+      text: '排队写入'
+    })
+    await writeStarted.promise
+    const preparation = store.prepareTaskDeletion('task-1', preview.token)
+    const commit = preparation.commit()
+    let commitSettled = false
+    void commit.finally(() => {
+      commitSettled = true
+    })
+    await Promise.resolve()
+    expect(commitSettled).toBe(false)
+
+    releaseWrite.resolve()
+    await mutation
+    await expect(commit).resolves.toBeUndefined()
+    expect(preparation.rollback()).toBe(false)
+    expect(() => store.getTaskDetail('task-1')).toThrow('未找到指定 Task 历史')
+    await expect(
+      readdir(join(registry.getProjectDirectory(project.projectId), 'tasks'))
+    ).resolves.not.toContain('task-1')
+  })
+
+  it('Project 删除 reservation 拒绝新 Task，rollback 后允许创建', async () => {
+    const { store, project } = await createStore()
+    const preview = await store.previewProjectDeletion(project.projectId)
+    const preparation = store.prepareProjectHistoryDeletion(project.projectId, preview.token)
+
+    await expect(
+      store.createTask({
+        taskId: 'task-2',
+        projectId: project.projectId,
+        root: project.canonicalRoot,
+        runtimeId: 'grok',
+        session: {
+          runtimeId: 'grok',
+          runtimeSessionId: 'private-session-2',
+          workspace: project.canonicalRoot
+        },
+        capabilitySnapshot: capabilitySnapshot()
+      })
+    ).rejects.toMatchObject({ code: 'invalid-state' })
+
+    expect(preparation.rollback()).toBe(true)
+    await expect(
+      store.createTask({
+        taskId: 'task-2',
+        projectId: project.projectId,
+        root: project.canonicalRoot,
+        runtimeId: 'grok',
+        session: {
+          runtimeId: 'grok',
+          runtimeSessionId: 'private-session-2',
+          workspace: project.canonicalRoot
+        },
+        capabilitySnapshot: capabilitySnapshot()
+      })
+    ).resolves.toMatchObject({ taskId: 'task-2' })
+  })
+
+  it('删除 rename 失败时恢复 token，双 commit 只执行一次物理删除', async () => {
+    const { store } = await createStore()
+    const writer = (store as unknown as { writer: AtomicJsonWriter }).writer
+    const originalRename = writer.renameDurably.bind(writer)
+    let failRename = true
+    const renameSpy = vi
+      .spyOn(writer, 'renameDurably')
+      .mockImplementation(async (source, target) => {
+        if (failRename && source.endsWith('/tasks/task-1')) {
+          failRename = false
+          throw new Error('模拟 rename 失败')
+        }
+        return originalRename(source, target)
+      })
+    const preview = await store.previewTaskDeletion('task-1')
+    const first = store.prepareTaskDeletion('task-1', preview.token)
+    await expect(first.commit()).rejects.toThrow('删除提交失败')
+    expect(first.rollback()).toBe(true)
+
+    const retry = store.prepareTaskDeletion('task-1', preview.token)
+    await Promise.all([retry.commit(), retry.commit()])
+    expect(
+      renameSpy.mock.calls.filter(([source]) => source.endsWith('/tasks/task-1'))
+    ).toHaveLength(2)
+    expect(retry.rollback()).toBe(false)
+    expect(() => store.getTaskDetail('task-1')).toThrow('未找到指定 Task 历史')
+  })
+
+  it('删除 rename 已完成但父目录同步失败时按磁盘结果提交且不恢复 token', async () => {
+    const syncFailure = { directory: undefined as string | undefined, count: 0 }
+    const writer = new AtomicJsonWriter({
+      fileSystem: {
+        open: async (path, flags, mode) => {
+          if (path === syncFailure.directory && flags === 'r' && syncFailure.count === 0) {
+            syncFailure.count += 1
+            return {
+              sync: async () => {
+                throw Object.assign(new Error('模拟目录同步失败'), { code: 'EIO' })
+              },
+              close: async () => undefined
+            } as unknown as Awaited<ReturnType<typeof open>>
+          }
+          return open(path, flags, mode)
+        }
+      }
+    })
+    const { store, registry, project } = await createStore({ writer })
+    syncFailure.directory = join(registry.getProjectDirectory(project.projectId), 'tasks')
+    const renameSpy = vi.spyOn(writer, 'renameDurably')
+    const preview = await store.previewTaskDeletion('task-1')
+    const preparation = store.prepareTaskDeletion('task-1', preview.token)
+
+    await preparation.commit()
+    await preparation.commit()
+
+    expect(syncFailure.count).toBe(1)
+    expect(
+      renameSpy.mock.calls.filter(([source]) => source.endsWith('/tasks/task-1'))
+    ).toHaveLength(1)
+    expect(preparation.rollback()).toBe(false)
+    expect(() => store.getTaskDetail('task-1')).toThrow('未找到指定 Task 历史')
+    await expect(readdir(syncFailure.directory)).resolves.not.toContain('task-1')
+    await expect(readdir(join(registry.historyRoot, 'deleting'))).resolves.toEqual([])
+  })
+
+  it('容量淘汰跳过持有外部历史 mutation lease 的终态 Task', async () => {
+    const { store, registry, project } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '完成 Task 1',
+      model: { modelId: 'model-1' }
+    })
+    await store.finishTurn('task-1', 'turn-1', 'completed')
+    await store.createTask({
+      taskId: 'task-2',
+      projectId: project.projectId,
+      root: project.canonicalRoot,
+      runtimeId: 'grok',
+      session: {
+        runtimeId: 'grok',
+        runtimeSessionId: 'private-session-2',
+        workspace: project.canonicalRoot
+      },
+      capabilitySnapshot: capabilitySnapshot()
+    })
+
+    const mutationLease = store.beginTaskHistoryMutation('task-1')
+    // 投影完整 256 MiB，稳定触发淘汰；Task 2 作为当前写入目标不会被淘汰。
+    const oversizedProjection = 256 * 1024 * 1024
+    await expect(
+      store.ensureAdditionalHistoryCapacity('task-2', oversizedProjection)
+    ).rejects.toMatchObject({ code: 'history-capacity-exceeded' })
+    expect(store.getTaskDetail('task-1').state).toBe('completed')
+    await expect(
+      readdir(join(registry.getProjectDirectory(project.projectId), 'tasks'))
+    ).resolves.toContain('task-1')
+
+    mutationLease.release()
+    await expect(
+      store.ensureAdditionalHistoryCapacity('task-2', oversizedProjection)
+    ).rejects.toMatchObject({ code: 'history-capacity-exceeded' })
+    expect(() => store.getTaskDetail('task-1')).toThrow('未找到指定 Task 历史')
+    await expect(
+      readdir(join(registry.getProjectDirectory(project.projectId), 'tasks'))
+    ).resolves.not.toContain('task-1')
+  })
+
   it('单事件超过 256KiB 时只标记截断，Runtime 历史队列仍可继续', async () => {
     const { store } = await createStore()
     await store.createTurn({
@@ -292,3 +537,15 @@ describe('TaskStore', () => {
     expect(await readdir(join(registry.historyRoot, 'deleting'))).toHaveLength(0)
   })
 })
+
+/** 构造无 sleep 的并发门禁，精确控制历史写入与删除提交时序。 */
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value?: T | PromiseLike<T>) => void
+} {
+  let resolve!: (value?: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise as (value?: T | PromiseLike<T>) => void
+  })
+  return { promise, resolve }
+}

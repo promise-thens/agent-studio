@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -16,6 +16,11 @@ import { registerTaskIpcHandlers } from './agent/task-ipc'
 import { TaskStore } from './agent/task-store'
 import { TaskExecutionController } from './agent/task-execution-controller'
 import { registerAppIpcHandlers } from './app-ipc'
+import { createAppShutdownGate } from './app-shutdown'
+import {
+  resolveControlledAcpE2eBootstrap,
+  type ControlledAcpE2eBootstrap
+} from './e2e/controlled-acp-e2e-bootstrap'
 import type { DesktopIpcMain } from './ipc-types'
 import { ProviderConfigStore, type ProviderRuntimeConfig } from './provider/provider-config-store'
 import { ProviderConnectionTester } from './provider/provider-connection-tester'
@@ -24,6 +29,9 @@ import { clearGrokProviderConfig } from './provider/grok-provider-config'
 import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
 import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
+import { PermissionAuditStore } from './security/permission-audit-store'
+import { PermissionBroker } from './security/permission-broker'
+import { createLocalEnvironmentId } from './security/permission-policy'
 import {
   assertTrustedIpcSender,
   sendToTrustedRenderer,
@@ -39,6 +47,8 @@ let providerStore: ProviderConfigStore | null = null
 let providerTester: ProviderConnectionTester | null = null
 let projectRegistry: ProjectRegistry | null = null
 let taskStore: TaskStore | null = null
+let permissionAuditStore: PermissionAuditStore | null = null
+let permissionBroker: PermissionBroker | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -78,7 +88,7 @@ function createWindow(): void {
 }
 
 /** safeStorage 只能在 app.whenReady() 后注入，避免模块加载阶段提前访问系统密钥库。 */
-async function initializeServices(): Promise<void> {
+async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | null): Promise<void> {
   providerStore = new ProviderConfigStore({
     userDataPath: app.getPath('userData'),
     platform: process.platform,
@@ -90,12 +100,66 @@ async function initializeServices(): Promise<void> {
     }
   })
   await providerStore.initialize()
+  providerTester = new ProviderConnectionTester({ redact: redactProviderText })
+  if (controlledE2e) {
+    // 受控 E2E 只验证 127.0.0.1 无认证 Mock Provider；失败时终止启动，绝不读取真实配置。
+    const config = validateProviderConfigInput(controlledE2e.providerConfig)
+    const result = await providerTester.testInference(config)
+    if (!result.ok) throw new Error('受控 ACP Runtime E2E Mock Provider 验证失败。')
+    await providerStore.save(config, { testedAt: new Date().toISOString() })
+  }
   projectRegistry = new ProjectRegistry({ userDataPath: app.getPath('userData') })
   await projectRegistry.initialize()
+  if (controlledE2e) {
+    // Project 由 Main 注册，避免 E2E 借助 Renderer 或系统目录选择框传入工作区路径。
+    await projectRegistry.register(controlledE2e.workspacePath)
+  }
   taskStore = new TaskStore({ projectRegistry })
   await taskStore.initialize()
+  permissionAuditStore = new PermissionAuditStore({
+    projectRegistry,
+    getTaskIdentity: (taskId) => {
+      const task = requireTaskStore().getTaskRecord(taskId)
+      return { taskId: task.taskId, projectId: task.projectId }
+    },
+    ensureHistoryCapacity: (taskId, additionalBytes) =>
+      requireTaskStore().ensureAdditionalHistoryCapacity(taskId, additionalBytes),
+    beginTaskHistoryMutation: (taskId) => requireTaskStore().beginTaskHistoryMutation(taskId)
+  })
+  permissionBroker = new PermissionBroker({
+    auditStore: permissionAuditStore,
+    onApproval: (request) =>
+      sendToTrustedRenderer(createRendererTrustOptions(), AGENT_PUSH_CHANNELS.permission, request),
+    onApprovalCancelled: (request) => {
+      sendToTrustedRenderer(
+        createRendererTrustOptions(),
+        AGENT_PUSH_CHANNELS.permissionCancelled,
+        request
+      )
+    },
+    resolveIntentContext: (taskId, turnId) => {
+      try {
+        const task = requireTaskStore().getTaskRecord(taskId)
+        if (task.environment.kind !== 'local') return null
+        return {
+          taskId: task.taskId,
+          turnId: task.activeTurnId ?? '',
+          projectId: task.projectId,
+          executionRoot: task.environment.rootSnapshot,
+          environmentId: createLocalEnvironmentId(task.projectId, task.environment.rootSnapshot),
+          runtimeId: task.runtimeId,
+          environmentKind: 'local',
+          active:
+            task.activeTurnId === turnId &&
+            (task.state === 'running' || task.state === 'waiting-permission')
+        }
+      } catch {
+        return null
+      }
+    },
+    redactText: redactProviderText
+  })
 
-  providerTester = new ProviderConnectionTester({ redact: redactProviderText })
   const rendererTrust = createRendererTrustOptions()
   const adapter = new GrokAcpAdapter(
     {
@@ -109,21 +173,20 @@ async function initializeServices(): Promise<void> {
       onPermission: (request) => {
         const service = agentService
         if (!service) {
-          runtimeAdapter?.respondPermission(request.id)
+          runtimeAdapter?.respondPermission(request.requestId, 'cancelled')
           return
         }
-
-        // 权限必须先登记到 Service；Renderer 不可达时立即取消，禁止 Runtime 永久等待。
         service.handlePermissionRequest(request)
-        if (!sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.permission, request)) {
-          service.respondPermission(request.id)
-        }
+      },
+      onPermissionCancelled: (request) => {
+        agentService?.handlePermissionCancellation(request)
       }
     },
     {
       userDataPath: app.getPath('userData'),
       getProviderConfig: () => requireProviderStore().getRuntimeConfig(),
-      redactText: redactProviderText
+      redactText: redactProviderText,
+      ...(controlledE2e ? { controlledFixture: controlledE2e.fixture } : {})
     }
   )
   runtimeAdapter = adapter
@@ -137,7 +200,8 @@ async function initializeServices(): Promise<void> {
         ...(config.modelDisplayName ? { displayName: config.modelDisplayName } : {})
       }
     },
-    redactText: redactProviderText
+    redactText: redactProviderText,
+    permissionBroker: requirePermissionBroker()
   })
 }
 
@@ -165,11 +229,39 @@ function registerIpcHandlers(): void {
     assertTrustedSender,
     chooseProject: chooseProject,
     listProjects: () => requireProjectRegistry().list(),
-    removeProject: (projectId) => requireProjectRegistry().remove(projectId),
+    removeProject: async (projectId) => {
+      const deletionLease = await requirePermissionBroker().beginProjectDeletion(projectId)
+      try {
+        await requireProjectRegistry().remove(projectId)
+      } catch (error) {
+        deletionLease.rollback()
+        throw error
+      }
+      // Registry 已提交后禁止 rollback；Broker commit 只做同步内存清理并保持失败关闭。
+      deletionLease.commit()
+    },
     previewProjectHistoryDeletion: (projectId) =>
       requireTaskStore().previewProjectDeletion(projectId),
-    deleteProjectHistory: (projectId, token) =>
-      requireTaskStore().deleteProjectHistory(projectId, token),
+    deleteProjectHistory: async (projectId, token) => {
+      const preparation = requireTaskStore().prepareProjectHistoryDeletion(projectId, token)
+      let deletionLease: Awaited<ReturnType<PermissionBroker['beginProjectDeletion']>>
+      try {
+        deletionLease = await requirePermissionBroker().beginProjectDeletion(projectId)
+      } catch (error) {
+        preparation.rollback()
+        throw error
+      }
+      try {
+        await preparation.commit()
+      } catch (error) {
+        const rollbackSafe = preparation.rollback()
+        if (rollbackSafe) deletionLease.rollback()
+        else deletionLease.commit()
+        throw error
+      }
+      // 历史目录已越过 rename 提交点，后续不得恢复 token 或旧授权。
+      deletionLease.commit()
+    },
     sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
   })
 
@@ -186,9 +278,30 @@ function registerIpcHandlers(): void {
         listTurns: (taskId, cursor, limit) => store.listTurns(taskId, cursor, limit),
         listEvents: (taskId, turnId, afterSequence, limit) =>
           store.listEvents(taskId, turnId, afterSequence, limit),
+        listPermissionAudits: (taskId, cursor, limit) =>
+          requirePermissionAuditStore().list(taskId, cursor, limit),
         resumeTask: (taskId) => service.resumeTask(taskId),
         previewTaskDeletion: (taskId) => store.previewTaskDeletion(taskId),
-        deleteTask: (taskId, token) => store.deleteTask(taskId, token)
+        deleteTask: async (taskId, token) => {
+          const preparation = store.prepareTaskDeletion(taskId, token)
+          let deletionLease: Awaited<ReturnType<PermissionBroker['beginTaskDeletion']>>
+          try {
+            deletionLease = await requirePermissionBroker().beginTaskDeletion(taskId)
+          } catch (error) {
+            preparation.rollback()
+            throw error
+          }
+          try {
+            await preparation.commit()
+          } catch (error) {
+            const rollbackSafe = preparation.rollback()
+            if (rollbackSafe) deletionLease.rollback()
+            else deletionLease.commit()
+            throw error
+          }
+          // 物理删除完成后只允许提交内存授权清理，绝不再走 rollback。
+          deletionLease.commit()
+        }
       }
     },
     sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
@@ -376,6 +489,35 @@ function requireTaskStore(): TaskStore {
   return taskStore
 }
 
+function requirePermissionAuditStore(): PermissionAuditStore {
+  if (!permissionAuditStore) throw new Error('权限审计服务尚未初始化。')
+  return permissionAuditStore
+}
+
+function requirePermissionBroker(): PermissionBroker {
+  if (!permissionBroker) throw new Error('权限 Broker 尚未初始化。')
+  return permissionBroker
+}
+
+/**
+ * 受控 E2E 必须在单实例锁和任何服务初始化前切换到已校验的临时 userData。
+ * 参数残缺、非开发态或路径越界都会直接失败关闭，不能回退到用户真实 Profile。
+ */
+let controlledAcpE2e: ControlledAcpE2eBootstrap | null
+try {
+  controlledAcpE2e = resolveControlledAcpE2eBootstrap({
+    development: is.dev,
+    packaged: app.isPackaged,
+    // 构建后的 Main 固定在 out/main；从模块位置反推仓库根，不能信任 Playwright loader 改写的 appPath 或可变 cwd。
+    repositoryRoot: resolve(__dirname, '../..')
+  })
+  if (controlledAcpE2e) app.setPath('userData', controlledAcpE2e.userDataPath)
+} catch {
+  console.error('[Agent Studio] 受控 ACP Runtime E2E 配置无效。')
+  app.exit(1)
+  throw new Error('受控 ACP Runtime E2E 配置无效。')
+}
+
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
@@ -392,7 +534,7 @@ if (hasSingleInstanceLock)
     .then(async () => {
       electronApp.setAppUserModelId('com.promise-thens.agent-studio')
       app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
-      await initializeServices()
+      await initializeServices(controlledAcpE2e)
       registerIpcHandlers()
       createWindow()
 
@@ -407,10 +549,13 @@ if (hasSingleInstanceLock)
       app.quit()
     })
 
-app.on('before-quit', () => {
-  // 退出路径直接终止 Adapter，避免等待 ACP cancel 阻塞应用关闭。
-  void runtimeAdapter?.disconnect()
+const appShutdownGate = createAppShutdownGate({
+  shutdownPermissions: () => permissionBroker?.shutdown() ?? Promise.resolve(),
+  disconnectRuntime: () => runtimeAdapter?.disconnect() ?? Promise.resolve(),
+  quit: () => app.quit()
 })
+
+app.on('before-quit', appShutdownGate.handleBeforeQuit)
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

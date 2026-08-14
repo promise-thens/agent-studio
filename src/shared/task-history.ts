@@ -4,6 +4,11 @@ import type {
   AgentExecutionState,
   AgentPlanEntry,
   AgentRuntimeId,
+  AgentOperationType,
+  AgentOperationInitiator,
+  AgentPermissionResolutionReason,
+  AgentPermissionRisk,
+  AgentPermissionScope,
   AgentTaskRuntimeState,
   AgentToolStatus,
   AgentTurnOutcome,
@@ -144,6 +149,30 @@ export interface CursorPage<T> {
 export type TaskHistoryPage = CursorPage<TaskHistorySummary>
 export type TurnHistoryPage = CursorPage<TurnHistoryRecord>
 export type PersistedAgentEventPage = CursorPage<PersistedAgentEvent>
+
+/** 权限审计独立于对话事件，P0-09 再决定如何投影到统一 Timeline。 */
+export interface PermissionAuditRecord {
+  auditId: string
+  taskId: string
+  turnId: string
+  projectId: string
+  environmentId: string
+  initiator: 'runtime' | 'app'
+  runtimeId?: AgentRuntimeId
+  appService?: Extract<AgentOperationInitiator, { kind: 'app' }>['service']
+  operationType: AgentOperationType
+  risk: AgentPermissionRisk
+  targetSummaries: string[]
+  title: string
+  impact: string
+  reason: AgentPermissionResolutionReason
+  scope?: AgentPermissionScope
+  detail?: string
+  createdAt: string
+  truncated?: true
+}
+
+export type PermissionAuditPage = CursorPage<PermissionAuditRecord>
 
 /** 删除预览绑定 revision 与短期 token，确认时必须重新校验。 */
 export interface DeletionPreview {

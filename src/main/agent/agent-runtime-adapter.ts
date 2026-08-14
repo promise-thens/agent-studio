@@ -1,6 +1,8 @@
 import type {
   AgentEvent,
-  AgentPermissionRequest,
+  AgentOperationTarget,
+  AgentOperationType,
+  AgentPermissionRisk,
   AgentRuntimeCapabilitySnapshot,
   AgentRuntimeId,
   AgentRuntimeStatus,
@@ -56,6 +58,35 @@ export interface AgentRuntimeTurnResult {
   outcome: AgentTurnOutcome
 }
 
+/** Runtime 权限请求只在主进程内部流转，不包含可由 Renderer 选择的协议 optionId。 */
+export interface AgentRuntimePermissionRequest {
+  requestId: string
+  runtimeId: AgentRuntimeId
+  taskId: string
+  turnId: string
+  runtimeSessionId: string
+  toolCallId: string
+  operationType: AgentOperationType
+  targets: AgentOperationTarget[]
+  parameterFingerprint: string
+  title: string
+  impact: string
+  minimumRisk?: AgentPermissionRisk
+  executionSupported: boolean
+}
+
+/** Runtime 终止 ToolCall 后只通知精确的在途权限身份，不携带协议原始对象。 */
+export interface AgentRuntimePermissionCancellation {
+  requestId: string
+  runtimeId: AgentRuntimeId
+  taskId: string
+  turnId: string
+  runtimeSessionId: string
+  toolCallId: string
+}
+
+export type AgentRuntimePermissionResolution = 'allow-once' | 'deny-once' | 'cancelled'
+
 /**
  * Runtime 的中性事件出口。实现必须先完成协议投影、脱敏与事件归一化，
  * 不得把 ACP 原始 payload 或主进程实现对象交给调用方。
@@ -63,7 +94,8 @@ export interface AgentRuntimeTurnResult {
 export interface AgentRuntimeAdapterSink {
   onStatus: (status: AgentRuntimeStatus) => void
   onEvent: (event: AgentEvent) => void
-  onPermission: (request: AgentPermissionRequest) => void
+  onPermission: (request: AgentRuntimePermissionRequest) => void
+  onPermissionCancelled: (request: AgentRuntimePermissionCancellation) => void
 }
 
 /**
@@ -83,5 +115,5 @@ export interface AgentRuntimeAdapter {
   closeSession(session: AgentRuntimeSessionRef): Promise<void>
   startTurn(context: AgentRuntimeTurnContext): Promise<AgentRuntimeTurnResult>
   cancelTurn(turn: AgentRuntimeTurnRef): Promise<void>
-  respondPermission(requestId: string, optionId?: string): void
+  respondPermission(requestId: string, resolution: AgentRuntimePermissionResolution): void
 }

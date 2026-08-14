@@ -55,14 +55,20 @@ describe('Agent 领域契约', () => {
       completedAt: timestamp
     }
     const permission: AgentPermissionRequest = {
-      id: 'permission-1',
+      approvalId: 'permission-1',
+      initiator: 'runtime',
       runtimeId: 'grok',
       taskId: 'task-1',
       turnId: 'turn-1',
-      runtimeSessionId: 'runtime-session-1',
-      toolCallId: 'tool-1',
+      projectId: 'project-1',
+      environmentId: 'local:environment-1',
+      operationType: 'read-project',
+      risk: 'L0',
       title: '允许读取测试目录吗？',
-      options: [{ optionId: 'allow', name: '允许一次', kind: 'allow_once' }],
+      impact: '读取当前 Project 的有限元信息。',
+      targets: ['project: project-1'],
+      allowedScopes: ['once'],
+      expiresAt: timestamp,
       truncated: true
     }
 

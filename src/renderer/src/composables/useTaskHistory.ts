@@ -1,6 +1,7 @@
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import type {
   DeletionPreview,
+  PermissionAuditRecord,
   PersistedAgentEvent,
   ProjectSummary,
   RuntimeResumeSummary,
@@ -18,23 +19,27 @@ interface TaskHistoryState {
   openedTask: Ref<TaskHistoryDetail | null>
   openedTurns: Ref<TurnHistoryRecord[]>
   eventsByTurn: Ref<Record<string, PersistedAgentEvent[]>>
+  permissionAudits: Ref<PermissionAuditRecord[]>
   loading: Ref<boolean>
   errorMessage: Ref<string>
   deletionPreview: Ref<DeletionPreview | null>
   taskCursor: Ref<string | null>
   turnCursor: Ref<string | null>
   eventCursorByTurn: Ref<Record<string, number | null>>
+  permissionAuditCursor: Ref<string | null>
   loadingMoreTasks: Ref<boolean>
   loadingMoreTurns: Ref<boolean>
   loadingEventTurnIds: Ref<string[]>
+  loadingMorePermissionAudits: Ref<boolean>
   initialize(): Promise<void>
-  chooseProject(): Promise<ProjectSummary | null>
-  selectProject(projectId: string): Promise<void>
+  chooseProject(isCurrent?: () => boolean): Promise<ProjectSummary | null>
+  selectProject(projectId: string, isCurrent?: () => boolean): Promise<void>
   refreshTasks(): Promise<void>
   loadMoreTasks(): Promise<void>
-  openTask(taskId: string): Promise<void>
+  openTask(taskId: string): Promise<boolean>
   loadMoreTurns(): Promise<void>
   loadMoreEvents(turnId: string): Promise<void>
+  loadMorePermissionAudits(): Promise<void>
   hasMoreEvents(turnId: string): boolean
   resumeOpenedTask(): Promise<RuntimeResumeSummary>
   previewTaskDeletion(taskId: string): Promise<DeletionPreview>
@@ -52,16 +57,20 @@ export function useTaskHistory(): TaskHistoryState {
   const openedTask = ref<TaskHistoryDetail | null>(null)
   const openedTurns = ref<TurnHistoryRecord[]>([])
   const eventsByTurn = ref<Record<string, PersistedAgentEvent[]>>({})
+  const permissionAudits = ref<PermissionAuditRecord[]>([])
   const loading = ref(false)
   const errorMessage = ref('')
   const deletionPreview = ref<DeletionPreview | null>(null)
   const taskCursor = ref<string | null>(null)
   const turnCursor = ref<string | null>(null)
   const eventCursorByTurn = ref<Record<string, number | null>>({})
+  const permissionAuditCursor = ref<string | null>(null)
   const loadingMoreTasks = ref(false)
   const loadingMoreTurns = ref(false)
   const loadingEventTurnIds = ref<string[]>([])
+  const loadingMorePermissionAudits = ref(false)
   let projectRequestId = 0
+  let taskRequestId = 0
   const activeProject = computed(
     () => projects.value.find((project) => project.projectId === activeProjectId.value) ?? null
   )
@@ -72,27 +81,34 @@ export function useTaskHistory(): TaskHistoryState {
     if (preferred) await selectProject(preferred.projectId)
   }
 
-  async function chooseProject(): Promise<ProjectSummary | null> {
+  async function chooseProject(
+    isCurrent: () => boolean = () => true
+  ): Promise<ProjectSummary | null> {
     const project = unwrapDesktopIpcResult(await window.app.chooseProject())
-    if (!project) return null
+    if (!project || !isCurrent()) return null
     projects.value = [
       project,
       ...projects.value.filter((item) => item.projectId !== project.projectId)
     ]
-    await selectProject(project.projectId)
-    return project
+    await selectProject(project.projectId, isCurrent)
+    return isCurrent() ? project : null
   }
 
-  async function selectProject(projectId: string): Promise<void> {
+  async function selectProject(
+    projectId: string,
+    isCurrent: () => boolean = () => true
+  ): Promise<void> {
+    if (!isCurrent()) return
     const requestId = ++projectRequestId
     activeProjectId.value = projectId
-    openedTask.value = null
-    openedTurns.value = []
-    eventsByTurn.value = {}
-    turnCursor.value = null
-    eventCursorByTurn.value = {}
+    // Project 身份一变化就移除旧最近 Task，过渡期间不能让用户误操作上一 Project 的入口。
+    tasks.value = []
+    taskCursor.value = null
+    clearOpenedTaskState()
     const page = unwrapDesktopIpcResult(await window.task.list(projectId, undefined, 50))
-    if (requestId !== projectRequestId || activeProjectId.value !== projectId) return
+    if (!isCurrent() || requestId !== projectRequestId || activeProjectId.value !== projectId) {
+      return
+    }
     tasks.value = page.items
     taskCursor.value = page.nextCursor ?? null
   }
@@ -126,45 +142,73 @@ export function useTaskHistory(): TaskHistoryState {
     }
   }
 
-  async function openTask(taskId: string): Promise<void> {
+  async function openTask(taskId: string): Promise<boolean> {
+    const requestId = invalidateOpenedTaskRequests()
     loading.value = true
     errorMessage.value = ''
     try {
-      openedTask.value = unwrapDesktopIpcResult(await window.task.get(taskId))
-      const turnPage = unwrapDesktopIpcResult(await window.task.listTurns(taskId, undefined, 20))
+      const [detail, turnPage, auditPage] = await Promise.all([
+        window.task.get(taskId).then(unwrapDesktopIpcResult),
+        window.task.listTurns(taskId, undefined, 20).then(unwrapDesktopIpcResult),
+        window.task.listPermissionAudits(taskId, undefined, 50).then(unwrapDesktopIpcResult)
+      ])
+      const eventPages = await readEventPages(taskId, turnPage.items)
+      if (requestId !== taskRequestId) return false
+      openedTask.value = detail
       openedTurns.value = turnPage.items
+      permissionAudits.value = auditPage.items
       turnCursor.value = turnPage.nextCursor ?? null
-      await loadEventPages(taskId, turnPage.items, true)
+      permissionAuditCursor.value = auditPage.nextCursor ?? null
+      eventsByTurn.value = eventPages.events
+      eventCursorByTurn.value = eventPages.cursors
+      return true
     } catch (error) {
+      if (requestId !== taskRequestId) return false
       errorMessage.value = error instanceof Error ? error.message : String(error)
       throw error
     } finally {
-      loading.value = false
+      if (requestId === taskRequestId) loading.value = false
     }
   }
 
   async function loadMoreTurns(): Promise<void> {
     const taskId = openedTask.value?.taskId
     const cursor = turnCursor.value
-    if (!taskId || !cursor || loadingMoreTurns.value) return
+    const requestId = taskRequestId
+    if (!taskId || !cursor || loading.value || loadingMoreTurns.value) return
     loadingMoreTurns.value = true
     try {
       const page = unwrapDesktopIpcResult(await window.task.listTurns(taskId, cursor, 20))
+      if (!isCurrentOpenedTaskRequest(requestId, taskId)) return
+      const eventPages = await readEventPages(taskId, page.items)
+      if (!isCurrentOpenedTaskRequest(requestId, taskId)) return
       openedTurns.value = mergeUnique(openedTurns.value, page.items, (turn) => turn.turnId)
       turnCursor.value = page.nextCursor ?? null
-      await loadEventPages(taskId, page.items, false)
+      const nextEvents = { ...eventsByTurn.value }
+      const nextCursors = { ...eventCursorByTurn.value }
+      Object.assign(nextEvents, eventPages.events)
+      Object.assign(nextCursors, eventPages.cursors)
+      eventsByTurn.value = nextEvents
+      eventCursorByTurn.value = nextCursors
+    } catch (error) {
+      if (!isCurrentOpenedTaskRequest(requestId, taskId)) return
+      throw error
     } finally {
-      loadingMoreTurns.value = false
+      if (isCurrentOpenedTaskRequest(requestId, taskId)) loadingMoreTurns.value = false
     }
   }
 
   async function loadMoreEvents(turnId: string): Promise<void> {
     const taskId = openedTask.value?.taskId
     const cursor = eventCursorByTurn.value[turnId]
-    if (!taskId || cursor == null || loadingEventTurnIds.value.includes(turnId)) return
+    const requestId = taskRequestId
+    if (!taskId || cursor == null || loading.value || loadingEventTurnIds.value.includes(turnId)) {
+      return
+    }
     loadingEventTurnIds.value = [...loadingEventTurnIds.value, turnId]
     try {
       const page = unwrapDesktopIpcResult(await window.task.listEvents(taskId, turnId, cursor, 200))
+      if (!isCurrentOpenedTaskRequest(requestId, taskId)) return
       eventsByTurn.value = {
         ...eventsByTurn.value,
         [turnId]: mergeUnique(eventsByTurn.value[turnId] ?? [], page.items, (event) =>
@@ -175,13 +219,45 @@ export function useTaskHistory(): TaskHistoryState {
         ...eventCursorByTurn.value,
         [turnId]: parseSequenceCursor(page.nextCursor)
       }
+    } catch (error) {
+      if (!isCurrentOpenedTaskRequest(requestId, taskId)) return
+      throw error
     } finally {
-      loadingEventTurnIds.value = loadingEventTurnIds.value.filter((id) => id !== turnId)
+      if (isCurrentOpenedTaskRequest(requestId, taskId)) {
+        loadingEventTurnIds.value = loadingEventTurnIds.value.filter((id) => id !== turnId)
+      }
     }
   }
 
   function hasMoreEvents(turnId: string): boolean {
     return eventCursorByTurn.value[turnId] != null
+  }
+
+  async function loadMorePermissionAudits(): Promise<void> {
+    const taskId = openedTask.value?.taskId
+    const cursor = permissionAuditCursor.value
+    const requestId = taskRequestId
+    if (!taskId || !cursor || loading.value || loadingMorePermissionAudits.value) return
+    loadingMorePermissionAudits.value = true
+    try {
+      const page = unwrapDesktopIpcResult(
+        await window.task.listPermissionAudits(taskId, cursor, 50)
+      )
+      if (!isCurrentOpenedTaskRequest(requestId, taskId)) return
+      permissionAudits.value = mergeUnique(
+        permissionAudits.value,
+        page.items,
+        (audit) => audit.auditId
+      )
+      permissionAuditCursor.value = page.nextCursor ?? null
+    } catch (error) {
+      if (!isCurrentOpenedTaskRequest(requestId, taskId)) return
+      throw error
+    } finally {
+      if (isCurrentOpenedTaskRequest(requestId, taskId)) {
+        loadingMorePermissionAudits.value = false
+      }
+    }
   }
 
   async function resumeOpenedTask(): Promise<RuntimeResumeSummary> {
@@ -199,7 +275,9 @@ export function useTaskHistory(): TaskHistoryState {
   async function deleteTask(taskId: string, token: string): Promise<void> {
     unwrapDesktopIpcResult(await window.task.delete(taskId, token))
     tasks.value = tasks.value.filter((task) => task.taskId !== taskId)
-    if (openedTask.value?.taskId === taskId) openedTask.value = null
+    if (openedTask.value?.taskId === taskId) {
+      clearOpenedTaskState()
+    }
     deletionPreview.value = null
     await refreshTasks()
   }
@@ -227,20 +305,19 @@ export function useTaskHistory(): TaskHistoryState {
     if (activeProjectId.value === projectId) {
       tasks.value = []
       taskCursor.value = null
-      openedTask.value = null
-      openedTurns.value = []
-      eventsByTurn.value = {}
-      turnCursor.value = null
-      eventCursorByTurn.value = {}
+      clearOpenedTaskState()
     }
     deletionPreview.value = null
   }
 
-  async function loadEventPages(
+  /** 先在局部变量读取完整首屏，只有最新 openTask 请求才一次性提交响应式状态。 */
+  async function readEventPages(
     taskId: string,
-    turns: TurnHistoryRecord[],
-    replace: boolean
-  ): Promise<void> {
+    turns: TurnHistoryRecord[]
+  ): Promise<{
+    events: Record<string, PersistedAgentEvent[]>
+    cursors: Record<string, number | null>
+  }> {
     const entries = await Promise.all(
       turns.map(async (turn) => {
         const page = unwrapDesktopIpcResult(
@@ -249,25 +326,46 @@ export function useTaskHistory(): TaskHistoryState {
         return [turn.turnId, page] as const
       })
     )
-    const nextEvents = replace ? {} : { ...eventsByTurn.value }
-    const nextCursors = replace ? {} : { ...eventCursorByTurn.value }
-    for (const [turnId, page] of entries) {
-      nextEvents[turnId] = page.items
-      nextCursors[turnId] = parseSequenceCursor(page.nextCursor)
+    return {
+      events: Object.fromEntries(entries.map(([turnId, page]) => [turnId, page.items])),
+      cursors: Object.fromEntries(
+        entries.map(([turnId, page]) => [turnId, parseSequenceCursor(page.nextCursor)])
+      )
     }
-    eventsByTurn.value = nextEvents
-    eventCursorByTurn.value = nextCursors
   }
 
   function clearProjectSelection(): void {
     activeProjectId.value = ''
     tasks.value = []
     taskCursor.value = null
+    clearOpenedTaskState()
+  }
+
+  /** 让旧 Task 请求全部失效，并同步复位只属于该请求代际的加载状态。 */
+  function invalidateOpenedTaskRequests(): number {
+    taskRequestId += 1
+    loading.value = false
+    loadingMoreTurns.value = false
+    loadingEventTurnIds.value = []
+    loadingMorePermissionAudits.value = false
+    return taskRequestId
+  }
+
+  /** 清空当前 Task 历史；Project 切换或删除后，旧响应不得再写回新上下文。 */
+  function clearOpenedTaskState(): void {
+    invalidateOpenedTaskRequests()
     openedTask.value = null
     openedTurns.value = []
     eventsByTurn.value = {}
+    permissionAudits.value = []
     turnCursor.value = null
     eventCursorByTurn.value = {}
+    permissionAuditCursor.value = null
+    errorMessage.value = ''
+  }
+
+  function isCurrentOpenedTaskRequest(requestId: number, taskId: string): boolean {
+    return requestId === taskRequestId && openedTask.value?.taskId === taskId
   }
 
   return {
@@ -278,15 +376,18 @@ export function useTaskHistory(): TaskHistoryState {
     openedTask,
     openedTurns,
     eventsByTurn,
+    permissionAudits,
     loading,
     errorMessage,
     deletionPreview,
     taskCursor,
     turnCursor,
     eventCursorByTurn,
+    permissionAuditCursor,
     loadingMoreTasks,
     loadingMoreTurns,
     loadingEventTurnIds,
+    loadingMorePermissionAudits,
     initialize,
     chooseProject,
     selectProject,
@@ -295,6 +396,7 @@ export function useTaskHistory(): TaskHistoryState {
     openTask,
     loadMoreTurns,
     loadMoreEvents,
+    loadMorePermissionAudits,
     hasMoreEvents,
     resumeOpenedTask,
     previewTaskDeletion,

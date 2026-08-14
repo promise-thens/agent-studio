@@ -36,10 +36,15 @@ describe('窄 Preload API', () => {
     await agent.startTurn('task-1', '执行测试')
     await agent.cancelTurn('task-1')
     await agent.getTaskRuntimeState('task-1')
-    await agent.respondPermission('request-1')
-    await agent.respondPermission('request-2', 'allow-once')
+    await agent.respondPermission({
+      approvalId: 'request-1',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      decision: 'deny'
+    })
     await app.chooseProject()
     await task.list('project-1')
+    await task.listPermissionAudits('task-1')
     await task.resume('task-1')
 
     expect(ipcRenderer.invoke.mock.calls).toEqual([
@@ -50,10 +55,18 @@ describe('窄 Preload API', () => {
       [AGENT_INVOKE_CHANNELS.startTurn, { taskId: 'task-1', prompt: '执行测试' }],
       [AGENT_INVOKE_CHANNELS.cancelTurn, { taskId: 'task-1' }],
       [AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId: 'task-1' }],
-      [AGENT_INVOKE_CHANNELS.respondPermission, { requestId: 'request-1' }],
-      [AGENT_INVOKE_CHANNELS.respondPermission, { requestId: 'request-2', optionId: 'allow-once' }],
+      [
+        AGENT_INVOKE_CHANNELS.respondPermission,
+        {
+          approvalId: 'request-1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          decision: 'deny'
+        }
+      ],
       [APP_INVOKE_CHANNELS.chooseProject],
       [TASK_INVOKE_CHANNELS.list, { projectId: 'project-1' }],
+      [TASK_INVOKE_CHANNELS.listPermissionAudits, { taskId: 'task-1' }],
       [TASK_INVOKE_CHANNELS.resume, { taskId: 'task-1' }]
     ])
   })
@@ -78,19 +91,143 @@ describe('窄 Preload API', () => {
     )
   })
 
-  it('三种推送各自绑定唯一固定 channel', () => {
+  it('四种推送各自绑定唯一固定 channel', () => {
     const ipcRenderer = createIpcRenderer()
     const agent = createAgentDesktopApi(ipcRenderer)
 
     agent.onStatus(vi.fn())
     agent.onEvent(vi.fn())
     agent.onPermission(vi.fn())
+    agent.onPermissionCancelled(vi.fn())
 
     expect(ipcRenderer.on.mock.calls.map(([channel]) => channel)).toEqual([
       AGENT_PUSH_CHANNELS.status,
       AGENT_PUSH_CHANNELS.event,
-      AGENT_PUSH_CHANNELS.permission
+      AGENT_PUSH_CHANNELS.permission,
+      AGENT_PUSH_CHANNELS.permissionCancelled
     ])
+  })
+
+  it('权限推送只转发白名单 DTO，丢弃 Runtime 私有字段和原始负载', () => {
+    const ipcRenderer = createIpcRenderer()
+    const agent = createAgentDesktopApi(ipcRenderer)
+    const permissionListener = vi.fn()
+    const cancellationListener = vi.fn()
+    const cleanupPermission = agent.onPermission(permissionListener)
+    const cleanupCancellation = agent.onPermissionCancelled(cancellationListener)
+    const permissionHandler = ipcRenderer.on.mock.calls[0]?.[1]
+    const cancellationHandler = ipcRenderer.on.mock.calls[1]?.[1]
+
+    permissionHandler?.(
+      { hidden: 'electron-event' },
+      {
+        approvalId: 'approval-1',
+        initiator: 'runtime',
+        runtimeId: 'grok',
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        projectId: 'project-1',
+        environmentId: 'local:test',
+        operationType: 'write-file',
+        risk: 'L1',
+        title: '修改文件',
+        impact: '会修改 Project 文件。',
+        targets: ['path: src/index.ts'],
+        allowedScopes: ['once', 'task'],
+        expiresAt: '2026-08-13T12:00:00.000Z',
+        truncated: true,
+        requestId: 'runtime-private',
+        runtimeSessionId: 'runtime-session-private',
+        toolCallId: 'tool-private',
+        parameterFingerprint: 'private-fingerprint',
+        executionSupported: true,
+        executionRoot: '/private/root',
+        optionId: 'allow-once-private',
+        rawInput: { apiKey: 'fake-secret' }
+      }
+    )
+    cancellationHandler?.(
+      { hidden: 'electron-event' },
+      {
+        approvalId: 'approval-1',
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        reason: 'cancelled',
+        requestId: 'runtime-private',
+        rawOutput: 'fake-secret'
+      }
+    )
+
+    expect(permissionListener).toHaveBeenCalledWith({
+      approvalId: 'approval-1',
+      initiator: 'runtime',
+      runtimeId: 'grok',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      projectId: 'project-1',
+      environmentId: 'local:test',
+      operationType: 'write-file',
+      risk: 'L1',
+      title: '修改文件',
+      impact: '会修改 Project 文件。',
+      targets: ['path: src/index.ts'],
+      allowedScopes: ['once', 'task'],
+      expiresAt: '2026-08-13T12:00:00.000Z',
+      truncated: true
+    })
+    expect(cancellationListener).toHaveBeenCalledWith({
+      approvalId: 'approval-1',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      reason: 'cancelled'
+    })
+    expect(JSON.stringify(permissionListener.mock.calls)).not.toContain('fake-secret')
+    expect(JSON.stringify(permissionListener.mock.calls)).not.toContain('runtime-private')
+
+    cleanupPermission()
+    cleanupPermission()
+    cleanupCancellation()
+    cleanupCancellation()
+    expect(ipcRenderer.removeListener.mock.calls).toEqual([
+      [AGENT_PUSH_CHANNELS.permission, permissionHandler],
+      [AGENT_PUSH_CHANNELS.permissionCancelled, cancellationHandler]
+    ])
+  })
+
+  it('权限推送身份、枚举或大小越界时整条拒绝', () => {
+    const ipcRenderer = createIpcRenderer()
+    const agent = createAgentDesktopApi(ipcRenderer)
+    const permissionListener = vi.fn()
+    const cancellationListener = vi.fn()
+    agent.onPermission(permissionListener)
+    agent.onPermissionCancelled(cancellationListener)
+    const permissionHandler = ipcRenderer.on.mock.calls[0]?.[1]
+    const cancellationHandler = ipcRenderer.on.mock.calls[1]?.[1]
+    const valid = {
+      approvalId: 'approval-1',
+      initiator: 'runtime',
+      runtimeId: 'grok',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      projectId: 'project-1',
+      environmentId: 'local:test',
+      operationType: 'write-file',
+      risk: 'L1',
+      title: '修改文件',
+      impact: '会修改 Project 文件。',
+      targets: ['path: src/index.ts'],
+      allowedScopes: ['once'],
+      expiresAt: '2026-08-13T12:00:00.000Z'
+    }
+
+    permissionHandler?.({}, { ...valid, risk: 'L9' })
+    permissionHandler?.({}, { ...valid, targets: Array.from({ length: 33 }, () => 'path: x') })
+    permissionHandler?.({}, { ...valid, approvalId: 'x'.repeat(4 * 1024 + 1) })
+    permissionHandler?.({}, { ...valid, allowedScopes: ['once', 'forever'] })
+    cancellationHandler?.({}, { approvalId: 'a', taskId: 't', turnId: 'u', reason: 'expired' })
+
+    expect(permissionListener).not.toHaveBeenCalled()
+    expect(cancellationListener).not.toHaveBeenCalled()
   })
 
   it('Provider API 保持原始 channel 和参数契约', async () => {

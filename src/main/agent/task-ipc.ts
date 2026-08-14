@@ -1,5 +1,6 @@
 import type {
   DeletionPreview,
+  PermissionAuditPage,
   PersistedAgentEventPage,
   RuntimeResumeSummary,
   TaskHistoryDetail,
@@ -28,6 +29,11 @@ export interface TaskHistoryIpcRuntime {
     afterSequence?: number,
     limit?: number
   ): Promise<PersistedAgentEventPage>
+  listPermissionAudits(
+    taskId: string,
+    cursor?: string,
+    limit?: number
+  ): Promise<PermissionAuditPage>
   resumeTask(taskId: string): Promise<RuntimeResumeSummary>
   previewTaskDeletion(taskId: string): Promise<DeletionPreview>
   deleteTask(taskId: string, token: string): Promise<void>
@@ -124,6 +130,14 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
       readText(request, 'taskId')!,
       readText(request, 'turnId')!,
       readInteger(request, 'afterSequence'),
+      readInteger(request, 'limit')
+    )
+  })
+  register(TASK_INVOKE_CHANNELS.listPermissionAudits, (args) => {
+    const request = readRequest(args, ['taskId', 'cursor', 'limit'])
+    return requireHistory(dependencies.getHistory).listPermissionAudits(
+      readText(request, 'taskId')!,
+      readText(request, 'cursor', true),
       readInteger(request, 'limit')
     )
   })

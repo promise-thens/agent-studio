@@ -32,6 +32,7 @@ function createFixture(historyAvailable = true): {
     })),
     listTurns: vi.fn(async () => ({ items: [] })),
     listEvents: vi.fn(async () => ({ items: [] })),
+    listPermissionAudits: vi.fn(async () => ({ items: [] })),
     resumeTask: vi.fn(async () => ({ resumed: false, message: '不可恢复' })),
     previewTaskDeletion: vi.fn(async () => ({
       targetType: 'task' as const,
@@ -66,7 +67,7 @@ function createFixture(historyAvailable = true): {
 }
 
 describe('Task 历史 IPC', () => {
-  it('只注册固定七个 channel，并先验证 Renderer 来源', async () => {
+  it('只注册固定 Task channel，并先验证 Renderer 来源', async () => {
     const fixture = createFixture()
     expect([...fixture.handlers.keys()]).toEqual(Object.values(TASK_INVOKE_CHANNELS))
     fixture.assertTrustedSender.mockImplementation(() => {
@@ -112,5 +113,17 @@ describe('Task 历史 IPC', () => {
       })
     ).toEqual({ ok: true, value: null })
     expect(fixture.history.deleteTask).toHaveBeenCalledWith('task-1', 'token-1')
+  })
+
+  it('权限审计查询只接受 Task ID、cursor 和 limit', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.listPermissionAudits, {
+        taskId: 'task-1',
+        cursor: 'audit-1',
+        limit: 20
+      })
+    ).toEqual({ ok: true, value: { items: [] } })
+    expect(fixture.history.listPermissionAudits).toHaveBeenCalledWith('task-1', 'audit-1', 20)
   })
 })

@@ -86,6 +86,29 @@ interface DeleteTokenRecord {
   expiresAtMs: number
 }
 
+type DeletionReservationId = symbol
+
+type TaskMutationOptions = {
+  deletionReservationId?: DeletionReservationId
+}
+
+type ProjectMutationOptions = {
+  deletionReservationId?: DeletionReservationId
+}
+
+export interface TaskHistoryDeletionPreparation {
+  commit(): Promise<void>
+  /** 返回 true 表示物理提交点尚未越过，外层可以同步回滚 Broker 冻结。 */
+  rollback(): boolean
+}
+
+class TaskDeletionCommitError extends Error {
+  constructor(readonly rollbackSafe: boolean) {
+    super(rollbackSafe ? '删除提交失败，可安全重试。' : '删除结果无法确认，已保持失败关闭。')
+    this.name = 'TaskDeletionCommitError'
+  }
+}
+
 export type TaskStoreErrorCode =
   | 'history-not-found'
   | 'history-corrupt'
@@ -112,6 +135,10 @@ export interface TaskStoreOptions {
   createId?: () => string
 }
 
+export interface TaskHistoryMutationLease {
+  release(): void
+}
+
 /**
  * 持久化 Project 下的 Task、Turn 与事件块。
  * 每个 Store mutation 串行化，只有磁盘写入成功后才更新内存索引。
@@ -127,7 +154,14 @@ export class TaskStore {
     { projectId: string; schemaVersion: number }
   >()
   private readonly taskQueues = new Map<string, Promise<void>>()
+  private readonly projectQueues = new Map<string, Promise<void>>()
   private readonly deleteTokens = new Map<string, DeleteTokenRecord>()
+  private readonly taskDeletionReservations = new Map<string, DeletionReservationId>()
+  private readonly projectDeletionReservations = new Map<string, DeletionReservationId>()
+  private readonly taskHistoryMutationReservations = new Map<
+    DeletionReservationId,
+    { taskId: string; projectId: string }
+  >()
 
   constructor(options: TaskStoreOptions) {
     this.registry = options.projectRegistry
@@ -165,30 +199,34 @@ export class TaskStore {
     session: AgentRuntimeSessionRef
     capabilitySnapshot: AgentRuntimeCapabilitySnapshot
   }): Promise<TaskRecordV1> {
-    await this.ensureTaskCapacity()
-    const observedAt = this.now()
-    const task: TaskRecordV1 = {
-      schemaVersion: TASK_SCHEMA_VERSION,
-      taskId: input.taskId,
-      projectId: input.projectId,
-      runtimeId: input.runtimeId,
-      environment: { kind: 'local', projectId: input.projectId, rootSnapshot: input.root },
-      runtimeSession: {
-        ...input.session,
-        capabilityEvidence: toCapabilityEvidence(input.capabilitySnapshot),
-        lastConfirmedAt: observedAt
-      },
-      permissionPolicy: { kind: 'legacy-runtime' },
-      title: '新任务',
-      state: 'pending',
-      turnCount: 0,
-      createdAt: observedAt,
-      updatedAt: observedAt,
-      revision: 1
-    }
-    await this.writer.write(this.taskPath(task), task)
-    this.tasks.set(task.taskId, task)
-    return structuredClone(task)
+    return this.enqueueProject(input.projectId, async () => {
+      this.assertProjectMutationAllowed(input.projectId)
+      await this.ensureTaskCapacity()
+      this.assertProjectMutationAllowed(input.projectId)
+      const observedAt = this.now()
+      const task: TaskRecordV1 = {
+        schemaVersion: TASK_SCHEMA_VERSION,
+        taskId: input.taskId,
+        projectId: input.projectId,
+        runtimeId: input.runtimeId,
+        environment: { kind: 'local', projectId: input.projectId, rootSnapshot: input.root },
+        runtimeSession: {
+          ...input.session,
+          capabilityEvidence: toCapabilityEvidence(input.capabilitySnapshot),
+          lastConfirmedAt: observedAt
+        },
+        permissionPolicy: { kind: 'legacy-runtime' },
+        title: '新任务',
+        state: 'pending',
+        turnCount: 0,
+        createdAt: observedAt,
+        updatedAt: observedAt,
+        revision: 1
+      }
+      await this.writer.write(this.taskPath(task), task)
+      this.tasks.set(task.taskId, task)
+      return structuredClone(task)
+    })
   }
 
   async createTurn(input: {
@@ -202,7 +240,10 @@ export class TaskStore {
       if (task.turnCount >= MAX_TURNS_PER_TASK) {
         throw new TaskStoreError('task-turn-limit-reached', '当前 Task 已达到 100 个 Turn 上限。')
       }
-      await this.ensureHistoryCapacity(Buffer.byteLength(input.promptDisplayText, 'utf8'))
+      await this.ensureHistoryCapacity(
+        Buffer.byteLength(input.promptDisplayText, 'utf8'),
+        input.taskId
+      )
       const observedAt = this.now()
       const turn: TurnRecordV1 = {
         schemaVersion: TURN_SCHEMA_VERSION,
@@ -422,14 +463,61 @@ export class TaskStore {
     return this.createDeletionPreview('task', taskId, task.revision, this.taskDirectory(task))
   }
 
-  async deleteTask(taskId: string, token: string): Promise<void> {
+  /**
+   * 先原子消费删除 token 并冻结其 revision，Broker 只有在此步骤成功后才能取消审批。
+   * rollback 会恢复仍在有效期内的同一 token，便于冻结或磁盘提交失败后安全重试。
+   */
+  prepareTaskDeletion(taskId: string, token: string): TaskHistoryDeletionPreparation {
     const task = this.requireTask(taskId)
     if (task.activeTurnId || task.state === 'running' || task.state === 'waiting-permission') {
       throw new TaskStoreError('invalid-state', '活动 Task 不能删除历史。')
     }
-    this.consumeDeleteToken(token, 'task', taskId, task.revision)
-    await this.moveToDeletingAndRemove(this.taskDirectory(task), `task-${taskId}`)
-    this.tasks.delete(taskId)
+    if (
+      this.taskDeletionReservations.has(taskId) ||
+      this.projectDeletionReservations.has(task.projectId) ||
+      this.hasTaskHistoryMutation(taskId)
+    ) {
+      throw new TaskStoreError('invalid-state', 'Task 历史正在删除，请稍后重试。')
+    }
+    const consumed = this.consumeDeleteToken(token, 'task', taskId, task.revision)
+    const reservationId = Symbol(taskId)
+    this.taskDeletionReservations.set(taskId, reservationId)
+    return this.createDeletionPreparation(
+      consumed,
+      async () =>
+        this.enqueueTask(
+          taskId,
+          async () => {
+            const current = this.requireTask(taskId)
+            if (
+              current.revision !== consumed.revision ||
+              current.activeTurnId ||
+              current.state === 'running' ||
+              current.state === 'waiting-permission'
+            ) {
+              throw new TaskStoreError('invalid-state', 'Task 状态已变化，请重新预览删除影响。')
+            }
+            await this.moveToDeletingAndRemove(this.taskDirectory(current), `task-${taskId}`)
+            this.tasks.delete(taskId)
+          },
+          { deletionReservationId: reservationId }
+        ),
+      () => {
+        if (this.taskDeletionReservations.get(taskId) === reservationId) {
+          this.taskDeletionReservations.delete(taskId)
+        }
+      }
+    )
+  }
+
+  async deleteTask(taskId: string, token: string): Promise<void> {
+    const preparation = this.prepareTaskDeletion(taskId, token)
+    try {
+      await preparation.commit()
+    } catch (error) {
+      preparation.rollback()
+      throw error
+    }
   }
 
   async previewProjectDeletion(projectId: string): Promise<DeletionPreview> {
@@ -442,18 +530,115 @@ export class TaskStore {
     )
   }
 
-  async deleteProjectHistory(projectId: string, token: string): Promise<void> {
+  /** Project 历史删除同样先验证 token/revision，再允许外层获取权限冻结 lease。 */
+  prepareProjectHistoryDeletion(projectId: string, token: string): TaskHistoryDeletionPreparation {
     const project = this.registry.getRecord(projectId)
     if (
-      [...this.tasks.values()].some((task) => task.projectId === projectId && task.activeTurnId)
+      this.projectDeletionReservations.has(projectId) ||
+      [...this.tasks.values()].some(
+        (task) => task.projectId === projectId && this.taskDeletionReservations.has(task.taskId)
+      ) ||
+      this.hasProjectHistoryMutation(projectId)
+    ) {
+      throw new TaskStoreError('invalid-state', 'Project 历史正在删除，请稍后重试。')
+    }
+    if (
+      [...this.tasks.values()].some(
+        (task) =>
+          task.projectId === projectId &&
+          (task.activeTurnId || task.state === 'running' || task.state === 'waiting-permission')
+      )
     ) {
       throw new TaskStoreError('invalid-state', 'Project 中仍有活动 Task，不能删除历史。')
     }
-    this.consumeDeleteToken(token, 'project-history', projectId, project.revision)
-    const tasksPath = join(this.registry.getProjectDirectory(projectId), 'tasks')
-    await this.moveToDeletingAndRemove(tasksPath, `project-${projectId}`)
-    for (const [taskId, task] of this.tasks)
-      if (task.projectId === projectId) this.tasks.delete(taskId)
+    const consumed = this.consumeDeleteToken(token, 'project-history', projectId, project.revision)
+    const reservationId = Symbol(projectId)
+    this.projectDeletionReservations.set(projectId, reservationId)
+    return this.createDeletionPreparation(
+      consumed,
+      async () =>
+        this.enqueueProject(
+          projectId,
+          async () => {
+            const taskIds = [...this.tasks.values()]
+              .filter((task) => task.projectId === projectId)
+              .map((task) => task.taskId)
+            await Promise.all(
+              taskIds.map((taskId) =>
+                this.enqueueTask(taskId, async () => undefined, {
+                  deletionReservationId: reservationId
+                })
+              )
+            )
+
+            const currentProject = this.registry.getRecord(projectId)
+            if (currentProject.revision !== consumed.revision) {
+              throw new TaskStoreError('invalid-state', 'Project 状态已变化，请重新预览删除影响。')
+            }
+            if (
+              [...this.tasks.values()].some(
+                (task) =>
+                  task.projectId === projectId &&
+                  (task.activeTurnId ||
+                    task.state === 'running' ||
+                    task.state === 'waiting-permission')
+              )
+            ) {
+              throw new TaskStoreError('invalid-state', 'Project 中仍有活动 Task，不能删除历史。')
+            }
+            const tasksPath = join(this.registry.getProjectDirectory(projectId), 'tasks')
+            await this.moveToDeletingAndRemove(tasksPath, `project-${projectId}`)
+            for (const [taskId, task] of this.tasks) {
+              if (task.projectId === projectId) this.tasks.delete(taskId)
+            }
+          },
+          { deletionReservationId: reservationId }
+        ),
+      () => {
+        if (this.projectDeletionReservations.get(projectId) === reservationId) {
+          this.projectDeletionReservations.delete(projectId)
+        }
+      }
+    )
+  }
+
+  async deleteProjectHistory(projectId: string, token: string): Promise<void> {
+    const preparation = this.prepareProjectHistoryDeletion(projectId, token)
+    try {
+      await preparation.commit()
+    } catch (error) {
+      preparation.rollback()
+      throw error
+    }
+  }
+
+  /** 权限审计等同属历史目录的写入，必须主动复用 256 MiB 全局容量门禁。 */
+  async ensureAdditionalHistoryCapacity(taskId: string, projectedBytes: number): Promise<void> {
+    if (!Number.isSafeInteger(projectedBytes) || projectedBytes < 0) {
+      throw new TaskStoreError('invalid-state', '历史容量增量无效。')
+    }
+    const task = this.requireTask(taskId)
+    this.assertTaskMutationAllowed(taskId, task.projectId)
+    await this.ensureHistoryCapacity(projectedBytes, taskId)
+  }
+
+  /**
+   * 为独立权限审计等 Task 关联历史写入登记短期 reservation。
+   * 删除准备会拒绝已有 reservation，并在 reservation 建立后阻止新的外部历史写入。
+   */
+  beginTaskHistoryMutation(taskId: string): TaskHistoryMutationLease {
+    const task = this.requireTask(taskId)
+    this.assertTaskMutationAllowed(taskId, task.projectId)
+    const reservationId = Symbol(`history-${taskId}`)
+    this.taskHistoryMutationReservations.set(reservationId, {
+      taskId,
+      projectId: task.projectId
+    })
+    return {
+      release: () => {
+        this.taskHistoryMutationReservations.delete(reservationId)
+      }
+    }
   }
 
   private async scanProject(projectId: string): Promise<void> {
@@ -605,10 +790,13 @@ export class TaskStore {
     }
   }
 
-  private async ensureHistoryCapacity(projectedBytes: number): Promise<void> {
+  private async ensureHistoryCapacity(
+    projectedBytes: number,
+    protectedTaskId?: string
+  ): Promise<void> {
     let total = await directoryUsage(this.registry.historyRoot)
     while (total + projectedBytes > MAX_HISTORY_BYTES) {
-      const removed = await this.evictOldestTerminalTask()
+      const removed = await this.evictOldestTerminalTask(protectedTaskId)
       if (!removed) {
         throw new TaskStoreError('history-capacity-exceeded', '历史容量已达到 256 MiB 上限。')
       }
@@ -616,18 +804,55 @@ export class TaskStore {
     }
   }
 
-  private async evictOldestTerminalTask(): Promise<boolean> {
-    const candidate = [...this.tasks.values()]
+  private async evictOldestTerminalTask(protectedTaskId?: string): Promise<boolean> {
+    const candidates = [...this.tasks.values()]
       .filter(
         (task) =>
+          task.taskId !== protectedTaskId &&
+          !this.taskDeletionReservations.has(task.taskId) &&
+          !this.projectDeletionReservations.has(task.projectId) &&
+          !this.hasTaskHistoryMutation(task.taskId) &&
           !task.activeTurnId &&
           ['completed', 'failed', 'cancelled', 'interrupted'].includes(task.state)
       )
-      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))[0]
-    if (!candidate) return false
-    await this.moveToDeletingAndRemove(this.taskDirectory(candidate), `evicted-${candidate.taskId}`)
-    this.tasks.delete(candidate.taskId)
-    return true
+      .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt))
+    for (const candidate of candidates) {
+      // 正在写入的 Task 不参与本轮淘汰，避免跨 Task 队列互等形成死锁。
+      if (this.taskQueues.has(candidate.taskId)) continue
+      const reservationId = Symbol(`evict-${candidate.taskId}`)
+      this.taskDeletionReservations.set(candidate.taskId, reservationId)
+      try {
+        const removed = await this.enqueueTask(
+          candidate.taskId,
+          async () => {
+            const current = this.tasks.get(candidate.taskId)
+            if (
+              !current ||
+              current.taskId === protectedTaskId ||
+              this.projectDeletionReservations.has(current.projectId) ||
+              this.hasTaskHistoryMutation(current.taskId) ||
+              current.activeTurnId ||
+              !['completed', 'failed', 'cancelled', 'interrupted'].includes(current.state)
+            ) {
+              return false
+            }
+            await this.moveToDeletingAndRemove(
+              this.taskDirectory(current),
+              `evicted-${current.taskId}`
+            )
+            this.tasks.delete(current.taskId)
+            return true
+          },
+          { deletionReservationId: reservationId }
+        )
+        if (removed) return true
+      } finally {
+        if (this.taskDeletionReservations.get(candidate.taskId) === reservationId) {
+          this.taskDeletionReservations.delete(candidate.taskId)
+        }
+      }
+    }
+    return false
   }
 
   private async createDeletionPreview(
@@ -663,7 +888,7 @@ export class TaskStore {
     targetType: DeletionPreview['targetType'],
     targetId: string,
     revision: number
-  ): void {
+  ): DeleteTokenRecord & { token: string } {
     const record = this.deleteTokens.get(token)
     this.deleteTokens.delete(token)
     if (
@@ -675,6 +900,58 @@ export class TaskStore {
     ) {
       throw new TaskStoreError('deletion-token-invalid', '删除确认已过期，请重新预览影响。')
     }
+    return { ...record, token }
+  }
+
+  /** 删除准备只允许提交或回滚一次，避免同一 token 被重复恢复或重复删除。 */
+  private createDeletionPreparation(
+    consumed: DeleteTokenRecord & { token: string },
+    commitDeletion: () => Promise<void>,
+    releaseReservation: () => void
+  ): TaskHistoryDeletionPreparation {
+    let state: 'prepared' | 'committing' | 'committed' | 'failed-closed' | 'rolled-back' =
+      'prepared'
+    let commitPromise: Promise<void> | undefined
+    return {
+      commit: async () => {
+        if (state === 'committed') return
+        if (state === 'rolled-back') {
+          throw new TaskStoreError('invalid-state', '删除准备已回滚。')
+        }
+        if (commitPromise) return commitPromise
+        state = 'committing'
+        commitPromise = commitDeletion()
+          .then(() => {
+            state = 'committed'
+            releaseReservation()
+          })
+          .catch((error) => {
+            if (error instanceof TaskDeletionCommitError && !error.rollbackSafe) {
+              state = 'failed-closed'
+            } else {
+              state = 'prepared'
+              commitPromise = undefined
+            }
+            throw error
+          })
+        return commitPromise
+      },
+      rollback: () => {
+        if (state === 'rolled-back') return true
+        if (state !== 'prepared') return false
+        state = 'rolled-back'
+        releaseReservation()
+        if (consumed.expiresAtMs >= Date.now() && !this.deleteTokens.has(consumed.token)) {
+          this.deleteTokens.set(consumed.token, {
+            targetType: consumed.targetType,
+            targetId: consumed.targetId,
+            revision: consumed.revision,
+            expiresAtMs: consumed.expiresAtMs
+          })
+        }
+        return true
+      }
+    }
   }
 
   private async moveToDeletingAndRemove(source: string, label: string): Promise<void> {
@@ -684,8 +961,20 @@ export class TaskStore {
     try {
       await this.writer.renameDurably(source, target)
     } catch (error) {
-      if (isFileNotFound(error)) return
-      throw error
+      let sourceExists: boolean
+      let targetExists: boolean
+      try {
+        ;[sourceExists, targetExists] = await Promise.all([pathExists(source), pathExists(target)])
+      } catch {
+        throw new TaskDeletionCommitError(false)
+      }
+      if (!sourceExists && targetExists) {
+        // rename 已完成但目录同步失败时仍视为不可逆提交，禁止上层恢复删除 token。
+      } else if (isFileNotFound(error)) {
+        return
+      } else {
+        throw new TaskDeletionCommitError(sourceExists)
+      }
     }
     // rename 是删除提交点；后续清理失败时目标保留在 deleting，启动时继续重试。
     await this.writer.removeDurably(target).catch(() => undefined)
@@ -743,12 +1032,20 @@ export class TaskStore {
     return join(this.eventsDirectory(task, turnId), `${String(index).padStart(6, '0')}.json`)
   }
 
-  private async enqueueTask<T>(taskId: string, operation: () => Promise<T>): Promise<T> {
+  private async enqueueTask<T>(
+    taskId: string,
+    operation: () => Promise<T>,
+    options: TaskMutationOptions = {}
+  ): Promise<T> {
+    const task = this.tasks.get(taskId)
+    this.assertTaskMutationAllowed(taskId, task?.projectId, options.deletionReservationId)
     const previous = this.taskQueues.get(taskId) ?? Promise.resolve()
     let result: T
     const current = previous
       .catch(() => undefined)
       .then(async () => {
+        const task = this.tasks.get(taskId)
+        this.assertTaskMutationAllowed(taskId, task?.projectId, options.deletionReservationId)
         result = await operation()
       })
     this.taskQueues.set(taskId, current)
@@ -758,6 +1055,69 @@ export class TaskStore {
     } finally {
       if (this.taskQueues.get(taskId) === current) this.taskQueues.delete(taskId)
     }
+  }
+
+  private async enqueueProject<T>(
+    projectId: string,
+    operation: () => Promise<T>,
+    options: ProjectMutationOptions = {}
+  ): Promise<T> {
+    this.assertProjectMutationAllowed(projectId, options.deletionReservationId)
+    const previous = this.projectQueues.get(projectId) ?? Promise.resolve()
+    let result: T
+    const current = previous
+      .catch(() => undefined)
+      .then(async () => {
+        this.assertProjectMutationAllowed(projectId, options.deletionReservationId)
+        result = await operation()
+      })
+    this.projectQueues.set(projectId, current)
+    try {
+      await current
+      return result!
+    } finally {
+      if (this.projectQueues.get(projectId) === current) this.projectQueues.delete(projectId)
+    }
+  }
+
+  /** 删除 reservation 存在时，只有持有同一 leaseId 的删除提交可以进入写队列。 */
+  private assertTaskMutationAllowed(
+    taskId: string,
+    projectId?: string,
+    deletionReservationId?: DeletionReservationId
+  ): void {
+    const taskReservation = this.taskDeletionReservations.get(taskId)
+    const projectReservation = projectId
+      ? this.projectDeletionReservations.get(projectId)
+      : undefined
+    if (
+      (taskReservation && taskReservation !== deletionReservationId) ||
+      (projectReservation && projectReservation !== deletionReservationId)
+    ) {
+      throw new TaskStoreError('invalid-state', 'Task 历史正在删除，不能继续写入。')
+    }
+  }
+
+  private assertProjectMutationAllowed(
+    projectId: string,
+    deletionReservationId?: DeletionReservationId
+  ): void {
+    const reservation = this.projectDeletionReservations.get(projectId)
+    if (reservation && reservation !== deletionReservationId) {
+      throw new TaskStoreError('invalid-state', 'Project 历史正在删除，不能创建新 Task。')
+    }
+  }
+
+  private hasTaskHistoryMutation(taskId: string): boolean {
+    return [...this.taskHistoryMutationReservations.values()].some(
+      (reservation) => reservation.taskId === taskId
+    )
+  }
+
+  private hasProjectHistoryMutation(projectId: string): boolean {
+    return [...this.taskHistoryMutationReservations.values()].some(
+      (reservation) => reservation.projectId === projectId
+    )
   }
 
   /** 隔离仅保存有限原因枚举；Runtime 原始错误和历史内容不会复制到说明文件。 */
@@ -979,6 +1339,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isFileNotFound(error: unknown): boolean {
   return isRecord(error) && error.code === 'ENOENT'
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await fs.stat(path)
+    return true
+  } catch (error) {
+    if (isFileNotFound(error)) return false
+    throw error
+  }
 }
 
 async function directoryUsage(path: string): Promise<number> {

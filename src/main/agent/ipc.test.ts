@@ -12,6 +12,12 @@ import { AgentServiceError } from './agent-service'
 import { registerAgentIpcHandlers, type AgentIpcRuntime } from './ipc'
 
 const event = {} as TrustedIpcInvokeEvent
+const validPermissionResponse = {
+  approvalId: 'approval-1',
+  taskId: 'task-1',
+  turnId: 'turn-1',
+  decision: 'deny'
+} as const
 
 function createFixture(initialStatus?: AgentRuntimeStatus): {
   handlers: Map<string, DesktopIpcHandler>
@@ -56,7 +62,7 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
     startTurn: vi.fn(async () => turn),
     cancelTurn: vi.fn(async () => undefined),
     getTaskRuntimeState: vi.fn(() => task),
-    respondPermission: vi.fn()
+    respondPermission: vi.fn(async () => undefined)
   }
   const assertTrustedSender = vi.fn()
   registerAgentIpcHandlers({
@@ -199,7 +205,7 @@ describe('Agent IPC Handler', () => {
     ).toMatchObject({ ok: true, value: { outcome: 'failed' } })
   })
 
-  it('无返回值操作统一返回 null，并保留权限幂等委托', async () => {
+  it('无返回值操作统一返回 null', async () => {
     const fixture = createFixture()
 
     expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.cancelTurn, { taskId: 'task-1' })).toEqual({
@@ -209,13 +215,35 @@ describe('Agent IPC Handler', () => {
     expect(
       await fixture.invoke(AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId: 'task-1' })
     ).toMatchObject({ ok: true, value: { taskId: 'task-1' } })
-    expect(
-      await fixture.invoke(AGENT_INVOKE_CHANNELS.respondPermission, {
-        requestId: 'request-1',
-        optionId: 'allow-once'
+  })
+
+  it.each(['allow-once', 'allow-task', 'deny'] as const)(
+    '权限响应接受 %s 产品级决策并完整委托给 Service',
+    async (decision) => {
+      const fixture = createFixture()
+      const request = { ...validPermissionResponse, decision }
+
+      expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.respondPermission, request)).toEqual({
+        ok: true,
+        value: null
       })
-    ).toEqual({ ok: true, value: null })
-    expect(fixture.runtime.respondPermission).toHaveBeenCalledWith('request-1', 'allow-once')
+      expect(fixture.runtime.respondPermission).toHaveBeenCalledWith(request)
+    }
+  )
+
+  it('语法合法但不匹配的 Task/Turn 身份交给 Service 幂等处理', async () => {
+    const fixture = createFixture()
+    const request = {
+      ...validPermissionResponse,
+      taskId: 'other-task',
+      turnId: 'other-turn'
+    }
+
+    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.respondPermission, request)).toEqual({
+      ok: true,
+      value: null
+    })
+    expect(fixture.runtime.respondPermission).toHaveBeenCalledWith(request)
   })
 
   it.each([
@@ -259,11 +287,74 @@ describe('Agent IPC Handler', () => {
       AGENT_INVOKE_CHANNELS.createTask,
       [{ workspace: '/tmp/project' }],
       'invalid-input'
+    ],
+    [
+      '权限响应携带 Runtime optionId',
+      AGENT_INVOKE_CHANNELS.respondPermission,
+      [{ ...validPermissionResponse, optionId: 'allow-once' }],
+      'invalid-input'
+    ],
+    [
+      '权限响应携带额外字段',
+      AGENT_INVOKE_CHANNELS.respondPermission,
+      [{ ...validPermissionResponse, runtimeSessionId: 'fake-session' }],
+      'invalid-input'
+    ],
+    [
+      '非法权限决策',
+      AGENT_INVOKE_CHANNELS.respondPermission,
+      [{ ...validPermissionResponse, decision: 'allow-always' }],
+      'invalid-input'
+    ],
+    [
+      '装箱字符串权限决策',
+      AGENT_INVOKE_CHANNELS.respondPermission,
+      [{ ...validPermissionResponse, decision: new String('deny') }],
+      'invalid-input'
     ]
   ] as const)('拒绝%s', async (_name, channel, args, code) => {
     const fixture = createFixture()
     const result = await fixture.invoke(channel, ...args)
     expect(result).toMatchObject({ ok: false, error: { code } })
+  })
+
+  it.each([
+    ['approvalId 类型错误', { ...validPermissionResponse, approvalId: 1 }, 'invalid-input'],
+    ['taskId 类型错误', { ...validPermissionResponse, taskId: 1 }, 'invalid-input'],
+    ['turnId 类型错误', { ...validPermissionResponse, turnId: 1 }, 'invalid-input'],
+    ['approvalId 为空', { ...validPermissionResponse, approvalId: '   ' }, 'invalid-input'],
+    ['taskId 为空', { ...validPermissionResponse, taskId: '   ' }, 'invalid-input'],
+    ['turnId 为空', { ...validPermissionResponse, turnId: '   ' }, 'invalid-input'],
+    [
+      'approvalId 包含 NUL',
+      { ...validPermissionResponse, approvalId: 'approval\0-1' },
+      'invalid-input'
+    ],
+    ['taskId 包含 NUL', { ...validPermissionResponse, taskId: 'task\0-1' }, 'invalid-input'],
+    ['turnId 包含 NUL', { ...validPermissionResponse, turnId: 'turn\0-1' }, 'invalid-input'],
+    [
+      'approvalId 超限',
+      { ...validPermissionResponse, approvalId: 'a'.repeat(4 * 1024 + 1) },
+      'payload-too-large'
+    ],
+    [
+      'taskId 超限',
+      { ...validPermissionResponse, taskId: 'a'.repeat(4 * 1024 + 1) },
+      'payload-too-large'
+    ],
+    [
+      'turnId 超限',
+      { ...validPermissionResponse, turnId: 'a'.repeat(4 * 1024 + 1) },
+      'payload-too-large'
+    ]
+  ] as const)('拒绝%s的权限身份', async (_name, request, code) => {
+    const fixture = createFixture()
+
+    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.respondPermission, request)).toMatchObject({
+      ok: false,
+      error: { code }
+    })
+    expect(fixture.runtime.respondPermission).not.toHaveBeenCalled()
   })
 
   it('按 UTF-8 字节接受临界 Prompt，并拒绝超过一个字节的内容', async () => {
@@ -294,8 +385,8 @@ describe('Agent IPC Handler', () => {
   it('整体请求超过 512 KiB 时在 Runtime 副作用前拒绝', async () => {
     const fixture = createFixture()
     const result = await fixture.invoke(AGENT_INVOKE_CHANNELS.respondPermission, {
-      requestId: 'request-1',
-      optionId: 'a'.repeat(512 * 1024)
+      ...validPermissionResponse,
+      approvalId: 'a'.repeat(512 * 1024)
     })
 
     expect(result).toMatchObject({ ok: false, error: { code: 'payload-too-large' } })

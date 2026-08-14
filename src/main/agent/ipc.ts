@@ -26,7 +26,6 @@ const MAX_PROJECT_ID_BYTES = 4 * 1024
 const MAX_PROMPT_BYTES = 64 * 1024
 const MAX_TASK_ID_BYTES = 4 * 1024
 const MAX_REQUEST_ID_BYTES = 4 * 1024
-const MAX_OPTION_ID_BYTES = 256 * 1024
 
 export interface AgentIpcRuntime {
   getStatus: () => AgentRuntimeStatus
@@ -36,7 +35,7 @@ export interface AgentIpcRuntime {
   startTurn: (taskId: string, prompt: string) => Promise<AgentTurnExecutionResult>
   cancelTurn: (taskId: string) => Promise<void>
   getTaskRuntimeState: (taskId: string) => AgentTaskRuntimeState
-  respondPermission: (requestId: string, optionId?: string) => void
+  respondPermission: (request: AgentRespondPermissionRequest) => Promise<void>
 }
 
 export interface AgentIpcDependencies {
@@ -132,14 +131,21 @@ function readTaskRequest(
 }
 
 function readPermissionRequest(args: unknown[]): AgentRespondPermissionRequest {
-  const request = readRequest(args, ['requestId', 'optionId'])
-  const requestId = readRequiredString(request, 'requestId', MAX_REQUEST_ID_BYTES)
-  if (!Object.hasOwn(request, 'optionId') || request.optionId === undefined) {
-    return { requestId }
+  const request = readRequest(args, ['approvalId', 'taskId', 'turnId', 'decision'])
+  const decision = request.decision
+  if (
+    typeof decision !== 'string' ||
+    !(['allow-once', 'allow-task', 'deny'] as const).includes(
+      decision as AgentRespondPermissionRequest['decision']
+    )
+  ) {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
   }
   return {
-    requestId,
-    optionId: readRequiredString(request, 'optionId', MAX_OPTION_ID_BYTES)
+    approvalId: readRequiredString(request, 'approvalId', MAX_REQUEST_ID_BYTES),
+    taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES),
+    turnId: readRequiredString(request, 'turnId', MAX_TASK_ID_BYTES),
+    decision: decision as AgentRespondPermissionRequest['decision']
   }
 }
 
@@ -222,9 +228,9 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
     return requireAgent(dependencies.getAgent).getTaskRuntimeState(request.taskId)
   })
 
-  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.respondPermission, (args) => {
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.respondPermission, async (args) => {
     const request = readPermissionRequest(args)
-    requireAgent(dependencies.getAgent).respondPermission(request.requestId, request.optionId)
+    await requireAgent(dependencies.getAgent).respondPermission(request)
     return null
   })
 }

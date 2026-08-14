@@ -25,6 +25,7 @@ describe('桌面 IPC 静态契约', () => {
       'agent:status',
       'agent:event',
       'agent:permission',
+      'agent:permission-cancelled',
       'app:choose-project',
       'app:list-projects',
       'app:remove-project',
@@ -34,6 +35,7 @@ describe('桌面 IPC 静态契约', () => {
       'task:get',
       'task:list-turns',
       'task:list-events',
+      'task:list-permission-audits',
       'task:resume',
       'task:preview-delete',
       'task:delete'

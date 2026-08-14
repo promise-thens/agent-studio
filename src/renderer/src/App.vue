@@ -12,11 +12,11 @@ import {
   PhSidebarSimple as SidebarSimple,
   PhStop as Stop,
   PhTerminalWindow as TerminalWindow,
-  PhWarningCircle as WarningCircle,
-  PhX as X
+  PhWarningCircle as WarningCircle
 } from '@phosphor-icons/vue'
 import type {
   AgentEvent,
+  AgentPermissionDecision,
   AgentPermissionRequest,
   AgentPlanEntry,
   AgentRuntimeStatus,
@@ -30,7 +30,7 @@ import type {
   ProviderModelOption,
   ProviderTestResult
 } from '../../shared/provider'
-import type { DeletionPreview } from '../../shared/task-history'
+import type { DeletionPreview, PermissionAuditRecord } from '../../shared/task-history'
 import {
   createAgentEventGuard,
   createAgentMessageKey,
@@ -38,6 +38,7 @@ import {
 } from './agent-event-consumer'
 import { unwrapDesktopIpcResult } from './desktop-ipc-result'
 import ModelSelector from './components/ModelSelector.vue'
+import PermissionPrompt from './components/PermissionPrompt.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
 import WorkspaceSidebar, {
   type SidebarProjectItem,
@@ -47,8 +48,18 @@ import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
 import { useTaskHistory } from './composables/useTaskHistory'
 import { projectTaskHistory } from './task-history-projector'
 import {
+  clearRespondingPermission,
+  clearPermissionQueueState,
+  enqueuePermissionRequest,
+  getNextPermissionExpiry,
+  isPermissionResponsePending,
+  reconcilePermissionRequests,
+  removeExpiredPermissionRequests,
+  removePermissionRequest
+} from './permission-queue'
+import { createProjectSelectionCoordinator } from './project-selection-coordinator'
+import {
   canSendRuntimePrompt,
-  chooseWorkspaceWhenIdle,
   createAsyncSingleFlight,
   shouldConnectProject
 } from './runtime-session-actions'
@@ -129,6 +140,7 @@ const resumePending = ref(false)
 const prompt = ref('')
 const promptSubmissionPending = ref(false)
 const projectConnectionPending = ref(false)
+const projectSelectionPending = ref(false)
 /** 发送入口共享单飞门禁，并同步投影到 UI busy 状态。 */
 const runPromptSubmission = createAsyncSingleFlight((pending) => {
   promptSubmissionPending.value = pending
@@ -137,7 +149,21 @@ const runPromptSubmission = createAsyncSingleFlight((pending) => {
 const runProjectConnection = createAsyncSingleFlight((pending) => {
   projectConnectionPending.value = pending
 })
-const permission = ref<AgentPermissionRequest | null>(null)
+/** Project 历史尚未提交时独立锁住旧 Task 入口；连接 Runtime 前会释放此门禁。 */
+const projectSelection = createProjectSelectionCoordinator((pending) => {
+  projectSelectionPending.value = pending
+})
+const permissionQueue = ref<AgentPermissionRequest[]>([])
+const permission = computed(() => permissionQueue.value[0] ?? null)
+const respondingPermission = ref<{
+  approvalId: string
+  taskId: string
+  turnId: string
+} | null>(null)
+const permissionResponsePending = computed(() =>
+  isPermissionResponsePending(permission.value, respondingPermission.value)
+)
+let permissionExpiryTimer: ReturnType<typeof setTimeout> | null = null
 const showInspector = ref(true)
 const composer = ref<HTMLTextAreaElement | null>(null)
 const messageList = ref<HTMLElement | null>(null)
@@ -148,6 +174,7 @@ let ignoreAnchorScrollSync = false
 let ignoreAnchorScrollTimer: ReturnType<typeof setTimeout> | null = null
 const taskViews = ref<Record<string, TaskViewState>>({})
 const taskOrder = ref<string[]>([])
+let taskSelectionRequestId = 0
 /** 当前激活的产品 Task；Runtime session 始终只留在主进程。 */
 const activeTaskId = ref('')
 const welcomeMessages = ref<ChatMessage[]>([
@@ -161,6 +188,18 @@ const emptyPlanEntries = ref<AgentPlanEntry[]>([])
 const emptyToolActivities = ref<ToolActivity[]>([])
 const emptyThoughtOverrides = ref<Record<string, boolean>>({})
 const activeTaskView = computed(() => taskViews.value[activeTaskId.value] ?? null)
+
+const permissionAuditReasonLabels: Record<PermissionAuditRecord['reason'], string> = {
+  'auto-allowed': '策略自动允许',
+  'grant-reused': '复用当前 Task 授权',
+  'user-allowed': '用户允许',
+  'user-denied': '用户拒绝',
+  cancelled: '请求已取消',
+  expired: '审批已过期',
+  'invalid-target': '目标无效',
+  unsupported: '能力不支持',
+  'internal-error': '内部执行失败'
+}
 
 /** 当前 Task 的消息、计划和工具状态通过计算属性切换，A/B 视图不会串台。 */
 const messages = computed<ChatMessage[]>({
@@ -196,11 +235,12 @@ const thoughtExpandOverride = computed<Record<string, boolean>>({
     else emptyThoughtOverrides.value = value
   }
 })
-const activeSessionId = computed(() => activeTaskId.value)
+const activeSessionId = computed(() => (projectSelectionPending.value ? '' : activeTaskId.value))
 /** 最近列表由主进程持久化历史提供，重启后不依赖 Renderer 内存。 */
-const recentSessions = computed<SidebarSessionItem[]>(() =>
-  taskHistory.tasks.value.map((task) => ({ id: task.taskId, title: task.title }))
-)
+const recentSessions = computed<SidebarSessionItem[]>(() => {
+  if (projectSelectionPending.value) return []
+  return taskHistory.tasks.value.map((task) => ({ id: task.taskId, title: task.title }))
+})
 
 const cleanupListeners: Array<() => void> = []
 const acceptAgentEvent = createAgentEventGuard()
@@ -547,6 +587,8 @@ const isBusy = computed(
     promptSubmissionPending.value ||
     projectConnectionPending.value
 )
+/** 只约束 Renderer 交互，不参与 Runtime 连接判断，避免门禁反向阻止目标 Project 连接。 */
+const projectInteractionBlocked = computed(() => isBusy.value || projectSelectionPending.value)
 const { resolveCapability, isAvailable } = useRuntimeCapabilities(status)
 const promptCapability = computed(() => resolveCapability('session.prompt.text', '发送文本 Prompt'))
 const planCapability = computed(() => resolveCapability('event.plan', '展示执行计划'))
@@ -555,6 +597,7 @@ const createSessionCapability = computed(() => resolveCapability('session.create
 const connectCapability = computed(() => resolveCapability('runtime.connect', '连接 Runtime'))
 const canSend = computed(
   () =>
+    !projectSelectionPending.value &&
     activeTaskView.value?.mode !== 'history' &&
     Boolean(providerSummary.value?.configured) &&
     !isTurnTiming.value &&
@@ -576,6 +619,7 @@ const activeProjectExecutionReason = computed(() => {
   return project.availability.state === 'available' ? '' : project.availability.message
 })
 const composerDisabledMessage = computed(() => {
+  if (projectSelectionPending.value) return '正在切换 Project，请稍候。'
   if (activeTaskView.value?.mode === 'history') return '当前为只读历史，继续任务成功后才能输入。'
   if (!providerSummary.value?.configured) return '请先配置 Provider。'
   if (!activeProjectExecutable.value) return activeProjectExecutionReason.value
@@ -596,13 +640,14 @@ const toolEmptyMessage = computed(
 const newChatDisabled = computed(
   () =>
     status.value.state !== 'ready' ||
-    isBusy.value ||
+    projectInteractionBlocked.value ||
     !activeProjectExecutable.value ||
     !providerSummary.value?.configured ||
     !isAvailable('runtime.connect') ||
     !isAvailable('session.create')
 )
 const newChatDisabledReason = computed(() => {
+  if (projectSelectionPending.value) return '正在切换 Project，暂时不能创建新对话。'
   if (isBusy.value) return 'Runtime 正在执行或连接中，暂时不能创建新对话。'
   if (!providerSummary.value?.configured) return '请先配置 Provider。'
   if (!activeProjectExecutable.value) return activeProjectExecutionReason.value
@@ -685,15 +730,25 @@ onMounted(async () => {
     window.agent.onStatus((nextStatus) => {
       status.value = nextStatus
       syncWorkspaceDisplay(nextStatus.workspace)
+      if (nextStatus.state === 'idle' || nextStatus.state === 'error') clearPermissionQueue()
     }),
     window.agent.onEvent(handleAgentEvent),
     window.agent.onPermission((request) => {
-      if (request.taskId === activeTaskId.value) {
-        permission.value = request
+      if (request.taskId === activeTaskId.value && request.projectId === activeProjectId.value) {
+        enqueuePermission(request)
       } else {
         // 非当前 Task 的权限不能污染正在查看的视图，也不能让 Runtime 永久等待。
-        void window.agent.respondPermission(request.id)
+        void window.agent.respondPermission({
+          approvalId: request.approvalId,
+          taskId: request.taskId,
+          turnId: request.turnId,
+          decision: 'deny'
+        })
       }
+    }),
+    window.agent.onPermissionCancelled((request) => {
+      removePermission(request)
+      respondingPermission.value = clearRespondingPermission(respondingPermission.value, request)
     })
   )
 
@@ -722,6 +777,10 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   cleanupListeners.forEach((cleanup) => cleanup())
+  if (permissionExpiryTimer) {
+    clearTimeout(permissionExpiryTimer)
+    permissionExpiryTimer = null
+  }
   if (durationTimer) {
     clearInterval(durationTimer)
     durationTimer = null
@@ -741,7 +800,7 @@ function deriveSessionTitle(text: string): string {
 
 /** 只有主进程确认创建 Task 后才建立本地视图，避免 UI 伪造不存在的会话。 */
 async function startNewChat(): Promise<void> {
-  if (newChatDisabled.value) return
+  if (newChatDisabled.value || projectSelectionPending.value) return
 
   try {
     const task = unwrapDesktopIpcResult(await window.agent.createTask(activeProjectId.value))
@@ -785,13 +844,14 @@ function activateTaskView(task: AgentTaskRuntimeState, mode: 'live' | 'history' 
     0,
     12
   )
-  permission.value = null
+  reconcilePermissionQueue(task.taskId, activeProjectId.value)
   activeTurnAnchorId.value = null
   void nextTick(() => syncActiveTurnAnchor())
 }
 
 /** 首次发送时懒创建 Task；后续 Turn 始终复用当前稳定 taskId。 */
 async function ensureActiveTask(): Promise<string> {
+  if (projectSelectionPending.value) throw new Error('正在切换 Project，请稍候。')
   const current = activeTaskView.value
   if (current?.projectId === activeProjectId.value && current.mode === 'live') return current.taskId
 
@@ -803,12 +863,16 @@ async function ensureActiveTask(): Promise<string> {
 
 /** 点击最近 Task 时先装配只读历史，再自动连接所属 Project；选择动作不会自动恢复 session。 */
 async function selectTask(taskId: string): Promise<void> {
-  if (!taskId || taskId === activeTaskId.value || isBusy.value) return
+  if (!taskId || taskId === activeTaskId.value || isBusy.value || projectSelectionPending.value) {
+    return
+  }
+  const selectionRequestId = ++taskSelectionRequestId
 
   try {
-    await taskHistory.openTask(taskId)
+    if (!(await taskHistory.openTask(taskId))) return
+    if (selectionRequestId !== taskSelectionRequestId) return
     const detail = taskHistory.openedTask.value
-    if (!detail) throw new Error('未找到 Task 历史。')
+    if (!detail || detail.taskId !== taskId) return
     const projection = projectTaskHistory(
       taskHistory.openedTurns.value,
       taskHistory.eventsByTurn.value
@@ -825,25 +889,42 @@ async function selectTask(taskId: string): Promise<void> {
       thoughtExpandOverride: {}
     }
     activeTaskId.value = taskId
-    permission.value = null
+    reconcilePermissionQueue(taskId, detail.projectId)
     await ensureProjectConnected(detail.projectId)
+    if (selectionRequestId !== taskSelectionRequestId || activeTaskId.value !== taskId) return
   } catch (error) {
+    if (selectionRequestId !== taskSelectionRequestId) return
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
 }
 
 /** 选择已有 Project 后自动连接 Runtime；连接失败不回滚已经加载的本地历史。 */
 async function selectProject(projectId: string): Promise<void> {
-  if (!projectId || isBusy.value) return
-  try {
-    if (projectId !== activeProjectId.value) {
-      await taskHistory.selectProject(projectId)
-      workspace.value = taskHistory.activeProject.value?.canonicalRoot ?? ''
-      activeTaskId.value = ''
-    }
+  if (!projectId || isBusy.value || projectSelectionPending.value) return
+  if (projectId === activeProjectId.value) {
     await ensureProjectConnected(projectId)
+    return
+  }
+  taskSelectionRequestId += 1
+  const selection = projectSelection.begin()
+  activeTaskId.value = ''
+  reconcilePermissionQueue('', projectId)
+  try {
+    await taskHistory.selectProject(projectId, () => projectSelection.isCurrent(selection))
+    if (!projectSelection.isCurrent(selection) || activeProjectId.value !== projectId) {
+      return
+    }
+    workspace.value = taskHistory.activeProject.value?.canonicalRoot ?? ''
+    // 历史状态已稳定，先释放旧 Task 门禁，再让 Runtime 连接判断按正常 busy 语义执行。
+    projectSelection.finish(selection)
+    await ensureProjectConnected(projectId, () => projectSelection.isCurrent(selection))
   } catch (error) {
-    appendMessage('error', error instanceof Error ? error.message : String(error))
+    if (!projectSelection.isCurrent(selection) || activeProjectId.value !== projectId) return
+    projectSelection.commit(selection, () => {
+      appendMessage('error', error instanceof Error ? error.message : String(error))
+    })
+  } finally {
+    projectSelection.finish(selection)
   }
 }
 
@@ -852,17 +933,37 @@ function syncWorkspaceDisplay(runtimeWorkspace?: string): void {
 }
 
 async function chooseWorkspace(): Promise<void> {
+  if (isBusy.value || projectSelectionPending.value) return
+  taskSelectionRequestId += 1
+  const selection = projectSelection.begin()
+  const previousProjectId = activeProjectId.value
+  const previousTaskId = activeTaskId.value
+  activeTaskId.value = ''
   try {
-    const selected = await chooseWorkspaceWhenIdle(
-      () => isBusy.value,
-      () => taskHistory.chooseProject()
-    )
-    if (!selected) return
+    const selected = await taskHistory.chooseProject(() => projectSelection.isCurrent(selection))
+    if (!selected) {
+      projectSelection.commit(selection, () => {
+        if (activeProjectId.value === previousProjectId) activeTaskId.value = previousTaskId
+      })
+      return
+    }
+    if (!projectSelection.isCurrent(selection) || activeProjectId.value !== selected.projectId) {
+      return
+    }
     workspace.value = selected.canonicalRoot
     activeTaskId.value = ''
-    await ensureProjectConnected(selected.projectId)
+    reconcilePermissionQueue('', selected.projectId)
+    projectSelection.finish(selection)
+    await ensureProjectConnected(selected.projectId, () => projectSelection.isCurrent(selection))
   } catch (error) {
-    appendMessage('error', error instanceof Error ? error.message : String(error))
+    if (!projectSelection.isCurrent(selection)) return
+    projectSelection.commit(selection, () => {
+      if (activeProjectId.value === previousProjectId) activeTaskId.value = previousTaskId
+      else reconcilePermissionQueue('', activeProjectId.value)
+      appendMessage('error', error instanceof Error ? error.message : String(error))
+    })
+  } finally {
+    projectSelection.finish(selection)
   }
 }
 
@@ -905,19 +1006,24 @@ function closeProviderSettings(): void {
 }
 
 async function clearProvider(): Promise<void> {
+  taskSelectionRequestId += 1
+  projectSelection.invalidate()
   providerSummary.value = await window.provider.clear()
   providerBootState.value = 'needs-provider'
   showProviderSettings.value = false
   syncWorkspaceDisplay()
   activeTaskId.value = ''
-  permission.value = null
+  reconcilePermissionQueue('', '')
 }
 
 /**
  * 确保目标 Project 的 Runtime 已连接。
  * 连接失败只展示有限错误，不清空 Project/Task 历史，也不隐式恢复历史 session。
  */
-async function ensureProjectConnected(projectId: string): Promise<boolean> {
+async function ensureProjectConnected(
+  projectId: string,
+  isCurrent: () => boolean = () => true
+): Promise<boolean> {
   const project = taskHistory.projects.value.find((item) => item.projectId === projectId)
   if (!project) return false
 
@@ -937,9 +1043,12 @@ async function ensureProjectConnected(projectId: string): Promise<boolean> {
   let connected = false
   await runProjectConnection(async () => {
     try {
-      unwrapDesktopIpcResult(await window.agent.connect(projectId))
+      const result = await window.agent.connect(projectId)
+      if (!isCurrent()) return
+      unwrapDesktopIpcResult(result)
       connected = true
     } catch (error) {
+      if (!isCurrent()) return
       appendMessage('error', error instanceof Error ? error.message : String(error))
     }
   })
@@ -957,6 +1066,7 @@ async function connectAgent(): Promise<void> {
 async function disconnectAgent(): Promise<void> {
   try {
     unwrapDesktopIpcResult(await window.agent.disconnect())
+    clearPermissionQueue()
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
@@ -1008,14 +1118,100 @@ async function cancelTurn(): Promise<void> {
   }
 }
 
-async function respondPermission(optionId?: string): Promise<void> {
-  if (!permission.value) return
+async function respondPermission(decision: AgentPermissionDecision): Promise<void> {
+  const request = permission.value
+  if (!request || isPermissionResponsePending(request, respondingPermission.value)) return
+  const identity = {
+    approvalId: request.approvalId,
+    taskId: request.taskId,
+    turnId: request.turnId
+  }
+  respondingPermission.value = identity
   try {
-    unwrapDesktopIpcResult(await window.agent.respondPermission(permission.value.id, optionId))
-    permission.value = null
+    unwrapDesktopIpcResult(
+      await window.agent.respondPermission({
+        approvalId: request.approvalId,
+        taskId: request.taskId,
+        turnId: request.turnId,
+        decision
+      })
+    )
+    removePermission(identity)
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    respondingPermission.value = clearRespondingPermission(respondingPermission.value, identity)
   }
+}
+
+/** 审批按 arrival 顺序展示并按三元组身份去重，防止并发请求互相覆盖。 */
+function enqueuePermission(request: AgentPermissionRequest): void {
+  permissionQueue.value = enqueuePermissionRequest(permissionQueue.value, request)
+  schedulePermissionExpiry()
+}
+
+function removePermission(identity: { approvalId: string; taskId: string; turnId: string }): void {
+  permissionQueue.value = removePermissionRequest(permissionQueue.value, identity)
+  schedulePermissionExpiry()
+}
+
+/** Runtime 断开或异常后立即清空 Renderer 投影，主进程 Broker 负责真实请求的最终收束。 */
+function clearPermissionQueue(): void {
+  const cleared = clearPermissionQueueState()
+  permissionQueue.value = cleared.queue
+  respondingPermission.value = cleared.respondingPermission
+  schedulePermissionExpiry()
+}
+
+/** Task/Project 身份变化时拒绝不再匹配的审批，Broker 会幂等处理晚到响应。 */
+function reconcilePermissionQueue(taskId: string, projectId: string): void {
+  const { active, stale } = reconcilePermissionRequests(permissionQueue.value, taskId, projectId)
+  permissionQueue.value = active
+  for (const request of stale) {
+    void window.agent.respondPermission({
+      approvalId: request.approvalId,
+      taskId: request.taskId,
+      turnId: request.turnId,
+      decision: 'deny'
+    })
+  }
+  schedulePermissionExpiry()
+}
+
+function schedulePermissionExpiry(): void {
+  if (permissionExpiryTimer) clearTimeout(permissionExpiryTimer)
+  permissionExpiryTimer = null
+  const nextExpiry = getNextPermissionExpiry(permissionQueue.value)
+  if (nextExpiry == null) return
+  permissionExpiryTimer = setTimeout(
+    () => {
+      const now = Date.now()
+      permissionQueue.value = removeExpiredPermissionRequests(permissionQueue.value, now)
+      schedulePermissionExpiry()
+    },
+    Math.max(0, nextExpiry - Date.now())
+  )
+}
+
+function permissionAuditScopeLabel(scope: PermissionAuditRecord['scope']): string {
+  if (scope === 'task') return '当前 Task'
+  if (scope === 'once') return '仅本次'
+  return '未授予范围'
+}
+
+function permissionAuditInitiatorLabel(audit: PermissionAuditRecord): string {
+  if (audit.initiator === 'runtime') {
+    if (audit.runtimeId === 'grok') return 'Grok Build'
+    if (audit.runtimeId === 'codex') return 'Codex'
+    return 'Agent Runtime'
+  }
+  const labels: Record<NonNullable<PermissionAuditRecord['appService']>, string> = {
+    'command-runner': 'Command Runner',
+    git: 'Git',
+    worktree: 'Worktree',
+    other: 'Agent Studio'
+  }
+  return audit.appService ? labels[audit.appService] : 'Agent Studio'
 }
 
 /** 输入法正在确认候选词时保留 Enter，等待 compositionend 完成 v-model 更新。 */
@@ -1040,9 +1236,10 @@ function handleAgentEvent(event: AgentEvent): void {
   } else if (event.kind === 'plan') {
     planEntries.value = event.entries
   } else if (event.kind === 'turn-complete') {
-    if (permission.value?.taskId === event.taskId && permission.value.turnId === event.turnId) {
-      permission.value = null
-    }
+    permissionQueue.value = permissionQueue.value.filter(
+      (item) => item.taskId !== event.taskId || item.turnId !== event.turnId
+    )
+    schedulePermissionExpiry()
     // 整轮完成：只沉淀一个总耗时，不给中间片段分别计时。
     completeCurrentTurn()
     void taskHistory.refreshTasks()
@@ -1129,17 +1326,24 @@ async function confirmHistoryAction(): Promise<void> {
       await taskHistory.deleteTask(confirmation.targetId, confirmation.preview.token)
       delete taskViews.value[confirmation.targetId]
       taskOrder.value = taskOrder.value.filter((id) => id !== confirmation.targetId)
-      if (activeTaskId.value === confirmation.targetId) activeTaskId.value = ''
+      if (activeTaskId.value === confirmation.targetId) {
+        activeTaskId.value = ''
+        reconcilePermissionQueue('', activeProjectId.value)
+      }
     } else if (confirmation.kind === 'project-remove') {
       await taskHistory.removeProject(confirmation.targetId)
       activeTaskId.value = ''
+      reconcilePermissionQueue('', activeProjectId.value)
       syncWorkspaceDisplay()
     } else if (confirmation.preview) {
       await taskHistory.deleteProjectHistory(confirmation.targetId, confirmation.preview.token)
       for (const [taskId, view] of Object.entries(taskViews.value)) {
         if (view.projectId === confirmation.targetId) delete taskViews.value[taskId]
       }
-      if (taskHistory.activeProjectId.value === confirmation.targetId) activeTaskId.value = ''
+      if (taskHistory.activeProjectId.value === confirmation.targetId) {
+        activeTaskId.value = ''
+        reconcilePermissionQueue('', activeProjectId.value)
+      }
     }
     historyConfirmation.value = null
   } catch (error) {
@@ -1271,9 +1475,9 @@ function scrollMessagesToBottom(): void {
         :active-project-id="activeProjectId"
         :new-chat-disabled="newChatDisabled"
         :new-chat-disabled-reason="newChatDisabledReason"
-        :workspace-actions-disabled="isBusy"
+        :workspace-actions-disabled="projectInteractionBlocked"
         workspace-actions-disabled-reason="当前 Turn 收束后才能切换目录。"
-        :recent-sessions-disabled="isBusy"
+        :recent-sessions-disabled="projectInteractionBlocked"
         recent-sessions-disabled-reason="当前 Turn 收束后才能切换 Task。"
         :has-more-sessions="Boolean(taskHistory.taskCursor.value)"
         :loading-more-sessions="taskHistory.loadingMoreTasks.value"
@@ -1304,7 +1508,12 @@ function scrollMessagesToBottom(): void {
             <button v-if="isConnected" class="secondary-button" @click="disconnectAgent">
               断开
             </button>
-            <button v-else class="primary-button" :disabled="isBusy" @click="connectAgent">
+            <button
+              v-else
+              class="primary-button"
+              :disabled="projectInteractionBlocked"
+              @click="connectAgent"
+            >
               <ArrowClockwise :size="15" />
               连接 Grok
             </button>
@@ -1332,7 +1541,7 @@ function scrollMessagesToBottom(): void {
             class="secondary-button"
             type="button"
             :disabled="
-              isBusy ||
+              projectInteractionBlocked ||
               resumePending ||
               !providerSummary?.configured ||
               !activeProjectExecutable ||
@@ -1515,6 +1724,7 @@ function scrollMessagesToBottom(): void {
               v-model="prompt"
               :disabled="
                 status.state !== 'ready' ||
+                projectSelectionPending ||
                 !promptCapability.available ||
                 activeTaskView?.mode === 'history' ||
                 !providerSummary?.configured
@@ -1530,7 +1740,7 @@ function scrollMessagesToBottom(): void {
                   :model="currentModel"
                   :load-models="loadSavedModels"
                   :select-model="selectProviderModel"
-                  :busy="isBusy"
+                  :busy="projectInteractionBlocked"
                   :disabled="!providerSummary?.configured"
                   @changed="handleModelChanged"
                   @error="handleModelError"
@@ -1611,44 +1821,64 @@ function scrollMessagesToBottom(): void {
             <p>{{ toolEmptyMessage }}</p>
           </div>
         </section>
+
+        <section v-if="activeTaskView?.mode === 'history'" class="inspector-section audit-section">
+          <div class="inspector-heading">
+            <strong>权限审计</strong>
+            <span>{{ taskHistory.permissionAudits.value.length }}</span>
+          </div>
+          <div v-if="taskHistory.permissionAudits.value.length" class="permission-audit-list">
+            <article
+              v-for="audit in taskHistory.permissionAudits.value"
+              :key="audit.auditId"
+              class="permission-audit-item"
+              :data-risk="audit.risk"
+            >
+              <div>
+                <strong>{{ audit.title }}</strong>
+                <span>
+                  {{ audit.risk }} · {{ audit.operationType }} ·
+                  {{ permissionAuditInitiatorLabel(audit) }}
+                </span>
+              </div>
+              <p>{{ audit.impact }}</p>
+              <ul class="permission-audit-targets">
+                <li v-for="target in audit.targetSummaries" :key="target">{{ target }}</li>
+              </ul>
+              <p v-if="audit.detail" class="permission-audit-detail">{{ audit.detail }}</p>
+              <small>
+                {{ permissionAuditReasonLabels[audit.reason] }} ·
+                {{ permissionAuditScopeLabel(audit.scope) }} ·
+                {{ new Date(audit.createdAt).toLocaleString() }}
+                <template v-if="audit.truncated"> · 摘要已截断</template>
+              </small>
+            </article>
+            <button
+              v-if="taskHistory.permissionAuditCursor.value"
+              class="history-load-more"
+              :disabled="taskHistory.loadingMorePermissionAudits.value"
+              @click="taskHistory.loadMorePermissionAudits"
+            >
+              {{ taskHistory.loadingMorePermissionAudits.value ? '正在加载…' : '加载更多审计' }}
+            </button>
+          </div>
+          <div v-else class="empty-state compact" role="status" aria-live="polite">
+            <ShieldCheck :size="22" />
+            <p>当前 Task 暂无权限决策记录。</p>
+          </div>
+        </section>
       </aside>
     </div>
 
-    <div v-if="permission" class="modal-backdrop" @click.self="respondPermission()">
-      <section
-        class="permission-dialog runtime-permission-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="permission-title"
-        aria-describedby="permission-description"
-      >
-        <header>
-          <div class="permission-icon"><ShieldCheck :size="22" weight="fill" /></div>
-          <div>
-            <h2 id="permission-title">需要你的确认</h2>
-            <p id="permission-description">{{ permission.title }}</p>
-          </div>
-          <button
-            class="icon-button"
-            title="取消权限请求"
-            aria-label="取消权限请求"
-            @click="respondPermission()"
-          >
-            <X :size="17" />
-          </button>
-        </header>
-        <div class="permission-options">
-          <button
-            v-for="option in permission.options"
-            :key="option.optionId"
-            :class="option.kind.startsWith('allow') ? 'primary-button' : 'secondary-button'"
-            @click="respondPermission(option.optionId)"
-          >
-            {{ option.name }}
-          </button>
-        </div>
-      </section>
-    </div>
+    <PermissionPrompt
+      v-if="permission"
+      :key="`${permission.approvalId}:${permission.taskId}:${permission.turnId}`"
+      :request="permission"
+      :pending="permissionResponsePending"
+      :task-title="activeTaskView?.title"
+      @respond="respondPermission"
+      @cancel-turn="cancelTurn"
+    />
 
     <div
       v-if="historyConfirmation"

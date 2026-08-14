@@ -3,7 +3,6 @@ import { isAbsolute } from 'node:path'
 import type {
   AgentEvent,
   AgentExecutionState,
-  AgentPermissionRequest,
   AgentRuntimeCapabilitySnapshot,
   AgentRuntimeStatus,
   AgentTaskRuntimeState,
@@ -15,6 +14,8 @@ import {
   AgentRuntimeAdapterError,
   type AgentRuntimeAdapter,
   type AgentRuntimeAdapterErrorCode,
+  type AgentRuntimePermissionCancellation,
+  type AgentRuntimePermissionRequest,
   type AgentRuntimeSessionRef,
   type AgentRuntimeTurnRef
 } from './agent-runtime-adapter'
@@ -26,10 +27,14 @@ import {
   TaskStoreError,
   type TaskRecordV1
 } from './task-store'
+import type { AgentRespondPermissionRequest } from '../../shared/agent-ipc'
+import type { PermissionBroker } from '../security/permission-broker'
+import { createLocalEnvironmentId } from '../security/permission-policy'
 
 const MAX_WORKSPACE_BYTES = 4 * 1024
 const MAX_PROMPT_BYTES = 64 * 1024
 const MAX_IDENTIFIER_BYTES = 4 * 1024
+const MAX_RUNTIME_PERMISSION_REQUESTS = 2_000
 
 export type AgentServiceErrorCode =
   | AgentRuntimeAdapterErrorCode
@@ -64,17 +69,13 @@ export interface AgentServiceOptions {
   taskStore?: TaskStore
   getTurnModel?: () => TurnModelSnapshot
   redactText?: (text: string) => string
+  permissionBroker?: PermissionBroker
 }
 
 interface AgentTaskRecord extends AgentTaskRuntimeState {
   projectId?: string
   runtimeSessionId: string
   session: AgentRuntimeSessionRef
-}
-
-interface PendingPermissionRef {
-  taskId: string
-  turnId: string
 }
 
 function cloneTask(task: AgentTaskRecord): AgentTaskRuntimeState {
@@ -112,7 +113,6 @@ export class AgentService {
   private readonly tasks = new Map<string, AgentTaskRecord>()
   private readonly allocatedTaskIds = new Set<string>()
   private readonly allocatedTurnIds = new Set<string>()
-  private readonly pendingPermissions = new Map<string, PendingPermissionRef>()
   private selectedTaskId: string | null = null
   private sessionOperationActive = false
   private readonly createId: () => string
@@ -121,7 +121,9 @@ export class AgentService {
   private readonly taskStore?: TaskStore
   private readonly getTurnModel: () => TurnModelSnapshot
   private readonly redactText: (text: string) => string
+  private readonly permissionBroker?: PermissionBroker
   private readonly historyWrites = new Map<string, Promise<void>>()
+  private readonly runtimePermissionRequests = new Map<string, AgentRuntimePermissionRequest>()
 
   constructor(
     private readonly adapter: AgentRuntimeAdapter,
@@ -134,6 +136,7 @@ export class AgentService {
     this.taskStore = options.taskStore
     this.getTurnModel = options.getTurnModel ?? (() => ({ modelId: 'unknown' }))
     this.redactText = options.redactText ?? ((text) => text)
+    this.permissionBroker = options.permissionBroker
     for (const persistedTask of this.taskStore?.listTaskRecords() ?? []) {
       const task = restoreRuntimeTask(persistedTask)
       this.tasks.set(task.taskId, task)
@@ -174,7 +177,11 @@ export class AgentService {
     }
 
     return this.runExclusiveSessionOperation(async () => {
+      const previousWorkspace = this.adapter.getStatus().workspace
       const status = await this.runAdapterOperation(() => this.adapter.connect(validatedWorkspace))
+      if (previousWorkspace && previousWorkspace !== validatedWorkspace) {
+        this.permissionBroker?.clearTaskGrants()
+      }
       const selectedTask = this.selectedTaskId ? this.tasks.get(this.selectedTaskId) : undefined
       if (
         !selectedTask ||
@@ -203,7 +210,7 @@ export class AgentService {
           ?.finishTurn(activeTurn.taskId, activeTurn.turnId, 'cancelled')
           .catch(() => undefined)
         this.executionController.release(activeTurn)
-        this.clearPendingPermissions(activeTurn)
+        await this.permissionBroker?.cancelTurn(activeTurn.taskId, activeTurn.turnId)
       }
       this.selectedTaskId = null
       return status
@@ -340,11 +347,7 @@ export class AgentService {
     await this.runExclusiveSessionOperation(async () => {
       await this.runAdapterOperation(() => this.adapter.closeSession(task.session))
       this.tasks.delete(taskId)
-      this.clearPendingPermissions({
-        taskId,
-        turnId: task.activeTurnId ?? '',
-        runtimeSessionId: task.runtimeSessionId
-      })
+      await this.permissionBroker?.invalidateTask(taskId)
       if (this.selectedTaskId === taskId) this.selectedTaskId = null
     })
   }
@@ -352,55 +355,83 @@ export class AgentService {
   /**
    * Adapter sink 收到权限请求后调用此方法；只有完全匹配当前 Turn/session 的请求才改变状态。
    */
-  handlePermissionRequest(request: AgentPermissionRequest): void {
+  handlePermissionRequest(request: AgentRuntimePermissionRequest): void {
     const task = this.tasks.get(request.taskId)
-    const activeTurn = this.executionController.getActiveTurn()
     if (
       !task ||
-      !activeTurn ||
-      request.runtimeId !== task.runtimeId ||
-      activeTurn.taskId !== request.taskId ||
-      activeTurn.turnId !== request.turnId ||
-      activeTurn.runtimeSessionId !== task.runtimeSessionId ||
-      (request.runtimeSessionId && request.runtimeSessionId !== task.runtimeSessionId)
+      !task.projectId ||
+      !this.permissionBroker ||
+      !this.isRuntimePermissionCurrent(request)
     ) {
+      this.adapter.respondPermission(request.requestId, 'cancelled')
       return
     }
+    if (
+      this.runtimePermissionRequests.has(request.requestId) ||
+      this.runtimePermissionRequests.size >= MAX_RUNTIME_PERMISSION_REQUESTS
+    ) {
+      this.adapter.respondPermission(request.requestId, 'cancelled')
+      return
+    }
+    this.runtimePermissionRequests.set(request.requestId, request)
+    const environmentId = createLocalEnvironmentId(task.projectId, task.workspace)
+    void this.permissionBroker
+      .authorizeOperation(
+        {
+          initiator: { kind: 'runtime', runtimeId: request.runtimeId },
+          taskId: request.taskId,
+          turnId: request.turnId,
+          projectId: task.projectId,
+          environmentId,
+          executionRoot: task.workspace,
+          operationType: request.operationType,
+          targets: request.targets,
+          parameterFingerprint: request.parameterFingerprint,
+          title: request.title,
+          impact: request.impact,
+          ...(request.minimumRisk ? { minimumRisk: request.minimumRisk } : {})
+        },
+        () => {
+          if (!this.isRuntimePermissionActive(request)) throw new Error('permission-stale')
+          this.adapter.respondPermission(request.requestId, 'allow-once')
+        },
+        {
+          executionSupported: request.executionSupported,
+          isActive: () => this.isRuntimePermissionActive(request),
+          onPendingChange: (count) => this.updatePermissionWaitingState(request, count),
+          cancellationId: request.requestId
+        }
+      )
+      .then((result) => {
+        if (result.ok) return
+        this.adapter.respondPermission(
+          request.requestId,
+          result.reason === 'user-denied' ? 'deny-once' : 'cancelled'
+        )
+      })
+      .catch(() => this.adapter.respondPermission(request.requestId, 'cancelled'))
+      .finally(() => {
+        if (this.runtimePermissionRequests.get(request.requestId) === request) {
+          this.runtimePermissionRequests.delete(request.requestId)
+        }
+      })
+  }
 
-    this.pendingPermissions.set(request.id, {
-      taskId: request.taskId,
-      turnId: request.turnId
-    })
-    task.state = 'waiting-permission'
-    task.updatedAt = this.now()
-    this.queueHistoryWrite(
-      request.taskId,
-      request.turnId,
-      () =>
-        this.taskStore?.setPermissionState(request.taskId, request.turnId, true) ??
-        Promise.resolve()
+  /** Adapter 已在本地取消 ACP Promise；这里只撤销完全匹配的 Broker 审批与 Renderer 投影。 */
+  handlePermissionCancellation(cancellation: AgentRuntimePermissionCancellation): void {
+    const request = this.runtimePermissionRequests.get(cancellation.requestId)
+    if (!request || !matchesRuntimePermissionCancellation(request, cancellation)) return
+    this.runtimePermissionRequests.delete(cancellation.requestId)
+    void this.permissionBroker?.cancelAuthorization(
+      cancellation.requestId,
+      cancellation.taskId,
+      cancellation.turnId
     )
   }
 
-  /** 权限响应只转发一次；重复、晚到或不属于当前 Turn 的响应安全忽略。 */
-  respondPermission(requestId: string, optionId?: string): void {
-    const pending = this.pendingPermissions.get(requestId)
-    if (!pending) return
-
-    this.pendingPermissions.delete(requestId)
-    this.adapter.respondPermission(requestId, optionId)
-    const task = this.tasks.get(pending.taskId)
-    if (task?.activeTurnId === pending.turnId && task.state === 'waiting-permission') {
-      task.state = 'running'
-      task.updatedAt = this.now()
-      this.queueHistoryWrite(
-        pending.taskId,
-        pending.turnId,
-        () =>
-          this.taskStore?.setPermissionState(pending.taskId, pending.turnId, false) ??
-          Promise.resolve()
-      )
-    }
+  /** Renderer 只提交产品级决策，Broker 负责身份、过期、重复和允许范围校验。 */
+  async respondPermission(request: AgentRespondPermissionRequest): Promise<void> {
+    await this.permissionBroker?.respond(request)
   }
 
   /**
@@ -539,15 +570,48 @@ export class AgentService {
     task.state = mapOutcomeToExecutionState(outcome)
     delete task.activeTurnId
     task.updatedAt = this.now()
-    this.clearPendingPermissions({ taskId, turnId, runtimeSessionId: task.runtimeSessionId })
+    void this.permissionBroker?.cancelTurn(taskId, turnId)
   }
 
-  private clearPendingPermissions(turn: AgentRuntimeTurnRef): void {
-    for (const [requestId, pending] of this.pendingPermissions) {
-      if (pending.taskId === turn.taskId && (!turn.turnId || pending.turnId === turn.turnId)) {
-        this.pendingPermissions.delete(requestId)
-      }
-    }
+  private isRuntimePermissionCurrent(request: AgentRuntimePermissionRequest): boolean {
+    const task = this.tasks.get(request.taskId)
+    const activeTurn = this.executionController.getActiveTurn()
+    return Boolean(
+      task &&
+      activeTurn &&
+      request.runtimeId === task.runtimeId &&
+      activeTurn.taskId === request.taskId &&
+      activeTurn.turnId === request.turnId &&
+      activeTurn.runtimeSessionId === task.runtimeSessionId &&
+      request.runtimeSessionId === task.runtimeSessionId &&
+      task.activeTurnId === request.turnId
+    )
+  }
+
+  private isRuntimePermissionActive(request: AgentRuntimePermissionRequest): boolean {
+    return (
+      this.runtimePermissionRequests.get(request.requestId) === request &&
+      this.isRuntimePermissionCurrent(request)
+    )
+  }
+
+  /** 多个并发审批只在全部收束后恢复 running，避免第二个等待请求被错误覆盖。 */
+  private updatePermissionWaitingState(
+    request: AgentRuntimePermissionRequest,
+    pendingCount: number
+  ): void {
+    const task = this.tasks.get(request.taskId)
+    if (!task || task.activeTurnId !== request.turnId) return
+    const waiting = pendingCount > 0
+    task.state = waiting ? 'waiting-permission' : 'running'
+    task.updatedAt = this.now()
+    this.queueHistoryWrite(
+      request.taskId,
+      request.turnId,
+      () =>
+        this.taskStore?.setPermissionState(request.taskId, request.turnId, waiting) ??
+        Promise.resolve()
+    )
   }
 
   private allocateTurnId(): string {
@@ -620,6 +684,20 @@ export class AgentService {
       if (this.historyWrites.get(key) === current) this.historyWrites.delete(key)
     }
   }
+}
+
+function matchesRuntimePermissionCancellation(
+  request: AgentRuntimePermissionRequest,
+  cancellation: AgentRuntimePermissionCancellation
+): boolean {
+  return (
+    request.requestId === cancellation.requestId &&
+    request.runtimeId === cancellation.runtimeId &&
+    request.taskId === cancellation.taskId &&
+    request.turnId === cancellation.turnId &&
+    request.runtimeSessionId === cancellation.runtimeSessionId &&
+    request.toolCallId === cancellation.toolCallId
+  )
 }
 
 function validateWorkspace(workspace: string): string {

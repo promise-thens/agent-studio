@@ -10,6 +10,8 @@ import type {
 import { createAgentRuntimeCapabilitySnapshot } from './runtime-capabilities'
 import type {
   AgentRuntimeAdapter,
+  AgentRuntimePermissionRequest,
+  AgentRuntimePermissionResolution,
   AgentRuntimeSessionContext,
   AgentRuntimeSessionRef,
   AgentRuntimeTurnContext,
@@ -20,6 +22,9 @@ import { AgentService, AgentServiceError } from './agent-service'
 import { TaskExecutionController } from './task-execution-controller'
 import { ProjectRegistry } from '../project/project-registry'
 import { TaskStore } from './task-store'
+import { PermissionAuditStore } from '../security/permission-audit-store'
+import { PermissionBroker } from '../security/permission-broker'
+import { createLocalEnvironmentId } from '../security/permission-policy'
 
 const WORKSPACE = '/tmp/agent-studio-project'
 
@@ -247,34 +252,317 @@ describe('AgentService Task / Turn 编排', () => {
     expect(adapter.createSession).toHaveBeenCalledTimes(1)
   })
 
-  it('权限响应只转发一次，断开可取消活动 Turn 并清理等待状态', async () => {
-    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+  it('允许一次只转发一次，错误身份与重复响应均幂等忽略', async () => {
+    const fixture = await createPermissionServiceFixture(['task-a', 'turn-a1'])
     const turnResult = deferred<AgentRuntimeTurnResult>()
-    adapter.startTurn.mockImplementationOnce(() => turnResult.promise)
-    const controller = new TaskExecutionController()
-    const service = createService(adapter, ['task-a', 'turn-a1'], controller)
-    const task = await service.createTask(WORKSPACE)
-    const execution = service.startTurn(task.taskId, '等待权限')
-    await vi.waitFor(() => expect(adapter.startTurn).toHaveBeenCalledTimes(1))
+    fixture.adapter.startTurn.mockImplementationOnce(() => turnResult.promise)
+    try {
+      const execution = fixture.service.startTurn(fixture.taskId, '等待权限')
+      await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledTimes(1))
 
-    const permission = permissionRequest(task.taskId, 'turn-a1', 'runtime-session-1')
-    service.handlePermissionRequest(permission)
-    expect(service.getTaskRuntimeState(task.taskId).state).toBe('waiting-permission')
+      const permission = permissionRequest(
+        fixture.taskId,
+        'turn-a1',
+        'runtime-session-1',
+        'runtime-request-1'
+      )
+      fixture.service.handlePermissionRequest(permission)
+      const approval = await waitForApproval(fixture.approvals, 0)
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId).state).toBe('waiting-permission')
 
-    service.respondPermission(permission.id, 'allow-once')
-    service.respondPermission(permission.id, 'allow-once')
-    expect(adapter.respondPermission).toHaveBeenCalledTimes(1)
-    expect(service.getTaskRuntimeState(task.taskId).state).toBe('running')
+      await fixture.service.respondPermission({
+        approvalId: approval.approvalId,
+        taskId: 'wrong-task',
+        turnId: approval.turnId,
+        decision: 'allow-once'
+      })
+      expect(fixture.adapter.respondPermission).not.toHaveBeenCalled()
 
-    await service.disconnect()
-    expect(adapter.cancelTurn).not.toHaveBeenCalled()
-    expect(adapter.disconnect).toHaveBeenCalledTimes(1)
-    expect(controller.getActiveTurn()).toBeNull()
-    expect(service.getTaskRuntimeState(task.taskId).state).toBe('cancelled')
-    expect(service.getSelectedTaskId()).toBeNull()
+      const response = {
+        approvalId: approval.approvalId,
+        taskId: approval.taskId,
+        turnId: approval.turnId,
+        decision: 'allow-once' as const
+      }
+      await fixture.service.respondPermission(response)
+      await fixture.service.respondPermission(response)
 
-    turnResult.resolve({ outcome: 'cancelled' })
-    await execution
+      expect(fixture.adapter.respondPermission).toHaveBeenCalledOnce()
+      expect(fixture.adapter.respondPermission).toHaveBeenCalledWith(
+        'runtime-request-1',
+        'allow-once'
+      )
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId).state).toBe('running')
+
+      turnResult.resolve({ outcome: 'completed' })
+      await expect(execution).resolves.toMatchObject({ outcome: 'completed' })
+    } finally {
+      await fixture.dispose()
+    }
+  })
+
+  it('两个并发审批会独立收敛，最后一个结束后才恢复 running', async () => {
+    const fixture = await createPermissionServiceFixture(['task-a', 'turn-a1'])
+    const turnResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockImplementationOnce(() => turnResult.promise)
+    try {
+      const execution = fixture.service.startTurn(fixture.taskId, '并发等待权限')
+      await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledOnce())
+
+      fixture.service.handlePermissionRequest(
+        permissionRequest(
+          fixture.taskId,
+          'turn-a1',
+          'runtime-session-1',
+          'runtime-request-1',
+          'src/first.ts'
+        )
+      )
+      fixture.service.handlePermissionRequest(
+        permissionRequest(
+          fixture.taskId,
+          'turn-a1',
+          'runtime-session-1',
+          'runtime-request-2',
+          'src/second.ts'
+        )
+      )
+      const firstApproval = await waitForApproval(fixture.approvals, 0)
+      const secondApproval = await waitForApproval(fixture.approvals, 1)
+      expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(2)
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId).state).toBe('waiting-permission')
+
+      await fixture.service.respondPermission({
+        approvalId: firstApproval.approvalId,
+        taskId: firstApproval.taskId,
+        turnId: firstApproval.turnId,
+        decision: 'allow-once'
+      })
+      expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(1)
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId).state).toBe('waiting-permission')
+
+      await fixture.service.respondPermission({
+        approvalId: secondApproval.approvalId,
+        taskId: secondApproval.taskId,
+        turnId: secondApproval.turnId,
+        decision: 'allow-once'
+      })
+      expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(0)
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId).state).toBe('running')
+      expect(fixture.adapter.respondPermission.mock.calls).toEqual(
+        expect.arrayContaining([
+          ['runtime-request-1', 'allow-once'],
+          ['runtime-request-2', 'allow-once']
+        ])
+      )
+      expect(fixture.adapter.respondPermission).toHaveBeenCalledTimes(2)
+
+      turnResult.resolve({ outcome: 'completed' })
+      await execution
+    } finally {
+      await fixture.dispose()
+    }
+  })
+
+  it('AgentService 不能越过 Broker 队首允许后续 Runtime 请求', async () => {
+    const fixture = await createPermissionServiceFixture(['task-a', 'turn-a1'])
+    const turnResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockImplementationOnce(() => turnResult.promise)
+    try {
+      const execution = fixture.service.startTurn(fixture.taskId, '验证主进程 FIFO')
+      await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledOnce())
+      fixture.service.handlePermissionRequest(
+        permissionRequest(
+          fixture.taskId,
+          'turn-a1',
+          'runtime-session-1',
+          'runtime-request-first',
+          'src/first.ts'
+        )
+      )
+      fixture.service.handlePermissionRequest(
+        permissionRequest(
+          fixture.taskId,
+          'turn-a1',
+          'runtime-session-1',
+          'runtime-request-second',
+          'src/second.ts'
+        )
+      )
+      const first = await waitForApproval(fixture.approvals, 0)
+      const second = await waitForApproval(fixture.approvals, 1)
+
+      await fixture.service.respondPermission({
+        approvalId: second.approvalId,
+        taskId: second.taskId,
+        turnId: second.turnId,
+        decision: 'allow-once'
+      })
+      expect(fixture.adapter.respondPermission).not.toHaveBeenCalled()
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId).state).toBe('waiting-permission')
+
+      await fixture.service.respondPermission({
+        approvalId: first.approvalId,
+        taskId: first.taskId,
+        turnId: first.turnId,
+        decision: 'deny'
+      })
+      await fixture.service.respondPermission({
+        approvalId: second.approvalId,
+        taskId: second.taskId,
+        turnId: second.turnId,
+        decision: 'allow-once'
+      })
+      expect(fixture.adapter.respondPermission.mock.calls).toEqual([
+        ['runtime-request-first', 'deny-once'],
+        ['runtime-request-second', 'allow-once']
+      ])
+
+      turnResult.resolve({ outcome: 'completed' })
+      await execution
+      await vi.waitFor(() =>
+        expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(0)
+      )
+    } finally {
+      await fixture.dispose()
+    }
+  })
+
+  it('ToolCall 终态精确撤销目标审批，晚到 allow-task 不执行也不注册 grant', async () => {
+    const fixture = await createPermissionServiceFixture(['task-a', 'turn-a1'])
+    const turnResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockImplementationOnce(() => turnResult.promise)
+    try {
+      const execution = fixture.service.startTurn(fixture.taskId, '精确撤销权限')
+      await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledOnce())
+      const firstRequest = permissionRequest(
+        fixture.taskId,
+        'turn-a1',
+        'runtime-session-1',
+        'runtime-request-cancelled'
+      )
+      fixture.service.handlePermissionRequest(firstRequest)
+      const approval = await waitForApproval(fixture.approvals, 0)
+
+      fixture.service.handlePermissionCancellation({
+        requestId: firstRequest.requestId,
+        runtimeId: firstRequest.runtimeId,
+        taskId: firstRequest.taskId,
+        turnId: firstRequest.turnId,
+        runtimeSessionId: firstRequest.runtimeSessionId,
+        toolCallId: firstRequest.toolCallId
+      })
+      await vi.waitFor(() =>
+        expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(0)
+      )
+      await fixture.service.respondPermission({
+        approvalId: approval.approvalId,
+        taskId: approval.taskId,
+        turnId: approval.turnId,
+        decision: 'allow-task'
+      })
+      expect(fixture.adapter.respondPermission.mock.calls).toEqual([
+        ['runtime-request-cancelled', 'cancelled']
+      ])
+
+      const secondRequest = {
+        ...permissionRequest(
+          fixture.taskId,
+          'turn-a1',
+          'runtime-session-1',
+          'runtime-request-after-cancel'
+        ),
+        parameterFingerprint: firstRequest.parameterFingerprint
+      }
+      fixture.service.handlePermissionRequest(secondRequest)
+      await expect(waitForApproval(fixture.approvals, 1)).resolves.toMatchObject({
+        taskId: fixture.taskId
+      })
+
+      turnResult.resolve({ outcome: 'completed' })
+      await execution
+    } finally {
+      await fixture.dispose()
+    }
+  })
+
+  it('Turn 终态会取消未决审批，晚到允许不会重新执行', async () => {
+    const fixture = await createPermissionServiceFixture(['task-a', 'turn-a1'])
+    const turnResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockImplementationOnce(() => turnResult.promise)
+    try {
+      const execution = fixture.service.startTurn(fixture.taskId, '终态收束权限')
+      await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledOnce())
+      fixture.service.handlePermissionRequest(
+        permissionRequest(
+          fixture.taskId,
+          'turn-a1',
+          'runtime-session-1',
+          'runtime-request-terminal'
+        )
+      )
+      const approval = await waitForApproval(fixture.approvals, 0)
+
+      turnResult.resolve({ outcome: 'completed' })
+      await execution
+      await vi.waitFor(() =>
+        expect(fixture.adapter.respondPermission).toHaveBeenCalledWith(
+          'runtime-request-terminal',
+          'cancelled'
+        )
+      )
+      expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(0)
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId)).toMatchObject({
+        state: 'completed',
+        lastTurnId: 'turn-a1'
+      })
+
+      await fixture.service.respondPermission({
+        approvalId: approval.approvalId,
+        taskId: approval.taskId,
+        turnId: approval.turnId,
+        decision: 'allow-once'
+      })
+      expect(fixture.adapter.respondPermission).toHaveBeenCalledOnce()
+    } finally {
+      await fixture.dispose()
+    }
+  })
+
+  it('断开会取消活动 Turn 与未决审批，并清理选中会话', async () => {
+    const fixture = await createPermissionServiceFixture(['task-a', 'turn-a1'])
+    const turnResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockImplementationOnce(() => turnResult.promise)
+    try {
+      const execution = fixture.service.startTurn(fixture.taskId, '断开时收束权限')
+      await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledOnce())
+      fixture.service.handlePermissionRequest(
+        permissionRequest(
+          fixture.taskId,
+          'turn-a1',
+          'runtime-session-1',
+          'runtime-request-disconnect'
+        )
+      )
+      await waitForApproval(fixture.approvals, 0)
+
+      await fixture.service.disconnect()
+      await vi.waitFor(() =>
+        expect(fixture.adapter.respondPermission).toHaveBeenCalledWith(
+          'runtime-request-disconnect',
+          'cancelled'
+        )
+      )
+      expect(fixture.adapter.cancelTurn).not.toHaveBeenCalled()
+      expect(fixture.controller.getActiveTurn()).toBeNull()
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId).state).toBe('cancelled')
+      expect(fixture.service.getSelectedTaskId()).toBeNull()
+
+      turnResult.resolve({ outcome: 'cancelled' })
+      await execution
+    } finally {
+      await fixture.dispose()
+    }
   })
 
   it('断开时等待历史队列并把持久化 Turn 收束为 cancelled', async () => {
@@ -322,41 +610,61 @@ describe('AgentService Task / Turn 编排', () => {
     await execution
   })
 
-  it('旧 Turn 的晚到终态不能覆盖当前新 Turn，错误 session 的权限请求也会被忽略', async () => {
-    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
-    const service = createService(adapter, ['task-a', 'turn-a1', 'turn-a2'])
-    const task = await service.createTask(WORKSPACE)
-    await service.startTurn(task.taskId, '第一轮')
+  it('旧 Turn 终态不覆盖新 Turn，错误 session/runtime 的权限请求失败关闭', async () => {
+    const fixture = await createPermissionServiceFixture(['task-a', 'turn-a1', 'turn-a2'])
+    try {
+      await fixture.service.startTurn(fixture.taskId, '第一轮')
 
-    const secondResult = deferred<AgentRuntimeTurnResult>()
-    adapter.startTurn.mockImplementationOnce(() => secondResult.promise)
-    const secondExecution = service.startTurn(task.taskId, '第二轮')
-    await vi.waitFor(() => expect(adapter.startTurn).toHaveBeenCalledTimes(2))
+      const secondResult = deferred<AgentRuntimeTurnResult>()
+      fixture.adapter.startTurn.mockImplementationOnce(() => secondResult.promise)
+      const secondExecution = fixture.service.startTurn(fixture.taskId, '第二轮')
+      await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledTimes(2))
 
-    service.handleRuntimeEvent({
-      runtimeId: 'grok',
-      runtimeSessionId: 'runtime-session-1',
-      capabilityState: 'native',
-      taskId: task.taskId,
-      turnId: 'turn-a1',
-      sequence: 99,
-      observedAt: '2026-08-11T00:00:00.000Z',
-      kind: 'turn-complete',
-      outcome: 'failed'
-    })
-    service.handlePermissionRequest(permissionRequest(task.taskId, 'turn-a2', 'wrong-session'))
-    service.handlePermissionRequest({
-      ...permissionRequest(task.taskId, 'turn-a2', 'runtime-session-1'),
-      runtimeId: 'codex'
-    })
-    expect(service.getTaskRuntimeState(task.taskId)).toMatchObject({
-      state: 'running',
-      activeTurnId: 'turn-a2'
-    })
+      fixture.service.handleRuntimeEvent({
+        runtimeId: 'grok',
+        runtimeSessionId: 'runtime-session-1',
+        capabilityState: 'native',
+        taskId: fixture.taskId,
+        turnId: 'turn-a1',
+        sequence: 99,
+        observedAt: '2026-08-11T00:00:00.000Z',
+        kind: 'turn-complete',
+        outcome: 'failed'
+      })
+      fixture.service.handlePermissionRequest(
+        permissionRequest(
+          fixture.taskId,
+          'turn-a2',
+          'wrong-session',
+          'runtime-request-wrong-session'
+        )
+      )
+      fixture.service.handlePermissionRequest({
+        ...permissionRequest(
+          fixture.taskId,
+          'turn-a2',
+          'runtime-session-1',
+          'runtime-request-wrong-runtime'
+        ),
+        runtimeId: 'codex'
+      })
 
-    secondResult.resolve({ outcome: 'completed' })
-    await secondExecution
-    expect(service.getTaskRuntimeState(task.taskId).state).toBe('completed')
+      expect(fixture.approvals).toHaveLength(0)
+      expect(fixture.adapter.respondPermission.mock.calls).toEqual([
+        ['runtime-request-wrong-session', 'cancelled'],
+        ['runtime-request-wrong-runtime', 'cancelled']
+      ])
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId)).toMatchObject({
+        state: 'running',
+        activeTurnId: 'turn-a2'
+      })
+
+      secondResult.resolve({ outcome: 'completed' })
+      await secondExecution
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId).state).toBe('completed')
+    } finally {
+      await fixture.dispose()
+    }
   })
 
   it('服务层再次校验工作区、Prompt 与未知 Task，不信任 IPC 前置校验', async () => {
@@ -446,7 +754,9 @@ class FakeRuntimeAdapter implements AgentRuntimeAdapter {
     async () => ({ outcome: 'completed' })
   )
   readonly cancelTurn = vi.fn(async (): Promise<void> => undefined)
-  readonly respondPermission = vi.fn((): void => undefined)
+  readonly respondPermission = vi.fn<
+    (requestId: string, resolution: AgentRuntimePermissionResolution) => void
+  >((): void => undefined)
 
   constructor(capabilities: { resume: boolean; load: boolean }) {
     this.snapshot = restoreSnapshot(capabilities)
@@ -527,17 +837,130 @@ function createService(
 function permissionRequest(
   taskId: string,
   turnId: string,
-  runtimeSessionId: string
-): AgentPermissionRequest {
+  runtimeSessionId: string,
+  requestId: string,
+  target = 'src/example.ts'
+): AgentRuntimePermissionRequest {
   return {
-    id: 'permission-1',
+    requestId,
     runtimeId: 'grok',
     taskId,
     turnId,
     runtimeSessionId,
-    title: '运行测试',
-    options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }]
+    toolCallId: `tool-${requestId}`,
+    operationType: 'write-file',
+    targets: [{ kind: 'path', value: target }],
+    parameterFingerprint: `write:${requestId}`,
+    title: '写入测试文件',
+    impact: '会修改当前 Project 内的文件。',
+    executionSupported: true
   }
+}
+
+interface PermissionServiceFixture {
+  adapter: FakeRuntimeAdapter
+  broker: PermissionBroker
+  controller: TaskExecutionController
+  service: AgentService
+  taskId: string
+  approvals: AgentPermissionRequest[]
+  dispose: () => Promise<void>
+}
+
+/**
+ * 使用真实临时 ProjectRegistry/TaskStore 绑定 Task 身份，
+ * 避免用绕过 projectId 与持久化边界的假审批制造虚假绿灯。
+ */
+async function createPermissionServiceFixture(ids: string[]): Promise<PermissionServiceFixture> {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'agent-service-permission-'))
+  const projectPath = join(userDataPath, 'project')
+  await mkdir(projectPath)
+  const registry = new ProjectRegistry({
+    userDataPath,
+    createId: () => 'project-1',
+    now: () => '2026-08-12T00:00:00.000Z'
+  })
+  await registry.initialize()
+  const project = await registry.register(projectPath)
+  const taskStore = new TaskStore({ projectRegistry: registry })
+  await taskStore.initialize()
+  const approvals: AgentPermissionRequest[] = []
+  let brokerId = 0
+  const auditStore = new PermissionAuditStore({
+    projectRegistry: registry,
+    getTaskIdentity: (taskId) => {
+      const task = taskStore.getTaskRecord(taskId)
+      return { taskId: task.taskId, projectId: task.projectId }
+    },
+    createId: () => `quarantine-${++brokerId}`
+  })
+  const broker = new PermissionBroker({
+    auditStore,
+    onApproval: (approval) => {
+      approvals.push(approval)
+      return true
+    },
+    resolveIntentContext: (taskId, turnId) => {
+      try {
+        const task = taskStore.getTaskRecord(taskId)
+        return {
+          taskId: task.taskId,
+          turnId: task.activeTurnId ?? '',
+          projectId: task.projectId,
+          executionRoot: task.environment.rootSnapshot,
+          environmentId: createLocalEnvironmentId(task.projectId, task.environment.rootSnapshot),
+          runtimeId: task.runtimeId,
+          environmentKind: 'local' as const,
+          active:
+            task.activeTurnId === turnId &&
+            (task.state === 'running' || task.state === 'waiting-permission')
+        }
+      } catch {
+        return null
+      }
+    },
+    createId: () => `broker-${++brokerId}`,
+    now: () => Date.parse('2026-08-12T00:00:00.000Z')
+  })
+  const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+  const controller = new TaskExecutionController()
+  let idIndex = 0
+  let clock = 0
+  const service = new AgentService(adapter, controller, {
+    createId: () => ids[idIndex++] ?? `unexpected-id-${idIndex}`,
+    now: () => new Date(Date.UTC(2026, 7, 12, 0, 0, clock++)).toISOString(),
+    projectRegistry: registry,
+    taskStore,
+    permissionBroker: broker
+  })
+  await service.connect(project.projectId)
+  const task = await service.createTask(project.projectId)
+
+  return {
+    adapter,
+    broker,
+    controller,
+    service,
+    taskId: task.taskId,
+    approvals,
+    dispose: async () => {
+      await broker.shutdown()
+      await rm(userDataPath, { recursive: true, force: true })
+    }
+  }
+}
+
+/** 等待 Broker 完成路径规范化并登记产品级审批。 */
+async function waitForApproval(
+  approvals: AgentPermissionRequest[],
+  index: number
+): Promise<AgentPermissionRequest> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const approval = approvals[index]
+    if (approval) return approval
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error('审批未在预期时间内登记。')
 }
 
 /** 构造可控结果，验证取消、权限和断开的异步收束。 */

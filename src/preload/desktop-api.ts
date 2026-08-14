@@ -1,14 +1,17 @@
-import type {
-  AgentEvent,
-  AgentPermissionRequest,
-  AgentRuntimeStatus,
-  AgentTaskRuntimeState,
-  AgentTurnExecutionResult
+import {
+  AGENT_OPERATION_TYPES,
+  type AgentOperationType,
+  type AgentEvent,
+  type AgentPermissionRequest,
+  type AgentRuntimeStatus,
+  type AgentTaskRuntimeState,
+  type AgentTurnExecutionResult
 } from '../shared/agent'
 import {
   AGENT_INVOKE_CHANNELS,
   AGENT_PUSH_CHANNELS,
-  type AgentDesktopApi
+  type AgentDesktopApi,
+  type AgentPermissionCancellation
 } from '../shared/agent-ipc'
 import { APP_INVOKE_CHANNELS, type AppDesktopApi } from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
@@ -21,13 +24,24 @@ export interface NarrowIpcRenderer {
   removeListener: (channel: string, listener: (event: unknown, payload: unknown) => void) => void
 }
 
+const MAX_PERMISSION_FIELD_BYTES = 4 * 1024
+const MAX_PERMISSION_TARGETS = 32
+const AGENT_RUNTIME_IDS = ['grok', 'codex'] as const
+const AGENT_PERMISSION_RISKS = ['L0', 'L1', 'L2', 'L3'] as const
+const AGENT_PERMISSION_SCOPES = ['once', 'task'] as const
+const AGENT_APP_SERVICES = ['command-runner', 'git', 'worktree', 'other'] as const
+
 /** 固定订阅单个 channel，只转发 payload，并提供精确且幂等的清理函数。 */
 function subscribe<T>(
   ipcRenderer: NarrowIpcRenderer,
   channel: string,
-  listener: (payload: T) => void
+  listener: (payload: T) => void,
+  parse?: (payload: unknown) => T | null
 ): () => void {
-  const handler = (_event: unknown, payload: unknown): void => listener(payload as T)
+  const handler = (_event: unknown, payload: unknown): void => {
+    const parsed = parse ? parse(payload) : (payload as T)
+    if (parsed !== null) listener(parsed)
+  }
   let cleaned = false
   ipcRenderer.on(channel, handler)
   return () => {
@@ -35,6 +49,112 @@ function subscribe<T>(
     cleaned = true
     ipcRenderer.removeListener(channel, handler)
   }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function readPermissionText(value: unknown, allowEmpty = false): string | null {
+  if (
+    typeof value !== 'string' ||
+    (!allowEmpty && !value.trim()) ||
+    value.includes('\0') ||
+    new TextEncoder().encode(value).byteLength > MAX_PERMISSION_FIELD_BYTES
+  ) {
+    return null
+  }
+  return value
+}
+
+function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
+  return typeof value === 'string' && values.includes(value as T)
+}
+
+/**
+ * 权限 Push 是 Preload 的敏感跨进程边界；这里只重建 Renderer 公开 DTO，
+ * 主进程意外附带的 Runtime 身份、指纹、optionId 或原始负载不会被透传。
+ */
+function parsePermissionRequest(payload: unknown): AgentPermissionRequest | null {
+  if (!isPlainRecord(payload)) return null
+  const approvalId = readPermissionText(payload.approvalId)
+  const taskId = readPermissionText(payload.taskId)
+  const turnId = readPermissionText(payload.turnId)
+  const projectId = readPermissionText(payload.projectId)
+  const environmentId = readPermissionText(payload.environmentId)
+  const title = readPermissionText(payload.title, true)
+  const impact = readPermissionText(payload.impact, true)
+  const expiresAt = readPermissionText(payload.expiresAt)
+  if (
+    !approvalId ||
+    !taskId ||
+    !turnId ||
+    !projectId ||
+    !environmentId ||
+    title === null ||
+    impact === null ||
+    !expiresAt ||
+    !Number.isFinite(Date.parse(expiresAt)) ||
+    (payload.initiator !== 'runtime' && payload.initiator !== 'app') ||
+    !isOneOf(payload.operationType, AGENT_OPERATION_TYPES) ||
+    !isOneOf(payload.risk, AGENT_PERMISSION_RISKS) ||
+    !Array.isArray(payload.targets) ||
+    payload.targets.length > MAX_PERMISSION_TARGETS ||
+    !Array.isArray(payload.allowedScopes) ||
+    payload.allowedScopes.length === 0 ||
+    payload.allowedScopes.length > AGENT_PERMISSION_SCOPES.length ||
+    (payload.truncated !== undefined && payload.truncated !== true)
+  ) {
+    return null
+  }
+
+  const targets = payload.targets.map((target) => readPermissionText(target, true))
+  if (targets.some((target) => target === null)) return null
+  if (
+    !payload.allowedScopes.every((scope) => isOneOf(scope, AGENT_PERMISSION_SCOPES)) ||
+    new Set(payload.allowedScopes).size !== payload.allowedScopes.length
+  ) {
+    return null
+  }
+
+  const identity =
+    payload.initiator === 'runtime'
+      ? isOneOf(payload.runtimeId, AGENT_RUNTIME_IDS)
+        ? { initiator: 'runtime' as const, runtimeId: payload.runtimeId }
+        : null
+      : isOneOf(payload.appService, AGENT_APP_SERVICES)
+        ? { initiator: 'app' as const, appService: payload.appService }
+        : null
+  if (!identity) return null
+
+  return {
+    approvalId,
+    ...identity,
+    taskId,
+    turnId,
+    projectId,
+    environmentId,
+    operationType: payload.operationType as AgentOperationType,
+    risk: payload.risk,
+    title,
+    impact,
+    targets: targets as string[],
+    allowedScopes: [...payload.allowedScopes],
+    expiresAt,
+    ...(payload.truncated === true ? { truncated: true } : {})
+  }
+}
+
+/** 取消 Push 只允许审批三元组和固定原因，不向 Renderer 暴露 Runtime requestId。 */
+function parsePermissionCancellation(payload: unknown): AgentPermissionCancellation | null {
+  if (!isPlainRecord(payload) || payload.reason !== 'cancelled') return null
+  const approvalId = readPermissionText(payload.approvalId)
+  const taskId = readPermissionText(payload.taskId)
+  const turnId = readPermissionText(payload.turnId)
+  if (!approvalId || !taskId || !turnId) return null
+  return { approvalId, taskId, turnId, reason: 'cancelled' }
 }
 
 /** 创建不暴露 channel 或 Electron event 的中性 Agent API。 */
@@ -68,16 +188,30 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId }) as Promise<
         DesktopIpcResult<AgentTaskRuntimeState>
       >,
-    respondPermission: (requestId, optionId) =>
+    respondPermission: (request) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.respondPermission, {
-        requestId,
-        ...(optionId === undefined ? {} : { optionId })
+        approvalId: request.approvalId,
+        taskId: request.taskId,
+        turnId: request.turnId,
+        decision: request.decision
       }) as Promise<DesktopIpcResult<null>>,
     onStatus: (listener) =>
       subscribe<AgentRuntimeStatus>(ipcRenderer, AGENT_PUSH_CHANNELS.status, listener),
     onEvent: (listener) => subscribe<AgentEvent>(ipcRenderer, AGENT_PUSH_CHANNELS.event, listener),
     onPermission: (listener) =>
-      subscribe<AgentPermissionRequest>(ipcRenderer, AGENT_PUSH_CHANNELS.permission, listener)
+      subscribe<AgentPermissionRequest>(
+        ipcRenderer,
+        AGENT_PUSH_CHANNELS.permission,
+        listener,
+        parsePermissionRequest
+      ),
+    onPermissionCancelled: (listener) =>
+      subscribe<AgentPermissionCancellation>(
+        ipcRenderer,
+        AGENT_PUSH_CHANNELS.permissionCancelled,
+        listener,
+        parsePermissionCancellation
+      )
   }
 }
 
@@ -132,6 +266,12 @@ export function createTaskDesktopApi(ipcRenderer: NarrowIpcRenderer): TaskDeskto
         ...(afterSequence === undefined ? {} : { afterSequence }),
         ...(limit === undefined ? {} : { limit })
       }) as ReturnType<TaskDesktopApi['listEvents']>,
+    listPermissionAudits: (taskId, cursor, limit) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.listPermissionAudits, {
+        taskId,
+        ...(cursor === undefined ? {} : { cursor }),
+        ...(limit === undefined ? {} : { limit })
+      }) as ReturnType<TaskDesktopApi['listPermissionAudits']>,
     resume: (taskId) =>
       ipcRenderer.invoke(TASK_INVOKE_CHANNELS.resume, { taskId }) as ReturnType<
         TaskDesktopApi['resume']

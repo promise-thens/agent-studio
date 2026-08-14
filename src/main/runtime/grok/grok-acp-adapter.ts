@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, dirname, join, resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import type {
@@ -19,6 +19,8 @@ import {
   type AgentRuntimeAdapter,
   type AgentRuntimeAdapterErrorCode,
   type AgentRuntimeAdapterSink,
+  type AgentRuntimePermissionCancellation,
+  type AgentRuntimePermissionResolution,
   type AgentRuntimeSessionContext,
   type AgentRuntimeSessionRef,
   type AgentRuntimeTurnContext,
@@ -34,17 +36,30 @@ import {
 } from '../../provider/grok-provider-config'
 import {
   GROK_RUNTIME_ID,
+  areGrokAuthorizationSnapshotsEquivalent,
+  isSafeGrokToolCallId,
   createGrokCapabilitySnapshot,
   createGrokEventBase,
   mapGrokInitializeCapabilitySnapshot,
   mapGrokPermissionRequest,
   mapGrokPromptResponse,
-  mapGrokSessionUpdate
+  mapGrokSessionUpdate,
+  mergeGrokToolCallAuthorizationPatch,
+  type GrokToolCallAuthorizationSnapshot
 } from './grok-acp-mappers'
+import {
+  CONTROLLED_ACP_E2E_DIRECTORIES,
+  CONTROLLED_ACP_E2E_FIXTURE_FILE,
+  CONTROLLED_ACP_E2E_SCENARIOS,
+  CONTROLLED_ACP_E2E_ADAPTER_TRACE_FILE,
+  type ControlledAcpFixtureLaunch
+} from './controlled-acp-fixture'
 
 interface PendingPermission {
+  request: AgentRuntimePermissionCancellation
   activeTurn: ActiveTurn
-  optionIds: Set<string>
+  allowOnceOptionId?: string
+  rejectOnceOptionId?: string
   resolve: (response: acp.RequestPermissionResponse) => void
 }
 
@@ -56,6 +71,9 @@ interface ActiveTurn {
   connectionGeneration: number
   sessionGeneration: number
   normalizer: AgentEventNormalizer
+  toolCallAuthorizationSnapshots: Map<string, GrokToolCallAuthorizationSnapshot>
+  terminalToolCallIds: Set<string>
+  rejectAllToolPermissions: boolean
   cancelRequested: boolean
   outcome?: AgentTurnOutcome
 }
@@ -72,11 +90,16 @@ interface GrokSetModelRequest {
 }
 
 const GROK_SET_MODEL_METHOD = 'session/set_model'
+const MAX_PERMISSION_OPTION_ID_BYTES = 4 * 1024
+const MAX_TOOL_CALL_AUTHORIZATION_SNAPSHOTS = 2_000
+const MAX_TERMINAL_TOOL_CALL_IDS = 2_000
 
 export interface GrokAcpAdapterOptions {
   userDataPath: string
   getProviderConfig: () => ProviderRuntimeConfig | null
   redactText: (text: string) => string
+  /** 仅由 Main 开发态 E2E bootstrap 注入；绝不接受 Renderer、IPC 或普通环境变量。 */
+  controlledFixture?: ControlledAcpFixtureLaunch
 }
 
 /**
@@ -96,6 +119,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   private selectedSession: AgentRuntimeSessionRef | null = null
   private activeTurn: ActiveTurn | null = null
   private pendingPermissions = new Map<string, PendingPermission>()
+  private controlledTraceWrite: Promise<void> = Promise.resolve()
   private supportsCloseSession = false
   private capabilitySnapshot: AgentRuntimeCapabilitySnapshot
   private status: AgentRuntimeStatus
@@ -141,27 +165,43 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       throw error
     }
 
-    let grokHome: string
-    try {
-      grokHome = await writeGrokProviderConfig(this.options.userDataPath, providerConfig)
-    } catch (error) {
-      const adapterError = this.createError(
-        'operation-failed',
-        `无法生成 Grok 配置：${this.redactError(error)}`
-      )
-      this.updateStatus({ state: 'error', message: adapterError.message, workspace })
-      throw adapterError
-    }
-
-    const child = spawn(
-      this.resolveBinary(),
-      ['--no-auto-update', 'agent', '--no-leader', '-m', AGENT_STUDIO_MODEL_ALIAS, 'stdio'],
-      {
-        cwd: workspace,
-        env: buildGrokRuntimeEnvironment(providerConfig, grokHome),
-        stdio: ['pipe', 'pipe', 'pipe']
+    let child: ChildProcessWithoutNullStreams
+    if (this.options.controlledFixture) {
+      try {
+        child = await this.spawnControlledFixture(workspace, this.options.controlledFixture)
+      } catch {
+        // 受控 E2E 的校验错误不携带路径或环境，避免测试日志成为额外的信息出口。
+        const adapterError = this.createError(
+          'operation-failed',
+          '无法启动受控 ACP Runtime Electron E2E。'
+        )
+        this.updateStatus({ state: 'error', message: adapterError.message, workspace })
+        throw adapterError
       }
-    )
+    } else {
+      let grokHome: string
+      try {
+        grokHome = await writeGrokProviderConfig(this.options.userDataPath, providerConfig)
+      } catch (error) {
+        const adapterError = this.createError(
+          'operation-failed',
+          `无法生成 Grok 配置：${this.redactError(error)}`
+        )
+        this.updateStatus({ state: 'error', message: adapterError.message, workspace })
+        throw adapterError
+      }
+
+      // 生产默认启动参数必须保持原样，不能经由通用 command/args 抽象。
+      child = spawn(
+        this.resolveBinary(),
+        ['--no-auto-update', 'agent', '--no-leader', '-m', AGENT_STUDIO_MODEL_ALIAS, 'stdio'],
+        {
+          cwd: workspace,
+          env: buildGrokRuntimeEnvironment(providerConfig, grokHome),
+          stdio: ['pipe', 'pipe', 'pipe']
+        }
+      )
+    }
     const connectionGeneration = ++this.connectionGeneration
     this.process = child
 
@@ -358,6 +398,9 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       connectionGeneration: this.connectionGeneration,
       sessionGeneration: this.sessionGeneration,
       normalizer: new AgentEventNormalizer({ taskId: context.taskId, turnId: context.turnId }),
+      toolCallAuthorizationSnapshots: new Map(),
+      terminalToolCallIds: new Set(),
+      rejectAllToolPermissions: false,
       cancelRequested: false
     }
     this.activeTurn = activeTurn
@@ -424,7 +467,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     }
   }
 
-  respondPermission(requestId: string, optionId?: string): void {
+  respondPermission(requestId: string, resolution: AgentRuntimePermissionResolution): void {
     const pending = this.pendingPermissions.get(requestId)
     if (!pending) return
 
@@ -433,8 +476,14 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       pending.resolve({ outcome: { outcome: 'cancelled' } })
       return
     }
+    const optionId =
+      resolution === 'allow-once'
+        ? pending.allowOnceOptionId
+        : resolution === 'deny-once'
+          ? pending.rejectOnceOptionId
+          : undefined
     pending.resolve(
-      optionId && pending.optionIds.has(optionId)
+      optionId
         ? { outcome: { outcome: 'selected', optionId } }
         : { outcome: { outcome: 'cancelled' } }
     )
@@ -489,14 +538,48 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     ) {
       return Promise.resolve({ outcome: { outcome: 'cancelled' } })
     }
+    if (
+      activeTurn.rejectAllToolPermissions ||
+      activeTurn.terminalToolCallIds.has(params.toolCall.toolCallId) ||
+      params.toolCall.status === 'completed' ||
+      params.toolCall.status === 'failed'
+    ) {
+      this.markToolCallTerminal(activeTurn, params.toolCall.toolCallId)
+      return Promise.resolve({ outcome: { outcome: 'cancelled' } })
+    }
+    if (!isSafeGrokToolCallId(params.toolCall.toolCallId)) {
+      this.rejectAllToolPermissions(activeTurn)
+      return Promise.resolve({ outcome: { outcome: 'cancelled' } })
+    }
 
     const id = randomUUID()
+    const { allowOnceOptionId, rejectOnceOptionId } = findPermissionOptions(params)
+    const previousSnapshot = activeTurn.toolCallAuthorizationSnapshots.get(
+      params.toolCall.toolCallId
+    )
+    const authorizationSnapshot = mergeGrokToolCallAuthorizationPatch(
+      previousSnapshot,
+      params.toolCall
+    )
+    this.rememberToolCallAuthorizationSnapshot(activeTurn, authorizationSnapshot)
+    if (activeTurn.rejectAllToolPermissions) {
+      return Promise.resolve({ outcome: { outcome: 'cancelled' } })
+    }
+    if (
+      previousSnapshot &&
+      !areGrokAuthorizationSnapshotsEquivalent(previousSnapshot, authorizationSnapshot)
+    ) {
+      // 新权限请求改写了同一 ToolCall 的授权事实，旧审批必须先撤销，避免批准陈旧目标。
+      this.cancelPendingPermissionsForToolCall(activeTurn, params.toolCall.toolCallId)
+    }
     const request = mapGrokPermissionRequest(
       params,
       id,
       activeTurn.taskId,
       activeTurn.turnId,
-      (text) => this.safeRedact(text)
+      (text) => this.safeRedact(text),
+      allowOnceOptionId != null,
+      authorizationSnapshot
     )
     if (!request) {
       this.emitDraft(activeTurn, {
@@ -513,10 +596,21 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     return new Promise((resolve) => {
       // 先登记再通知上层，避免同步响应早于 pending 状态建立。
       this.pendingPermissions.set(id, {
+        request: {
+          requestId: id,
+          runtimeId: GROK_RUNTIME_ID,
+          taskId: activeTurn.taskId,
+          turnId: activeTurn.turnId,
+          runtimeSessionId: activeTurn.runtimeSessionId,
+          toolCallId: params.toolCall.toolCallId
+        },
         activeTurn,
-        optionIds: new Set(params.options.map((option) => option.optionId)),
+        ...(request.executionSupported && allowOnceOptionId ? { allowOnceOptionId } : {}),
+        ...(rejectOnceOptionId ? { rejectOnceOptionId } : {}),
         resolve
       })
+      // E2E trace 只记录固定 ToolCall 身份；不会写入 Prompt、选项、路径或 Provider 数据。
+      this.recordControlledFixtureTrace('adapter-permission-pending', params.toolCall.toolCallId)
       try {
         this.sink.onPermission(request)
       } catch {
@@ -540,8 +634,80 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       return
     }
 
+    const update = params.update
+    if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
+      if (!isSafeGrokToolCallId(update.toolCallId)) {
+        this.rejectAllToolPermissions(activeTurn)
+      } else if (update.status === 'completed' || update.status === 'failed') {
+        this.markToolCallTerminal(activeTurn, update.toolCallId)
+      } else if (
+        !activeTurn.rejectAllToolPermissions &&
+        !activeTurn.terminalToolCallIds.has(update.toolCallId)
+      ) {
+        const previousSnapshot = activeTurn.toolCallAuthorizationSnapshots.get(update.toolCallId)
+        const snapshot = mergeGrokToolCallAuthorizationPatch(previousSnapshot, update)
+        this.rememberToolCallAuthorizationSnapshot(activeTurn, snapshot)
+        if (
+          previousSnapshot &&
+          !activeTurn.rejectAllToolPermissions &&
+          !areGrokAuthorizationSnapshotsEquivalent(previousSnapshot, snapshot)
+        ) {
+          // title、status 等展示更新不撤销审批；真实授权事实变化才使旧审批失效。
+          this.cancelPendingPermissionsForToolCall(activeTurn, update.toolCallId)
+        }
+      }
+    }
+
     for (const draft of mapGrokSessionUpdate(params, (text) => this.safeRedact(text))) {
       this.emitDraft(activeTurn, draft)
+    }
+  }
+
+  /**
+   * 权限事实只保留在当前 Turn；容量超限后拒绝本 Turn 后续工具授权，禁止淘汰旧项后复活身份。
+   */
+  private rememberToolCallAuthorizationSnapshot(
+    activeTurn: ActiveTurn,
+    snapshot: GrokToolCallAuthorizationSnapshot
+  ): void {
+    activeTurn.toolCallAuthorizationSnapshots.delete(snapshot.toolCallId)
+    activeTurn.toolCallAuthorizationSnapshots.set(snapshot.toolCallId, snapshot)
+    if (activeTurn.toolCallAuthorizationSnapshots.size <= MAX_TOOL_CALL_AUTHORIZATION_SNAPSHOTS) {
+      return
+    }
+    activeTurn.toolCallAuthorizationSnapshots.clear()
+    this.rejectAllToolPermissions(activeTurn)
+  }
+
+  private rejectAllToolPermissions(activeTurn: ActiveTurn): void {
+    activeTurn.rejectAllToolPermissions = true
+    activeTurn.terminalToolCallIds.clear()
+    activeTurn.toolCallAuthorizationSnapshots.clear()
+    this.cancelPendingPermissions(activeTurn)
+  }
+
+  /** ToolCall 终态先建立 tombstone，再删除快照并精确撤销同一 ToolCall 的等待权限。 */
+  private markToolCallTerminal(activeTurn: ActiveTurn, toolCallId: string): void {
+    if (activeTurn.rejectAllToolPermissions) {
+      this.cancelPendingPermissionsForToolCall(activeTurn, toolCallId)
+      return
+    }
+    if (!activeTurn.terminalToolCallIds.has(toolCallId)) {
+      if (activeTurn.terminalToolCallIds.size >= MAX_TERMINAL_TOOL_CALL_IDS) {
+        this.rejectAllToolPermissions(activeTurn)
+        return
+      }
+      activeTurn.terminalToolCallIds.add(toolCallId)
+    }
+    activeTurn.toolCallAuthorizationSnapshots.delete(toolCallId)
+    this.cancelPendingPermissionsForToolCall(activeTurn, toolCallId)
+  }
+
+  /** 只撤销完全匹配当前 Turn 与 ToolCall 的权限，其他并发请求保持 FIFO。 */
+  private cancelPendingPermissionsForToolCall(activeTurn: ActiveTurn, toolCallId: string): void {
+    for (const [requestId, pending] of this.pendingPermissions) {
+      if (pending.activeTurn !== activeTurn || pending.request.toolCallId !== toolCallId) continue
+      this.cancelPendingPermission(requestId, pending)
     }
   }
 
@@ -585,8 +751,18 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   private cancelPendingPermissions(activeTurn?: ActiveTurn): void {
     for (const [requestId, pending] of this.pendingPermissions) {
       if (activeTurn && pending.activeTurn !== activeTurn) continue
-      this.pendingPermissions.delete(requestId)
-      pending.resolve({ outcome: { outcome: 'cancelled' } })
+      this.cancelPendingPermission(requestId, pending)
+    }
+  }
+
+  private cancelPendingPermission(requestId: string, pending: PendingPermission): void {
+    this.pendingPermissions.delete(requestId)
+    pending.resolve({ outcome: { outcome: 'cancelled' } })
+    this.recordControlledFixtureTrace('adapter-permission-cancelled', pending.request.toolCallId)
+    try {
+      this.sink.onPermissionCancelled(pending.request)
+    } catch {
+      // 服务层通知失败不影响 ACP Promise 的本地安全收束。
     }
   }
 
@@ -924,6 +1100,46 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     return existsSync(bundledPath) ? bundledPath : 'grok'
   }
 
+  /**
+   * 受控 Runtime 仅运行仓库内固定 fixture，且其路径与临时目录会在 Main 和 Adapter 两层复核。
+   * 该分支不复用 Grok 的 HOME/PATH 继承环境，也不接受任意 executable、args 或 Renderer 输入。
+   */
+  private async spawnControlledFixture(
+    workspace: string,
+    launch: ControlledAcpFixtureLaunch
+  ): Promise<ChildProcessWithoutNullStreams> {
+    await assertControlledFixtureLaunch(this.options.userDataPath, workspace, launch)
+    return spawn(
+      process.execPath,
+      [launch.fixturePath, '--scenario', launch.scenario, '--user-data', launch.userDataPath],
+      {
+        cwd: workspace,
+        env: buildControlledFixtureEnvironment(launch.runtimeHomeDirectory, launch.userDataPath),
+        stdio: ['pipe', 'pipe', 'pipe']
+      }
+    )
+  }
+
+  /** 受控 E2E 辅助 trace 按 Adapter 调用顺序串行写入，生产路径不会触及该文件。 */
+  private recordControlledFixtureTrace(event: string, toolCallId: string): void {
+    const launch = this.options.controlledFixture
+    if (!launch) return
+    const record = JSON.stringify({ source: 'adapter', event, toolCallId })
+    this.controlledTraceWrite = this.controlledTraceWrite
+      .catch(() => undefined)
+      .then(() =>
+        fs.appendFile(
+          join(launch.traceDirectory, CONTROLLED_ACP_E2E_ADAPTER_TRACE_FILE),
+          `${record}\n`,
+          {
+            encoding: 'utf8',
+            mode: 0o600
+          }
+        )
+      )
+      .catch(() => undefined)
+  }
+
   /** 统一执行主进程脱敏；脱敏器自身异常时失败关闭，绝不回退原文。 */
   private safeRedact(text: string): string {
     try {
@@ -966,6 +1182,174 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       : 'operation-failed'
     return this.createError(code, `${prefix}：${message}`)
   }
+}
+
+/**
+ * Adapter 侧再次验证受控 fixture 的不可变边界。
+ * 即使未来 Main 装配出现回归，也不能将测试描述符变成任意本地子进程入口。
+ */
+async function assertControlledFixtureLaunch(
+  userDataPath: string,
+  workspace: string,
+  launch: ControlledAcpFixtureLaunch
+): Promise<void> {
+  if (!isControlledFixtureScenario(launch.scenario)) throw new Error('invalid-controlled-fixture')
+  if (resolve(launch.userDataPath) !== resolve(userDataPath)) {
+    throw new Error('invalid-controlled-fixture')
+  }
+  await assertControlledFixtureDirectory(
+    userDataPath,
+    workspace,
+    CONTROLLED_ACP_E2E_DIRECTORIES.workspace
+  )
+  await assertControlledFixtureDirectory(
+    userDataPath,
+    launch.traceDirectory,
+    CONTROLLED_ACP_E2E_DIRECTORIES.trace
+  )
+  await assertControlledFixtureDirectory(
+    userDataPath,
+    launch.barrierDirectory,
+    CONTROLLED_ACP_E2E_DIRECTORIES.barriers
+  )
+  await assertControlledFixtureDirectory(
+    userDataPath,
+    launch.runtimeHomeDirectory,
+    CONTROLLED_ACP_E2E_DIRECTORIES.runtimeHome
+  )
+
+  const expectedDirectory = resolve(launch.repositoryRootPath, 'tests/e2e')
+  const expectedPath = join(expectedDirectory, CONTROLLED_ACP_E2E_FIXTURE_FILE)
+  if (resolve(launch.fixturePath) !== expectedPath) throw new Error('invalid-controlled-fixture')
+
+  const [repositoryRootStats, directoryStats, fixtureStats] = await Promise.all([
+    fs.lstat(launch.repositoryRootPath),
+    fs.lstat(expectedDirectory),
+    fs.lstat(launch.fixturePath)
+  ])
+  if (
+    !repositoryRootStats.isDirectory() ||
+    repositoryRootStats.isSymbolicLink() ||
+    !directoryStats.isDirectory() ||
+    directoryStats.isSymbolicLink() ||
+    !fixtureStats.isFile() ||
+    fixtureStats.isSymbolicLink()
+  ) {
+    throw new Error('invalid-controlled-fixture')
+  }
+  const [canonicalRepositoryRoot, canonicalDirectory, canonicalFixture] = await Promise.all([
+    fs.realpath(launch.repositoryRootPath),
+    fs.realpath(expectedDirectory),
+    fs.realpath(launch.fixturePath)
+  ])
+  if (
+    canonicalRepositoryRoot !== resolve(launch.repositoryRootPath) ||
+    canonicalDirectory !== join(canonicalRepositoryRoot, 'tests/e2e') ||
+    canonicalFixture !== join(canonicalDirectory, CONTROLLED_ACP_E2E_FIXTURE_FILE) ||
+    dirname(canonicalFixture) !== canonicalDirectory
+  ) {
+    throw new Error('invalid-controlled-fixture')
+  }
+}
+
+/** 临时目录必须是 userData 的固定直接子目录，拒绝符号链接和跨目录描述符。 */
+async function assertControlledFixtureDirectory(
+  userDataPath: string,
+  directory: string,
+  expectedName: string
+): Promise<void> {
+  if (typeof directory !== 'string') throw new Error('invalid-controlled-fixture')
+  const expectedPath = resolve(userDataPath, expectedName)
+  if (resolve(directory) !== expectedPath) throw new Error('invalid-controlled-fixture')
+
+  const [userDataStats, directoryStats] = await Promise.all([
+    fs.lstat(userDataPath),
+    fs.lstat(directory)
+  ])
+  if (
+    !userDataStats.isDirectory() ||
+    userDataStats.isSymbolicLink() ||
+    !directoryStats.isDirectory() ||
+    directoryStats.isSymbolicLink()
+  ) {
+    throw new Error('invalid-controlled-fixture')
+  }
+  const [canonicalUserData, canonicalDirectory] = await Promise.all([
+    fs.realpath(userDataPath),
+    fs.realpath(directory)
+  ])
+  if (canonicalDirectory !== join(canonicalUserData, expectedName)) {
+    throw new Error('invalid-controlled-fixture')
+  }
+}
+
+function isControlledFixtureScenario(
+  value: unknown
+): value is ControlledAcpFixtureLaunch['scenario'] {
+  return (
+    typeof value === 'string' &&
+    CONTROLLED_ACP_E2E_SCENARIOS.includes(value as ControlledAcpFixtureLaunch['scenario'])
+  )
+}
+
+/** 夹具进程只得到临时 HOME 与 userData 所在临时根，不继承宿主 PATH、凭据或 Provider 环境。 */
+function buildControlledFixtureEnvironment(
+  runtimeHomeDirectory: string,
+  userDataPath: string
+): NodeJS.ProcessEnv {
+  const temporaryDirectory = dirname(userDataPath)
+  const environment: NodeJS.ProcessEnv = {
+    ELECTRON_RUN_AS_NODE: '1',
+    HOME: runtimeHomeDirectory,
+    USERPROFILE: runtimeHomeDirectory,
+    // fixture 需以 tmpdir() 复核 userData 的直接父目录；这里传入派生路径而非宿主环境。
+    TMPDIR: temporaryDirectory,
+    TMP: temporaryDirectory,
+    TEMP: temporaryDirectory
+  }
+  if (process.platform === 'win32') {
+    const systemRoot = process.env.SystemRoot ?? process.env.WINDIR
+    if (systemRoot) {
+      environment.SystemRoot = systemRoot
+      environment.WINDIR = systemRoot
+    }
+  }
+  return environment
+}
+
+/** optionId 必须在全部 options 中全局唯一，避免拒绝 ID 被 Runtime 同时解释为允许。 */
+function findPermissionOptions(params: acp.RequestPermissionRequest): {
+  allowOnceOptionId?: string
+  rejectOnceOptionId?: string
+} {
+  const counts = new Map<string, number>()
+  for (const option of params.options) {
+    if (!isSafePermissionOptionId(option.optionId)) continue
+    counts.set(option.optionId, (counts.get(option.optionId) ?? 0) + 1)
+  }
+  const uniqueByKind = (kind: 'allow_once' | 'reject_once'): string | undefined => {
+    const matches = params.options.filter(
+      (option) =>
+        option.kind === kind &&
+        isSafePermissionOptionId(option.optionId) &&
+        counts.get(option.optionId) === 1
+    )
+    return matches.length === 1 ? matches[0].optionId : undefined
+  }
+  const allowOnceOptionId = uniqueByKind('allow_once')
+  const rejectOnceOptionId = uniqueByKind('reject_once')
+  return {
+    ...(allowOnceOptionId ? { allowOnceOptionId } : {}),
+    ...(rejectOnceOptionId ? { rejectOnceOptionId } : {})
+  }
+}
+
+function isSafePermissionOptionId(optionId: string): boolean {
+  return (
+    Boolean(optionId.trim()) &&
+    !optionId.includes('\0') &&
+    Buffer.byteLength(optionId, 'utf8') <= MAX_PERMISSION_OPTION_ID_BYTES
+  )
 }
 
 const RUNTIME_ENV_ALLOWLIST = [

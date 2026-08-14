@@ -172,28 +172,89 @@ export type AgentDiff =
       patch: string
     }
 
-export type AgentPermissionOptionKind =
-  'allow_once' | 'allow_always' | 'reject_once' | 'reject_always'
+/** P0-07 首期统一识别的副作用类别；未接入能力仍显式保留并默认拒绝。 */
+export const AGENT_OPERATION_TYPES = [
+  'read-project',
+  'write-file',
+  'execute-command',
+  'delete-path',
+  'git-read',
+  'git-mutate',
+  'worktree-create',
+  'worktree-remove',
+  'network-egress',
+  'browser',
+  'screen',
+  'clipboard',
+  'unknown'
+] as const
 
-export interface AgentPermissionOption {
-  optionId: string
-  name: string
-  kind: AgentPermissionOptionKind
-}
+export type AgentOperationType = (typeof AGENT_OPERATION_TYPES)[number]
+export type AgentPermissionRisk = 'L0' | 'L1' | 'L2' | 'L3'
+export type AgentPermissionScope = 'once' | 'task'
+export type AgentPermissionDecision = 'allow-once' | 'allow-task' | 'deny'
+export type AgentPermissionResolutionReason =
+  | 'auto-allowed'
+  | 'grant-reused'
+  | 'user-allowed'
+  | 'user-denied'
+  | 'cancelled'
+  | 'expired'
+  | 'invalid-target'
+  | 'unsupported'
+  | 'internal-error'
+
+/** 发起者只描述受信任主进程边界，不使用 Runtime 文案或 Renderer 输入作为身份。 */
+export type AgentOperationInitiator =
+  | { kind: 'runtime'; runtimeId: AgentRuntimeId }
+  | { kind: 'app'; service: 'command-runner' | 'git' | 'worktree' | 'other' }
+
+/** 目标使用判别联合，避免用含义模糊的字符串数组承载路径、网络和命令。 */
+export type AgentOperationTarget =
+  | { kind: 'path'; value: string }
+  | { kind: 'project'; value: string }
+  | { kind: 'origin'; value: string }
+  | { kind: 'command'; value: string }
+  | { kind: 'git'; value: string }
+  | { kind: 'worktree'; value: string }
+  | { kind: 'unknown'; value: string }
 
 /**
- * Renderer 可展示的权限请求。allow_always 仅表示 Runtime 提供的选项，
- * 不代表 Agent Studio 已授予跨任务的永久权限。
+ * 主进程内部统一授权语言。executionRoot 和参数指纹不会直接发送 Renderer；
+ * 参数指纹只用于精确匹配，展示文案必须由受信任调用方单独提供且完成脱敏。
  */
-export interface AgentPermissionRequest {
-  id: string
-  runtimeId: AgentRuntimeId
-  title: string
-  options: AgentPermissionOption[]
+export interface OperationIntent {
+  initiator: AgentOperationInitiator
   taskId: string
   turnId: string
-  runtimeSessionId?: string
-  toolCallId?: string
+  projectId: string
+  environmentId: string
+  executionRoot: string
+  operationType: AgentOperationType
+  targets: AgentOperationTarget[]
+  parameterFingerprint: string
+  title: string
+  impact: string
+  minimumRisk?: AgentPermissionRisk
+}
+
+/** Renderer 只能查看 Broker 已创建的有限审批，不接触 Runtime optionId。 */
+export interface AgentPermissionRequest {
+  approvalId: string
+  initiator: 'runtime' | 'app'
+  runtimeId?: AgentRuntimeId
+  appService?: Extract<AgentOperationInitiator, { kind: 'app' }>['service']
+  taskId: string
+  turnId: string
+  projectId: string
+  environmentId: string
+  operationType: AgentOperationType
+  risk: AgentPermissionRisk
+  title: string
+  impact: string
+  targets: string[]
+  allowedScopes: AgentPermissionScope[]
+  expiresAt: string
   truncated?: true
 }
 

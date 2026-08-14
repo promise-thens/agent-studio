@@ -253,19 +253,18 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[P0-06 Project、Task、Turn 与历史恢复](docs/superpowers/plans/p0-06-task-session-history.md)
-- 状态：P0-06 已完成代码、自动验证与 Electron 真机验收，P0-07 前置依赖已满足
+- 当前计划：[P0-07 核心权限 Broker](docs/superpowers/plans/p0-07-core-permission-broker.md)
+- 状态：P0-07 已完成；既有真实 Grok 已验证权限路径、完整自动门禁与受控 ACP Runtime Electron E2E 均已通过
 - 完成度：任务步骤 `12/12`，验收标准 `7/7`
-- 当前完成：已建立版本化 Project Registry、Task/Turn 与事件块存储、原子 JSON、逐记录 quarantine、未知新 schema 保留、256 MiB/100 Project/500 Task/100 Turn/2000 event 有界策略、重启 `interrupted` 收束、`resume → 安全 load`、两阶段物理删除、分页历史和 Renderer 只读/继续/删除入口
-- 兼容边界：Task 固定 Project、Runtime 与 Local 环境，每个 Turn 单独保存实际模型快照；历史只保存规范化、二次脱敏和限长的展示事件，不保存 Runtime raw payload、Secret、原始环境、屏幕或剪贴板；删除不触碰项目目录、Worktree 或 Runtime 原生历史
-- 下一步：按路线图开始 P0-07 核心权限 Broker，继续复用 P0-06 的持久化权限事件与 `interrupted` / `cancelled` 历史状态，不提前建设 P0-08 后台执行器
-- 最近验证：2026-08-12，P0-06 在 Node.js `v22.22.0`、pnpm `10.33.0` 下通过完整 ESLint、30 个文件 / `201` 个 Vitest、typecheck、build、`build:unpack`、diff-check、AGENTS/CLAUDE 一致性和 GitNexus 变更检测；Electron 真机使用隔离 Project 与本机已保存 Provider 凭据完成注册、多轮、Task A → B → A、重启只读、恢复成功/失败、Project 不可用、`interrupted`、`cancelled`、损坏隔离和 Task/Project 本地历史物理删除验收，项目文件与 Runtime 原生历史未被删除
+- 当前完成：已建立 `OperationIntent`、L0-L3 策略、canonical root/符号链接边界、权威 Task context、精确内存 Task grant、2 分钟审批、ACP `allow_once`、脱敏有界审计、静态 IPC/Preload、PermissionPrompt 和权限历史回看；删除事务已增加 Task/Project reservation、写入屏障、一次性 token rollback 与 Store/Broker 不可逆提交后的失败关闭语义，容量淘汰与审计修复写入已统一接入历史 mutation lease；受控 ACP Runtime Electron E2E 已补齐 FIFO、精确 ToolCall/Turn 取消、合法 execute-command 和 unsupported 失败关闭的完整跨层证据
+- 兼容边界：只覆盖 Grok 已验证并上报的 ACP permission request 与未来 App 自有受控服务，不是 Runtime 进程沙箱；受控 E2E 使用固定本地 fixture、真实 stdio/NDJSON 和完整 Electron 链路，不等价于真实 Grok 黑盒会发出同类请求，也不拦截 Runtime 未上报副作用；Browser/Screen/Clipboard 不支持，Worktree 权威环境留给 P0-14；真实 Git、Command Runner、Worktree 服务尚未实现，当前仅有内部授权 API 和代表性 fixture
+- 下一步：可按路线图开始 P0-08 Task Executor 与后台生命周期；保持 P0-07 的 Runtime 信任边界，不把受控 E2E 扩大描述为真实 Grok 黑盒或进程沙箱保证
+- 最近验证：2026-08-14，Node.js `v22.22.0`、pnpm `10.33.0`；目标 ESLint、全仓 `pnpm exec eslint . --no-cache`、`pnpm test`（38 个文件 / 351 项 Vitest，默认排除独立 Electron E2E）、`pnpm typecheck`、`pnpm build`、`pnpm build:unpack`、diff-check 与 AGENTS/CLAUDE 一致性均通过；`pnpm test:permission:e2e` 4/4 通过 FIFO、精确 ToolCall 取消、Turn 取消、合法 execute/unsupported。2026-08-14 Electron/Grok 真机已通过 L0、L1 允许/拒绝、Task grant 跨 Turn 与跨 Task 隔离、真实 Main 重启失效、超时、Runtime 断开、Project A/B workspace、焦点与键盘、审计脱敏和 invalid-target；受控 E2E 与真实 Grok 黑盒证据按上述边界区分。本机未配置 Developer ID，目录包未签名
 
 <!-- gitnexus:start -->
-
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **agent-studio** (1715 symbols, 4200 relationships, 146 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **agent-studio** (2818 symbols, 7822 relationships, 243 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
@@ -286,22 +285,22 @@ This project is indexed by GitNexus as **agent-studio** (1715 symbols, 4200 rela
 
 ## Resources
 
-| Resource                                      | Use for                                  |
-| --------------------------------------------- | ---------------------------------------- |
-| `gitnexus://repo/agent-studio/context`        | Codebase overview, check index freshness |
-| `gitnexus://repo/agent-studio/clusters`       | All functional areas                     |
-| `gitnexus://repo/agent-studio/processes`      | All execution flows                      |
-| `gitnexus://repo/agent-studio/process/{name}` | Step-by-step execution trace             |
+| Resource | Use for |
+|----------|---------|
+| `gitnexus://repo/agent-studio/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/agent-studio/clusters` | All functional areas |
+| `gitnexus://repo/agent-studio/processes` | All execution flows |
+| `gitnexus://repo/agent-studio/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
-| Task                                         | Read this skill file                                        |
-| -------------------------------------------- | ----------------------------------------------------------- |
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md`       |
-| Blast radius / "What breaks if I change X?"  | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?"             | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md`       |
-| Rename / extract / split / refactor          | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md`     |
-| Tools, resources, schema reference           | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md`           |
-| Index, status, clean, wiki CLI commands      | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md`             |
+| Task | Read this skill file |
+|------|---------------------|
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
