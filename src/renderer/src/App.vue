@@ -177,13 +177,8 @@ const taskOrder = ref<string[]>([])
 let taskSelectionRequestId = 0
 /** 当前激活的产品 Task；Runtime session 始终只留在主进程。 */
 const activeTaskId = ref('')
-const welcomeMessages = ref<ChatMessage[]>([
-  {
-    id: 'welcome',
-    role: 'assistant',
-    text: '选择一个工作目录，我会通过当前模型配置启动 Grok Build Runtime。'
-  }
-])
+/** 尚未建立 Task 时只承接真实错误消息，不伪造 Runtime 欢迎回复。 */
+const welcomeMessages = ref<ChatMessage[]>([])
 const emptyPlanEntries = ref<AgentPlanEntry[]>([])
 const emptyToolActivities = ref<ToolActivity[]>([])
 const emptyThoughtOverrides = ref<Record<string, boolean>>({})
@@ -821,13 +816,7 @@ function activateTaskView(task: AgentTaskRuntimeState, mode: 'live' | 'history' 
       workspace: task.workspace,
       title: '新对话',
       mode,
-      messages: [
-        {
-          id: `welcome-${task.taskId}`,
-          role: 'assistant',
-          text: '新的 Agent Task 已就绪。直接描述你想改动或排查的内容即可。'
-        }
-      ],
+      messages: [],
       planEntries: [],
       toolActivities: [],
       thoughtExpandOverride: {}
@@ -1731,7 +1720,7 @@ function scrollMessagesToBottom(): void {
               "
               :aria-describedby="composerDisabledMessage ? 'prompt-capability-message' : undefined"
               rows="1"
-              placeholder="让 Grok Build 阅读、修改或验证这个项目"
+              placeholder="描述你想修改、排查或验证的内容…"
               @keydown="handleComposerKeydown"
             />
             <div class="composer-footer">

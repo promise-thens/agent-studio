@@ -377,14 +377,12 @@ async function prepareWorkbench(context: ScenarioContext): Promise<void> {
   await expect.poll(() => context.provider.requestCount).toBe(1)
   expect(context.provider.authorizationHeaders).toEqual([undefined])
   await expect(context.page.locator('.status-chip[data-state="ready"]')).toBeVisible()
-  await expect(
-    context.page.getByPlaceholder('让 Grok Build 阅读、修改或验证这个项目')
-  ).toBeEnabled()
+  await expect(context.page.getByPlaceholder('描述你想修改、排查或验证的内容…')).toBeEnabled()
 }
 
 /** 用正常 Composer 交互创建 Task/Turn；fixture 从不读取这段 Prompt。 */
 async function startScenarioPrompt(page: ScenarioContext['page'], prompt: string): Promise<void> {
-  const composer = page.getByPlaceholder('让 Grok Build 阅读、修改或验证这个项目')
+  const composer = page.getByPlaceholder('描述你想修改、排查或验证的内容…')
   await composer.fill(prompt)
   await composer.press('Enter')
 }

@@ -192,16 +192,31 @@ button:disabled {
   opacity: 0.42;
 }
 
+/* 主聊天区明确分配三行，避免输入区在无历史横幅时落入弹性消息行。 */
 .chat-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'header'
+    'messages'
+    'composer';
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: color-mix(in srgb, var(--surface-1) 88%, #0b1016);
 }
 
+.chat-panel:has(> .history-readonly-banner) {
+  grid-template-areas:
+    'header'
+    'history'
+    'messages'
+    'composer';
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
 .chat-header {
+  grid-area: header;
   justify-content: space-between;
   min-height: 66px;
   padding: 12px 18px;
@@ -259,6 +274,7 @@ button:disabled {
 
 /* 消息舞台：左侧固定锚点轨 + 右侧可滚动对话 */
 .message-stage {
+  grid-area: messages;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
@@ -377,21 +393,27 @@ button:disabled {
 }
 
 .history-readonly-banner {
+  grid-area: history;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   margin: 0 22px;
-  padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
-  border-radius: var(--radius-soft);
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  padding: 9px 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+}
+
+.history-readonly-banner strong {
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .history-readonly-banner p {
-  margin: 4px 0 0;
+  margin: 3px 0 0;
   color: var(--text-3);
-  font-size: 12px;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 /* 只读说明允许收缩，继续按钮只占自身宽度，避免挤出工作台边界。 */
@@ -661,7 +683,13 @@ button:disabled {
 }
 
 .composer-wrap {
+  grid-area: composer;
+  position: relative;
+  z-index: 2;
   padding: 12px 18px 18px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 56%, transparent);
+  background: color-mix(in srgb, var(--surface-1) 96%, #0b1016);
+  box-shadow: 0 -16px 30px rgb(2 5 9 / 12%);
 }
 
 .capability-message {
