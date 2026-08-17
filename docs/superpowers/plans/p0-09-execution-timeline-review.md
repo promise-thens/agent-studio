@@ -47,8 +47,8 @@
 预期：同一 Task 多 Turn 不串流，重复事件和晚到终态后普通事件被拒绝。
 
 - [ ] **第 2 步: 实现状态归并**
-说明：按 sequence 处理 `running`、`waiting_permission`、`cancelling`、`completed`、`failed`、`cancelled`、`interrupted`；工具活动按 toolCallId 更新而不是追加重复卡片。
-预期：实时执行、切换 Task 后重新订阅、重启回放得到相同最终投影。
+说明：执行状态由 P0-08 当前执行快照的 `executionRevision` 与持久化 Turn 状态归并，覆盖短暂 `queued`、`running`、`waiting-permission`、`cancelling`、`completed`、`failed`、`cancelled`、`interrupted`；AgentEvent 只按各 Turn 的 `sequence` 排列消息、Plan、Tool、Permission 引用、Usage、错误和终态内容节点，不能代替执行状态 revision。工具活动按 toolCallId 更新而不是追加重复卡片。
+预期：实时 execution 增量、历史 Turn 状态和 AgentEvent 内容节点各自使用正确顺序来源；实时执行、切换 Task 后重新订阅、重启回放得到相同最终投影。
 
 - [ ] **第 3 步: 控制高频渲染成本**
 说明：对流式文本批量刷新，对长 Task 只渲染可见窗口并保留折叠摘要；不得丢失终态、权限和错误节点。
