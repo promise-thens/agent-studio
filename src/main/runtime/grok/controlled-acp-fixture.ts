@@ -8,7 +8,11 @@ export const CONTROLLED_ACP_E2E_SCENARIOS = [
   'E2E:FIFO',
   'E2E:TOOLCALL_CANCEL',
   'E2E:TURN_CANCEL',
-  'E2E:EXECUTE_UNSUPPORTED'
+  'E2E:EXECUTE_UNSUPPORTED',
+  'E2E:LONG_RUNNING',
+  'E2E:PERMISSION_WAIT',
+  'E2E:IGNORE_CANCEL',
+  'E2E:RUNTIME_CRASH'
 ] as const
 
 export type ControlledAcpFixtureScenario = (typeof CONTROLLED_ACP_E2E_SCENARIOS)[number]
@@ -16,6 +20,7 @@ export type ControlledAcpFixtureScenario = (typeof CONTROLLED_ACP_E2E_SCENARIOS)
 /** 受控临时 userData 下只允许使用这些固定目录，避免测试夹具接收自由路径。 */
 export const CONTROLLED_ACP_E2E_DIRECTORIES = {
   workspace: 'controlled-acp-e2e-workspace',
+  secondaryWorkspace: 'controlled-acp-e2e-secondary-workspace',
   trace: 'controlled-acp-e2e-trace',
   barriers: 'controlled-acp-e2e-barriers',
   runtimeHome: 'controlled-acp-e2e-home'

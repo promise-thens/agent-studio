@@ -10,10 +10,12 @@ import type {
   ProviderConnectionInput,
   ProviderModelOption
 } from '../shared/provider'
-import { AgentService } from './agent/agent-service'
+import { AgentService, AgentServiceError } from './agent/agent-service'
 import { registerAgentIpcHandlers } from './agent/ipc'
 import { registerTaskIpcHandlers } from './agent/task-ipc'
 import { TaskStore } from './agent/task-store'
+import { OperationGate, type OperationLease } from './agent/operation-gate'
+import { TaskExecutor } from './agent/task-executor'
 import { TaskExecutionController } from './agent/task-execution-controller'
 import { registerAppIpcHandlers } from './app-ipc'
 import { createAppShutdownGate } from './app-shutdown'
@@ -42,6 +44,8 @@ import { redactSensitiveError, redactSensitiveText } from './security/sensitive-
 
 let mainWindow: BrowserWindow | null = null
 let agentService: AgentService | null = null
+let taskExecutor: TaskExecutor | null = null
+let operationGate: OperationGate | null = null
 let runtimeAdapter: GrokAcpAdapter | null = null
 let providerStore: ProviderConfigStore | null = null
 let providerTester: ProviderConnectionTester | null = null
@@ -113,6 +117,7 @@ async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | nul
   if (controlledE2e) {
     // Project 由 Main 注册，避免 E2E 借助 Renderer 或系统目录选择框传入工作区路径。
     await projectRegistry.register(controlledE2e.workspacePath)
+    await projectRegistry.register(controlledE2e.secondaryWorkspacePath)
   }
   taskStore = new TaskStore({ projectRegistry })
   await taskStore.initialize()
@@ -166,8 +171,8 @@ async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | nul
       onStatus: (status) =>
         sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.status, status),
       onEvent: (event) => {
-        // 先收束主进程状态，再向 Renderer 发布，避免 UI 先看到终态而执行槽尚未释放。
-        agentService?.handleRuntimeEvent(event)
+        // TaskExecutor/AgentService 先收束主进程事实，再向 Renderer 发布实时内容。
+        if (!taskExecutor?.handleRuntimeEvent(event)) agentService?.handleRuntimeEvent(event)
         sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.event, event)
       },
       onPermission: (request) => {
@@ -190,6 +195,17 @@ async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | nul
     }
   )
   runtimeAdapter = adapter
+  operationGate = new OperationGate()
+  taskExecutor = new TaskExecutor({
+    taskStore: requireTaskStore(),
+    adapter,
+    operationGate,
+    redactText: redactProviderText,
+    onCancelTimeout: (identity) =>
+      requirePermissionBroker().cancelTurn(identity.taskId, identity.turnId),
+    onSnapshot: (snapshot) =>
+      sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.executionUpdate, snapshot)
+  })
   agentService = new AgentService(adapter, new TaskExecutionController(), {
     projectRegistry,
     taskStore,
@@ -201,7 +217,9 @@ async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | nul
       }
     },
     redactText: redactProviderText,
-    permissionBroker: requirePermissionBroker()
+    permissionBroker: requirePermissionBroker(),
+    taskExecutor,
+    operationGate
   })
 }
 
@@ -220,7 +238,54 @@ function registerIpcHandlers(): void {
   registerAgentIpcHandlers({
     ipcMain: desktopIpcMain,
     assertTrustedSender,
-    getAgent: () => agentService,
+    getAgent: () => {
+      const service = agentService
+      const executor = taskExecutor
+      if (!service || !executor) return service
+      return {
+        getStatus: () => service.getStatus(),
+        getExecutionSnapshot: () => executor.getSnapshot(),
+        connect: (projectId) => service.connect(projectId),
+        disconnect: () => service.disconnect(),
+        createTask: (projectId) => service.createTask(projectId),
+        startTurn: async (taskId, prompt) => {
+          const task = requireTaskStore().getTaskRecord(taskId)
+          return executor.start({
+            taskId,
+            projectId: task.projectId,
+            runtimeId: task.runtimeId,
+            session: {
+              runtimeId: task.runtimeSession.runtimeId,
+              runtimeSessionId: task.runtimeSession.runtimeSessionId,
+              workspace: task.runtimeSession.workspace
+            },
+            environmentId: task.environment.environmentId,
+            resolvedExecutionRoot: task.environment.rootSnapshot,
+            prompt,
+            promptDisplayText: redactProviderText(prompt),
+            model: (() => {
+              const config = requireProviderRuntimeConfig()
+              return {
+                modelId: config.modelId,
+                ...(config.modelDisplayName ? { displayName: config.modelDisplayName } : {})
+              }
+            })(),
+            capabilitySnapshot: requireRuntimeAdapter().getCapabilitySnapshot(),
+            prepareRuntime: async (lease) => {
+              await service.resumeTask(taskId, lease)
+            }
+          })
+        },
+        cancelTurn: async (request) => {
+          if (typeof request === 'string') return service.cancelTurn(request)
+          const cancelled = await executor.cancel(request)
+          if (!cancelled)
+            throw new AgentServiceError('invalid-state', '指定 execution 当前不可取消。')
+        },
+        getTaskRuntimeState: (taskId) => service.getTaskRuntimeState(taskId),
+        respondPermission: (request) => service.respondPermission(request)
+      }
+    },
     sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
   })
 
@@ -321,31 +386,37 @@ function registerIpcHandlers(): void {
         }),
       save: (input: ProviderConfigInput) =>
         runProviderOperation(async () => {
-          const resolvedInput = validateProviderConfigInput(attachStoredCredential(input))
-          const result = await requireProviderTester().testInference(resolvedInput)
-          if (!result.ok) throw new Error(result.message)
-          return persistProviderConfig(resolvedInput)
+          return runProviderMutation(async (lease) => {
+            const resolvedInput = validateProviderConfigInput(attachStoredCredential(input))
+            const result = await requireProviderTester().testInference(resolvedInput)
+            if (!result.ok) throw new Error(result.message)
+            return persistProviderConfig(resolvedInput, lease)
+          })
         }),
       selectModel: (model: ProviderModelOption) =>
         runProviderOperation(async () => {
-          const current = requireProviderRuntimeConfig()
-          if (!model || typeof model.modelId !== 'string') throw new Error('请选择有效模型。')
+          return runProviderMutation(async (lease) => {
+            const current = requireProviderRuntimeConfig()
+            if (!model || typeof model.modelId !== 'string') throw new Error('请选择有效模型。')
 
-          const nextInput = validateProviderConfigInput({
-            ...current,
-            modelId: model.modelId,
-            modelDisplayName: model.displayName
+            const nextInput = validateProviderConfigInput({
+              ...current,
+              modelId: model.modelId,
+              modelDisplayName: model.displayName
+            })
+            const result = await requireProviderTester().testInference(nextInput)
+            if (!result.ok) throw new Error(result.message)
+            return persistProviderConfig(nextInput, lease)
           })
-          const result = await requireProviderTester().testInference(nextInput)
-          if (!result.ok) throw new Error(result.message)
-          return persistProviderConfig(nextInput)
         }),
       clear: () =>
         runProviderOperation(async () => {
-          await requireAgentService().disconnect()
-          const summary = await requireProviderStore().clear()
-          await clearGrokProviderConfig(app.getPath('userData'))
-          return summary
+          return runProviderMutation(async (lease) => {
+            await requireAgentService().disconnect(lease)
+            const summary = await requireProviderStore().clear()
+            await clearGrokProviderConfig(app.getPath('userData'))
+            return summary
+          })
         })
     }
   })
@@ -383,17 +454,16 @@ function createRendererTrustOptions(): RendererTrustOptions {
 }
 
 /** Provider 变更需要与已连接 Runtime 保持事务一致，失败时恢复旧配置。 */
-async function persistProviderConfig(input: ProviderConfigInput): Promise<ProviderConfigSummary> {
+async function persistProviderConfig(
+  input: ProviderConfigInput,
+  lease: OperationLease
+): Promise<ProviderConfigSummary> {
   const currentAgent = requireAgentService()
   const store = requireProviderStore()
   const previous = store.getRuntimeConfig()
   const status = currentAgent.getStatus()
 
-  if (
-    currentAgent.hasInFlightOperation() ||
-    status.state === 'busy' ||
-    status.state === 'connecting'
-  ) {
+  if (status.state === 'busy' || status.state === 'connecting') {
     throw new Error('任务执行中，结束后才能修改模型配置。')
   }
 
@@ -401,14 +471,14 @@ async function persistProviderConfig(input: ProviderConfigInput): Promise<Provid
   const nextSummary = await store.save(input, { testedAt: new Date().toISOString() })
   if (!workspace) return nextSummary
 
-  await currentAgent.disconnect()
+  await currentAgent.disconnect(lease)
   try {
-    await currentAgent.connect(workspace)
+    await currentAgent.connect(workspace, lease)
     return nextSummary
   } catch (error) {
     if (previous) {
       await store.save(previous, { testedAt: previous.testedAt })
-      await currentAgent.connect(workspace).catch(() => undefined)
+      await currentAgent.connect(workspace, lease).catch(() => undefined)
     }
     throw error
   }
@@ -455,6 +525,30 @@ async function runProviderOperation<T>(operation: () => Promise<T>): Promise<T> 
   }
 }
 
+/** Provider save/select/clear 在任何网络或持久化 await 前取得共享 mutation lease。 */
+async function runProviderMutation<T>(
+  operation: (lease: OperationLease) => Promise<T>
+): Promise<T> {
+  let lease: OperationLease
+  try {
+    lease = requireOperationGate().acquireProviderMutation()
+  } catch {
+    const state = requireOperationGate().getState()
+    const message =
+      state === 'execution-active' || state === 'admitting-execution'
+        ? '任务执行中，结束后才能修改模型配置。'
+        : state === 'shutting-down'
+          ? '应用正在退出，不能修改模型配置。'
+          : '已有主进程操作正在进行，请稍后重试。'
+    throw new Error(message)
+  }
+  try {
+    return await operation(lease)
+  } finally {
+    lease.release()
+  }
+}
+
 function redactProviderText(text: string): string {
   return redactSensitiveText(text, getKnownSecrets())
 }
@@ -462,6 +556,16 @@ function redactProviderText(text: string): string {
 function getKnownSecrets(): string[] {
   const apiKey = providerStore?.getRuntimeConfig()?.apiKey
   return apiKey ? [apiKey] : []
+}
+
+function requireRuntimeAdapter(): GrokAcpAdapter {
+  if (!runtimeAdapter) throw new Error('Agent Runtime Adapter 尚未初始化。')
+  return runtimeAdapter
+}
+
+function requireOperationGate(): OperationGate {
+  if (!operationGate) throw new Error('主进程操作门禁尚未初始化。')
+  return operationGate
 }
 
 function requireAgentService(): AgentService {
@@ -550,9 +654,54 @@ if (hasSingleInstanceLock)
     })
 
 const appShutdownGate = createAppShutdownGate({
+  hasActiveExecution: () => taskExecutor?.hasActiveExecution() ?? false,
+  chooseActiveExecutionAction: async () => {
+    const owner = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined
+    const result = owner
+      ? await dialog.showMessageBox(owner, {
+          type: 'warning',
+          title: '任务仍在执行',
+          message: '当前 Task 仍在执行，退出应用前请选择处理方式。',
+          detail: '强制退出可能留下无法确认的外部副作用，重启后该 Turn 会标记为 interrupted。',
+          buttons: ['继续等待', '取消任务并退出', '强制退出'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true
+        })
+      : await dialog.showMessageBox({
+          type: 'warning',
+          title: '任务仍在执行',
+          message: '当前 Task 仍在执行，退出应用前请选择处理方式。',
+          buttons: ['继续等待', '取消任务并退出', '强制退出'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true
+        })
+    return result.response === 1
+      ? 'cancel-and-quit'
+      : result.response === 2
+        ? 'force-quit'
+        : 'continue-waiting'
+  },
+  beginShutdown: () => {
+    operationGate?.beginShutdown()
+  },
+  cancelActiveExecution: async () => {
+    const identity = taskExecutor?.getActiveIdentity()
+    if (!identity) return
+    await taskExecutor?.cancel(identity)
+    await taskExecutor?.waitForTerminal()
+  },
+  interruptActiveExecution: async () => {
+    await taskExecutor?.interrupt('forced-shutdown')
+  },
+  drainHistory: async () => {
+    await taskExecutor?.waitForTerminal()
+  },
   shutdownPermissions: () => permissionBroker?.shutdown() ?? Promise.resolve(),
   disconnectRuntime: () => runtimeAdapter?.disconnect() ?? Promise.resolve(),
-  quit: () => app.quit()
+  quit: () => app.quit(),
+  forceQuit: () => app.exit(0)
 })
 
 app.on('before-quit', appShutdownGate.handleBeforeQuit)

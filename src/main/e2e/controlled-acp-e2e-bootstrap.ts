@@ -23,6 +23,7 @@ const MAX_PATH_BYTES = 16 * 1024
 export interface ControlledAcpE2eBootstrap {
   readonly userDataPath: string
   readonly workspacePath: string
+  readonly secondaryWorkspacePath: string
   readonly markerPath: string
   readonly providerConfig: ProviderConfigInput
   readonly fixture: ControlledAcpFixtureLaunch
@@ -66,6 +67,10 @@ export function resolveControlledAcpE2eBootstrap(
     userDataPath,
     CONTROLLED_ACP_E2E_DIRECTORIES.workspace
   )
+  const secondaryWorkspacePath = assertDirectChildDirectory(
+    userDataPath,
+    CONTROLLED_ACP_E2E_DIRECTORIES.secondaryWorkspace
+  )
   const traceDirectory = assertDirectChildDirectory(
     userDataPath,
     CONTROLLED_ACP_E2E_DIRECTORIES.trace
@@ -86,6 +91,7 @@ export function resolveControlledAcpE2eBootstrap(
   return {
     userDataPath,
     workspacePath,
+    secondaryWorkspacePath,
     markerPath,
     providerConfig: {
       baseUrl: `http://127.0.0.1:${providerPort}/v1`,

@@ -15,6 +15,7 @@ describe('桌面 IPC 静态契约', () => {
     expect(new Set(channels).size).toBe(channels.length)
     expect(channels).toEqual([
       'agent:get-status',
+      'agent:get-execution-snapshot',
       'agent:connect',
       'agent:disconnect',
       'agent:create-task',
@@ -23,6 +24,7 @@ describe('桌面 IPC 静态契约', () => {
       'agent:get-task-runtime-state',
       'agent:respond-permission',
       'agent:status',
+      'agent:execution-update',
       'agent:event',
       'agent:permission',
       'agent:permission-cancelled',

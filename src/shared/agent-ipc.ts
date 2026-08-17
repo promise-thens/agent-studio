@@ -3,13 +3,18 @@ import type {
   AgentPermissionDecision,
   AgentPermissionRequest,
   AgentRuntimeStatus,
-  AgentTaskRuntimeState,
-  AgentTurnExecutionResult
+  AgentTaskRuntimeState
 } from './agent'
+import type {
+  AgentStartTurnAdmissionResult,
+  TaskExecutionCancellationRequest,
+  TaskExecutionSnapshot
+} from './task-execution'
 import type { DesktopIpcResult } from './ipc-result'
 
 export const AGENT_INVOKE_CHANNELS = {
   getStatus: 'agent:get-status',
+  getExecutionSnapshot: 'agent:get-execution-snapshot',
   connect: 'agent:connect',
   disconnect: 'agent:disconnect',
   createTask: 'agent:create-task',
@@ -21,6 +26,7 @@ export const AGENT_INVOKE_CHANNELS = {
 
 export const AGENT_PUSH_CHANNELS = {
   status: 'agent:status',
+  executionUpdate: 'agent:execution-update',
   event: 'agent:event',
   permission: 'agent:permission',
   permissionCancelled: 'agent:permission-cancelled'
@@ -39,9 +45,7 @@ export interface AgentStartTurnRequest {
   prompt: string
 }
 
-export interface AgentCancelTurnRequest {
-  taskId: string
-}
+export type AgentCancelTurnRequest = TaskExecutionCancellationRequest
 
 export interface AgentGetTaskRuntimeStateRequest {
   taskId: string
@@ -65,14 +69,19 @@ export interface AgentPermissionCancellation {
 /** Renderer 只能通过固定方法控制当前 Agent Runtime。 */
 export interface AgentDesktopApi {
   getStatus: () => Promise<DesktopIpcResult<AgentRuntimeStatus>>
+  getExecutionSnapshot: () => Promise<DesktopIpcResult<TaskExecutionSnapshot>>
   connect: (projectId: string) => Promise<DesktopIpcResult<AgentRuntimeStatus>>
   disconnect: () => Promise<DesktopIpcResult<AgentRuntimeStatus>>
   createTask: (projectId: string) => Promise<DesktopIpcResult<AgentTaskRuntimeState>>
-  startTurn: (taskId: string, prompt: string) => Promise<DesktopIpcResult<AgentTurnExecutionResult>>
-  cancelTurn: (taskId: string) => Promise<DesktopIpcResult<null>>
+  startTurn: (
+    taskId: string,
+    prompt: string
+  ) => Promise<DesktopIpcResult<AgentStartTurnAdmissionResult>>
+  cancelTurn: (request: AgentCancelTurnRequest) => Promise<DesktopIpcResult<null>>
   getTaskRuntimeState: (taskId: string) => Promise<DesktopIpcResult<AgentTaskRuntimeState>>
   respondPermission: (request: AgentRespondPermissionRequest) => Promise<DesktopIpcResult<null>>
   onStatus: (listener: (status: AgentRuntimeStatus) => void) => () => void
+  onExecutionUpdate: (listener: (snapshot: TaskExecutionSnapshot) => void) => () => void
   onEvent: (listener: (event: AgentEvent) => void) => () => void
   onPermission: (listener: (request: AgentPermissionRequest) => void) => () => void
   onPermissionCancelled: (listener: (request: AgentPermissionCancellation) => void) => () => void

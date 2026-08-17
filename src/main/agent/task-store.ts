@@ -20,12 +20,21 @@ import type {
   TurnHistoryRecord,
   TurnModelSnapshot
 } from '../../shared/task-history'
+import type {
+  TaskExecutionCancellationReason,
+  TaskExecutionFailureReason,
+  TaskExecutionInterruptionReason,
+  TaskExecutionState
+} from '../../shared/task-execution'
 import type { AgentRuntimeSessionRef } from './agent-runtime-adapter'
 import { ProjectRegistry } from '../project/project-registry'
+import { createLocalEnvironmentId } from '../security/permission-policy'
 import { AtomicJsonWriter } from '../storage/atomic-json-file'
 
-const TASK_SCHEMA_VERSION = 1
-const TURN_SCHEMA_VERSION = 1
+const TASK_SCHEMA_VERSION = 2
+const TURN_SCHEMA_VERSION = 2
+const LEGACY_TASK_SCHEMA_VERSION = 1
+const LEGACY_TURN_SCHEMA_VERSION = 1
 const EVENT_SCHEMA_VERSION = 1
 const MAX_TASKS = 500
 const MAX_TURNS_PER_TASK = 100
@@ -54,12 +63,19 @@ export interface TaskRecordV1 {
   taskId: string
   projectId: string
   runtimeId: AgentRuntimeId
-  environment: { kind: 'local'; projectId: string; rootSnapshot: string }
+  environment: {
+    kind: 'local'
+    version: 1
+    environmentId: string
+    projectId: string
+    rootSnapshot: string
+  }
   runtimeSession: PersistedRuntimeSessionRefV1
   permissionPolicy: { kind: 'legacy-runtime' }
   title: string
   state: HistoryExecutionState
   activeTurnId?: string
+  activeExecutionId?: string
   lastTurnId?: string
   turnCount: number
   createdAt: string
@@ -67,8 +83,15 @@ export interface TaskRecordV1 {
   revision: number
 }
 
+type PersistedExecutionReason =
+  TaskExecutionFailureReason | TaskExecutionCancellationReason | TaskExecutionInterruptionReason
+
 interface TurnRecordV1 extends TurnHistoryRecord {
   schemaVersion: typeof TURN_SCHEMA_VERSION
+  executionId?: string
+  environmentId?: string
+  stateChangedAt?: string
+  reason?: PersistedExecutionReason
 }
 
 interface EventChunkV1 {
@@ -133,6 +156,18 @@ export interface TaskStoreOptions {
   writer?: AtomicJsonWriter
   now?: () => string
   createId?: () => string
+}
+
+export type ExecutionTerminalCommitResult =
+  | { kind: 'committed'; taskRevision: number; turnRevision: number }
+  | { kind: 'repaired'; taskRevision: number; turnRevision: number }
+  | { kind: 'duplicate'; taskRevision: number; turnRevision: number }
+  | { kind: 'conflict' | 'stale' }
+
+export interface ExecutionIdentity {
+  taskId: string
+  turnId: string
+  executionId: string
 }
 
 export interface TaskHistoryMutationLease {
@@ -209,7 +244,13 @@ export class TaskStore {
         taskId: input.taskId,
         projectId: input.projectId,
         runtimeId: input.runtimeId,
-        environment: { kind: 'local', projectId: input.projectId, rootSnapshot: input.root },
+        environment: {
+          kind: 'local',
+          version: 1,
+          environmentId: createLocalEnvironmentId(input.projectId, input.root),
+          projectId: input.projectId,
+          rootSnapshot: input.root
+        },
         runtimeSession: {
           ...input.session,
           capabilityEvidence: toCapabilityEvidence(input.capabilitySnapshot),
@@ -229,11 +270,39 @@ export class TaskStore {
     })
   }
 
+  async admitExecutionTurn(input: {
+    taskId: string
+    turnId: string
+    executionId: string
+    environmentId: string
+    promptDisplayText: string
+    model: TurnModelSnapshot
+  }): Promise<TurnRecordV1> {
+    return this.createTurnRecord({
+      ...input,
+      initialState: 'queued',
+      activeExecutionId: input.executionId
+    })
+  }
+
   async createTurn(input: {
     taskId: string
     turnId: string
     promptDisplayText: string
     model: TurnModelSnapshot
+  }): Promise<TurnRecordV1> {
+    return this.createTurnRecord({ ...input, initialState: 'pending' })
+  }
+
+  private async createTurnRecord(input: {
+    taskId: string
+    turnId: string
+    promptDisplayText: string
+    model: TurnModelSnapshot
+    initialState: Extract<HistoryExecutionState, 'pending' | 'queued'>
+    executionId?: string
+    environmentId?: string
+    activeExecutionId?: string
   }): Promise<TurnRecordV1> {
     return this.enqueueTask(input.taskId, async () => {
       const task = this.requireTask(input.taskId)
@@ -245,14 +314,29 @@ export class TaskStore {
         input.taskId
       )
       const observedAt = this.now()
+      if (
+        input.executionId &&
+        (input.environmentId !== task.environment.environmentId ||
+          task.activeTurnId ||
+          task.activeExecutionId ||
+          task.state === 'running' ||
+          task.state === 'waiting-permission' ||
+          task.state === 'queued' ||
+          task.state === 'cancelling')
+      ) {
+        throw new TaskStoreError('invalid-state', 'Task 当前状态不允许受理新的执行。')
+      }
       const turn: TurnRecordV1 = {
         schemaVersion: TURN_SCHEMA_VERSION,
         turnId: input.turnId,
         taskId: input.taskId,
         promptDisplayText: input.promptDisplayText,
         model: input.model,
-        state: 'pending',
+        state: input.initialState,
         createdAt: observedAt,
+        stateChangedAt: observedAt,
+        ...(input.executionId ? { executionId: input.executionId } : {}),
+        ...(input.environmentId ? { environmentId: input.environmentId } : {}),
         eventCount: 0,
         eventBytes: 0,
         revision: 1
@@ -260,8 +344,9 @@ export class TaskStore {
       const nextTask: TaskRecordV1 = {
         ...task,
         title: task.turnCount === 0 ? deriveTaskTitle(input.promptDisplayText) : task.title,
-        state: 'pending',
+        state: input.initialState,
         activeTurnId: input.turnId,
+        ...(input.activeExecutionId ? { activeExecutionId: input.activeExecutionId } : {}),
         lastTurnId: input.turnId,
         turnCount: task.turnCount + 1,
         updatedAt: observedAt,
@@ -271,14 +356,134 @@ export class TaskStore {
       try {
         await this.writer.write(this.taskPath(nextTask), nextTask)
       } catch (error) {
-        await this.writer
-          .removeDurably(this.turnDirectory(nextTask, input.turnId))
-          .catch(() => undefined)
+        try {
+          await this.writer.removeDurably(this.turnDirectory(nextTask, input.turnId))
+        } catch {
+          throw new TaskStoreError('history-corrupt', 'Turn admission 提交失败且回滚结果无法确认。')
+        }
         throw error
       }
       this.tasks.set(nextTask.taskId, nextTask)
       return turn
     })
+  }
+
+  async transitionExecution(
+    identity: ExecutionIdentity,
+    state: Extract<TaskExecutionState, 'running' | 'waiting-permission' | 'cancelling'>,
+    observedAt: string
+  ): Promise<void> {
+    await this.updateTurn(identity.taskId, identity.turnId, (task, turn) => {
+      this.assertExecutionIdentity(task, turn, identity)
+      return {
+        task: { ...task, state },
+        turn: {
+          ...turn,
+          state,
+          stateChangedAt: observedAt,
+          ...(state === 'running' && !turn.dispatchedAt ? { dispatchedAt: observedAt } : {})
+        }
+      }
+    })
+  }
+
+  async commitExecutionTerminal(
+    identity: ExecutionIdentity,
+    terminal: {
+      state: Extract<TaskExecutionState, 'completed' | 'failed' | 'cancelled' | 'interrupted'>
+      endedAt: string
+      reason?: PersistedExecutionReason
+      usage?: AgentTurnUsage
+    }
+  ): Promise<ExecutionTerminalCommitResult> {
+    return this.enqueueTask(identity.taskId, async () => {
+      const task = this.requireTask(identity.taskId)
+      const turn = await this.readTurn(task, identity.turnId)
+      if (turn.executionId !== identity.executionId) return { kind: 'stale' }
+
+      if (isTerminalHistoryState(turn.state)) {
+        if (turn.state !== terminal.state || turn.reason !== terminal.reason) {
+          return { kind: 'conflict' }
+        }
+        if (task.state === terminal.state && !task.activeTurnId && !task.activeExecutionId) {
+          return {
+            kind: 'duplicate',
+            taskRevision: task.revision,
+            turnRevision: turn.revision
+          }
+        }
+        const repairedTask = this.toTerminalTask(task, terminal.state, terminal.endedAt)
+        await this.writer.write(this.taskPath(repairedTask), repairedTask)
+        this.tasks.set(repairedTask.taskId, repairedTask)
+        return {
+          kind: 'repaired',
+          taskRevision: repairedTask.revision,
+          turnRevision: turn.revision
+        }
+      }
+
+      if (!this.matchesExecutionIdentity(task, turn, identity)) return { kind: 'stale' }
+      const nextTurn: TurnRecordV1 = {
+        ...turn,
+        state: terminal.state,
+        stateChangedAt: terminal.endedAt,
+        endedAt: terminal.endedAt,
+        ...(terminal.reason ? { reason: terminal.reason } : {}),
+        ...(terminal.usage ? { usage: terminal.usage } : {}),
+        revision: turn.revision + 1
+      }
+      const nextTask = this.toTerminalTask(task, terminal.state, terminal.endedAt)
+      await this.writer.write(this.turnPath(task, identity.turnId), nextTurn)
+      await this.writer.write(this.taskPath(nextTask), nextTask)
+      this.tasks.set(nextTask.taskId, nextTask)
+      return {
+        kind: 'committed',
+        taskRevision: nextTask.revision,
+        turnRevision: nextTurn.revision
+      }
+    })
+  }
+
+  private assertExecutionIdentity(
+    task: TaskRecordV1,
+    turn: TurnRecordV1,
+    identity: ExecutionIdentity
+  ): void {
+    if (!this.matchesExecutionIdentity(task, turn, identity)) {
+      throw new TaskStoreError('invalid-state', '执行身份已失效。')
+    }
+  }
+
+  private matchesExecutionIdentity(
+    task: TaskRecordV1,
+    turn: TurnRecordV1,
+    identity: ExecutionIdentity
+  ): boolean {
+    return (
+      task.taskId === identity.taskId &&
+      task.activeTurnId === identity.turnId &&
+      task.activeExecutionId === identity.executionId &&
+      turn.turnId === identity.turnId &&
+      turn.executionId === identity.executionId
+    )
+  }
+
+  private toTerminalTask(
+    task: TaskRecordV1,
+    state: Extract<TaskExecutionState, 'completed' | 'failed' | 'cancelled' | 'interrupted'>,
+    endedAt: string
+  ): TaskRecordV1 {
+    const nextTask = {
+      ...task,
+      state,
+      activeTurnId: undefined,
+      activeExecutionId: undefined,
+      updatedAt: endedAt,
+      revision: task.revision + 1
+    }
+    delete nextTask.activeTurnId
+    delete nextTask.activeExecutionId
+    return nextTask
   }
 
   async markTurnDispatched(taskId: string, turnId: string): Promise<void> {
@@ -661,6 +866,9 @@ export class TaskStore {
           parsed.record.taskId === taskId &&
           parsed.record.projectId === projectId
         ) {
+          if (parsed.needsUpgrade) {
+            await this.writer.write(join(tasksRoot, taskId, 'task.json'), parsed.record)
+          }
           this.tasks.set(parsed.record.taskId, parsed.record)
         } else {
           await this.quarantine(join(tasksRoot, taskId), 'task', 'invalid-fields')
@@ -673,30 +881,100 @@ export class TaskStore {
 
   private async interruptUnfinishedRecords(): Promise<void> {
     for (const task of [...this.tasks.values()]) {
-      if (task.state !== 'running' && task.state !== 'waiting-permission') continue
-      const nextTask = {
-        ...task,
-        state: 'interrupted' as const,
-        activeTurnId: undefined,
-        updatedAt: this.now(),
-        revision: task.revision + 1
-      }
-      if (task.activeTurnId) {
-        try {
-          const turn = await this.readTurn(task, task.activeTurnId)
-          await this.saveTurn(task, {
-            ...turn,
-            state: 'interrupted',
-            endedAt: this.now(),
-            revision: turn.revision + 1
-          })
-        } catch {
-          // Task 状态仍需收束，损坏 Turn 单独忽略。
-        }
-      }
-      await this.writer.write(this.taskPath(nextTask), nextTask)
-      this.tasks.set(nextTask.taskId, nextTask)
+      await this.reconcileUnfinishedTask(task)
     }
+  }
+
+  /**
+   * 启动时以 active Turn 为执行事实交叉修复 Task/Turn。
+   * 已持久化终态优先于非终态，未知或缺失的活动 Turn 失败关闭为 interrupted。
+   */
+  private async reconcileUnfinishedTask(task: TaskRecordV1): Promise<void> {
+    const activeTurnId = task.activeTurnId
+    if (!activeTurnId) {
+      if (!isNonTerminalHistoryState(task.state) || task.state === 'pending') return
+      await this.saveRecoveredTask(task, 'interrupted', this.now())
+      return
+    }
+
+    let turn: TurnRecordV1 | null = null
+    try {
+      turn = await this.readTurn(task, activeTurnId)
+    } catch (error) {
+      if (error instanceof TaskStoreError && error.code === 'history-version-unsupported') {
+        throw error
+      }
+      const recoveredAt = this.now()
+      await this.saveRecoveredTask(task, 'interrupted', recoveredAt)
+      return
+    }
+
+    const taskTerminal = isTerminalHistoryState(task.state)
+    const turnTerminal = isTerminalHistoryState(turn.state)
+    if (taskTerminal && turnTerminal && task.state !== turn.state) {
+      throw new TaskStoreError('history-corrupt', 'Task 与 Turn 终态不一致。')
+    }
+
+    if (turnTerminal) {
+      const terminalState = asTerminalHistoryState(turn.state)
+      await this.saveRecoveredTask(task, terminalState, turn.endedAt ?? this.now())
+      return
+    }
+
+    if (taskTerminal) {
+      const terminalState = asTerminalHistoryState(task.state)
+      const recoveredAt = task.updatedAt
+      await this.saveRecoveredTurn(task, turn, terminalState, recoveredAt)
+      await this.saveRecoveredTask(task, terminalState, recoveredAt)
+      return
+    }
+
+    const recoveredAt = this.now()
+    await this.saveRecoveredTurn(task, turn, 'interrupted', recoveredAt)
+    await this.saveRecoveredTask(task, 'interrupted', recoveredAt)
+  }
+
+  private async saveRecoveredTurn(
+    task: TaskRecordV1,
+    turn: TurnRecordV1,
+    state: Extract<HistoryExecutionState, 'completed' | 'failed' | 'cancelled' | 'interrupted'>,
+    recoveredAt: string
+  ): Promise<void> {
+    if (turn.state === state && turn.endedAt) return
+    await this.saveTurn(task, {
+      ...turn,
+      state,
+      stateChangedAt: recoveredAt,
+      endedAt: turn.endedAt ?? recoveredAt,
+      ...(state === 'interrupted' ? { reason: 'restart-recovery' as const } : {}),
+      revision: turn.revision + 1
+    })
+  }
+
+  private async saveRecoveredTask(
+    task: TaskRecordV1,
+    state: Extract<HistoryExecutionState, 'completed' | 'failed' | 'cancelled' | 'interrupted'>,
+    recoveredAt: string
+  ): Promise<void> {
+    if (
+      task.state === state &&
+      task.activeTurnId === undefined &&
+      task.activeExecutionId === undefined
+    ) {
+      return
+    }
+    const nextTask = {
+      ...task,
+      state,
+      activeTurnId: undefined,
+      activeExecutionId: undefined,
+      updatedAt: recoveredAt,
+      revision: task.revision + 1
+    }
+    delete nextTask.activeTurnId
+    delete nextTask.activeExecutionId
+    await this.writer.write(this.taskPath(nextTask), nextTask)
+    this.tasks.set(nextTask.taskId, nextTask)
   }
 
   private async updateTurn(
@@ -743,6 +1021,7 @@ export class TaskStore {
       await this.quarantine(directory, 'turn', 'invalid-fields')
       throw new TaskStoreError('history-corrupt', 'Turn 历史记录损坏。')
     }
+    if (parsed.needsUpgrade) await this.writer.write(path, parsed.record)
     return parsed.record
   }
 
@@ -1209,13 +1488,17 @@ function createEmptyChunk(taskId: string, turnId: string, chunkIndex: number): E
 }
 
 type RecordParseResult<T> =
-  | { kind: 'valid'; record: T }
+  | { kind: 'valid'; record: T; needsUpgrade?: boolean }
   | { kind: 'unsupported'; schemaVersion: number }
   | { kind: 'corrupt' }
 
 function parseTaskRecord(value: unknown): RecordParseResult<TaskRecordV1> {
-  const version = readSchemaVersion(value, TASK_SCHEMA_VERSION)
-  if (version.kind !== 'current') return version
+  const version = readCompatibleSchemaVersion(
+    value,
+    TASK_SCHEMA_VERSION,
+    LEGACY_TASK_SCHEMA_VERSION
+  )
+  if (version.kind === 'unsupported' || version.kind === 'corrupt') return version
   if (!isRecord(value) || !isValidIdentifier(value.taskId) || !isValidIdentifier(value.projectId)) {
     return { kind: 'corrupt' }
   }
@@ -1242,15 +1525,50 @@ function parseTaskRecord(value: unknown): RecordParseResult<TaskRecordV1> {
     !Number.isSafeInteger(value.revision) ||
     Number(value.revision) < 1 ||
     !isIsoTimestamp(value.createdAt) ||
-    !isIsoTimestamp(value.updatedAt)
-  )
+    !isIsoTimestamp(value.updatedAt) ||
+    (value.activeTurnId !== undefined && !isValidIdentifier(value.activeTurnId)) ||
+    (value.activeExecutionId !== undefined && !isValidIdentifier(value.activeExecutionId)) ||
+    (value.lastTurnId !== undefined && !isValidIdentifier(value.lastTurnId))
+  ) {
     return { kind: 'corrupt' }
-  return { kind: 'valid', record: value as unknown as TaskRecordV1 }
+  }
+  const environmentId =
+    version.schemaVersion === LEGACY_TASK_SCHEMA_VERSION
+      ? createLocalEnvironmentId(value.projectId, value.environment.rootSnapshot)
+      : value.environment.environmentId
+  if (
+    typeof environmentId !== 'string' ||
+    environmentId !== createLocalEnvironmentId(value.projectId, value.environment.rootSnapshot) ||
+    (version.schemaVersion === TASK_SCHEMA_VERSION &&
+      (value.environment.version !== 1 || typeof value.environment.environmentId !== 'string'))
+  ) {
+    return { kind: 'corrupt' }
+  }
+  const upgraded = {
+    ...value,
+    schemaVersion: TASK_SCHEMA_VERSION,
+    environment: {
+      kind: 'local' as const,
+      version: 1 as const,
+      environmentId,
+      projectId: value.projectId,
+      rootSnapshot: value.environment.rootSnapshot
+    }
+  }
+  return {
+    kind: 'valid',
+    record: upgraded as unknown as TaskRecordV1,
+    needsUpgrade: version.schemaVersion === LEGACY_TASK_SCHEMA_VERSION
+  }
 }
 
 function parseTurnRecord(value: unknown): RecordParseResult<TurnRecordV1> {
-  const version = readSchemaVersion(value, TURN_SCHEMA_VERSION)
-  if (version.kind !== 'current') return version
+  const version = readCompatibleSchemaVersion(
+    value,
+    TURN_SCHEMA_VERSION,
+    LEGACY_TURN_SCHEMA_VERSION
+  )
+  if (version.kind === 'unsupported' || version.kind === 'corrupt') return version
   if (!isRecord(value) || !isValidIdentifier(value.turnId) || !isValidIdentifier(value.taskId)) {
     return { kind: 'corrupt' }
   }
@@ -1260,7 +1578,11 @@ function parseTurnRecord(value: unknown): RecordParseResult<TurnRecordV1> {
     !isRecord(value.model) ||
     typeof value.model.modelId !== 'string' ||
     !isHistoryState(value.state) ||
-    !isIsoTimestamp(value.createdAt)
+    !isIsoTimestamp(value.createdAt) ||
+    (value.executionId !== undefined && !isValidIdentifier(value.executionId)) ||
+    (value.environmentId !== undefined && !isValidIdentifier(value.environmentId)) ||
+    (value.stateChangedAt !== undefined && !isIsoTimestamp(value.stateChangedAt)) ||
+    (value.reason !== undefined && !isPersistedExecutionReason(value.reason))
   )
     return { kind: 'corrupt' }
   if (!Number.isSafeInteger(value.eventCount) || !Number.isSafeInteger(value.eventBytes))
@@ -1268,7 +1590,18 @@ function parseTurnRecord(value: unknown): RecordParseResult<TurnRecordV1> {
   if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 1) {
     return { kind: 'corrupt' }
   }
-  return { kind: 'valid', record: value as unknown as TurnRecordV1 }
+  const upgraded = {
+    ...value,
+    schemaVersion: TURN_SCHEMA_VERSION,
+    ...(version.schemaVersion === LEGACY_TURN_SCHEMA_VERSION
+      ? { stateChangedAt: value.endedAt ?? value.dispatchedAt ?? value.createdAt }
+      : {})
+  }
+  return {
+    kind: 'valid',
+    record: upgraded as unknown as TurnRecordV1,
+    needsUpgrade: version.schemaVersion === LEGACY_TURN_SCHEMA_VERSION
+  }
 }
 
 function parseEventChunk(
@@ -1292,6 +1625,24 @@ function parseEventChunk(
     return { kind: 'corrupt' }
   }
   return { kind: 'valid', record: value as unknown as EventChunkV1 }
+}
+
+function readCompatibleSchemaVersion(
+  value: unknown,
+  currentVersion: number,
+  legacyVersion: number
+):
+  | { kind: 'current'; schemaVersion: number }
+  | { kind: 'unsupported'; schemaVersion: number }
+  | { kind: 'corrupt' } {
+  if (!isRecord(value) || !Number.isSafeInteger(value.schemaVersion)) return { kind: 'corrupt' }
+  const schemaVersion = Number(value.schemaVersion)
+  if (schemaVersion === currentVersion || schemaVersion === legacyVersion) {
+    return { kind: 'current', schemaVersion }
+  }
+  return schemaVersion > currentVersion
+    ? { kind: 'unsupported', schemaVersion }
+    : { kind: 'corrupt' }
 }
 
 function readSchemaVersion(
@@ -1320,13 +1671,50 @@ function isValidIdentifier(value: unknown): value is string {
 function isHistoryState(value: unknown): value is HistoryExecutionState {
   return [
     'pending',
+    'queued',
     'running',
     'waiting-permission',
+    'cancelling',
     'completed',
     'failed',
     'cancelled',
     'interrupted'
   ].includes(String(value))
+}
+
+function isPersistedExecutionReason(value: unknown): value is PersistedExecutionReason {
+  return [
+    'dispatch-failed',
+    'runtime-error',
+    'runtime-exit',
+    'protocol-error',
+    'persistence-failed',
+    'cancelled-before-dispatch',
+    'runtime-cancelled',
+    'restart-recovery',
+    'cancel-timeout',
+    'forced-shutdown',
+    'runtime-result-unknown'
+  ].includes(String(value))
+}
+
+function isNonTerminalHistoryState(state: HistoryExecutionState): boolean {
+  return ['pending', 'queued', 'running', 'waiting-permission', 'cancelling'].includes(state)
+}
+
+function isTerminalHistoryState(
+  state: HistoryExecutionState
+): state is Extract<HistoryExecutionState, 'completed' | 'failed' | 'cancelled' | 'interrupted'> {
+  return ['completed', 'failed', 'cancelled', 'interrupted'].includes(state)
+}
+
+function asTerminalHistoryState(
+  state: HistoryExecutionState
+): Extract<HistoryExecutionState, 'completed' | 'failed' | 'cancelled' | 'interrupted'> {
+  if (!isTerminalHistoryState(state)) {
+    throw new TaskStoreError('history-corrupt', '执行历史终态无效。')
+  }
+  return state
 }
 
 function isIsoTimestamp(value: unknown): value is string {

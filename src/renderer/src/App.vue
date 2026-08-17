@@ -30,6 +30,7 @@ import type {
   ProviderModelOption,
   ProviderTestResult
 } from '../../shared/provider'
+import type { TaskExecutionSnapshot } from '../../shared/task-execution'
 import type { DeletionPreview, PermissionAuditRecord } from '../../shared/task-history'
 import {
   createAgentEventGuard,
@@ -46,6 +47,7 @@ import WorkspaceSidebar, {
 } from './components/WorkspaceSidebar.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
 import { useTaskHistory } from './composables/useTaskHistory'
+import { createTaskExecutionConsumer } from './task-execution-consumer'
 import { projectTaskHistory } from './task-history-projector'
 import {
   clearRespondingPermission,
@@ -53,7 +55,6 @@ import {
   enqueuePermissionRequest,
   getNextPermissionExpiry,
   isPermissionResponsePending,
-  reconcilePermissionRequests,
   removeExpiredPermissionRequests,
   removePermissionRequest
 } from './permission-queue'
@@ -61,8 +62,11 @@ import { createProjectSelectionCoordinator } from './project-selection-coordinat
 import {
   canSendRuntimePrompt,
   createAsyncSingleFlight,
+  isRuntimeConnectedToProject,
   shouldConnectProject
 } from './runtime-session-actions'
+
+const TERMINAL_EXECUTION_STATES = new Set(['completed', 'failed', 'cancelled', 'interrupted'])
 
 interface ChatMessage {
   id: string
@@ -122,6 +126,23 @@ const status = ref<AgentRuntimeStatus>({
   runtimeId: 'grok',
   state: 'idle',
   message: '尚未连接 Grok Build'
+})
+const executionSnapshot = ref<TaskExecutionSnapshot>({
+  executorEpoch: 'renderer-initial',
+  executionRevision: 0,
+  execution: null
+})
+/** execution 身份独立于当前查看的 Project/Task；终态快照只作历史展示，不继续占用交互门禁。 */
+const activeExecution = computed(() => {
+  const execution = executionSnapshot.value.execution
+  return execution && !TERMINAL_EXECUTION_STATES.has(execution.state) ? execution : null
+})
+const executionConsumer = createTaskExecutionConsumer({
+  getSnapshot: async () => unwrapDesktopIpcResult(await window.agent.getExecutionSnapshot()),
+  subscribe: (listener) => window.agent.onExecutionUpdate(listener),
+  onSnapshot: (snapshot) => {
+    executionSnapshot.value = snapshot
+  }
 })
 const providerSummary = ref<ProviderConfigSummary | null>(null)
 const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
@@ -183,6 +204,16 @@ const emptyPlanEntries = ref<AgentPlanEntry[]>([])
 const emptyToolActivities = ref<ToolActivity[]>([])
 const emptyThoughtOverrides = ref<Record<string, boolean>>({})
 const activeTaskView = computed(() => taskViews.value[activeTaskId.value] ?? null)
+/** 审批标题按请求真实 taskId 解析，查看 B 时不能把后台 A 冒充成 B。 */
+const permissionTaskTitle = computed(() => {
+  const request = permission.value
+  if (!request) return ''
+  return (
+    taskViews.value[request.taskId]?.title ??
+    taskHistory.tasks.value.find((task) => task.taskId === request.taskId)?.title ??
+    request.taskId
+  )
+})
 
 const permissionAuditReasonLabels: Record<PermissionAuditRecord['reason'], string> = {
   'auto-allowed': '策略自动允许',
@@ -244,6 +275,8 @@ const nowTick = ref(Date.now())
 let durationTimer: ReturnType<typeof setInterval> | null = null
 /** 当前这一轮用户指令的开始时间；一条指令只对应一个计时器。 */
 const turnStartedAt = ref<number | null>(null)
+/** 计时器绑定执行 Task，而不是当前查看 Task，切去历史 B 时不得把 A 的耗时挂到 B。 */
+const turnTimingTaskId = ref<string | null>(null)
 /** 当前这一轮结束时间；结束后冻结总耗时。 */
 const turnEndedAt = ref<number | null>(null)
 /** 当前把“整轮耗时”徽章挂在哪条消息上；运行中跟着最新输出走，结束后固定在最终回复。 */
@@ -252,12 +285,22 @@ const turnDurationAnchorId = ref<string | null>(null)
 const turnMessageStartIndex = ref(0)
 /** 是否存在仍在流式输出的消息。 */
 const hasStreamingMessage = computed(() => messages.value.some((item) => item.streaming))
+/** 当前这一轮是否仍在计时（发送后到整轮结束前）。 */
+const isTurnTiming = computed(
+  () =>
+    turnTimingTaskId.value === activeTaskId.value &&
+    activeTaskView.value?.mode === 'live' &&
+    turnStartedAt.value != null &&
+    turnEndedAt.value == null
+)
 /** 已进入执行态，但还没有任何流式消息时，展示占位提示。 */
 const showExecutionPlaceholder = computed(
-  () => status.value.state === 'busy' && !hasStreamingMessage.value && turnStartedAt.value != null
+  () =>
+    activeTaskView.value?.mode === 'live' &&
+    activeExecution.value?.taskId === activeTaskId.value &&
+    !hasStreamingMessage.value &&
+    isTurnTiming.value
 )
-/** 当前这一轮是否仍在计时（发送后到整轮结束前）。 */
-const isTurnTiming = computed(() => turnStartedAt.value != null && turnEndedAt.value == null)
 
 /**
  * 把毫秒格式化成用户可读耗时。
@@ -275,7 +318,7 @@ function formatDuration(ms: number): string {
 
 /** 当前这一轮的总耗时文案；运行中实时跳，结束后读冻结值。 */
 const turnDurationLabel = computed(() => {
-  if (turnStartedAt.value == null) return ''
+  if (!isTurnTiming.value || turnStartedAt.value == null) return ''
   const end = turnEndedAt.value ?? nowTick.value
   return formatDuration(end - turnStartedAt.value)
 })
@@ -499,7 +542,7 @@ function toggleThoughtExpanded(turnId: string): void {
 
 /** 启动/停止整轮耗时刷新定时器。 */
 function syncDurationTimer(): void {
-  if (isTurnTiming.value || status.value.state === 'busy' || hasStreamingMessage.value) {
+  if (isTurnTiming.value || hasStreamingMessage.value) {
     if (durationTimer) return
     durationTimer = setInterval(() => {
       nowTick.value = Date.now()
@@ -524,9 +567,14 @@ function finalizeStreamingMessages(): void {
  * 结束当前这一轮计时，并把唯一的总耗时徽章沉淀到最终回复上。
  * 优先挂在最后一条助手消息；没有则挂在本轮最后一条非用户消息。
  */
-function completeCurrentTurn(): void {
-  if (turnStartedAt.value == null) {
-    finalizeStreamingMessages()
+function completeCurrentTurn(taskId = activeTaskId.value): void {
+  if (turnTimingTaskId.value !== taskId || turnStartedAt.value == null) return
+  if (activeTaskId.value !== taskId) {
+    // 后台 Task 收束时只清理它自己的计时身份，当前查看 Task 的消息保持完全不动。
+    turnTimingTaskId.value = null
+    turnStartedAt.value = null
+    turnEndedAt.value = null
+    turnDurationAnchorId.value = null
     syncDurationTimer()
     return
   }
@@ -555,6 +603,7 @@ function completeCurrentTurn(): void {
   }
 
   // 计时状态回到空闲，后续新指令重新开始。
+  turnTimingTaskId.value = null
   turnStartedAt.value = null
   turnEndedAt.value = null
   turnMessageStartIndex.value = messages.value.length
@@ -562,8 +611,9 @@ function completeCurrentTurn(): void {
 }
 
 /** 开始新一轮用户指令的计时。 */
-function beginCurrentTurn(): void {
+function beginCurrentTurn(taskId = activeTaskId.value): void {
   const now = Date.now()
+  turnTimingTaskId.value = taskId
   turnStartedAt.value = now
   turnEndedAt.value = null
   turnDurationAnchorId.value = null
@@ -573,9 +623,12 @@ function beginCurrentTurn(): void {
   syncDurationTimer()
 }
 
-const isConnected = computed(() => status.value.state === 'ready' || status.value.state === 'busy')
+const isConnected = computed(() =>
+  isRuntimeConnectedToProject(status.value, taskHistory.activeProject.value?.canonicalRoot ?? '')
+)
 const isBusy = computed(
   () =>
+    Boolean(activeExecution.value) ||
     status.value.state === 'busy' ||
     status.value.state === 'connecting' ||
     isTurnTiming.value ||
@@ -584,6 +637,8 @@ const isBusy = computed(
 )
 /** 只约束 Renderer 交互，不参与 Runtime 连接判断，避免门禁反向阻止目标 Project 连接。 */
 const projectInteractionBlocked = computed(() => isBusy.value || projectSelectionPending.value)
+/** 历史导航不受后台 execution 影响，只在 Project 列表切换事务自身未完成时禁用。 */
+const historyNavigationBlocked = computed(() => projectSelectionPending.value)
 const { resolveCapability, isAvailable } = useRuntimeCapabilities(status)
 const promptCapability = computed(() => resolveCapability('session.prompt.text', '发送文本 Prompt'))
 const planCapability = computed(() => resolveCapability('event.plan', '展示执行计划'))
@@ -595,6 +650,7 @@ const canSend = computed(
     !projectSelectionPending.value &&
     activeTaskView.value?.mode !== 'history' &&
     Boolean(providerSummary.value?.configured) &&
+    isConnected.value &&
     !isTurnTiming.value &&
     !promptSubmissionPending.value &&
     canSendRuntimePrompt(prompt.value, status.value, promptCapability.value.available)
@@ -618,6 +674,7 @@ const composerDisabledMessage = computed(() => {
   if (activeTaskView.value?.mode === 'history') return '当前为只读历史，继续任务成功后才能输入。'
   if (!providerSummary.value?.configured) return '请先配置 Provider。'
   if (!activeProjectExecutable.value) return activeProjectExecutionReason.value
+  if (!isConnected.value) return '当前查看的 Project 尚未连接 Runtime。'
   return promptCapabilityMessage.value
 })
 const planEmptyMessage = computed(
@@ -681,6 +738,9 @@ const showProviderScreen = computed(
     (providerBootState.value !== 'ready' && taskHistory.projects.value.length === 0)
 )
 const statusLabel = computed(() => {
+  if (activeExecution.value) {
+    return activeExecution.value.projectId === activeProjectId.value ? '执行中' : '后台执行中'
+  }
   const labels: Record<AgentRuntimeStatus['state'], string> = {
     idle: '未连接',
     connecting: '连接中',
@@ -707,18 +767,36 @@ watch(
   { deep: true }
 )
 
-// Runtime 进入/离开执行态时，维护“一条指令一个总计时”。
-watch([hasStreamingMessage, () => status.value.state], ([, state], previous) => {
-  const previousState = previous?.[1]
-  // 发送时可能已经 beginCurrentTurn；这里只在尚未计时时补启动。
-  if (state === 'busy' && previousState !== 'busy' && turnStartedAt.value == null) {
-    beginCurrentTurn()
-  }
-  if (state !== 'busy' && previousState === 'busy') {
-    completeCurrentTurn()
+// 查看身份变化只切换计时可见性；execution 终态按其真实 taskId 收束，不能误写当前历史 B。
+watch([hasStreamingMessage, isTurnTiming, activeTaskId, () => status.value.state], () => {
+  const execution = activeExecution.value
+  if (
+    status.value.state === 'busy' &&
+    execution?.taskId === activeTaskId.value &&
+    activeTaskView.value?.mode === 'live' &&
+    turnStartedAt.value == null
+  ) {
+    beginCurrentTurn(execution.taskId)
   }
   syncDurationTimer()
 })
+
+watch(
+  () => executionSnapshot.value.execution,
+  (execution) => {
+    if (!execution) return
+    if (TERMINAL_EXECUTION_STATES.has(execution.state)) {
+      completeCurrentTurn(execution.taskId)
+    } else if (
+      execution.taskId === activeTaskId.value &&
+      activeTaskView.value?.mode === 'live' &&
+      turnStartedAt.value == null
+    ) {
+      beginCurrentTurn(execution.taskId)
+    }
+    syncDurationTimer()
+  }
+)
 
 onMounted(async () => {
   cleanupListeners.push(
@@ -729,17 +807,8 @@ onMounted(async () => {
     }),
     window.agent.onEvent(handleAgentEvent),
     window.agent.onPermission((request) => {
-      if (request.taskId === activeTaskId.value && request.projectId === activeProjectId.value) {
-        enqueuePermission(request)
-      } else {
-        // 非当前 Task 的权限不能污染正在查看的视图，也不能让 Runtime 永久等待。
-        void window.agent.respondPermission({
-          approvalId: request.approvalId,
-          taskId: request.taskId,
-          turnId: request.turnId,
-          decision: 'deny'
-        })
-      }
+      // 查看身份不参与权限决策；所有未过期审批都保留到用户显式处理或 Broker 收束。
+      enqueuePermission(request)
     }),
     window.agent.onPermissionCancelled((request) => {
       removePermission(request)
@@ -762,6 +831,7 @@ onMounted(async () => {
   }
 
   try {
+    await executionConsumer.start()
     status.value = unwrapDesktopIpcResult(await window.agent.getStatus())
     syncWorkspaceDisplay(status.value.workspace)
     if (activeProjectId.value) await ensureProjectConnected(activeProjectId.value)
@@ -771,6 +841,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  executionConsumer.dispose()
   cleanupListeners.forEach((cleanup) => cleanup())
   if (permissionExpiryTimer) {
     clearTimeout(permissionExpiryTimer)
@@ -850,9 +921,9 @@ async function ensureActiveTask(): Promise<string> {
   return task.taskId
 }
 
-/** 点击最近 Task 时先装配只读历史，再自动连接所属 Project；选择动作不会自动恢复 session。 */
+/** 点击最近 Task 只装配本地历史；已有 execution 可切回实时视图，但绝不连接或恢复 Runtime。 */
 async function selectTask(taskId: string): Promise<void> {
-  if (!taskId || taskId === activeTaskId.value || isBusy.value || projectSelectionPending.value) {
+  if (!taskId || taskId === activeTaskId.value || projectSelectionPending.value) {
     return
   }
   const selectionRequestId = ++taskSelectionRequestId
@@ -866,12 +937,13 @@ async function selectTask(taskId: string): Promise<void> {
       taskHistory.openedTurns.value,
       taskHistory.eventsByTurn.value
     )
+    const mode = activeExecution.value?.taskId === taskId ? 'live' : 'history'
     taskViews.value[taskId] = {
       taskId,
       projectId: detail.projectId,
       workspace: workspace.value,
       title: detail.title,
-      mode: 'history',
+      mode,
       messages: projection.messages,
       planEntries: projection.planEntries,
       toolActivities: projection.toolActivities,
@@ -879,7 +951,6 @@ async function selectTask(taskId: string): Promise<void> {
     }
     activeTaskId.value = taskId
     reconcilePermissionQueue(taskId, detail.projectId)
-    await ensureProjectConnected(detail.projectId)
     if (selectionRequestId !== taskSelectionRequestId || activeTaskId.value !== taskId) return
   } catch (error) {
     if (selectionRequestId !== taskSelectionRequestId) return
@@ -887,13 +958,9 @@ async function selectTask(taskId: string): Promise<void> {
   }
 }
 
-/** 选择已有 Project 后自动连接 Runtime；连接失败不回滚已经加载的本地历史。 */
+/** Project 选择只切换本地历史身份；连接 Runtime 必须由显式 Connect 或“继续任务”触发。 */
 async function selectProject(projectId: string): Promise<void> {
-  if (!projectId || isBusy.value || projectSelectionPending.value) return
-  if (projectId === activeProjectId.value) {
-    await ensureProjectConnected(projectId)
-    return
-  }
+  if (!projectId || projectSelectionPending.value || projectId === activeProjectId.value) return
   taskSelectionRequestId += 1
   const selection = projectSelection.begin()
   activeTaskId.value = ''
@@ -904,9 +971,6 @@ async function selectProject(projectId: string): Promise<void> {
       return
     }
     workspace.value = taskHistory.activeProject.value?.canonicalRoot ?? ''
-    // 历史状态已稳定，先释放旧 Task 门禁，再让 Runtime 连接判断按正常 busy 语义执行。
-    projectSelection.finish(selection)
-    await ensureProjectConnected(projectId, () => projectSelection.isCurrent(selection))
   } catch (error) {
     if (!projectSelection.isCurrent(selection) || activeProjectId.value !== projectId) return
     projectSelection.commit(selection, () => {
@@ -1053,6 +1117,7 @@ async function connectAgent(): Promise<void> {
 }
 
 async function disconnectAgent(): Promise<void> {
+  if (activeExecution.value || !isConnected.value) return
   try {
     unwrapDesktopIpcResult(await window.agent.disconnect())
     clearPermissionQueue()
@@ -1067,12 +1132,14 @@ async function sendPrompt(): Promise<void> {
 
   await runPromptSubmission(async () => {
     let turnStarted = false
+    let submittedTaskId = ''
 
     try {
       const taskId = await ensureActiveTask()
+      submittedTaskId = taskId
       prompt.value = ''
       // 一条用户指令只开一个总计时，从发送当下就开始。
-      beginCurrentTurn()
+      beginCurrentTurn(taskId)
       turnStarted = true
 
       const current = taskViews.value[taskId]
@@ -1084,11 +1151,13 @@ async function sendPrompt(): Promise<void> {
       appendMessage('user', text)
       await nextTick()
       composer.value?.focus()
-      unwrapDesktopIpcResult(await window.agent.startTurn(taskId, text))
+      const admitted = unwrapDesktopIpcResult(await window.agent.startTurn(taskId, text))
+      // admission 也必须经过 epoch/revision watermark，不能覆盖已经先到的较新 Push。
+      executionConsumer.accept(admitted)
       await taskHistory.refreshTasks()
     } catch (error) {
       // 只收束本次已经启动的 Turn，创建 Task 失败不能误结束其他计时。
-      if (turnStarted) completeCurrentTurn()
+      if (turnStarted) completeCurrentTurn(submittedTaskId)
       appendMessage('error', error instanceof Error ? error.message : String(error))
       await taskHistory.refreshTasks().catch(() => undefined)
     }
@@ -1096,11 +1165,17 @@ async function sendPrompt(): Promise<void> {
 }
 
 async function cancelTurn(): Promise<void> {
-  const taskId = activeTaskId.value
-  if (!taskId) return
+  const execution = activeExecution.value
+  if (!execution) return
 
   try {
-    unwrapDesktopIpcResult(await window.agent.cancelTurn(taskId))
+    unwrapDesktopIpcResult(
+      await window.agent.cancelTurn({
+        executionId: execution.executionId,
+        taskId: execution.taskId,
+        turnId: execution.turnId
+      })
+    )
     // 接受取消只表示请求已发出；等待真实 turn-complete 再收束计时与流式状态。
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
@@ -1152,18 +1227,11 @@ function clearPermissionQueue(): void {
   schedulePermissionExpiry()
 }
 
-/** Task/Project 身份变化时拒绝不再匹配的审批，Broker 会幂等处理晚到响应。 */
+/** Task/Project 身份变化只改变当前展示，不把后台审批解释为用户拒绝。 */
 function reconcilePermissionQueue(taskId: string, projectId: string): void {
-  const { active, stale } = reconcilePermissionRequests(permissionQueue.value, taskId, projectId)
-  permissionQueue.value = active
-  for (const request of stale) {
-    void window.agent.respondPermission({
-      approvalId: request.approvalId,
-      taskId: request.taskId,
-      turnId: request.turnId,
-      decision: 'deny'
-    })
-  }
+  void taskId
+  void projectId
+  permissionQueue.value = removeExpiredPermissionRequests(permissionQueue.value)
   schedulePermissionExpiry()
 }
 
@@ -1230,10 +1298,10 @@ function handleAgentEvent(event: AgentEvent): void {
     )
     schedulePermissionExpiry()
     // 整轮完成：只沉淀一个总耗时，不给中间片段分别计时。
-    completeCurrentTurn()
+    completeCurrentTurn(event.taskId)
     void taskHistory.refreshTasks()
   } else if (event.kind === 'error') {
-    completeCurrentTurn()
+    completeCurrentTurn(event.taskId)
     appendMessage('error', event.message)
   }
 }
@@ -1464,10 +1532,10 @@ function scrollMessagesToBottom(): void {
         :active-project-id="activeProjectId"
         :new-chat-disabled="newChatDisabled"
         :new-chat-disabled-reason="newChatDisabledReason"
-        :workspace-actions-disabled="projectInteractionBlocked"
-        workspace-actions-disabled-reason="当前 Turn 收束后才能切换目录。"
-        :recent-sessions-disabled="projectInteractionBlocked"
-        recent-sessions-disabled-reason="当前 Turn 收束后才能切换 Task。"
+        :history-navigation-disabled="historyNavigationBlocked"
+        history-navigation-disabled-reason="正在切换 Project，请稍候。"
+        :mutation-actions-disabled="projectInteractionBlocked"
+        mutation-actions-disabled-reason="任务执行或主进程操作期间，只读历史仍可查看，修改入口暂不可用。"
         :has-more-sessions="Boolean(taskHistory.taskCursor.value)"
         :loading-more-sessions="taskHistory.loadingMoreTasks.value"
         @new-chat="startNewChat"
@@ -1494,7 +1562,10 @@ function scrollMessagesToBottom(): void {
               <WarningCircle v-else-if="status.state === 'error'" :size="14" weight="fill" />
               <span>{{ statusLabel }}</span>
             </span>
-            <button v-if="isConnected" class="secondary-button" @click="disconnectAgent">
+            <button v-if="activeExecution" class="secondary-button" type="button" disabled>
+              {{ activeExecution.projectId === activeProjectId ? '任务执行中' : '后台任务执行中' }}
+            </button>
+            <button v-else-if="isConnected" class="secondary-button" @click="disconnectAgent">
               断开
             </button>
             <button
@@ -1713,6 +1784,7 @@ function scrollMessagesToBottom(): void {
               v-model="prompt"
               :disabled="
                 status.state !== 'ready' ||
+                !isConnected ||
                 projectSelectionPending ||
                 !promptCapability.available ||
                 activeTaskView?.mode === 'history' ||
@@ -1738,7 +1810,13 @@ function scrollMessagesToBottom(): void {
                   <kbd>Enter</kbd> 发送，<kbd>Shift Enter</kbd> 换行
                 </span>
               </div>
-              <button v-if="status.state === 'busy'" class="stop-button" @click="cancelTurn">
+              <button
+                v-if="activeExecution"
+                class="stop-button"
+                type="button"
+                :title="`停止 Task ${activeExecution.taskId}`"
+                @click="cancelTurn"
+              >
                 <Stop :size="15" weight="fill" />停止
               </button>
               <button
@@ -1864,7 +1942,7 @@ function scrollMessagesToBottom(): void {
       :key="`${permission.approvalId}:${permission.taskId}:${permission.turnId}`"
       :request="permission"
       :pending="permissionResponsePending"
-      :task-title="activeTaskView?.title"
+      :task-title="permissionTaskTitle"
       @respond="respondPermission"
       @cancel-turn="cancelTurn"
     />

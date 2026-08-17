@@ -208,7 +208,13 @@ describe('Agent IPC Handler', () => {
   it('无返回值操作统一返回 null', async () => {
     const fixture = createFixture()
 
-    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.cancelTurn, { taskId: 'task-1' })).toEqual({
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.cancelTurn, {
+        executionId: 'execution-1',
+        taskId: 'task-1',
+        turnId: 'turn-1'
+      })
+    ).toEqual({
       ok: true,
       value: null
     })

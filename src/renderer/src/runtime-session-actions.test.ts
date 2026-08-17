@@ -4,6 +4,7 @@ import {
   canSendRuntimePrompt,
   chooseWorkspaceWhenIdle,
   createAsyncSingleFlight,
+  isRuntimeConnectedToProject,
   shouldConnectProject
 } from './runtime-session-actions'
 
@@ -68,6 +69,17 @@ describe('Runtime 会话操作', () => {
     expect(canSendRuntimePrompt('执行测试', readyStatus, false)).toBe(false)
     expect(canSendRuntimePrompt('   ', readyStatus, true)).toBe(false)
     expect(canSendRuntimePrompt('执行测试', { ...readyStatus, state: 'busy' }, true)).toBe(false)
+  })
+
+  it('连接展示必须匹配当前查看 Project 的真实 workspace', () => {
+    expect(isRuntimeConnectedToProject(readyStatus, '/tmp/project')).toBe(true)
+    expect(isRuntimeConnectedToProject({ ...readyStatus, state: 'busy' }, '/tmp/project')).toBe(
+      true
+    )
+    expect(isRuntimeConnectedToProject(readyStatus, '/tmp/other-project')).toBe(false)
+    expect(isRuntimeConnectedToProject({ ...readyStatus, state: 'idle' }, '/tmp/project')).toBe(
+      false
+    )
   })
 
   it('Project 切换只在具备执行条件且目标目录尚未连接时触发连接', () => {

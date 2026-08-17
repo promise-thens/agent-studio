@@ -33,6 +33,71 @@ describe('App 退出清理门禁', () => {
     expect(retriedEvent.preventDefault).not.toHaveBeenCalled()
   })
 
+  it('继续等待会取消本次退出且不会关闭 Broker 或冻结新操作', async () => {
+    const shutdownPermissions = vi.fn(async () => undefined)
+    const beginShutdown = vi.fn()
+    const quit = vi.fn()
+    const gate = createAppShutdownGate({
+      hasActiveExecution: () => true,
+      chooseActiveExecutionAction: async () => 'continue-waiting',
+      beginShutdown,
+      shutdownPermissions,
+      disconnectRuntime: vi.fn(async () => undefined),
+      quit
+    })
+
+    gate.handleBeforeQuit({ preventDefault: vi.fn() })
+    await vi.waitFor(() => expect(gate.isShuttingDown()).toBe(false))
+    expect(beginShutdown).not.toHaveBeenCalled()
+    expect(shutdownPermissions).not.toHaveBeenCalled()
+    expect(quit).not.toHaveBeenCalled()
+  })
+
+  it('确认退出后先冻结操作，再按取消、历史、权限和 Runtime 顺序收束', async () => {
+    const calls: string[] = []
+    const quit = vi.fn()
+    const gate = createAppShutdownGate({
+      hasActiveExecution: () => true,
+      chooseActiveExecutionAction: async () => 'cancel-and-quit',
+      beginShutdown: () => calls.push('begin'),
+      cancelActiveExecution: async () => {
+        calls.push('cancel')
+      },
+      drainHistory: async () => {
+        calls.push('history')
+      },
+      shutdownPermissions: async () => {
+        calls.push('permissions')
+      },
+      disconnectRuntime: async () => {
+        calls.push('runtime')
+      },
+      quit
+    })
+
+    gate.handleBeforeQuit({ preventDefault: vi.fn() })
+    await vi.waitFor(() => expect(quit).toHaveBeenCalledOnce())
+    expect(calls).toEqual(['begin', 'cancel', 'history', 'permissions', 'runtime'])
+  })
+
+  it('force 路径使用中断语义并调用 forceQuit', async () => {
+    const interrupt = vi.fn(async () => undefined)
+    const forceQuit = vi.fn()
+    const gate = createAppShutdownGate({
+      hasActiveExecution: () => true,
+      chooseActiveExecutionAction: async () => 'force-quit',
+      interruptActiveExecution: interrupt,
+      shutdownPermissions: vi.fn(async () => undefined),
+      disconnectRuntime: vi.fn(async () => undefined),
+      quit: vi.fn(),
+      forceQuit
+    })
+
+    gate.handleBeforeQuit({ preventDefault: vi.fn() })
+    await vi.waitFor(() => expect(forceQuit).toHaveBeenCalledOnce())
+    expect(interrupt).toHaveBeenCalledOnce()
+  })
+
   it('单项清理失败仍会等待全部收束后重试退出', async () => {
     const runtimeCleanup = deferred<void>()
     const quit = vi.fn()

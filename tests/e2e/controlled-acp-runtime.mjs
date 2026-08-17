@@ -14,7 +14,11 @@ const SCENARIOS = new Set([
   'E2E:FIFO',
   'E2E:TOOLCALL_CANCEL',
   'E2E:TURN_CANCEL',
-  'E2E:EXECUTE_UNSUPPORTED'
+  'E2E:EXECUTE_UNSUPPORTED',
+  'E2E:LONG_RUNNING',
+  'E2E:PERMISSION_WAIT',
+  'E2E:IGNORE_CANCEL',
+  'E2E:RUNTIME_CRASH'
 ])
 const TEMPORARY_USER_DATA_PREFIX = 'agent-studio-controlled-acp-e2e-'
 const DIRECTORIES = {
@@ -72,21 +76,34 @@ async function run({ scenario, userDataPath }) {
 
   const trace = createTraceWriter(traceDirectory, scenario)
   const sessions = new Map()
+  let sessionSequence = 0
   const stream = acp.ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin))
   const app = acp
     .agent({ name: 'controlled-acp-runtime-e2e' })
     .onRequest('initialize', async () => ({
       protocolVersion: acp.PROTOCOL_VERSION,
-      agentCapabilities: { loadSession: false },
+      agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
       agentInfo: { name: 'controlled-acp-runtime-e2e', version: '1.0.0' }
     }))
     .onRequest('session/new', async () => {
-      sessions.set(SESSION_ID, { cancellation: null })
-      await trace({ event: 'session-created', sessionId: SESSION_ID })
-      return { sessionId: SESSION_ID }
+      sessionSequence += 1
+      const sessionId = sessionSequence === 1 ? SESSION_ID : `${SESSION_ID}-${sessionSequence}`
+      sessions.set(sessionId, { cancellation: null })
+      await trace({ event: 'session-created', sessionId })
+      return { sessionId }
     })
     // GrokAcpAdapter 会绑定 App 私有模型别名；fixture 只确认协议往返，不读取模型或 Provider 内容。
     .onRequest('session/set_model', createSetModelParser(), async () => ({}))
+    .onRequest('session/load', async (context) => {
+      if (!sessions.has(context.params.sessionId)) throw new Error('unknown-session')
+      await trace({ event: 'session-loaded', sessionId: context.params.sessionId })
+      return {}
+    })
+    .onRequest('session/resume', async (context) => {
+      if (!sessions.has(context.params.sessionId)) throw new Error('unknown-session')
+      await trace({ event: 'session-resumed', sessionId: context.params.sessionId })
+      return {}
+    })
     .onRequest('session/prompt', async (context) => {
       const session = sessions.get(context.params.sessionId)
       if (!session) throw new Error('unknown-session')
@@ -111,7 +128,12 @@ async function run({ scenario, userDataPath }) {
     })
     .onNotification('session/cancel', async (context) => {
       const session = sessions.get(context.params.sessionId)
-      await trace({ event: 'session-cancelled', sessionId: context.params.sessionId })
+      await trace({
+        event: 'session-cancelled',
+        sessionId: context.params.sessionId,
+        ignored: scenario === 'E2E:IGNORE_CANCEL'
+      })
+      if (scenario === 'E2E:IGNORE_CANCEL') return
       session?.cancellation?.abort()
     })
 
@@ -186,7 +208,51 @@ async function runScenario(context) {
       return runTurnCancellationScenario(context)
     case 'E2E:EXECUTE_UNSUPPORTED':
       return runExecuteUnsupportedScenario(context)
+    case 'E2E:LONG_RUNNING':
+      return runLongRunningScenario(context)
+    case 'E2E:PERMISSION_WAIT':
+      return runPermissionWaitScenario(context)
+    case 'E2E:IGNORE_CANCEL':
+      return runIgnoreCancelScenario(context)
+    case 'E2E:RUNTIME_CRASH':
+      return runRuntimeCrashScenario(context)
   }
+}
+
+/** 长任务只等待固定 barrier，供窗口 reload、Task/Project 浏览和后台终态测试使用。 */
+async function runLongRunningScenario(context) {
+  await context.trace({ event: 'long-running-waiting' })
+  await waitForBarrier(context.barrierDirectory, 'long-running-release', context.signal)
+  return context.signal.aborted ? 'cancelled' : 'end_turn'
+}
+
+/** 审批保持未决直到真实 UI 响应；允许后只写固定 marker。 */
+async function runPermissionWaitScenario(context) {
+  const response = await requestPermission(context, 'lifecycle-permission', '写入生命周期 marker')
+  await context.trace({
+    event: 'permission-resolved',
+    request: 'lifecycle',
+    outcome: outcomeName(response)
+  })
+  if (isAllowed(response, 'allow-lifecycle-permission')) {
+    await writeMarker(context.workspace, 'P')
+  }
+  return context.signal.aborted ? 'cancelled' : 'end_turn'
+}
+
+/** Runtime 明确收到 cancel 但故意不收束，验证 Main 的取消 deadline 与强制断开。 */
+async function runIgnoreCancelScenario(context) {
+  await context.trace({ event: 'ignore-cancel-waiting' })
+  await waitForBarrier(context.barrierDirectory, 'ignore-cancel-release')
+  return 'end_turn'
+}
+
+/** barrier 释放后先落固定 trace，再以非零退出码模拟 Runtime 崩溃。 */
+async function runRuntimeCrashScenario(context) {
+  await context.trace({ event: 'runtime-crash-waiting' })
+  await waitForBarrier(context.barrierDirectory, 'runtime-crash', context.signal)
+  await context.trace({ event: 'runtime-crash-exit', code: 17 })
+  process.exit(17)
 }
 
 /** 两个 ACP request 在首项未决时发出；fixture 不提前解析或执行用户 Prompt。 */

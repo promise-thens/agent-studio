@@ -62,7 +62,7 @@ export function removePermissionRequest(
   return queue.filter((item) => !matchesPermissionIdentity(item, identity))
 }
 
-/** 身份切换只保留当前 Task/Project 的审批，并返回需要 best-effort 拒绝的旧请求。 */
+/** 查看身份只对审批做可见/后台分组，不产生任何隐式权限决策。 */
 export function reconcilePermissionRequests(
   queue: AgentPermissionRequest[],
   taskId: string,

@@ -20,6 +20,7 @@
     "format": "prettier --write .",
     "lint": "eslint --cache .",
     "test": "vitest run --exclude 'tests/e2e/**'",
+    "test:lifecycle:e2e": "electron-vite build && playwright test --config tests/e2e/playwright.lifecycle.config.ts",
     "test:permission:e2e": "electron-vite build && playwright test --config tests/e2e/playwright.permission.config.ts",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json --composite false",

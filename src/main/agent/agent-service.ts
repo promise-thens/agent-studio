@@ -10,6 +10,10 @@ import type {
   AgentTurnOutcome
 } from '../../shared/agent'
 import type { RuntimeResumeSummary, TurnModelSnapshot } from '../../shared/task-history'
+import type {
+  TaskExecutionCancellationRequest,
+  TaskExecutionSnapshot
+} from '../../shared/task-execution'
 import {
   AgentRuntimeAdapterError,
   type AgentRuntimeAdapter,
@@ -19,7 +23,9 @@ import {
   type AgentRuntimeSessionRef,
   type AgentRuntimeTurnRef
 } from './agent-runtime-adapter'
+import type { TaskExecutor } from './task-executor'
 import { TaskExecutionConflictError, TaskExecutionController } from './task-execution-controller'
+import { OperationGate, type OperationLease } from './operation-gate'
 import { ProjectRegistry, ProjectRegistryError } from '../project/project-registry'
 import {
   projectPersistedAgentEvent,
@@ -70,6 +76,8 @@ export interface AgentServiceOptions {
   getTurnModel?: () => TurnModelSnapshot
   redactText?: (text: string) => string
   permissionBroker?: PermissionBroker
+  taskExecutor?: TaskExecutor
+  operationGate?: OperationGate
 }
 
 interface AgentTaskRecord extends AgentTaskRuntimeState {
@@ -122,6 +130,8 @@ export class AgentService {
   private readonly getTurnModel: () => TurnModelSnapshot
   private readonly redactText: (text: string) => string
   private readonly permissionBroker?: PermissionBroker
+  private readonly taskExecutor?: TaskExecutor
+  private readonly operationGate?: OperationGate
   private readonly historyWrites = new Map<string, Promise<void>>()
   private readonly runtimePermissionRequests = new Map<string, AgentRuntimePermissionRequest>()
 
@@ -137,6 +147,8 @@ export class AgentService {
     this.getTurnModel = options.getTurnModel ?? (() => ({ modelId: 'unknown' }))
     this.redactText = options.redactText ?? ((text) => text)
     this.permissionBroker = options.permissionBroker
+    this.taskExecutor = options.taskExecutor
+    this.operationGate = options.operationGate
     for (const persistedTask of this.taskStore?.listTaskRecords() ?? []) {
       const task = restoreRuntimeTask(persistedTask)
       this.tasks.set(task.taskId, task)
@@ -146,6 +158,16 @@ export class AgentService {
 
   getStatus(): AgentRuntimeStatus {
     return this.adapter.getStatus()
+  }
+
+  getExecutionSnapshot(): TaskExecutionSnapshot {
+    return (
+      this.taskExecutor?.getSnapshot() ?? {
+        executorEpoch: 'legacy-agent-service',
+        executionRevision: 0,
+        execution: null
+      }
+    )
   }
 
   getCapabilitySnapshot(): AgentRuntimeCapabilitySnapshot {
@@ -166,43 +188,38 @@ export class AgentService {
 
   /** Provider 事务用此门禁识别 Turn 或 session 操作，避免 ready 状态下并发打断恢复。 */
   hasInFlightOperation(): boolean {
-    return this.sessionOperationActive || this.executionController.hasActiveTurn()
+    return (
+      (this.operationGate?.getState() ?? 'idle') !== 'idle' ||
+      this.sessionOperationActive ||
+      this.taskExecutor?.hasActiveExecution() === true ||
+      this.executionController.hasActiveTurn()
+    )
   }
 
   /** 连接前再次校验工作区，并禁止连接动作隐式打断活动 Turn。 */
-  async connect(projectIdOrWorkspace: string): Promise<AgentRuntimeStatus> {
-    const validatedWorkspace = await this.resolveWorkspace(projectIdOrWorkspace)
-    if (this.executionController.hasActiveTurn()) {
-      throw new AgentServiceError('invalid-state', '活动 Turn 收束前不能重新连接 Runtime。')
-    }
-
-    return this.runExclusiveSessionOperation(async () => {
-      const previousWorkspace = this.adapter.getStatus().workspace
-      const status = await this.runAdapterOperation(() => this.adapter.connect(validatedWorkspace))
-      if (previousWorkspace && previousWorkspace !== validatedWorkspace) {
-        this.permissionBroker?.clearTaskGrants()
+  async connect(
+    projectIdOrWorkspace: string,
+    inheritedLease?: OperationLease
+  ): Promise<AgentRuntimeStatus> {
+    return this.runExclusiveSessionOperation(async (lease) => {
+      const validatedWorkspace = await this.resolveWorkspace(projectIdOrWorkspace)
+      this.assertOperationLeaseCurrent(lease)
+      if (this.executionController.hasActiveTurn()) {
+        throw new AgentServiceError('invalid-state', '活动 Turn 收束前不能重新连接 Runtime。')
       }
-      const selectedTask = this.selectedTaskId ? this.tasks.get(this.selectedTaskId) : undefined
-      if (
-        !selectedTask ||
-        status.workspace !== selectedTask.workspace ||
-        status.runtimeSessionId !== selectedTask.runtimeSessionId
-      ) {
-        // 新连接尚未激活 Task session，旧选择指针必须失效，下一轮才能执行 resume/load。
-        this.selectedTaskId = null
-      }
-      return status
-    })
+      return this.connectWithinSessionOperation(validatedWorkspace, lease)
+    }, inheritedLease)
   }
 
   /**
    * 断开直接委托 Adapter 终止 Runtime；不得先等待可能永不返回的 ACP cancel。
    * Adapter 成功收束后再释放服务层槽位，避免 Provider 重连和应用退出被取消请求卡住。
    */
-  async disconnect(): Promise<AgentRuntimeStatus> {
-    return this.runExclusiveSessionOperation(async () => {
+  async disconnect(inheritedLease?: OperationLease): Promise<AgentRuntimeStatus> {
+    return this.runExclusiveSessionOperation(async (lease) => {
       const activeTurn = this.executionController.getActiveTurn()
       const status = await this.runAdapterOperation(() => this.adapter.disconnect())
+      this.assertOperationLeaseCurrent(lease)
       if (activeTurn) {
         await this.flushHistoryWrites(activeTurn.taskId, activeTurn.turnId).catch(() => undefined)
         this.finishTurn(activeTurn.taskId, activeTurn.turnId, 'cancelled')
@@ -214,22 +231,26 @@ export class AgentService {
       }
       this.selectedTaskId = null
       return status
-    })
+    }, inheritedLease)
   }
 
   /** 新 Task 创建唯一产品 ID，并把 Adapter 返回的 session 引用仅保存在主进程注册表。 */
-  async createTask(projectIdOrWorkspace: string): Promise<AgentTaskRuntimeState> {
-    const validatedWorkspace = await this.resolveWorkspace(projectIdOrWorkspace)
-    if (this.executionController.hasActiveTurn()) {
-      throw new AgentServiceError('invalid-state', '活动 Turn 执行期间不能创建新 Task。')
-    }
-
-    return this.runExclusiveSessionOperation(async () => {
+  async createTask(
+    projectIdOrWorkspace: string,
+    inheritedLease?: OperationLease
+  ): Promise<AgentTaskRuntimeState> {
+    return this.runExclusiveSessionOperation(async (lease) => {
+      const validatedWorkspace = await this.resolveWorkspace(projectIdOrWorkspace)
+      this.assertOperationLeaseCurrent(lease)
+      if (this.executionController.hasActiveTurn()) {
+        throw new AgentServiceError('invalid-state', '活动 Turn 执行期间不能创建新 Task。')
+      }
       this.assertRuntimeReady(validatedWorkspace)
       const taskId = this.allocateTaskId()
       const session = await this.runAdapterOperation(() =>
         this.adapter.createSession({ workspace: validatedWorkspace })
       )
+      this.assertOperationLeaseCurrent(lease)
       this.assertSessionRef(session, validatedWorkspace)
 
       const observedAt = this.now()
@@ -262,7 +283,7 @@ export class AgentService {
       this.tasks.set(taskId, task)
       this.selectedTaskId = taskId
       return cloneTask(task)
-    })
+    }, inheritedLease)
   }
 
   /**
@@ -321,7 +342,15 @@ export class AgentService {
   }
 
   /** 重复取消同一活动 Turn 只会向 Adapter 发送一次请求；终态仍由 Runtime 回包确认。 */
-  async cancelTurn(taskId: string): Promise<void> {
+  async cancelTurn(request: string | TaskExecutionCancellationRequest): Promise<void> {
+    if (typeof request !== 'string' && this.taskExecutor) {
+      const cancelled = await this.taskExecutor.cancel(request)
+      if (!cancelled) {
+        throw new AgentServiceError('invalid-state', '指定 execution 当前不可取消。')
+      }
+      return
+    }
+    const taskId = typeof request === 'string' ? request : request.taskId
     this.requireTask(taskId)
     const activeTurn = this.executionController.getActiveTurn()
     if (!activeTurn) return
@@ -337,19 +366,20 @@ export class AgentService {
   }
 
   /** 关闭 Task 时不影响其他内存 Task；活动 Task 必须先完成或取消。 */
-  async closeTask(taskId: string): Promise<void> {
+  async closeTask(taskId: string, inheritedLease?: OperationLease): Promise<void> {
     const task = this.requireTask(taskId)
     const activeTurn = this.executionController.getActiveTurn()
     if (activeTurn?.taskId === taskId) {
       throw new AgentServiceError('invalid-state', '活动 Turn 收束前不能关闭 Task。')
     }
 
-    await this.runExclusiveSessionOperation(async () => {
+    await this.runExclusiveSessionOperation(async (lease) => {
       await this.runAdapterOperation(() => this.adapter.closeSession(task.session))
+      this.assertOperationLeaseCurrent(lease)
       this.tasks.delete(taskId)
       await this.permissionBroker?.invalidateTask(taskId)
       if (this.selectedTaskId === taskId) this.selectedTaskId = null
-    })
+    }, inheritedLease)
   }
 
   /**
@@ -438,6 +468,7 @@ export class AgentService {
    * Adapter sink 发布中性事件后调用此方法；旧 Turn 或错误 session 的晚到终态不能覆盖新状态。
    */
   handleRuntimeEvent(event: AgentEvent): void {
+    if (this.taskExecutor?.handleRuntimeEvent(event)) return
     const task = this.tasks.get(event.taskId)
     if (
       !task ||
@@ -466,21 +497,24 @@ export class AgentService {
   }
 
   /** 只读历史显式继续时重新连接 Project，并在当前能力验证后恢复原生会话。 */
-  async resumeTask(taskId: string): Promise<RuntimeResumeSummary> {
+  async resumeTask(taskId: string, inheritedLease?: OperationLease): Promise<RuntimeResumeSummary> {
     const task = this.requireTask(taskId)
     if (!task.projectId || !this.projectRegistry) {
       throw new AgentServiceError('history-not-found', '该 Task 不包含可恢复的 Project 历史。')
     }
-    await this.projectRegistry.resolveAvailableRoot(task.projectId)
-    await this.connect(task.projectId)
-    const method = await this.activateTaskSession(task)
-    return {
-      resumed: true,
-      ...(method ? { method } : {}),
-      message:
-        method === 'load' ? '已通过 Runtime load 恢复 Task。' : '已恢复 Runtime Task 上下文。',
-      task: cloneTask(task)
-    }
+    return this.runExclusiveSessionOperation(async (lease) => {
+      const validatedWorkspace = await this.projectRegistry!.resolveAvailableRoot(task.projectId!)
+      this.assertOperationLeaseCurrent(lease)
+      await this.connectWithinSessionOperation(validatedWorkspace, lease)
+      const method = await this.activateTaskSession(task, lease)
+      return {
+        resumed: true,
+        ...(method ? { method } : {}),
+        message:
+          method === 'load' ? '已通过 Runtime load 恢复 Task。' : '已恢复 Runtime Task 上下文。',
+        task: cloneTask(task)
+      }
+    }, inheritedLease)
   }
 
   private requireTask(taskId: string): AgentTaskRecord {
@@ -511,7 +545,10 @@ export class AgentService {
   }
 
   /** 切 Task 时优先 resume；连接仍可信时才回退 load，成功后才更新当前会话指针。 */
-  private async activateTaskSession(task: AgentTaskRecord): Promise<'resume' | 'load' | undefined> {
+  private async activateTaskSession(
+    task: AgentTaskRecord,
+    lease?: OperationLease
+  ): Promise<'resume' | 'load' | undefined> {
     if (this.selectedTaskId === task.taskId) return undefined
 
     const snapshot = this.adapter.getCapabilitySnapshot()
@@ -528,9 +565,11 @@ export class AgentService {
     if (canResume) {
       try {
         await this.adapter.resumeSession(task.session)
+        this.assertOperationLeaseCurrent(lease)
         this.selectedTaskId = task.taskId
         return 'resume'
       } catch (error) {
+        this.assertOperationLeaseCurrent(lease)
         resumeError = error
       }
     }
@@ -546,6 +585,7 @@ export class AgentService {
       }
       try {
         await this.adapter.loadSession(task.session)
+        this.assertOperationLeaseCurrent(lease)
         this.selectedTaskId = task.taskId
         return 'load'
       } catch (error) {
@@ -575,6 +615,17 @@ export class AgentService {
 
   private isRuntimePermissionCurrent(request: AgentRuntimePermissionRequest): boolean {
     const task = this.tasks.get(request.taskId)
+    const executorTurn = this.taskExecutor?.getActiveRuntimeTurn()
+    if (executorTurn) {
+      return Boolean(
+        task &&
+        request.runtimeId === task.runtimeId &&
+        executorTurn.taskId === request.taskId &&
+        executorTurn.turnId === request.turnId &&
+        executorTurn.runtimeSessionId === task.runtimeSessionId &&
+        request.runtimeSessionId === task.runtimeSessionId
+      )
+    }
     const activeTurn = this.executionController.getActiveTurn()
     return Boolean(
       task &&
@@ -600,6 +651,10 @@ export class AgentService {
     request: AgentRuntimePermissionRequest,
     pendingCount: number
   ): void {
+    if (this.taskExecutor?.getActiveIdentity()?.turnId === request.turnId) {
+      void this.taskExecutor.updatePermissionPendingCount(pendingCount)
+      return
+    }
     const task = this.tasks.get(request.taskId)
     if (!task || task.activeTurnId !== request.turnId) return
     const waiting = pendingCount > 0
@@ -640,8 +695,37 @@ export class AgentService {
     }
   }
 
-  /** session 创建、关闭和连接切换串行执行，避免并发响应互相使代次失效。 */
-  private async runExclusiveSessionOperation<T>(operation: () => Promise<T>): Promise<T> {
+  /**
+   * session 创建、关闭和连接切换统一复用 OperationGate；外层 Provider/execution 事务显式传入 owner lease。
+   * 未注入 Gate 的旧单测仍保留布尔门禁，避免一次迁移同时删除旧 Controller 兼容路径。
+   */
+  private async runExclusiveSessionOperation<T>(
+    operation: (lease?: OperationLease) => Promise<T>,
+    inheritedLease?: OperationLease
+  ): Promise<T> {
+    if (this.operationGate) {
+      let lease = inheritedLease
+      let ownsLease = false
+      if (!lease) {
+        try {
+          lease = this.operationGate.acquireSessionOperation()
+          ownsLease = true
+        } catch {
+          throw new AgentServiceError('invalid-state', this.operationConflictMessage())
+        }
+      }
+      this.assertOperationLeaseAllowed(lease)
+      try {
+        const result = await operation(lease)
+        this.assertOperationLeaseCurrent(lease)
+        return result
+      } finally {
+        if (ownsLease) lease.release()
+      }
+    }
+    if (inheritedLease) {
+      throw new AgentServiceError('invalid-state', 'Runtime 会话事务未启用共享门禁。')
+    }
     if (this.sessionOperationActive) {
       throw new AgentServiceError('invalid-state', '已有 Runtime 会话操作正在执行。')
     }
@@ -652,6 +736,56 @@ export class AgentService {
     } finally {
       this.sessionOperationActive = false
     }
+  }
+
+  /** 已取得 session/provider/execution lease 后执行连接主体，禁止嵌套再次抢占 Gate。 */
+  private async connectWithinSessionOperation(
+    validatedWorkspace: string,
+    lease?: OperationLease
+  ): Promise<AgentRuntimeStatus> {
+    const previousWorkspace = this.adapter.getStatus().workspace
+    const status = await this.runAdapterOperation(() => this.adapter.connect(validatedWorkspace))
+    this.assertOperationLeaseCurrent(lease)
+    if (previousWorkspace && previousWorkspace !== validatedWorkspace) {
+      this.permissionBroker?.clearTaskGrants()
+    }
+    const selectedTask = this.selectedTaskId ? this.tasks.get(this.selectedTaskId) : undefined
+    if (
+      !selectedTask ||
+      status.workspace !== selectedTask.workspace ||
+      status.runtimeSessionId !== selectedTask.runtimeSessionId
+    ) {
+      // 新连接尚未激活 Task session，旧选择指针必须失效，下一轮才能执行 resume/load。
+      this.selectedTaskId = null
+    }
+    return status
+  }
+
+  private assertOperationLeaseAllowed(lease: OperationLease): void {
+    if (
+      this.operationGate?.isShuttingDown() ||
+      !['session-operation', 'provider-mutation', 'execution-active'].includes(lease.kind) ||
+      !this.operationGate?.ownsCurrentLease(lease)
+    ) {
+      throw new AgentServiceError('invalid-state', 'Runtime 会话事务身份已经失效。')
+    }
+  }
+
+  private assertOperationLeaseCurrent(lease?: OperationLease): void {
+    if (!lease) return
+    if (!this.operationGate?.ownsCurrentLease(lease) || this.operationGate.isShuttingDown()) {
+      throw new AgentServiceError('invalid-state', 'Runtime 会话事务已被新的主进程状态取代。')
+    }
+  }
+
+  private operationConflictMessage(): string {
+    const state = this.operationGate?.getState()
+    if (state === 'execution-active' || state === 'admitting-execution') {
+      return '活动 Turn 收束前不能切换 Runtime 会话。'
+    }
+    if (state === 'provider-mutation') return '模型配置更新期间不能切换 Runtime 会话。'
+    if (state === 'shutting-down') return '应用正在退出，不能开始 Runtime 会话操作。'
+    return '已有 Runtime 会话操作正在执行。'
   }
 
   private async resolveWorkspace(projectIdOrWorkspace: string): Promise<string> {
@@ -760,8 +894,14 @@ function normalizeServiceError(error: unknown): AgentServiceError {
   return new AgentServiceError('operation-failed', 'Agent Runtime 操作失败。')
 }
 
+function mapHistoryStateToRuntimeState(state: TaskRecordV1['state']): AgentExecutionState {
+  if (state === 'queued' || state === 'cancelling') return 'running'
+  if (state === 'interrupted') return 'failed'
+  return state
+}
+
 function restoreRuntimeTask(task: TaskRecordV1): AgentTaskRecord {
-  const state: AgentExecutionState = task.state === 'interrupted' ? 'failed' : task.state
+  const state: AgentExecutionState = mapHistoryStateToRuntimeState(task.state)
   return {
     taskId: task.taskId,
     projectId: task.projectId,

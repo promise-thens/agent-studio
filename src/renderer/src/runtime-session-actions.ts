@@ -45,6 +45,18 @@ export function canSendRuntimePrompt(
   return Boolean(prompt.trim()) && status.state === 'ready' && promptCapabilityAvailable
 }
 
+/** 查看身份必须与 Runtime 实际 workspace 精确一致，不能把后台 Project A 误显示为 Project B 已连接。 */
+export function isRuntimeConnectedToProject(
+  status: AgentRuntimeStatus,
+  targetWorkspace: string
+): boolean {
+  return (
+    Boolean(targetWorkspace) &&
+    (status.state === 'ready' || status.state === 'busy') &&
+    status.workspace === targetWorkspace
+  )
+}
+
 /**
  * 判断 Project 是否需要发起 Runtime 连接。
  * 只有 Provider、Project 和当前交互状态都允许时才连接；同目录已 ready 时避免重复重启会话。

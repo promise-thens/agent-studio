@@ -1,4 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentRuntimeStatus } from '../shared/agent'
+import type {
+  ProviderConfigInput,
+  ProviderConfigSummary,
+  ProviderTestResult
+} from '../shared/provider'
+import type { OperationLease } from './agent/operation-gate'
+import type { ProviderIpcOperations } from './provider/ipc'
+import type { ProviderRuntimeConfig } from './provider/provider-config-store'
 
 type AppDeletionDependencies = {
   removeProject(projectId: string): Promise<void>
@@ -29,11 +38,85 @@ const mocks = vi.hoisted(() => {
     resolveReady = resolve
   })
 
+  const providerState: { runtimeConfig: ProviderRuntimeConfig } = {
+    runtimeConfig: {
+      baseUrl: 'https://provider.test/v1',
+      authMode: 'none' as const,
+      modelId: 'model-1',
+      testedAt: '2026-08-17T00:00:00.000Z',
+      updatedAt: '2026-08-17T00:00:00.000Z'
+    }
+  }
+  const toProviderSummary = (): ProviderConfigSummary => ({
+    configured: true,
+    baseUrl: providerState.runtimeConfig.baseUrl,
+    authMode: providerState.runtimeConfig.authMode,
+    modelId: providerState.runtimeConfig.modelId,
+    hasApiKey: false,
+    credentialStorage: 'secure',
+    testedAt: providerState.runtimeConfig.testedAt,
+    updatedAt: providerState.runtimeConfig.updatedAt
+  })
+
   return {
     ready,
     resolveReady,
     appDeletionDependencies: undefined as AppDeletionDependencies | undefined,
     taskDeletionDependencies: undefined as TaskDeletionDependencies | undefined,
+    providerOperations: undefined as ProviderIpcOperations | undefined,
+    providerState,
+    providerStore: {
+      initialize: vi.fn(async () => undefined),
+      getSummary: vi.fn(() => toProviderSummary()),
+      getRuntimeConfig: vi.fn(() => ({ ...providerState.runtimeConfig })),
+      save: vi.fn(async (input: ProviderConfigInput) => {
+        providerState.runtimeConfig = {
+          ...input,
+          testedAt: '2026-08-17T00:00:01.000Z',
+          updatedAt: '2026-08-17T00:00:01.000Z'
+        }
+        return toProviderSummary()
+      }),
+      clear: vi.fn(async (): Promise<ProviderConfigSummary> => ({
+        configured: false,
+        hasApiKey: false,
+        credentialStorage: 'secure'
+      }))
+    },
+    providerTester: {
+      testInference: vi.fn(async (): Promise<ProviderTestResult> => ({
+        ok: true,
+        stage: 'inference',
+        message: 'ok'
+      })),
+      listModels: vi.fn()
+    },
+    agentService: {
+      getStatus: vi.fn<() => AgentRuntimeStatus>(() => ({
+        runtimeId: 'grok',
+        state: 'idle',
+        message: 'idle'
+      })),
+      connect: vi.fn<
+        (workspace: string, inheritedLease?: OperationLease) => Promise<AgentRuntimeStatus>
+      >(async (workspace) => ({
+        runtimeId: 'grok',
+        state: 'ready',
+        message: 'ready',
+        workspace
+      })),
+      disconnect: vi.fn<(inheritedLease?: OperationLease) => Promise<AgentRuntimeStatus>>(
+        async () => ({ runtimeId: 'grok', state: 'idle', message: 'idle' })
+      )
+    },
+    runtimeAdapter: {
+      disconnect: vi.fn(async () => undefined),
+      getCapabilitySnapshot: vi.fn(() => ({
+        runtimeId: 'grok',
+        observedAt: '2026-08-17T00:00:00.000Z',
+        capabilities: {}
+      }))
+    },
     projectRegistry: {
       initialize: vi.fn(async () => undefined),
       list: vi.fn(async () => []),
@@ -147,7 +230,11 @@ vi.mock('@electron-toolkit/utils', () => ({
 vi.mock('../../resources/icon.png?asset', () => ({ default: '/tmp/icon.png' }))
 
 vi.mock('./agent/ipc', () => ({ registerAgentIpcHandlers: vi.fn() }))
-vi.mock('./provider/ipc', () => ({ registerProviderIpcHandlers: vi.fn() }))
+vi.mock('./provider/ipc', () => ({
+  registerProviderIpcHandlers: vi.fn((dependencies: { operations: ProviderIpcOperations }) => {
+    mocks.providerOperations = dependencies.operations
+  })
+}))
 vi.mock('./app-ipc', () => ({
   registerAppIpcHandlers: vi.fn((dependencies: AppDeletionDependencies) => {
     mocks.appDeletionDependencies = dependencies
@@ -164,8 +251,8 @@ vi.mock('./app-shutdown', () => ({
 
 vi.mock('./provider/provider-config-store', () => ({
   ProviderConfigStore: class {
-    initialize(): Promise<void> {
-      return Promise.resolve()
+    constructor() {
+      return mocks.providerStore
     }
   }
 }))
@@ -194,17 +281,26 @@ vi.mock('./security/permission-broker', () => ({
   }
 }))
 vi.mock('./provider/provider-connection-tester', () => ({
-  ProviderConnectionTester: class {}
+  ProviderConnectionTester: class {
+    constructor() {
+      return mocks.providerTester
+    }
+  }
 }))
 vi.mock('./runtime/grok/grok-acp-adapter', () => ({
   GrokAcpAdapter: class {
-    disconnect(): Promise<void> {
-      return Promise.resolve()
+    constructor() {
+      return mocks.runtimeAdapter
     }
   }
 }))
 vi.mock('./agent/agent-service', () => ({
-  AgentService: class {}
+  AgentService: class {
+    constructor() {
+      return mocks.agentService
+    }
+  },
+  AgentServiceError: class extends Error {}
 }))
 vi.mock('./agent/task-execution-controller', () => ({
   TaskExecutionController: class {}
@@ -247,6 +343,39 @@ describe('Main 删除与权限失效编排', () => {
     )
     mocks.permissionBroker.invalidateProject.mockClear()
     mocks.permissionBroker.invalidateTask.mockClear()
+    mocks.providerState.runtimeConfig = {
+      baseUrl: 'https://provider.test/v1',
+      authMode: 'none',
+      modelId: 'model-1',
+      testedAt: '2026-08-17T00:00:00.000Z',
+      updatedAt: '2026-08-17T00:00:00.000Z'
+    }
+    mocks.providerTester.testInference.mockReset()
+    mocks.providerTester.testInference.mockResolvedValue({
+      ok: true,
+      stage: 'inference',
+      message: 'ok'
+    })
+    mocks.providerStore.save.mockClear()
+    mocks.providerStore.clear.mockClear()
+    mocks.agentService.getStatus.mockReset()
+    mocks.agentService.getStatus.mockReturnValue({
+      runtimeId: 'grok',
+      state: 'idle',
+      message: 'idle'
+    })
+    mocks.agentService.connect.mockReset()
+    mocks.agentService.connect.mockResolvedValue({
+      runtimeId: 'grok',
+      state: 'ready',
+      message: 'ready'
+    })
+    mocks.agentService.disconnect.mockReset()
+    mocks.agentService.disconnect.mockResolvedValue({
+      runtimeId: 'grok',
+      state: 'idle',
+      message: 'idle'
+    })
   })
 
   it('Task 删除成功后才失效授权，token 校验失败时保持原授权', async () => {
@@ -375,7 +504,91 @@ describe('Main 删除与权限失效编排', () => {
     expect(mocks.taskDeletionPreparation.rollback).not.toHaveBeenCalled()
     expect(mocks.taskDeletionLease.rollback).not.toHaveBeenCalled()
   })
+
+  it('Provider save 在首个网络 await 前占用 Gate，并拒绝并发 select/clear', async () => {
+    const operations = mocks.providerOperations!
+    const inference = deferred<ProviderTestResult>()
+    mocks.providerTester.testInference.mockReturnValueOnce(inference.promise)
+
+    const saving = operations.save(providerInput('model-2'))
+    await vi.waitFor(() => expect(mocks.providerTester.testInference).toHaveBeenCalledOnce())
+    await expect(operations.selectModel({ modelId: 'model-3' })).rejects.toThrow(
+      '已有主进程操作正在进行'
+    )
+    await expect(operations.clear()).rejects.toThrow('已有主进程操作正在进行')
+    expect(mocks.providerTester.testInference).toHaveBeenCalledOnce()
+    expect(mocks.providerStore.save).not.toHaveBeenCalled()
+    expect(mocks.agentService.disconnect).not.toHaveBeenCalled()
+
+    inference.resolve({ ok: true, stage: 'inference', message: 'ok' })
+    await expect(saving).resolves.toMatchObject({ configured: true, modelId: 'model-2' })
+    expect(mocks.providerStore.save).toHaveBeenCalledOnce()
+  })
+
+  it('Provider 失败会释放 Gate，后续 clear 复用同一 lease 并可正常完成', async () => {
+    const operations = mocks.providerOperations!
+    mocks.providerTester.testInference.mockResolvedValueOnce({
+      ok: false,
+      stage: 'inference',
+      message: '模拟测试失败'
+    })
+
+    await expect(operations.save(providerInput('model-failed'))).rejects.toThrow('模拟测试失败')
+    mocks.agentService.disconnect.mockImplementationOnce(async (lease) => {
+      const currentLease = requireOperationLease(lease)
+      expect(currentLease).toMatchObject({ kind: 'provider-mutation' })
+      expect(currentLease.isCurrent()).toBe(true)
+      return { runtimeId: 'grok', state: 'idle', message: 'idle' }
+    })
+    await expect(operations.clear()).resolves.toMatchObject({ configured: false })
+    expect(mocks.agentService.disconnect).toHaveBeenCalledOnce()
+    expect(mocks.providerStore.clear).toHaveBeenCalledOnce()
+  })
+
+  it('已连接 Runtime 的 Provider 保存用同一 inherited lease 完成断开与重连', async () => {
+    const operations = mocks.providerOperations!
+    mocks.agentService.getStatus.mockReturnValue({
+      runtimeId: 'grok',
+      state: 'ready',
+      message: 'ready',
+      workspace: '/tmp/project-1'
+    })
+    let inheritedLease: OperationLease | null = null
+    mocks.agentService.disconnect.mockImplementationOnce(async (lease) => {
+      const currentLease = requireOperationLease(lease)
+      inheritedLease = currentLease
+      expect(currentLease.isCurrent()).toBe(true)
+      return { runtimeId: 'grok', state: 'idle', message: 'idle' }
+    })
+    mocks.agentService.connect.mockImplementationOnce(async (workspace, lease) => {
+      const currentLease = requireOperationLease(lease)
+      expect(workspace).toBe('/tmp/project-1')
+      expect(currentLease).toBe(inheritedLease)
+      expect(currentLease.isCurrent()).toBe(true)
+      return { runtimeId: 'grok', state: 'ready', message: 'ready', workspace }
+    })
+
+    await expect(operations.save(providerInput('model-2'))).resolves.toMatchObject({
+      modelId: 'model-2'
+    })
+    expect(mocks.agentService.disconnect).toHaveBeenCalledOnce()
+    expect(mocks.agentService.connect).toHaveBeenCalledOnce()
+  })
 })
+
+function providerInput(modelId: string): ProviderConfigInput {
+  return {
+    baseUrl: 'https://provider.test/v1',
+    authMode: 'none',
+    modelId
+  }
+}
+
+/** Provider 事务测试必须显式收到 inherited lease，避免可选参数掩盖接线回归。 */
+function requireOperationLease(lease: OperationLease | undefined): OperationLease {
+  if (!lease) throw new Error('测试预期 Provider 操作传入 inherited lease。')
+  return lease
+}
 
 /** 构造可控 Promise，用来证明异步删除尚未完成时不会提前失效授权。 */
 function deferred<T>(): {

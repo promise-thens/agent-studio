@@ -1,8 +1,4 @@
-import type {
-  AgentRuntimeStatus,
-  AgentTaskRuntimeState,
-  AgentTurnExecutionResult
-} from '../../shared/agent'
+import type { AgentRuntimeStatus, AgentTaskRuntimeState } from '../../shared/agent'
 import {
   AGENT_INVOKE_CHANNELS,
   type AgentCancelTurnRequest,
@@ -13,6 +9,10 @@ import {
   type AgentStartTurnRequest
 } from '../../shared/agent-ipc'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
+import type {
+  AgentStartTurnAdmissionResult,
+  TaskExecutionSnapshot
+} from '../../shared/task-execution'
 import type { DesktopIpcMain } from '../ipc-types'
 import {
   DesktopIpcFailure,
@@ -29,11 +29,17 @@ const MAX_REQUEST_ID_BYTES = 4 * 1024
 
 export interface AgentIpcRuntime {
   getStatus: () => AgentRuntimeStatus
+  getExecutionSnapshot?: () => TaskExecutionSnapshot
   connect: (projectId: string) => Promise<AgentRuntimeStatus>
   disconnect: () => Promise<AgentRuntimeStatus>
   createTask: (projectId: string) => Promise<AgentTaskRuntimeState>
-  startTurn: (taskId: string, prompt: string) => Promise<AgentTurnExecutionResult>
-  cancelTurn: (taskId: string) => Promise<void>
+  startTurn: (
+    taskId: string,
+    prompt: string
+  ) => Promise<
+    AgentStartTurnAdmissionResult | import('../../shared/agent').AgentTurnExecutionResult
+  >
+  cancelTurn: (request: AgentCancelTurnRequest | string) => Promise<void>
   getTaskRuntimeState: (taskId: string) => AgentTaskRuntimeState
   respondPermission: (request: AgentRespondPermissionRequest) => Promise<void>
 }
@@ -123,11 +129,18 @@ function readStartTurnRequest(args: unknown[]): AgentStartTurnRequest {
   }
 }
 
-function readTaskRequest(
-  args: unknown[]
-): AgentCancelTurnRequest | AgentGetTaskRuntimeStateRequest {
+function readTaskRequest(args: unknown[]): AgentGetTaskRuntimeStateRequest {
   const request = readRequest(args, ['taskId'])
   return { taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES) }
+}
+
+function readCancelRequest(args: unknown[]): AgentCancelTurnRequest {
+  const request = readRequest(args, ['executionId', 'taskId', 'turnId'])
+  return {
+    executionId: readRequiredString(request, 'executionId', MAX_TASK_ID_BYTES),
+    taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES),
+    turnId: readRequiredString(request, 'turnId', MAX_TASK_ID_BYTES)
+  }
 }
 
 function readPermissionRequest(args: unknown[]): AgentRespondPermissionRequest {
@@ -191,6 +204,17 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
     return requireAgent(dependencies.getAgent).getStatus()
   })
 
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.getExecutionSnapshot, (args) => {
+    assertNoArguments(args)
+    return (
+      requireAgent(dependencies.getAgent).getExecutionSnapshot?.() ?? {
+        executorEpoch: 'legacy-agent-service',
+        executionRevision: 0,
+        execution: null
+      }
+    )
+  })
+
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.connect, async (args) => {
     const request = readConnectRequest(args)
     const agent = requireAgent(dependencies.getAgent)
@@ -218,8 +242,9 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
   })
 
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.cancelTurn, async (args) => {
-    const request = readTaskRequest(args)
-    await requireAgent(dependencies.getAgent).cancelTurn(request.taskId)
+    const request = readCancelRequest(args)
+    const agent = requireAgent(dependencies.getAgent)
+    await agent.cancelTurn(agent.getExecutionSnapshot ? request : request.taskId)
     return null
   })
 

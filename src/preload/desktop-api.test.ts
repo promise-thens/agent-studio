@@ -30,11 +30,16 @@ describe('窄 Preload API', () => {
     const task = createTaskDesktopApi(ipcRenderer)
 
     await agent.getStatus()
+    await agent.getExecutionSnapshot()
     await agent.connect('project-1')
     await agent.disconnect()
     await agent.createTask('project-1')
     await agent.startTurn('task-1', '执行测试')
-    await agent.cancelTurn('task-1')
+    await agent.cancelTurn({
+      executionId: 'execution-1',
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
     await agent.getTaskRuntimeState('task-1')
     await agent.respondPermission({
       approvalId: 'request-1',
@@ -49,11 +54,15 @@ describe('窄 Preload API', () => {
 
     expect(ipcRenderer.invoke.mock.calls).toEqual([
       [AGENT_INVOKE_CHANNELS.getStatus],
+      [AGENT_INVOKE_CHANNELS.getExecutionSnapshot],
       [AGENT_INVOKE_CHANNELS.connect, { projectId: 'project-1' }],
       [AGENT_INVOKE_CHANNELS.disconnect],
       [AGENT_INVOKE_CHANNELS.createTask, { projectId: 'project-1' }],
       [AGENT_INVOKE_CHANNELS.startTurn, { taskId: 'task-1', prompt: '执行测试' }],
-      [AGENT_INVOKE_CHANNELS.cancelTurn, { taskId: 'task-1' }],
+      [
+        AGENT_INVOKE_CHANNELS.cancelTurn,
+        { executionId: 'execution-1', taskId: 'task-1', turnId: 'turn-1' }
+      ],
       [AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId: 'task-1' }],
       [
         AGENT_INVOKE_CHANNELS.respondPermission,

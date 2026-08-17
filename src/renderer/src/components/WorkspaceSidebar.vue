@@ -39,14 +39,14 @@ const props = withDefaults(
     newChatDisabled?: boolean
     /** 为禁用的新对话入口提供可读原因，不替代主区域的状态反馈。 */
     newChatDisabledReason?: string
-    /** 连接、提交或执行期间禁用所有目录入口，避免当前 Task 与工作区解绑。 */
-    workspaceActionsDisabled?: boolean
-    /** 目录入口共用同一禁用原因，并关联到原生 disabled 控件。 */
-    workspaceActionsDisabledReason?: string
-    /** 活动 Turn 期间使用原生 disabled 阻止切换 Task。 */
-    recentSessionsDisabled?: boolean
-    /** 禁用原因必须可见，同时提供给每个会话按钮的无障碍说明。 */
-    recentSessionsDisabledReason?: string
+    /** 只读历史导航只在列表自身切换期间禁用，后台执行不能封死浏览入口。 */
+    historyNavigationDisabled?: boolean
+    /** 历史导航禁用原因必须可见，并关联到 Project/Task 主按钮。 */
+    historyNavigationDisabledReason?: string
+    /** 会改变 Runtime、Project 或历史的操作在活动 execution 期间统一禁用。 */
+    mutationActionsDisabled?: boolean
+    /** mutation 禁用原因只解释打开、删除、移除等会改变状态的入口。 */
+    mutationActionsDisabledReason?: string
     hasMoreSessions?: boolean
     loadingMoreSessions?: boolean
   }>(),
@@ -55,10 +55,10 @@ const props = withDefaults(
     activeProjectId: '',
     newChatDisabled: false,
     newChatDisabledReason: '',
-    workspaceActionsDisabled: false,
-    workspaceActionsDisabledReason: '',
-    recentSessionsDisabled: true,
-    recentSessionsDisabledReason: '当前 Turn 收束后才能切换 Task。',
+    historyNavigationDisabled: false,
+    historyNavigationDisabledReason: '',
+    mutationActionsDisabled: false,
+    mutationActionsDisabledReason: '',
     hasMoreSessions: false,
     loadingMoreSessions: false
   }
@@ -163,15 +163,15 @@ const filteredSessions = computed(() => {
       <button
         class="sidebar-link"
         type="button"
-        :disabled="workspaceActionsDisabled"
+        :disabled="mutationActionsDisabled"
         :aria-describedby="
-          workspaceActionsDisabled && workspaceActionsDisabledReason
-            ? 'workspace-actions-disabled-reason'
+          mutationActionsDisabled && mutationActionsDisabledReason
+            ? 'mutation-actions-disabled-reason'
             : undefined
         "
         :title="
-          workspaceActionsDisabled && workspaceActionsDisabledReason
-            ? workspaceActionsDisabledReason
+          mutationActionsDisabled && mutationActionsDisabledReason
+            ? mutationActionsDisabledReason
             : '打开项目'
         "
         @click="emit('openProject')"
@@ -186,11 +186,18 @@ const filteredSessions = computed(() => {
       <section class="sidebar-section" aria-label="项目">
         <div class="section-label">项目</div>
         <p
-          v-if="workspaceActionsDisabled && workspaceActionsDisabledReason"
-          id="workspace-actions-disabled-reason"
+          v-if="historyNavigationDisabled && historyNavigationDisabledReason"
+          id="history-navigation-disabled-reason"
           class="section-hint"
         >
-          {{ workspaceActionsDisabledReason }}
+          {{ historyNavigationDisabledReason }}
+        </p>
+        <p
+          v-else-if="mutationActionsDisabled && mutationActionsDisabledReason"
+          id="mutation-actions-disabled-reason"
+          class="section-hint"
+        >
+          {{ mutationActionsDisabledReason }}
         </p>
 
         <div v-if="filteredProjects.length" class="section-list">
@@ -199,7 +206,12 @@ const filteredSessions = computed(() => {
               class="sidebar-item sidebar-item-main"
               type="button"
               :class="{ active: project.id === activeProjectId }"
-              :disabled="workspaceActionsDisabled"
+              :disabled="historyNavigationDisabled"
+              :aria-describedby="
+                historyNavigationDisabled && historyNavigationDisabledReason
+                  ? 'history-navigation-disabled-reason'
+                  : undefined
+              "
               :title="project.path"
               @click="emit('selectProject', project.id)"
             >
@@ -210,7 +222,7 @@ const filteredSessions = computed(() => {
             <button
               class="sidebar-row-action"
               type="button"
-              :disabled="workspaceActionsDisabled"
+              :disabled="mutationActionsDisabled"
               :title="`从项目列表移除：${project.name}`"
               :aria-label="`从项目列表移除：${project.name}`"
               @click.stop="emit('removeProject', project.id)"
@@ -220,7 +232,7 @@ const filteredSessions = computed(() => {
             <button
               class="sidebar-row-action danger"
               type="button"
-              :disabled="workspaceActionsDisabled"
+              :disabled="mutationActionsDisabled"
               :title="`删除项目本地历史：${project.name}`"
               :aria-label="`删除项目本地历史：${project.name}`"
               @click.stop="emit('deleteProjectHistory', project.id)"
@@ -234,15 +246,15 @@ const filteredSessions = computed(() => {
           v-else
           class="sidebar-empty"
           type="button"
-          :disabled="workspaceActionsDisabled"
+          :disabled="mutationActionsDisabled"
           :aria-describedby="
-            workspaceActionsDisabled && workspaceActionsDisabledReason
-              ? 'workspace-actions-disabled-reason'
+            mutationActionsDisabled && mutationActionsDisabledReason
+              ? 'mutation-actions-disabled-reason'
               : undefined
           "
           :title="
-            workspaceActionsDisabled && workspaceActionsDisabledReason
-              ? workspaceActionsDisabledReason
+            mutationActionsDisabled && mutationActionsDisabledReason
+              ? mutationActionsDisabledReason
               : '选择项目目录'
           "
           @click="emit('openProject')"
@@ -256,11 +268,17 @@ const filteredSessions = computed(() => {
       <section class="sidebar-section" aria-label="最近">
         <div class="section-label">最近</div>
         <p
-          v-if="recentSessionsDisabled && recentSessionsDisabledReason"
-          id="recent-sessions-disabled-reason"
+          v-if="historyNavigationDisabled && historyNavigationDisabledReason"
+          id="recent-navigation-disabled-reason"
           class="section-hint"
         >
-          {{ recentSessionsDisabledReason }}
+          {{ historyNavigationDisabledReason }}
+        </p>
+        <p
+          v-else-if="mutationActionsDisabled && mutationActionsDisabledReason"
+          class="section-hint"
+        >
+          {{ mutationActionsDisabledReason }}
         </p>
 
         <div v-if="filteredSessions.length" class="section-list">
@@ -269,7 +287,12 @@ const filteredSessions = computed(() => {
               class="sidebar-item sidebar-item-main session-item"
               type="button"
               :class="{ active: session.id === activeSessionId }"
-              :disabled="recentSessionsDisabled"
+              :disabled="historyNavigationDisabled"
+              :aria-describedby="
+                historyNavigationDisabled && historyNavigationDisabledReason
+                  ? 'recent-navigation-disabled-reason'
+                  : undefined
+              "
               :title="session.title"
               @click="emit('selectSession', session.id)"
             >
@@ -278,7 +301,7 @@ const filteredSessions = computed(() => {
             <button
               class="sidebar-row-action danger"
               type="button"
-              :disabled="recentSessionsDisabled"
+              :disabled="mutationActionsDisabled"
               :title="`删除 Task：${session.title}`"
               :aria-label="`删除 Task：${session.title}`"
               @click.stop="emit('deleteSession', session.id)"
@@ -290,7 +313,7 @@ const filteredSessions = computed(() => {
             v-if="hasMoreSessions"
             class="load-more-button"
             type="button"
-            :disabled="loadingMoreSessions || recentSessionsDisabled"
+            :disabled="loadingMoreSessions || historyNavigationDisabled"
             :aria-busy="loadingMoreSessions"
             @click="emit('loadMoreSessions')"
           >
@@ -316,15 +339,15 @@ const filteredSessions = computed(() => {
       <button
         class="footer-button"
         type="button"
-        :disabled="workspaceActionsDisabled"
+        :disabled="mutationActionsDisabled"
         :aria-describedby="
-          workspaceActionsDisabled && workspaceActionsDisabledReason
-            ? 'workspace-actions-disabled-reason'
+          mutationActionsDisabled && mutationActionsDisabledReason
+            ? 'mutation-actions-disabled-reason'
             : undefined
         "
         :title="
-          workspaceActionsDisabled && workspaceActionsDisabledReason
-            ? workspaceActionsDisabledReason
+          mutationActionsDisabled && mutationActionsDisabledReason
+            ? mutationActionsDisabledReason
             : workspacePath
               ? '切换目录'
               : '选择目录'

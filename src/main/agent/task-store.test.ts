@@ -192,6 +192,190 @@ describe('TaskStore', () => {
     expect((await restarted.listTurns('task-1')).items[0]?.state).toBe('interrupted')
   })
 
+  it.each(['pending', 'queued', 'running', 'waiting-permission', 'cancelling'] as const)(
+    '重启将 %s Task/Turn 收束为 interrupted 且重复初始化幂等',
+    async (state) => {
+      const { store, registry, project } = await createStore()
+      await store.admitExecutionTurn({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        executionId: 'execution-1',
+        environmentId: store.getTaskRecord('task-1').environment.environmentId,
+        promptDisplayText: '测试',
+        model: { modelId: 'model-1' }
+      })
+      const taskPath = join(
+        registry.getProjectDirectory(project.projectId),
+        'tasks/task-1/task.json'
+      )
+      const turnPath = join(
+        registry.getProjectDirectory(project.projectId),
+        'tasks/task-1/turns/turn-1/turn.json'
+      )
+      const task = JSON.parse(await readFile(taskPath, 'utf8')) as Record<string, unknown>
+      const turn = JSON.parse(await readFile(turnPath, 'utf8')) as Record<string, unknown>
+      task.state = state
+      turn.state = state
+      await writeFile(taskPath, JSON.stringify(task))
+      await writeFile(turnPath, JSON.stringify(turn))
+
+      const restarted = new TaskStore({ projectRegistry: registry })
+      await restarted.initialize()
+      expect(restarted.getTaskDetail('task-1').state).toBe('interrupted')
+      expect((await restarted.listTurns('task-1')).items[0]?.state).toBe('interrupted')
+      expect(restarted.getTaskRecord('task-1').activeExecutionId).toBeUndefined()
+      const firstTaskDisk = await readFile(taskPath, 'utf8')
+      const firstTurnDisk = await readFile(turnPath, 'utf8')
+
+      const restartedAgain = new TaskStore({ projectRegistry: registry })
+      await restartedAgain.initialize()
+      expect(await readFile(taskPath, 'utf8')).toBe(firstTaskDisk)
+      expect(await readFile(turnPath, 'utf8')).toBe(firstTurnDisk)
+    }
+  )
+
+  it('Turn 已完成而 Task 仍运行时保留可信终态并只修复 Task', async () => {
+    const { store, registry, project } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '测试',
+      model: { modelId: 'model-1' }
+    })
+    await store.markTurnDispatched('task-1', 'turn-1')
+    const taskPath = join(registry.getProjectDirectory(project.projectId), 'tasks/task-1/task.json')
+    const turnPath = join(
+      registry.getProjectDirectory(project.projectId),
+      'tasks/task-1/turns/turn-1/turn.json'
+    )
+    const turn = JSON.parse(await readFile(turnPath, 'utf8')) as Record<string, unknown>
+    turn.state = 'completed'
+    turn.endedAt = '2026-08-12T00:01:00.000Z'
+    turn.stateChangedAt = turn.endedAt
+    turn.revision = Number(turn.revision) + 1
+    await writeFile(turnPath, JSON.stringify(turn))
+
+    const restarted = new TaskStore({ projectRegistry: registry })
+    await restarted.initialize()
+    expect(restarted.getTaskDetail('task-1').state).toBe('completed')
+    expect((await restarted.listTurns('task-1')).items[0]).toMatchObject({
+      state: 'completed',
+      endedAt: '2026-08-12T00:01:00.000Z'
+    })
+    expect(JSON.parse(await readFile(taskPath, 'utf8'))).toMatchObject({
+      state: 'completed'
+    })
+  })
+
+  it('缺失活动 Turn 时 Task 失败关闭为 interrupted 并清除执行身份', async () => {
+    const { store, registry, project } = await createStore()
+    await store.admitExecutionTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      executionId: 'execution-1',
+      environmentId: store.getTaskRecord('task-1').environment.environmentId,
+      promptDisplayText: '测试',
+      model: { modelId: 'model-1' }
+    })
+    await rm(join(registry.getProjectDirectory(project.projectId), 'tasks/task-1/turns/turn-1'), {
+      recursive: true,
+      force: true
+    })
+
+    const restarted = new TaskStore({ projectRegistry: registry })
+    await restarted.initialize()
+    expect(restarted.getTaskRecord('task-1')).toMatchObject({ state: 'interrupted' })
+    expect(restarted.getTaskRecord('task-1').activeTurnId).toBeUndefined()
+    expect(restarted.getTaskRecord('task-1').activeExecutionId).toBeUndefined()
+  })
+
+  it('V1 Task 初始化时升级环境身份但不为旧 Turn 编造 executionId', async () => {
+    const { store, registry, project } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '旧历史',
+      model: { modelId: 'model-1' }
+    })
+    const taskPath = join(registry.getProjectDirectory(project.projectId), 'tasks/task-1/task.json')
+    const turnPath = join(
+      registry.getProjectDirectory(project.projectId),
+      'tasks/task-1/turns/turn-1/turn.json'
+    )
+    const task = JSON.parse(await readFile(taskPath, 'utf8')) as Record<string, unknown>
+    const environment = task.environment as Record<string, unknown>
+    task.schemaVersion = 1
+    task.environment = {
+      kind: 'local',
+      projectId: environment.projectId,
+      rootSnapshot: environment.rootSnapshot
+    }
+    const turn = JSON.parse(await readFile(turnPath, 'utf8')) as Record<string, unknown>
+    turn.schemaVersion = 1
+    delete turn.stateChangedAt
+    await writeFile(taskPath, JSON.stringify(task))
+    await writeFile(turnPath, JSON.stringify(turn))
+
+    const restarted = new TaskStore({ projectRegistry: registry })
+    await restarted.initialize()
+    expect(restarted.getTaskRecord('task-1').environment).toMatchObject({
+      version: 1,
+      environmentId: expect.stringMatching(/^local:/)
+    })
+    expect(JSON.parse(await readFile(turnPath, 'utf8'))).not.toHaveProperty('executionId')
+  })
+
+  it('同一 execution 终态重复提交返回 duplicate，部分提交重试修复 Task', async () => {
+    const { store } = await createStore()
+    const environmentId = store.getTaskRecord('task-1').environment.environmentId
+    await store.admitExecutionTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      executionId: 'execution-1',
+      environmentId,
+      promptDisplayText: '测试',
+      model: { modelId: 'model-1' }
+    })
+    await store.transitionExecution(
+      { taskId: 'task-1', turnId: 'turn-1', executionId: 'execution-1' },
+      'running',
+      '2026-08-12T00:00:01.000Z'
+    )
+    const identity = { taskId: 'task-1', turnId: 'turn-1', executionId: 'execution-1' }
+    await expect(
+      store.commitExecutionTerminal(identity, {
+        state: 'completed',
+        endedAt: '2026-08-12T00:00:02.000Z'
+      })
+    ).resolves.toMatchObject({ kind: 'committed' })
+    await expect(
+      store.commitExecutionTerminal(identity, {
+        state: 'completed',
+        endedAt: '2026-08-12T00:10:00.000Z'
+      })
+    ).resolves.toMatchObject({ kind: 'duplicate' })
+  })
+
+  it('已有 legacy activeTurn 时拒绝新的 execution admission', async () => {
+    const { store } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'legacy-turn',
+      promptDisplayText: '旧 Turn',
+      model: { modelId: 'model-1' }
+    })
+    await expect(
+      store.admitExecutionTurn({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        executionId: 'execution-1',
+        environmentId: store.getTaskRecord('task-1').environment.environmentId,
+        promptDisplayText: '新 Turn',
+        model: { modelId: 'model-1' }
+      })
+    ).rejects.toMatchObject({ code: 'invalid-state' })
+  })
+
   it('删除 token 一次性绑定 revision，并只删除本地 Task 目录', async () => {
     const { store } = await createStore()
     const preview = await store.previewTaskDeletion('task-1')

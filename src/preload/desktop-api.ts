@@ -4,8 +4,7 @@ import {
   type AgentEvent,
   type AgentPermissionRequest,
   type AgentRuntimeStatus,
-  type AgentTaskRuntimeState,
-  type AgentTurnExecutionResult
+  type AgentTaskRuntimeState
 } from '../shared/agent'
 import {
   AGENT_INVOKE_CHANNELS,
@@ -15,6 +14,7 @@ import {
 } from '../shared/agent-ipc'
 import { APP_INVOKE_CHANNELS, type AppDesktopApi } from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
+import type { TaskExecutionSnapshot } from '../shared/task-execution'
 import type { ProviderDesktopApi } from '../shared/provider'
 import { TASK_INVOKE_CHANNELS, type TaskDesktopApi } from '../shared/task-ipc'
 
@@ -164,6 +164,10 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getStatus) as Promise<
         DesktopIpcResult<AgentRuntimeStatus>
       >,
+    getExecutionSnapshot: () =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getExecutionSnapshot) as Promise<
+        DesktopIpcResult<TaskExecutionSnapshot>
+      >,
     connect: (projectId) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.connect, { projectId }) as Promise<
         DesktopIpcResult<AgentRuntimeStatus>
@@ -178,12 +182,14 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       >,
     startTurn: (taskId, prompt) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.startTurn, { taskId, prompt }) as Promise<
-        DesktopIpcResult<AgentTurnExecutionResult>
+        DesktopIpcResult<TaskExecutionSnapshot>
       >,
-    cancelTurn: (taskId) =>
-      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.cancelTurn, { taskId }) as Promise<
-        DesktopIpcResult<null>
-      >,
+    cancelTurn: (request) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.cancelTurn, {
+        executionId: request.executionId,
+        taskId: request.taskId,
+        turnId: request.turnId
+      }) as Promise<DesktopIpcResult<null>>,
     getTaskRuntimeState: (taskId) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId }) as Promise<
         DesktopIpcResult<AgentTaskRuntimeState>
@@ -197,6 +203,8 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       }) as Promise<DesktopIpcResult<null>>,
     onStatus: (listener) =>
       subscribe<AgentRuntimeStatus>(ipcRenderer, AGENT_PUSH_CHANNELS.status, listener),
+    onExecutionUpdate: (listener) =>
+      subscribe<TaskExecutionSnapshot>(ipcRenderer, AGENT_PUSH_CHANNELS.executionUpdate, listener),
     onEvent: (listener) => subscribe<AgentEvent>(ipcRenderer, AGENT_PUSH_CHANNELS.event, listener),
     onPermission: (listener) =>
       subscribe<AgentPermissionRequest>(

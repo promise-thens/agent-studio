@@ -1,6 +1,6 @@
 # P0-08 Task Executor 与后台生命周期实施计划
 
-> **状态：** 契约已修订，待实施。开始编码前先用失败测试锁定 admission、唯一终态、恢复和退出语义；实施过程中按任务顺序逐项完成并记录验证证据。
+> **状态：** 核心实现、完整自动门禁和首批受控生命周期 Electron E2E 已完成；真实 Grok 活动窗口/退出三分支、窗口重建/重启恢复和 Windows/Linux 验证待补。
 
 **优先级：** P0-A / 权重 5（长任务不依赖当前 Renderer 视图）
 
@@ -414,17 +414,20 @@ Task admission、Provider mutation、Runtime session operation 和 shutdown 必�
 - [ ] **第 1 步：扩展固定受控 ACP 场景**
   - 增加长任务 barrier、reload 后事件、Runtime crash、忽略 cancel 和退出恢复场景。
   - 保持开发态、固定 fixture、隔离 userData/HOME、固定参数白名单和无真实 Key 边界。
+  - 当前已完成长任务、后台审批、忽略 cancel、Runtime crash 和空闲退出；重启 interrupted 仍待补。
 
 - [ ] **第 2 步：完成 Electron E2E**
   - Task A 运行时查看 B 并返回 A。
   - Renderer reload、BrowserWindow 销毁/重建后 Turn 继续。
   - 后台权限不会因当前视图改变而自动拒绝。
   - 重复启动、重复停止、Runtime crash、cancel timeout、三种退出选择和重启 interrupted 均有跨层证据。
+  - 当前已通过 Task/Project 浏览、Renderer reload、后台审批、重复 Stop、cancel timeout、Runtime crash 和空闲退出；BrowserWindow 重建、活动执行退出三分支及重启 interrupted 仍待补。
 
 - [ ] **第 3 步：完成平台和完整门禁**
   - 当前开发环境必须完成 macOS 自动 E2E 与手工窗口/退出验证。
   - Windows/Linux 行为通过可用的 CI runner 或对应测试机完成后方可勾选跨平台子项；若当前阶段无该环境，P0-08 可以完成 macOS 产品实现，但路线图和验收记录必须明确标注“Windows/Linux 生命周期待验证”，不得宣称跨平台完成。
   - 运行目标 ESLint、完整 ESLint、相关 Vitest、`pnpm test`、`pnpm typecheck`、`pnpm build`、`pnpm build:unpack`、生命周期 E2E 和 `git diff --check`。
+  - 当前 macOS 完整自动门禁与隔离窗口后台浏览/Stop 走查已通过；真实 Grok 退出走查和 Windows/Linux 仍待补。
 
 ---
 
@@ -452,10 +455,10 @@ Task admission、Provider mutation、Runtime session operation 和 shutdown 必�
 
 实施期间按以下格式持续更新，不能只勾选任务而不保留证据：
 
-- 状态机与 schema 版本：待记录。
-- admission/终态/持久化竞态测试：待记录。
-- IPC、Preload 和 Renderer revision 恢复证据：待记录。
-- Electron lifecycle E2E 场景与结果：待记录。
-- macOS 与 Windows/Linux 窗口/退出差异：待记录。
-- 完整自动门禁版本和结果：待记录。
-- 真实 Grok 手工验收与受控 fixture 边界：待记录。
+- 状态机与 schema 版本：已新增独立 `TaskExecutionState`、判别 DTO、execution epoch/revision、OperationGate；Task/Turn schema 升级到 V2，Event schema 保持 V1，旧 V1 Task/Turn 在初始化时显式升级。
+- admission/终态/持久化竞态测试：已覆盖首个 await 前 admission、queued/running 提交顺序、旧 lease、终态竞争、事件脱敏、终态部分提交重试、非终态重启恢复和 legacy environmentId 迁移。
+- IPC、Preload 和 Renderer revision 恢复证据：已增加 execution snapshot invoke/push、execution identity cancel、Preload 窄 API 和 listener-before-query consumer；App 已接入 consumer，后台权限不再因视图切换自动拒绝。
+- Electron lifecycle E2E 场景与结果：已新增独立 Playwright config；空闲退出、长任务 Task/Project 后台浏览与 Renderer reload、后台审批、重复 Stop/cancel timeout、Runtime exit 17 五场景 5/5 通过，三轮稳定性验证 15/15 通过。BrowserWindow 重建、活动执行退出三分支和重启 interrupted 仍待补。
+- macOS 与 Windows/Linux 窗口/退出差异：Main 已实现活动执行退出三选项和有界清理；macOS 隔离窗口已手工确认后台浏览与跨视图 Stop，真实 Grok close/activate/退出三分支、非 macOS last-window 及系统关机仍待真实平台走查。
+- 完整自动门禁版本和结果：2026-08-17，Node.js `v22.22.0`、pnpm `10.33.0`；全仓 ESLint、`pnpm test`（42 文件 / 415 项）、`pnpm typecheck`、`pnpm build`、`pnpm build:unpack` 和 `git diff --check` 通过；Permission Electron E2E 4/4 且三轮 12/12，lifecycle Electron E2E 5/5 且三轮 15/15。GitNexus compare 因跨 Main/Store/IPC/Renderer/lifecycle 变更评为 CRITICAL，继续保留真机与平台门禁。
+- 真实 Grok 手工验收与受控 fixture 边界：待补 P0-08 真机长任务、Task A/B 查看切换、Renderer reload、窗口重建和三种退出路径；受控 fixture 仍只证明固定本地 ACP/Electron 链路，不等价于真实 Grok 黑盒或进程沙箱。

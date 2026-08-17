@@ -28,6 +28,10 @@ describe('resolveControlledAcpE2eBootstrap', () => {
     expect(result).toMatchObject({
       userDataPath: fixture.userDataPath,
       workspacePath: join(fixture.userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.workspace),
+      secondaryWorkspacePath: join(
+        fixture.userDataPath,
+        CONTROLLED_ACP_E2E_DIRECTORIES.secondaryWorkspace
+      ),
       markerPath: join(
         fixture.userDataPath,
         CONTROLLED_ACP_E2E_DIRECTORIES.workspace,
@@ -84,6 +88,25 @@ describe('resolveControlledAcpE2eBootstrap', () => {
     await symlink(outside, join(fixture.userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.workspace))
 
     expect(() => resolveControlledAcpE2eBootstrap(options)).toThrow(ControlledAcpE2eBootstrapError)
+  })
+
+  it('第二受控工作区缺失或被符号链接替换时拒绝启动', async () => {
+    const fixture = await createFixtureRoot()
+    const secondaryWorkspace = join(
+      fixture.userDataPath,
+      CONTROLLED_ACP_E2E_DIRECTORIES.secondaryWorkspace
+    )
+    await rm(secondaryWorkspace, { recursive: true, force: true })
+
+    expect(() => resolveBootstrap(fixture.userDataPath)).toThrow(ControlledAcpE2eBootstrapError)
+
+    const outside = await mkdtemp(
+      join(await realpath(tmpdir()), 'agent-studio-controlled-acp-e2e-secondary-link-')
+    )
+    roots.push(outside)
+    await symlink(outside, secondaryWorkspace)
+
+    expect(() => resolveBootstrap(fixture.userDataPath)).toThrow(ControlledAcpE2eBootstrapError)
   })
 
   it('没有受控前缀时保持普通启动路径', () => {

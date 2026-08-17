@@ -19,6 +19,7 @@ import type {
 } from './agent-runtime-adapter'
 import { AgentRuntimeAdapterError } from './agent-runtime-adapter'
 import { AgentService, AgentServiceError } from './agent-service'
+import { OperationGate } from './operation-gate'
 import { TaskExecutionController } from './task-execution-controller'
 import { ProjectRegistry } from '../project/project-registry'
 import { TaskStore } from './task-store'
@@ -250,6 +251,86 @@ describe('AgentService Task / Turn 编排', () => {
     })
     await expect(firstTask).resolves.toMatchObject({ taskId: 'task-a' })
     expect(adapter.createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('拒绝 foreign、stale 与错误类型的 inherited lease，且不触发 Runtime 副作用', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const gate = new OperationGate()
+    const foreignGate = new OperationGate()
+    const service = createService(adapter, [], new TaskExecutionController(), gate)
+
+    const foreign = foreignGate.acquireProviderMutation()
+    await expect(service.connect(WORKSPACE, foreign)).rejects.toMatchObject({
+      code: 'invalid-state'
+    })
+    expect(adapter.connect).not.toHaveBeenCalled()
+
+    const stale = gate.acquireProviderMutation()
+    expect(stale.release()).toBe(true)
+    await expect(service.connect(WORKSPACE, stale)).rejects.toMatchObject({
+      code: 'invalid-state'
+    })
+
+    const admission = gate.acquireExecutionAdmission()
+    await expect(service.connect(WORKSPACE, admission)).rejects.toMatchObject({
+      code: 'invalid-state'
+    })
+    expect(adapter.connect).not.toHaveBeenCalled()
+    expect(admission.release()).toBe(true)
+    expect(foreign.release()).toBe(true)
+  })
+
+  it('inherited Provider 与 execution lease 无论成功失败都由外层释放', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const gate = new OperationGate()
+    const service = createService(adapter, [], new TaskExecutionController(), gate)
+
+    const providerLease = gate.acquireProviderMutation()
+    await expect(service.connect(WORKSPACE, providerLease)).resolves.toMatchObject({
+      state: 'ready'
+    })
+    expect(gate.ownsCurrentLease(providerLease)).toBe(true)
+    expect(gate.getState()).toBe('provider-mutation')
+    expect(providerLease.release()).toBe(true)
+
+    const admission = gate.acquireExecutionAdmission()
+    const executionLease = admission.activate()
+    if (!executionLease) throw new Error('测试需要 execution-active lease。')
+    adapter.connect.mockRejectedValueOnce(
+      new AgentRuntimeAdapterError('operation-failed', '模拟连接失败。')
+    )
+    await expect(service.connect(WORKSPACE, executionLease)).rejects.toMatchObject({
+      code: 'operation-failed'
+    })
+    expect(gate.ownsCurrentLease(executionLease)).toBe(true)
+    expect(gate.getState()).toBe('execution-active')
+    expect(executionLease.release()).toBe(true)
+  })
+
+  it('自持 session lease 在成功与异常后都恢复 Gate 空闲', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const gate = new OperationGate()
+    const service = createService(adapter, [], new TaskExecutionController(), gate)
+
+    await expect(service.connect(WORKSPACE)).resolves.toMatchObject({ state: 'ready' })
+    expect(gate.getState()).toBe('idle')
+
+    adapter.connect.mockRejectedValueOnce(
+      new AgentRuntimeAdapterError('operation-failed', '模拟连接失败。')
+    )
+    await expect(service.connect(WORKSPACE)).rejects.toMatchObject({ code: 'operation-failed' })
+    expect(gate.getState()).toBe('idle')
+  })
+
+  it('shutdown latch 后即使 inherited lease 仍 current 也不再调用 Runtime', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const gate = new OperationGate()
+    const service = createService(adapter, [], new TaskExecutionController(), gate)
+    const lease = gate.acquireProviderMutation()
+    gate.beginShutdown()
+
+    await expect(service.connect(WORKSPACE, lease)).rejects.toMatchObject({ code: 'invalid-state' })
+    expect(adapter.connect).not.toHaveBeenCalled()
   })
 
   it('允许一次只转发一次，错误身份与重复响应均幂等忽略', async () => {
@@ -824,13 +905,15 @@ function restoreSnapshot({
 function createService(
   adapter: FakeRuntimeAdapter,
   ids: string[],
-  controller = new TaskExecutionController()
+  controller = new TaskExecutionController(),
+  operationGate?: OperationGate
 ): AgentService {
   let idIndex = 0
   let clock = 0
   return new AgentService(adapter, controller, {
     createId: () => ids[idIndex++] ?? `unexpected-id-${idIndex}`,
-    now: () => new Date(Date.UTC(2026, 7, 11, 0, 0, clock++)).toISOString()
+    now: () => new Date(Date.UTC(2026, 7, 11, 0, 0, clock++)).toISOString(),
+    ...(operationGate ? { operationGate } : {})
   })
 }
 

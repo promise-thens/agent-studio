@@ -15,6 +15,7 @@ import type {
   AgentTurnUsage,
   AgentUsage
 } from './agent'
+import type { TaskExecutionState } from './task-execution'
 
 /** Project 当前目录可用性；历史查看不依赖目录仍然存在。 */
 export type ProjectAvailability =
@@ -36,8 +37,8 @@ export interface ProjectSummary {
   revision: number
 }
 
-/** 历史状态独立增加 interrupted，避免扩大实时执行状态机。 */
-export type HistoryExecutionState = AgentExecutionState | 'interrupted'
+/** 历史状态兼容旧 pending，并接受 P0-08 的完整执行状态。 */
+export type HistoryExecutionState = AgentExecutionState | TaskExecutionState
 
 /** 单轮实际使用的模型事实，不随之后的 Provider 设置变化。 */
 export interface TurnModelSnapshot {

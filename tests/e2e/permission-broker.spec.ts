@@ -1,52 +1,29 @@
-import { expect, test, _electron as electron } from '@playwright/test'
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
-import { createServer, type Server } from 'node:http'
-import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
-import type { AddressInfo } from 'node:net'
+import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import {
   CONTROLLED_ACP_E2E_ADAPTER_TRACE_FILE,
-  CONTROLLED_ACP_E2E_DIRECTORIES,
-  CONTROLLED_ACP_E2E_FIXTURE_TRACE_FILE,
-  CONTROLLED_ACP_E2E_MARKER_FILE,
-  type ControlledAcpFixtureScenario
+  CONTROLLED_ACP_E2E_FIXTURE_TRACE_FILE
 } from '../../src/main/runtime/grok/controlled-acp-fixture'
+import {
+  expectControlledMarker as expectMarker,
+  launchControlledScenario as launchScenario,
+  prepareControlledWorkbench as prepareWorkbench,
+  startControlledPrompt as startScenarioPrompt,
+  waitForExecutionTerminal,
+  writeControlledBarrier,
+  type ControlledElectronScenarioContext as ScenarioContext,
+  type ControlledLayout,
+  type TraceRecord
+} from './controlled-electron-fixture'
 
-const repositoryRoot = resolve(process.cwd())
-const mainEntry = join(repositoryRoot, 'out/main/index.js')
-const e2eArgumentPrefix = '--agent-studio-controlled-acp-e2e'
 const rawInputSentinel = 'E2E_RAW_INPUT_MUST_NOT_DISPLAY'
 
-type TraceRecord = Record<string, unknown>
 type CapturedPermission = {
   approvalId: string
   taskId: string
   turnId: string
   title: string
-}
-
-interface ControlledLayout {
-  root: string
-  workspace: string
-  traceDirectory: string
-  barrierDirectory: string
-  runtimeHomeDirectory: string
-  markerPath: string
-}
-
-interface MockProvider {
-  port: number
-  requestCount: number
-  authorizationHeaders: Array<string | undefined>
-  close(): Promise<void>
-}
-
-interface ScenarioContext {
-  app: Awaited<ReturnType<typeof electron.launch>>
-  page: Awaited<ReturnType<Awaited<ReturnType<typeof electron.launch>>['firstWindow']>>
-  layout: ControlledLayout
-  provider: MockProvider
-  close(): Promise<void>
 }
 
 test.describe('受控 ACP Runtime Electron E2E', () => {
@@ -95,6 +72,7 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
       )
       expect(writeAudits.every((item) => item.risk === 'L1')).toBe(true)
       expect(writeAudits.find((item) => item.reason === 'user-allowed')?.scope).toBe('once')
+      await waitForExecutionTerminal(context.page)
     } finally {
       await context.close()
     }
@@ -117,11 +95,7 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
       await expect(dialog).toContainText('写入受控 marker A')
 
       // 仅向隔离的 fixture barrier 写入固定文件，不解析或执行任何用户输入。
-      await writeFile(join(context.layout.barrierDirectory, 'toolcall-cancel-A.ready'), 'ready\n', {
-        encoding: 'utf8',
-        mode: 0o600,
-        flag: 'wx'
-      })
+      await writeControlledBarrier(context.layout, 'toolcall-cancel-A')
       await waitForAdapterEvents(context.layout, ['toolcall-A'], 'adapter-permission-cancelled')
       await expect(dialog).toContainText('写入受控 marker B')
 
@@ -153,6 +127,7 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
         expect.arrayContaining(['cancelled', 'user-allowed'])
       )
       expect(writeAudits.find((item) => item.reason === 'cancelled')?.scope).toBeUndefined()
+      await waitForExecutionTerminal(context.page)
     } finally {
       await context.close()
     }
@@ -199,6 +174,7 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
           (item) => item.operationType === 'execute-command' && item.reason === 'user-allowed'
         )
       ).toBe(false)
+      await waitForExecutionTerminal(context.page)
     } finally {
       await context.close()
     }
@@ -244,148 +220,12 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
       expect(executeAudits.every((item) => item.risk === 'L3')).toBe(true)
       expect(executeAudits.filter((item) => item.reason === 'unsupported')).toHaveLength(2)
       expect(executeAudits.find((item) => item.reason === 'user-allowed')?.scope).toBe('once')
+      await waitForExecutionTerminal(context.page)
     } finally {
       await context.close()
     }
   })
 })
-
-/** 创建完全隔离的临时 profile、workspace 与 Mock Provider，再通过真实 Electron Main/Preload/Renderer 链路启动。 */
-async function launchScenario(scenario: ControlledAcpFixtureScenario): Promise<ScenarioContext> {
-  const layout = await createControlledLayout()
-  const provider = await startMockProvider()
-  let app: Awaited<ReturnType<typeof electron.launch>> | undefined
-  try {
-    app = await electron.launch({
-      args: [
-        mainEntry,
-        `${e2eArgumentPrefix}-scenario=${scenario}`,
-        `${e2eArgumentPrefix}-user-data=${layout.root}`,
-        `${e2eArgumentPrefix}-provider-port=${provider.port}`
-      ],
-      cwd: repositoryRoot,
-      env: createIsolatedElectronEnvironment(layout.runtimeHomeDirectory, dirname(layout.root))
-    })
-    const page = await app.firstWindow()
-    return {
-      app,
-      page,
-      layout,
-      provider,
-      close: async () => {
-        await Promise.allSettled([app?.close(), provider.close()])
-        await rm(layout.root, { recursive: true, force: true })
-      }
-    }
-  } catch (error) {
-    await Promise.allSettled([app?.close(), provider.close()])
-    await rm(layout.root, { recursive: true, force: true })
-    throw error
-  }
-}
-
-/** 受控 Electron 进程不继承宿主 HOME 或 Provider 环境，只得到桌面运行所需的极小变量集合。 */
-function createIsolatedElectronEnvironment(
-  runtimeHomeDirectory: string,
-  temporaryDirectory: string
-): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = {
-    HOME: runtimeHomeDirectory,
-    USERPROFILE: runtimeHomeDirectory,
-    // bootstrap 用 tmpdir() 复核 userData 的直接父目录；这个值来自本次临时根而非宿主环境。
-    TMPDIR: temporaryDirectory,
-    TMP: temporaryDirectory,
-    TEMP: temporaryDirectory
-  }
-  for (const key of ['PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'DISPLAY', 'WAYLAND_DISPLAY']) {
-    if (process.env[key]) environment[key] = process.env[key]
-  }
-  if (process.platform === 'win32') {
-    const systemRoot = process.env.SystemRoot ?? process.env.WINDIR
-    if (systemRoot) {
-      environment.SystemRoot = systemRoot
-      environment.WINDIR = systemRoot
-    }
-  }
-  return environment
-}
-
-/** 临时目录布局与 Main bootstrap 的固定目录契约完全一致，避免系统目录或真实 profile 参与测试。 */
-async function createControlledLayout(): Promise<ControlledLayout> {
-  const temporaryDirectory = await realpath(tmpdir())
-  const root = await mkdtemp(join(temporaryDirectory, 'agent-studio-controlled-acp-e2e-'))
-  await chmod(root, 0o700)
-  const directories = await Promise.all(
-    Object.values(CONTROLLED_ACP_E2E_DIRECTORIES).map(async (name) => {
-      const directory = join(root, name)
-      await mkdir(directory, { mode: 0o700 })
-      await chmod(directory, 0o700)
-      return directory
-    })
-  )
-  const workspace = directories[0]
-  const markerPath = join(workspace, CONTROLLED_ACP_E2E_MARKER_FILE)
-  await writeFile(markerPath, 'unchanged\n', { encoding: 'utf8', mode: 0o600 })
-  await chmod(markerPath, 0o600)
-  return {
-    root,
-    workspace,
-    traceDirectory: join(root, CONTROLLED_ACP_E2E_DIRECTORIES.trace),
-    barrierDirectory: join(root, CONTROLLED_ACP_E2E_DIRECTORIES.barriers),
-    runtimeHomeDirectory: join(root, CONTROLLED_ACP_E2E_DIRECTORIES.runtimeHome),
-    markerPath
-  }
-}
-
-/** 本地 Mock 只接受 bootstrap 的无认证 Chat Completions 探针，任何其他请求均显式失败。 */
-async function startMockProvider(): Promise<MockProvider> {
-  let requestCount = 0
-  const authorizationHeaders: Array<string | undefined> = []
-  const server = createServer((request, response) => {
-    if (request.method === 'POST' && request.url === '/v1/chat/completions') {
-      requestCount += 1
-      authorizationHeaders.push(request.headers.authorization)
-      response.writeHead(200, { 'Content-Type': 'application/json' })
-      response.end(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }))
-      return
-    }
-    response.writeHead(404, { 'Content-Type': 'application/json' })
-    response.end(JSON.stringify({ error: { message: 'not found' } }))
-  })
-  await new Promise<void>((resolveListen, rejectListen) => {
-    server.once('error', rejectListen)
-    server.listen(0, '127.0.0.1', () => {
-      server.off('error', rejectListen)
-      resolveListen()
-    })
-  })
-  const address = server.address() as AddressInfo
-  return {
-    port: address.port,
-    get requestCount() {
-      return requestCount
-    },
-    get authorizationHeaders() {
-      return [...authorizationHeaders]
-    },
-    close: () => closeServer(server)
-  }
-}
-
-/** 等待启动期 Mock 探针和真实工作台连接完成，明确验证无认证请求没有 Authorization Header。 */
-async function prepareWorkbench(context: ScenarioContext): Promise<void> {
-  await expect.poll(() => context.provider.requestCount).toBe(1)
-  expect(context.provider.authorizationHeaders).toEqual([undefined])
-  await expect(context.page.locator('.status-chip[data-state="ready"]')).toBeVisible()
-  await expect(context.page.getByPlaceholder('描述你想修改、排查或验证的内容…')).toBeEnabled()
-}
-
-/** 用正常 Composer 交互创建 Task/Turn；fixture 从不读取这段 Prompt。 */
-async function startScenarioPrompt(page: ScenarioContext['page'], prompt: string): Promise<void> {
-  const composer = page.getByPlaceholder('描述你想修改、排查或验证的内容…')
-  await composer.fill(prompt)
-  await composer.press('Enter')
-}
 
 /** 仅订阅既有 Renderer 可见权限 DTO，供晚到响应回归使用；不会暴露 Runtime requestId 或测试 IPC。 */
 async function capturePermissionRequests(page: ScenarioContext['page']): Promise<void> {
@@ -442,9 +282,14 @@ async function waitForTaskId(page: ScenarioContext['page']): Promise<string> {
     .poll(async () => {
       taskId = await page.evaluate(async () => {
         const projects = await window.app.listProjects()
-        if (!projects.ok || projects.value.length !== 1) return undefined
-        const tasks = await window.task.list(projects.value[0].projectId)
-        return tasks.ok ? tasks.value.items[0]?.taskId : undefined
+        if (!projects.ok) return undefined
+
+        // 受控启动会注册多个 Project；逐个查询，返回实际持有本次 Task 的 Project。
+        for (const project of projects.value) {
+          const tasks = await window.task.list(project.projectId)
+          if (tasks.ok && tasks.value.items[0]) return tasks.value.items[0].taskId
+        }
+        return undefined
       })
       return taskId ?? null
     })
@@ -550,16 +395,6 @@ async function readTrace(layout: ControlledLayout, file: string): Promise<TraceR
   }
 }
 
-async function expectMarker(layout: ControlledLayout, expected: string): Promise<void> {
-  await expect.poll(async () => readFile(layout.markerPath, 'utf8')).toBe(expected)
-}
-
 function isMissingFile(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')
-}
-
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolveClose, rejectClose) => {
-    server.close((error) => (error ? rejectClose(error) : resolveClose()))
-  })
 }
