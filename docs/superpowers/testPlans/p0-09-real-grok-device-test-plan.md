@@ -73,8 +73,8 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 - [x] 启动开发版或本次构建的应用；确认产品名称为 Agent Studio，Runtime 身份和模型显示分离，且模型标签为实际 `displayName ?? modelId`。
 - [ ] 配置 Provider 后确认页面只显示“已保存”，不会回填明文 Key。
 
-**门禁证据：** 2026-08-18 macOS：Node `v22.22.0`、pnpm `10.33.0`；`pnpm exec eslint . --no-cache` 通过；`pnpm test` 为 45 files / 437 tests 通过；`pnpm typecheck`、`pnpm build`、`git diff --check` 通过；`pnpm test:permission:e2e` 5/5 通过；`pnpm test:lifecycle:e2e` 5/5 通过。开发版 UI 显示 Agent Studio、Grok Build 已连接和独立的 `grok-4.6` modelId。未进入设置页，Key 不回填项未验证。
-**门禁结论：** `自动化通过；真机已复测，但 RG-09-01 发现实时/历史 Timeline 不一致，P0-09 真机验收暂不通过。`
+**门禁证据：** 2026-08-18 macOS：Node `v22.22.0`、pnpm `10.33.0`；`pnpm exec eslint . --no-cache` 通过；`pnpm test` 为 45 files / 437 tests 通过；`pnpm typecheck`、`pnpm build`、`git diff --check` 通过；`pnpm test:permission:e2e` 5/5 通过；`pnpm test:lifecycle:e2e` 5/5 通过。开发版 UI 显示 Agent Studio、Grok Build 已连接和独立的 `grok-4.6` modelId。未进入设置页，Key 不回填项未验证。2026-08-18 Windows 复测：Node `v24.11.0`、pnpm `10.33.0`；相关 Vitest `task-timeline-reducer` + `useTaskTimeline` 共 13 项通过；开发版基于 `2a786f7` 加上 `startTurn` 后 `acceptAdmission` 修复。
+**门禁结论：** `自动化基线仍以 2026-08-18 macOS 全量门禁为准；Windows 已复测 RG-09-01 实时/历史 Prompt 一致，标受限通过。P0-09 真机验收仍未关闭：同一 Task 第二轮、RG-09-04 至 RG-09-08 未完成。`
 
 ---
 
@@ -104,22 +104,22 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 
 ### 操作步骤
 
-1. [ ] 选中 Project A，创建 **Task A**。记录 Task 初始无 Turn 的状态截图。
-2. [ ] 发送第一轮低风险 Prompt，例如：`阅读 README.md，列出三条要点。先给出计划，再给出结论；不要修改文件。`
-3. [ ] 在执行期间记录 Timeline：用户 Prompt、当前状态、Runtime 实际提供的 Plan/Tool/消息/Reasoning/完成节点。没有提供的节点不作为失败。
-4. [ ] 等待可信终态；记录是 `completed`、`failed`、`cancelled` 还是 `interrupted`，不要根据聊天文案推断成功。
-5. [ ] 记录 TaskResultReview：状态、Usage（若提供）、修改路径数（若提供）、验证/Artifact 的“未提供/未接入”说明，以及任何 warnings。
+1. [x] 选中 Project A，创建 **Task A**。记录 Task 初始无 Turn 的状态截图。
+2. [x] 发送第一轮低风险 Prompt，例如：`阅读 README.md，列出三条要点。先给出计划，再给出结论；不要修改文件。`
+3. [x] 在执行期间记录 Timeline：用户 Prompt、当前状态、Runtime 实际提供的 Plan/Tool/消息/Reasoning/完成节点。没有提供的节点不作为失败。
+4. [x] 等待可信终态；记录是 `completed`、`failed`、`cancelled` 还是 `interrupted`，不要根据聊天文案推断成功。
+5. [x] 记录 TaskResultReview：状态、Usage（若提供）、修改路径数（若提供）、验证/Artifact 的“未提供/未接入”说明，以及任何 warnings。
 6. [ ] 在同一 Task 发送第二轮 Prompt，例如：`基于刚才的结论，用两句话说明下一步建议；不要修改文件。`
 7. [ ] 确认第二轮创建新的 Turn，而第一轮的节点和终态不被覆盖或串入第二轮。
-8. [ ] 从侧栏切到其他 Task 后再打开 Task A，进入只读历史；逐轮核对 Prompt、节点顺序、终态、错误和结果审阅与实时状态一致。
+8. [x] 从侧栏切到其他 Task 后再打开 Task A，进入只读历史；逐轮核对 Prompt、节点顺序、终态、错误和结果审阅与实时状态一致。
 9. [ ] 记录最终 `git status --short`；只读任务不应产生未预期变更。
 
 ### 通过判定
 
 - [ ] 两轮分别显示，顺序正确，没有交叉节点。
-- [ ] 终态来自真实执行事实；不把运行中的 UI 文案作为完成证据。
-- [ ] 历史回放与实时展示一致。
-- [ ] Usage/Diff/Validation/Artifact 缺失时明确降级，不展示空白成功状态。
+- [x] 终态来自真实执行事实；不把运行中的 UI 文案作为完成证据。
+- [x] 历史回放与实时展示一致。
+- [x] Usage/Diff/Validation/Artifact 缺失时明确降级，不展示空白成功状态。
 
 ---
 
@@ -298,7 +298,7 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 
 | 场景 | 必测 | 结论 | 证据位置 | 关联验收标准 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| RG-09-01 多轮 Timeline | 是 | **失败** | 2026-08-18 真实 Grok：单轮、仅只读、未切换 Task/Project 的最小复现 | 实时/历史一致 | 实时 Timeline 将已发送 Prompt 显示为“用户指令不可用”；重新打开同一 Task 的历史 Timeline 正确显示 Prompt，其余已观察的 Tool/Reasoning/终态一致。违反实时/历史一致标准，停止第二轮及其依赖场景。 |
+| RG-09-01 多轮 Timeline | 是 | **受限通过** | 2026-08-18 Windows 开发版：Project `pA` 真实 Grok 单轮只读复测；历史回放对照截图 | 实时/历史一致 | 修复 `startTurn` 后 `acceptAdmission`。实时 Timeline 与权限弹窗 Task 字段均显示完整 Prompt，不再出现“用户指令不可用”。切到其他 Task 再打开只读历史，Prompt、Tool、Reasoning 与 `completed` 终态与实时一致。结果审阅 Usage 为“本轮未提供”。**未做同一 Task 第二轮**；并排两个同名 Task 不能代替多轮不串流验收。 |
 | RG-09-02 权限 | 是 | 受限通过（仅拒绝分支） | 2026-08-18 真实 Grok L1 写入请求 | 等待/审计正确 | 宿主在写入前展示正确的 Task、`write-file`、相对受限路径和 L1 风险；用户拒绝后 Turn 为 `cancelled`，历史审计记录 `user-denied`，fixture 无写入。允许一次分支未验证。 |
 | RG-09-03 Task/Project 切换 | 是 | 受限通过 | 2026-08-18 真实 Grok：A 运行时切空 Task，再切空 Project B | 不跨流 | 空 Task/Project B 未显示 A 的 Timeline、结果审阅、错误、消息或权限审计；回到 A 仅有原 Turn，未观察到重复 Prompt/Turn/可见重连。A 在 Project B 观察前已正常完成，未能证明持续后台执行；待决权限为强制模态，未决时不能切换 Task/Project。 |
 | RG-09-04 reload/窗口重建 | 是 | 未验证 | 暂停 | 恢复一致 | RG-09-01 实时/历史一致性失败后，继续不能形成有效通过证据。 |
@@ -324,7 +324,7 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 - [x] 删除或还原测试过程中创建的 `scratch/` 等专用路径；本次未创建写入路径。
 - [x] 关闭已知开发版应用与测试 Runtime；`pnpm dev` 会话以退出码 130 结束，已确认其 Electron 进程退出。
 - [ ] 将脱敏证据放入团队约定的受限位置；文档只记录链接/文件名，不嵌入 Secret。
-- [ ] 根据场景汇总更新 P0-09 实施计划、roadmap 和进度快照；有任何未验证或失败项时必须原样保留。
+- [x] 根据场景汇总更新 P0-09 实施计划、roadmap 和进度快照；有任何未验证或失败项时必须原样保留。
 
 ---
 
@@ -336,5 +336,6 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 - 真机执行日期：2026-08-18（延续同日复测）+0800。
 - 平台：macOS 26.5.1；Grok Build `1.0.5 (5115b46bc909)`；开发版 Electron。
 - 真机结果：Project A/B 均使用干净、可丢弃的本地 Git fixture。真实 Grok 已完成只读、权限拒绝和 Task/Project 隔离复测；两份 fixture 在结束时 `git status --short` 与 `git diff --stat` 均为空。未访问设置页，未记录 Key、Cookie、Header、环境变量、绝对路径或原始协议负载。
-- 已确认失败：全新只读 Task 在不切换 Task/Project 的情况下，实时 Timeline 显示“用户指令不可用”，重新打开同一 Task 的历史 Timeline 则正确显示 Prompt。该问题可稳定复现，P0-09 真机验收暂不通过，必须先修复后再继续多轮、reload、窗口重建、退出与高频输出场景。
-- 已知限制：真实写入请求可被宿主在执行前以 L1 权限弹窗拦截；拒绝后的审计与终态正确。弹窗是强制模态层，未决时无法切换 Task/Project，因此不能在保留弹窗的同时验证 Project 切换。允许一次分支、Windows/Linux、pending permission reload 恢复和安全历史截断触发仍未验证。
+- 已确认失败（同日较早）：全新只读 Task 在不切换 Task/Project 的情况下，实时 Timeline 显示“用户指令不可用”，重新打开同一 Task 的历史 Timeline 则正确显示 Prompt。
+- Windows 复测（同日稍后，开发版 `2a786f7` + `acceptAdmission` 修复；Node `v24.11.0`、pnpm `10.33.0`；界面 modelId 为 `grok-4.5`）：Project 显示名 `pA` / `pB`。实时执行中 Timeline 与权限弹窗 Task 字段均显示完整 Prompt；终态 `completed` 后切到其他 Task 再打开只读历史，Prompt 与已观察节点一致。RG-09-01 改为**受限通过**。同一 Task 第二轮未做；并排两个同名 Task 不能代替多轮验收。其中一个 Task 额外出现 `execute-command` 权限并被用户允许一次，历史审计为 `user-allowed`；这不是 RG-09-02 允许分支的完整验收。
+- 已知限制：真实写入请求可被宿主在执行前以 L1 权限弹窗拦截；拒绝后的审计与终态正确。弹窗是强制模态层，未决时无法切换 Task/Project，因此不能在保留弹窗的同时验证 Project 切换。允许一次分支、同一 Task 第二轮、RG-09-04 至 RG-09-08、pending permission reload 恢复和安全历史截断触发仍未验证。P0-09 测试门仍未关闭。

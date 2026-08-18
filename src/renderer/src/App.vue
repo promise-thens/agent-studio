@@ -1084,6 +1084,18 @@ async function sendPrompt(): Promise<void> {
       const admitted = unwrapDesktopIpcResult(await window.agent.startTurn(taskId, text))
       // admission 也必须经过 epoch/revision watermark，不能覆盖已经先到的较新 Push。
       executionConsumer.accept(admitted)
+      // 实时 Timeline 只靠 AgentEvent 看不到用户 Prompt；admission 成功后立刻写入同一投影。
+      const execution = admitted.execution
+      if (execution) {
+        taskTimeline.acceptAdmission({
+          taskId: execution.taskId,
+          turnId: execution.turnId,
+          executionId: execution.executionId,
+          promptDisplayText: text,
+          model: execution.model,
+          acceptedAt: execution.acceptedAt
+        })
+      }
       await taskHistory.refreshTasks()
     } catch (error) {
       // 只收束本次已经启动的 Turn，创建 Task 失败不能误结束其他计时。

@@ -7,6 +7,7 @@ import {
   createTaskTimelineFacts,
   reduceTaskTimelineFacts,
   selectTaskTimeline,
+  type AdmittedTurnFact,
   type TaskTimelineFacts,
   type TaskTimelineViewModel
 } from '../task-timeline-reducer'
@@ -35,6 +36,8 @@ export interface TaskTimelineController {
   coordinators: Ref<Record<string, TaskTimelineCoordinator>>
   start(): Promise<void>
   openTask(taskId: string): Promise<boolean>
+  /** Turn admission 成功后立即写入 Prompt，避免实时 Timeline 只能等历史回放开才看见用户指令。 */
+  acceptAdmission(admission: AdmittedTurnFact): void
   acceptLiveEvent(event: PublicAgentEvent): void
   acceptExecutionSnapshot(snapshot: TaskExecutionSnapshot): void
   hydrateHistory(
@@ -98,6 +101,14 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
     for (const [taskId, events] of Object.entries(batches)) {
       if (events.length) dispatch(taskId, { type: 'events/ingest-public', events })
     }
+  }
+
+  function acceptAdmission(admission: AdmittedTurnFact): void {
+    if (disposed) return
+    dispatch(admission.taskId, {
+      type: 'turn/admitted',
+      admission: cloneTimelineInput(admission)
+    })
   }
 
   function acceptLiveEvent(event: PublicAgentEvent): void {
@@ -252,6 +263,7 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
     coordinators,
     start,
     openTask,
+    acceptAdmission,
     acceptLiveEvent,
     acceptExecutionSnapshot,
     hydrateHistory,

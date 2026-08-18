@@ -12,7 +12,7 @@
 
 **主要风险：** 高频流式事件、晚到事件和历史回放可能导致状态倒退或 UI 卡顿；沿用 P0-02 sequence/terminal 规则，按 Turn 建立稳定 key、批量刷新和可见窗口限制。
 
-**当前状态：** 测试中。契约与安全边界、公开事件投影、Timeline reducer/组件已在工作区落地，正在做一致性与 Electron 走查。测试门关闭前不得开始 [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) 或 P0-10 主体。
+**当前状态：** 测试中。契约与安全边界、公开事件投影、Timeline reducer/组件已落地。2026-08-18 已补实时 `turn/admitted`：`startTurn` 成功后写入 Prompt，修复 RG-09-01 实时显示“用户指令不可用”。Windows 真机复测将该项标为受限通过（同一 Task 第二轮未做）。测试门关闭前不得开始 [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) 或 P0-10 主体。详见 [p0-09-real-grok-device-test-plan.md](../testPlans/p0-09-real-grok-device-test-plan.md)。
 
 ### 已冻结的事实契约
 

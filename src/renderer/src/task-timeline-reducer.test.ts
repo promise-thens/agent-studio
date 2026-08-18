@@ -82,6 +82,43 @@ function snapshot(state: 'completed' | 'running' = 'completed'): TaskExecutionSn
 }
 
 describe('Task Timeline reducer', () => {
+  it('仅有实时事件时显示用户指令不可用，admission 到达后恢复 Prompt', () => {
+    const withEvents = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+      type: 'events/ingest-public',
+      events: EVENTS
+    })
+    expect(selectTaskTimeline(withEvents, { executionSnapshot: snapshot('running') }).turns[0]).toMatchObject({
+      prompt: '用户指令不可用'
+    })
+
+    const withAdmission = reduceTaskTimelineFacts(withEvents, {
+      type: 'turn/admitted',
+      admission: {
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        executionId: 'execution-1',
+        promptDisplayText: '实时用户指令',
+        model: { modelId: 'model-1' },
+        acceptedAt: '2026-08-18T00:00:00.000Z'
+      }
+    })
+    const liveView = selectTaskTimeline(withAdmission, { executionSnapshot: snapshot('running') })
+    expect(liveView.turns[0]?.prompt).toBe('实时用户指令')
+    expect(liveView.turns[0]?.nodes[0]).toMatchObject({
+      kind: 'user-prompt',
+      text: '实时用户指令',
+      source: 'admission'
+    })
+
+    const withHistory = reduceTaskTimelineFacts(withAdmission, {
+      type: 'turns/upsert',
+      turns: [TURN]
+    })
+    expect(selectTaskTimeline(withHistory, { executionSnapshot: snapshot() }).turns[0]?.prompt).toBe(
+      TURN.promptDisplayText
+    )
+  })
+
   it('实时与历史任意顺序输入收敛为同一投影', () => {
     const first = reduceTaskTimelineFacts(
       reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {

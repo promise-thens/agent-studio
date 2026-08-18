@@ -137,6 +137,38 @@ describe('useTaskTimeline', () => {
     )
   })
 
+  it('实时 admission 后 Timeline 立即显示用户 Prompt，不依赖历史回放', async () => {
+    const controller = useTaskTimeline({ manageSubscriptions: false })
+    controller.setActiveTask('task-1')
+
+    controller.acceptLiveEvent(event)
+    await Promise.resolve()
+    expect(controller.activeTimeline.value?.turns[0]?.prompt).toBe('用户指令不可用')
+
+    controller.acceptAdmission({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      executionId: 'execution-1',
+      promptDisplayText: '阅读 README.md，列出三条要点',
+      model: { modelId: 'grok-4.6' },
+      acceptedAt: '2026-08-18T00:00:00.000Z'
+    })
+
+    expect(controller.activeTimeline.value?.turns[0]?.prompt).toBe(
+      '阅读 README.md，列出三条要点'
+    )
+    expect(controller.activeTimeline.value?.turns[0]?.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'user-prompt',
+          text: '阅读 README.md，列出三条要点',
+          source: 'admission'
+        }),
+        expect.objectContaining({ kind: 'message', text: 'hello' })
+      ])
+    )
+  })
+
   it('从响应式历史记录水合时保留 Timeline 和用户提示', () => {
     const controller = useTaskTimeline({
       getSnapshot: async () => snapshot,
