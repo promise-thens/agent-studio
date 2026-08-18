@@ -49,6 +49,7 @@ describe('窄 Preload API', () => {
     })
     await app.chooseProject()
     await task.list('project-1')
+    await task.listEvents('task-1', 'turn-1', 42, 200)
     await task.listPermissionAudits('task-1')
     await task.resume('task-1')
 
@@ -75,6 +76,10 @@ describe('窄 Preload API', () => {
       ],
       [APP_INVOKE_CHANNELS.chooseProject],
       [TASK_INVOKE_CHANNELS.list, { projectId: 'project-1' }],
+      [
+        TASK_INVOKE_CHANNELS.listEvents,
+        { taskId: 'task-1', turnId: 'turn-1', afterSequence: 42, limit: 200 }
+      ],
       [TASK_INVOKE_CHANNELS.listPermissionAudits, { taskId: 'task-1' }],
       [TASK_INVOKE_CHANNELS.resume, { taskId: 'task-1' }]
     ])
@@ -115,6 +120,92 @@ describe('窄 Preload API', () => {
       AGENT_PUSH_CHANNELS.permission,
       AGENT_PUSH_CHANNELS.permissionCancelled
     ])
+  })
+
+  it('Agent 事件推送只转发公开 DTO，丢弃 Runtime 私有字段和 Diff 正文', () => {
+    const ipcRenderer = createIpcRenderer()
+    const agent = createAgentDesktopApi(ipcRenderer)
+    const listener = vi.fn()
+    agent.onEvent(listener)
+    const eventHandler = ipcRenderer.on.mock.calls[0]?.[1]
+
+    eventHandler?.(
+      { hidden: 'electron-event' },
+      {
+        runtimeId: 'grok',
+        capabilityState: 'native',
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        sequence: 1,
+        observedAt: '2026-08-18T00:00:00.000Z',
+        kind: 'diff',
+        references: [
+          {
+            kind: 'diff-review',
+            availability: 'unavailable',
+            changedPathCount: 1,
+            pathSummaries: ['src/example.ts'],
+            reason: 'git-review-not-implemented',
+            patch: 'private-patch'
+          }
+        ],
+        toolCallId: 'tool-1',
+        runtimeSessionId: 'runtime-private',
+        executionRoot: '/private/root',
+        diffs: [{ before: 'private-before', after: 'private-after' }],
+        rawPayload: { authorization: 'fake-secret' }
+      }
+    )
+
+    expect(listener).toHaveBeenCalledWith({
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-18T00:00:00.000Z',
+      kind: 'diff',
+      references: [
+        {
+          kind: 'diff-review',
+          availability: 'unavailable',
+          changedPathCount: 1,
+          pathSummaries: ['src/example.ts'],
+          reason: 'git-review-not-implemented'
+        }
+      ],
+      toolCallId: 'tool-1'
+    })
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('runtime-private')
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('private-patch')
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('private-before')
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('fake-secret')
+  })
+
+  it('Agent 事件身份、枚举或大小越界时整条拒绝', () => {
+    const ipcRenderer = createIpcRenderer()
+    const agent = createAgentDesktopApi(ipcRenderer)
+    const listener = vi.fn()
+    agent.onEvent(listener)
+    const eventHandler = ipcRenderer.on.mock.calls[0]?.[1]
+    const valid = {
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-18T00:00:00.000Z',
+      kind: 'agent-message',
+      text: '安全内容'
+    }
+
+    eventHandler?.({}, { ...valid, sequence: 0 })
+    eventHandler?.({}, { ...valid, capabilityState: 'private' })
+    eventHandler?.({}, { ...valid, observedAt: 'not-a-date' })
+    eventHandler?.({}, { ...valid, text: 'x'.repeat(64 * 1024 + 1) })
+    eventHandler?.({}, { ...valid, kind: 'runtime-private-event' })
+
+    expect(listener).not.toHaveBeenCalled()
   })
 
   it('权限推送只转发白名单 DTO，丢弃 Runtime 私有字段和原始负载', () => {

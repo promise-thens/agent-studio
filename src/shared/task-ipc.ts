@@ -1,8 +1,8 @@
+import type { PublicAgentEvent } from './agent-event'
 import type { DesktopIpcResult } from './ipc-result'
 import type {
   DeletionPreview,
   PermissionAuditPage,
-  PersistedAgentEventPage,
   RuntimeResumeSummary,
   TaskHistoryDetail,
   TaskHistoryPage,
@@ -19,6 +19,12 @@ export const TASK_INVOKE_CHANNELS = {
   previewDelete: 'task:preview-delete',
   delete: 'task:delete'
 } as const
+
+export interface PublicAgentEventPage {
+  items: PublicAgentEvent[]
+  nextAfterSequence?: number
+  watermark: number
+}
 
 export interface TaskDesktopApi {
   list: (
@@ -37,7 +43,7 @@ export interface TaskDesktopApi {
     turnId: string,
     afterSequence?: number,
     limit?: number
-  ) => Promise<DesktopIpcResult<PersistedAgentEventPage>>
+  ) => Promise<DesktopIpcResult<PublicAgentEventPage>>
   listPermissionAudits: (
     taskId: string,
     cursor?: string,

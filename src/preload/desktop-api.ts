@@ -1,11 +1,15 @@
 import {
   AGENT_OPERATION_TYPES,
   type AgentOperationType,
-  type AgentEvent,
   type AgentPermissionRequest,
   type AgentRuntimeStatus,
   type AgentTaskRuntimeState
 } from '../shared/agent'
+import type {
+  PublicAgentDiffReviewReference,
+  PublicAgentEvent,
+  PublicAgentEventBase
+} from '../shared/agent-event'
 import {
   AGENT_INVOKE_CHANNELS,
   AGENT_PUSH_CHANNELS,
@@ -26,7 +30,23 @@ export interface NarrowIpcRenderer {
 
 const MAX_PERMISSION_FIELD_BYTES = 4 * 1024
 const MAX_PERMISSION_TARGETS = 32
+const MAX_EVENT_STREAM_BYTES = 64 * 1024
+const MAX_EVENT_FIELD_BYTES = 4 * 1024
+const MAX_EVENT_PLAN_ENTRIES = 100
+const MAX_EVENT_REVIEW_REFERENCES = 20
+const MAX_EVENT_REVIEW_PATHS = 20
 const AGENT_RUNTIME_IDS = ['grok', 'codex'] as const
+const AGENT_CAPABILITY_STATES = ['native', 'simulated', 'experimental', 'unsupported'] as const
+const AGENT_TOOL_STATUSES = ['pending', 'in_progress', 'completed', 'failed', 'cancelled'] as const
+const AGENT_PLAN_PRIORITIES = ['high', 'medium', 'low'] as const
+const AGENT_PLAN_STATUSES = ['pending', 'in_progress', 'completed'] as const
+const AGENT_TURN_OUTCOMES = [
+  'completed',
+  'cancelled',
+  'refused',
+  'limit-reached',
+  'failed'
+] as const
 const AGENT_PERMISSION_RISKS = ['L0', 'L1', 'L2', 'L3'] as const
 const AGENT_PERMISSION_SCOPES = ['once', 'task'] as const
 const AGENT_APP_SERVICES = ['command-runner', 'git', 'worktree', 'other'] as const
@@ -57,16 +77,20 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null
 }
 
-function readPermissionText(value: unknown, allowEmpty = false): string | null {
+function readBoundedText(value: unknown, maxBytes: number, allowEmpty = false): string | null {
   if (
     typeof value !== 'string' ||
     (!allowEmpty && !value.trim()) ||
     value.includes('\0') ||
-    new TextEncoder().encode(value).byteLength > MAX_PERMISSION_FIELD_BYTES
+    new TextEncoder().encode(value).byteLength > maxBytes
   ) {
     return null
   }
   return value
+}
+
+function readPermissionText(value: unknown, allowEmpty = false): string | null {
+  return readBoundedText(value, MAX_PERMISSION_FIELD_BYTES, allowEmpty)
 }
 
 function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
@@ -157,6 +181,273 @@ function parsePermissionCancellation(payload: unknown): AgentPermissionCancellat
   return { approvalId, taskId, turnId, reason: 'cancelled' }
 }
 
+/** Agent 事件 Push 逐字段重建，防止 Main 私有身份、Diff 正文或未知字段进入 Renderer。 */
+function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
+  if (!isPlainRecord(payload)) return null
+  const base = parsePublicAgentEventBase(payload)
+  if (!base || typeof payload.kind !== 'string') return null
+
+  switch (payload.kind) {
+    case 'agent-message':
+    case 'agent-thought': {
+      const text = readBoundedText(payload.text, MAX_EVENT_STREAM_BYTES, true)
+      const messageId = readOptionalEventText(payload.messageId)
+      if (text === null || messageId === null) return null
+      return {
+        ...base,
+        kind: payload.kind,
+        text,
+        ...(messageId === undefined ? {} : { messageId })
+      }
+    }
+    case 'tool-call': {
+      const toolCallId = readBoundedText(payload.toolCallId, MAX_EVENT_FIELD_BYTES)
+      const title = readBoundedText(payload.title, MAX_EVENT_FIELD_BYTES, true)
+      if (
+        !toolCallId ||
+        title === null ||
+        (payload.status !== undefined && !isOneOf(payload.status, AGENT_TOOL_STATUSES))
+      ) {
+        return null
+      }
+      return {
+        ...base,
+        kind: 'tool-call',
+        toolCallId,
+        title,
+        ...(payload.status === undefined ? {} : { status: payload.status })
+      }
+    }
+    case 'tool-update': {
+      const toolCallId = readBoundedText(payload.toolCallId, MAX_EVENT_FIELD_BYTES)
+      const title = readOptionalEventText(payload.title)
+      if (
+        !toolCallId ||
+        title === null ||
+        (payload.status !== undefined && !isOneOf(payload.status, AGENT_TOOL_STATUSES))
+      ) {
+        return null
+      }
+      return {
+        ...base,
+        kind: 'tool-update',
+        toolCallId,
+        ...(title === undefined ? {} : { title }),
+        ...(payload.status === undefined ? {} : { status: payload.status })
+      }
+    }
+    case 'plan': {
+      if (!Array.isArray(payload.entries) || payload.entries.length > MAX_EVENT_PLAN_ENTRIES) {
+        return null
+      }
+      const entries = payload.entries.map(parsePlanEntry)
+      if (entries.some((entry) => entry === null)) return null
+      return { ...base, kind: 'plan', entries: entries as NonNullable<(typeof entries)[number]>[] }
+    }
+    case 'diff': {
+      if (
+        !Array.isArray(payload.references) ||
+        payload.references.length > MAX_EVENT_REVIEW_REFERENCES
+      ) {
+        return null
+      }
+      const references = payload.references.map(parseDiffReviewReference)
+      const toolCallId = readOptionalEventText(payload.toolCallId)
+      if (references.some((reference) => reference === null) || toolCallId === null) return null
+      return {
+        ...base,
+        kind: 'diff',
+        references: references as PublicAgentDiffReviewReference[],
+        ...(toolCallId === undefined ? {} : { toolCallId })
+      }
+    }
+    case 'usage': {
+      const usage = parseAgentUsage(payload.usage)
+      return usage ? { ...base, kind: 'usage', usage } : null
+    }
+    case 'turn-complete': {
+      const usage = payload.usage === undefined ? undefined : parseTurnUsage(payload.usage)
+      if (
+        !isOneOf(payload.outcome, AGENT_TURN_OUTCOMES) ||
+        (payload.usage !== undefined && !usage)
+      ) {
+        return null
+      }
+      return {
+        ...base,
+        kind: 'turn-complete',
+        outcome: payload.outcome,
+        ...(usage ? { usage } : {})
+      }
+    }
+    case 'error': {
+      const message = readBoundedText(payload.message, MAX_EVENT_FIELD_BYTES, true)
+      const code = readOptionalEventText(payload.code)
+      if (message === null || typeof payload.recoverable !== 'boolean' || code === null) return null
+      return {
+        ...base,
+        kind: 'error',
+        message,
+        recoverable: payload.recoverable,
+        ...(code === undefined ? {} : { code })
+      }
+    }
+    default:
+      return null
+  }
+}
+
+function parsePublicAgentEventBase(payload: Record<string, unknown>): PublicAgentEventBase | null {
+  const taskId = readBoundedText(payload.taskId, MAX_EVENT_FIELD_BYTES)
+  const turnId = readBoundedText(payload.turnId, MAX_EVENT_FIELD_BYTES)
+  const observedAt = readBoundedText(payload.observedAt, MAX_EVENT_FIELD_BYTES)
+  if (
+    !isOneOf(payload.runtimeId, AGENT_RUNTIME_IDS) ||
+    !isOneOf(payload.capabilityState, AGENT_CAPABILITY_STATES) ||
+    !taskId ||
+    !turnId ||
+    !Number.isSafeInteger(payload.sequence) ||
+    (payload.sequence as number) < 1 ||
+    !observedAt ||
+    !Number.isFinite(Date.parse(observedAt)) ||
+    (payload.truncated !== undefined && payload.truncated !== true)
+  ) {
+    return null
+  }
+  return {
+    runtimeId: payload.runtimeId,
+    capabilityState: payload.capabilityState,
+    taskId,
+    turnId,
+    sequence: payload.sequence as number,
+    observedAt,
+    ...(payload.truncated === true ? { truncated: true } : {})
+  }
+}
+
+function readOptionalEventText(value: unknown): string | undefined | null {
+  return value === undefined ? undefined : readBoundedText(value, MAX_EVENT_FIELD_BYTES, true)
+}
+
+function parsePlanEntry(value: unknown): {
+  content: string
+  priority: 'high' | 'medium' | 'low'
+  status: 'pending' | 'in_progress' | 'completed'
+} | null {
+  if (!isPlainRecord(value)) return null
+  const content = readBoundedText(value.content, MAX_EVENT_FIELD_BYTES, true)
+  if (
+    content === null ||
+    !isOneOf(value.priority, AGENT_PLAN_PRIORITIES) ||
+    !isOneOf(value.status, AGENT_PLAN_STATUSES)
+  ) {
+    return null
+  }
+  return { content, priority: value.priority, status: value.status }
+}
+
+function parseDiffReviewReference(value: unknown): PublicAgentDiffReviewReference | null {
+  if (
+    !isPlainRecord(value) ||
+    value.kind !== 'diff-review' ||
+    value.availability !== 'unavailable' ||
+    !Number.isSafeInteger(value.changedPathCount) ||
+    (value.changedPathCount as number) < 0 ||
+    !Array.isArray(value.pathSummaries) ||
+    value.pathSummaries.length > MAX_EVENT_REVIEW_PATHS ||
+    !['git-review-not-implemented', 'source-unavailable', 'history-truncated'].includes(
+      String(value.reason)
+    )
+  ) {
+    return null
+  }
+  const pathSummaries = value.pathSummaries.map((path) =>
+    readBoundedText(path, MAX_EVENT_FIELD_BYTES, true)
+  )
+  if (pathSummaries.some((path) => path === null)) return null
+  return {
+    kind: 'diff-review',
+    availability: 'unavailable',
+    changedPathCount: value.changedPathCount as number,
+    pathSummaries: pathSummaries as string[],
+    reason: value.reason as PublicAgentDiffReviewReference['reason']
+  }
+}
+
+function parseAgentUsage(
+  value: unknown
+): Extract<PublicAgentEvent, { kind: 'usage' }>['usage'] | null {
+  if (!isPlainRecord(value)) return null
+  if (value.scope === 'context') return parseContextUsage(value)
+  return parseTurnUsage(value) ?? null
+}
+
+function parseContextUsage(
+  value: Record<string, unknown>
+): Extract<PublicAgentEvent, { kind: 'usage' }>['usage'] | null {
+  if (
+    value.scope !== 'context' ||
+    !isNonNegativeFiniteNumber(value.usedTokens) ||
+    !isNonNegativeFiniteNumber(value.limitTokens)
+  ) {
+    return null
+  }
+  const cost = parseCost(value.cost)
+  if (value.cost !== undefined && !cost) return null
+  return {
+    scope: 'context',
+    usedTokens: value.usedTokens,
+    limitTokens: value.limitTokens,
+    ...(cost ? { cost } : {})
+  }
+}
+
+function parseTurnUsage(
+  value: unknown
+): Extract<PublicAgentEvent, { kind: 'turn-complete' }>['usage'] | null {
+  if (
+    !isPlainRecord(value) ||
+    value.scope !== 'turn' ||
+    !isNonNegativeFiniteNumber(value.inputTokens) ||
+    !isNonNegativeFiniteNumber(value.outputTokens) ||
+    !isNonNegativeFiniteNumber(value.totalTokens) ||
+    !isOptionalNonNegativeFiniteNumber(value.thoughtTokens) ||
+    !isOptionalNonNegativeFiniteNumber(value.cachedReadTokens) ||
+    !isOptionalNonNegativeFiniteNumber(value.cachedWriteTokens)
+  ) {
+    return null
+  }
+  const cost = parseCost(value.cost)
+  if (value.cost !== undefined && !cost) return null
+  return {
+    scope: 'turn',
+    inputTokens: value.inputTokens,
+    outputTokens: value.outputTokens,
+    totalTokens: value.totalTokens,
+    ...(value.thoughtTokens === undefined ? {} : { thoughtTokens: value.thoughtTokens }),
+    ...(value.cachedReadTokens === undefined ? {} : { cachedReadTokens: value.cachedReadTokens }),
+    ...(value.cachedWriteTokens === undefined
+      ? {}
+      : { cachedWriteTokens: value.cachedWriteTokens }),
+    ...(cost ? { cost } : {})
+  }
+}
+
+function parseCost(value: unknown): { amount: number; currency: string } | null | undefined {
+  if (value === undefined) return undefined
+  if (!isPlainRecord(value) || !Number.isFinite(value.amount)) return null
+  const currency = readBoundedText(value.currency, MAX_EVENT_FIELD_BYTES)
+  return currency ? { amount: value.amount as number, currency } : null
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function isOptionalNonNegativeFiniteNumber(value: unknown): value is number | undefined {
+  return value === undefined || isNonNegativeFiniteNumber(value)
+}
+
 /** 创建不暴露 channel 或 Electron event 的中性 Agent API。 */
 export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesktopApi {
   return {
@@ -205,7 +496,13 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       subscribe<AgentRuntimeStatus>(ipcRenderer, AGENT_PUSH_CHANNELS.status, listener),
     onExecutionUpdate: (listener) =>
       subscribe<TaskExecutionSnapshot>(ipcRenderer, AGENT_PUSH_CHANNELS.executionUpdate, listener),
-    onEvent: (listener) => subscribe<AgentEvent>(ipcRenderer, AGENT_PUSH_CHANNELS.event, listener),
+    onEvent: (listener) =>
+      subscribe<PublicAgentEvent>(
+        ipcRenderer,
+        AGENT_PUSH_CHANNELS.event,
+        listener,
+        parsePublicAgentEvent
+      ),
     onPermission: (listener) =>
       subscribe<AgentPermissionRequest>(
         ipcRenderer,

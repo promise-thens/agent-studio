@@ -1,9 +1,9 @@
 import type {
-  AgentEvent,
-  AgentMessageEvent,
-  AgentThoughtEvent,
-  AgentToolEvent
-} from '../../shared/agent'
+  PublicAgentEvent,
+  PublicAgentMessageEvent,
+  PublicAgentThoughtEvent,
+  PublicAgentToolEvent
+} from '../../shared/agent-event'
 
 interface AgentTurnEventProgress {
   lastSequence: number
@@ -14,7 +14,7 @@ interface AgentTurnEventProgress {
  * Renderer 按 taskId + turnId 记录已消费的最大 sequence，并在首个终态后锁定当前 Turn。
  * 这里只拒绝重复和晚到事件，不要求 sequence 无缺口，避免 IPC 丢帧后永久阻塞后续输出。
  */
-export function createAgentEventGuard(): (event: AgentEvent) => boolean {
+export function createAgentEventGuard(): (event: PublicAgentEvent) => boolean {
   const turnProgress = new Map<string, AgentTurnEventProgress>()
 
   return (event) => {
@@ -34,12 +34,14 @@ export function createAgentEventGuard(): (event: AgentEvent) => boolean {
 }
 
 /** 同一 Turn 的消息流保持稳定 key，不同任务、轮次、消息与思考流彼此隔离。 */
-export function createAgentMessageKey(event: AgentMessageEvent | AgentThoughtEvent): string {
+export function createAgentMessageKey(
+  event: PublicAgentMessageEvent | PublicAgentThoughtEvent
+): string {
   const streamId = event.messageId == null ? 'stream' : `id:${event.messageId}`
   return `${event.taskId}:${event.turnId}:${event.kind}:${streamId}`
 }
 
 /** tool-call 与 tool-update 使用同一个 Turn 级 key，避免跨轮次复用 toolCallId 时误合并。 */
-export function createAgentToolKey(event: AgentToolEvent): string {
+export function createAgentToolKey(event: PublicAgentToolEvent): string {
   return `${event.taskId}:${event.turnId}:tool:${event.toolCallId}`
 }

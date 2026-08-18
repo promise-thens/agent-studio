@@ -68,6 +68,7 @@ src/
 docs/
 ├── product-vision.md         长期产品愿景与已确认边界
 ├── superpowers/plans/        按阶段与开发顺序编号的具体实施计划
+├── superpowers/plans/grokACP计划/  Grok ACP 加深计划；从 P0-09 测试门之后开始
 └── architecture/             只有形成稳定跨模块设计时才创建
 ```
 
@@ -242,6 +243,7 @@ git diff --check
 
 - 产品长期定位和已确认边界更新到 `docs/product-vision.md`。
 - 跨层或多步骤功能开发前，在 `docs/superpowers/plans/` 编写独立实施计划，并通过 `roadmap-index.md` 维护开发顺序与依赖。
+- Grok ACP 加深计划放在 `docs/superpowers/plans/grokACP计划/`，从 P0-09 测试门之后开始，不得插入正在测试的时间线工作。
 - 计划文件名使用 `<phase>-<sequence>-<topic>.md`，例如 `p0-05-grok-acp-adapter-migration.md`；同一序号需要拆分时使用小写字母后缀，例如 `p2-04a-...`、`p2-04b-...`。历史归档可以使用明确的语义化名称，不添加日期前缀。
 - 实施计划至少写明目标、非目标、数据流、安全边界、文件范围、步骤和验收标准。
 - 实现与计划发生变化时同步更新文档，不允许文档长期描述不存在的行为。
@@ -253,19 +255,18 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[P0-08 Task Executor 与后台生命周期](docs/superpowers/plans/p0-08-task-executor-background-lifecycle.md)
-- 状态：P0-08 核心实现、完整自动门禁、Permission E2E 和首批受控 lifecycle Electron E2E 已完成；真实 Grok 活动窗口/退出三分支、窗口重建/重启恢复和 Windows/Linux 验证待补
-- 完成度：核心状态机、TaskStore V2/恢复、单槽 TaskExecutor、execution snapshot/revision IPC、Renderer 恢复、后台权限保留和退出三选项已落地；独立 lifecycle E2E 已覆盖空闲退出、长任务后台浏览/reload、后台审批、cancel timeout 和 Runtime crash，完整跨平台验收尚未完成
-- 当前完成：已建立首个 await 前 admission、唯一终态仲裁、稳定 environmentId、Task/Turn 部分提交修复、事件脱敏、execution identity cancel、listener-before-query consumer、查看/执行身份解耦、PermissionBroker pending count、强制中断和有界 shutdown transaction；Provider save/select/clear 与 session operation 已接入共享 OperationGate，并覆盖 inherited/self/foreign/stale/wrong-kind/shutdown 对抗测试；Electron fixture 已有界回收进程并保护仍存活的 profile
-- 兼容边界：首版仍只有一个执行槽，不实现 P0-17 队列/并行；应用退出后不继续运行；强制退出无法保证 Runtime 未上报副作用已经停止；受控 ACP fixture 不等价于真实 Grok 黑盒或 OS 进程沙箱；Windows/Linux 生命周期尚未验证
-- 下一步：补齐受控 BrowserWindow 销毁/重建、活动执行退出三分支和重启 interrupted 场景；完成真实 Grok 长任务/Task 切换/reload/窗口重建/退出走查及 Windows/Linux 生命周期验证后，再将 P0-08 标记为完全完成
-- 最近验证：2026-08-17，Node.js `v22.22.0`、pnpm `10.33.0`；全仓 `pnpm exec eslint . --no-cache`、`pnpm test`（42 个文件 / 415 项 Vitest）、`pnpm typecheck`、`pnpm build`、`pnpm build:unpack` 和 `git diff --check` 通过；Permission Electron E2E 4/4 通过且三轮 12/12 稳定，lifecycle Electron E2E 5/5 通过且三轮 15/15 稳定；macOS 隔离窗口已手工确认 Task/Project 后台浏览与跨视图 Stop，目录包因本机无 Developer ID 未签名。GitNexus compare 将本次跨 Main/Store/IPC/Renderer/lifecycle 变更评为 CRITICAL，已执行多轮对抗审查并保留未完成真机/平台门禁
+- 当前计划：[P0-09 执行时间线与结果审阅](docs/superpowers/plans/p0-09-execution-timeline-review.md)
+- 状态：P0-09 测试中；P0-08 核心实现与首批 lifecycle E2E 已完成，真实 Grok 活动窗口/退出三分支、窗口重建/重启 interrupted 与 Windows/Linux 仍待补
+- 完成度：P0-01 至 P0-07 已完成；P0-08 单槽 TaskExecutor、恢复、后台权限和退出三选项已落地；P0-09 公开事件投影与 Timeline 组件已在工作区落地，一致性验收未关
+- Grok ACP 加深：评估与分计划在 [docs/superpowers/plans/grokACP计划/README.md](docs/superpowers/plans/grokACP计划/README.md)。**从 P0-09 测试门之后开始**，顺序为 GACP-01 真机观察 → GACP-02 恢复契约 → P0-10 工作台；GACP-03 在 P0-11 后，GACP-04 在 P2 前，GACP-05 默认不进 P0-A
+- 兼容边界：首版仍只有一个执行槽；应用退出后不继续运行；受控 ACP fixture 不等价于真实 Grok 黑盒；`clientCapabilities: {}` 是诚实广告，未实现 fs/terminal 前不得打开
+- 下一步：先关闭 P0-09 测试门；不要插队开始 P0-10 或改 Adapter 协议面。P0-08 剩余真机 Grok 路径由 GACP-01 收口，Windows/Linux 仍记在 P0-08
+- 最近验证：2026-08-17，Node.js `v22.22.0`、pnpm `10.33.0`；当时全仓 ESLint、Vitest、typecheck、build、unpack 与 Permission/lifecycle E2E 通过。P0-09 仍在测试，本次只补充计划文档，未重跑门禁
 
 <!-- gitnexus:start -->
-
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **agent-studio** (3203 symbols, 9066 relationships, 277 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **agent-studio** (3356 symbols, 9479 relationships, 290 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
@@ -286,22 +287,22 @@ This project is indexed by GitNexus as **agent-studio** (3203 symbols, 9066 rela
 
 ## Resources
 
-| Resource                                      | Use for                                  |
-| --------------------------------------------- | ---------------------------------------- |
-| `gitnexus://repo/agent-studio/context`        | Codebase overview, check index freshness |
-| `gitnexus://repo/agent-studio/clusters`       | All functional areas                     |
-| `gitnexus://repo/agent-studio/processes`      | All execution flows                      |
-| `gitnexus://repo/agent-studio/process/{name}` | Step-by-step execution trace             |
+| Resource | Use for |
+|----------|---------|
+| `gitnexus://repo/agent-studio/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/agent-studio/clusters` | All functional areas |
+| `gitnexus://repo/agent-studio/processes` | All execution flows |
+| `gitnexus://repo/agent-studio/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
-| Task                                         | Read this skill file                                        |
-| -------------------------------------------- | ----------------------------------------------------------- |
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md`       |
-| Blast radius / "What breaks if I change X?"  | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?"             | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md`       |
-| Rename / extract / split / refactor          | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md`     |
-| Tools, resources, schema reference           | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md`           |
-| Index, status, clean, wiki CLI commands      | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md`             |
+| Task | Read this skill file |
+|------|---------------------|
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->

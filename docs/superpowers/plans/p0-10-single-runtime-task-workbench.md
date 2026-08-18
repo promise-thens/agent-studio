@@ -20,6 +20,9 @@
 
 **前置依赖：**
 - 依赖 P0-06、P0-08、P0-09。
+- 依赖 [P0-10A](p0-10a-claude-desktop-workbench-ui.md)：工作台视觉与信息架构按 Claude Code Desktop 便捷度大修，P0-10 只往这套壳里填状态，禁止再做三栏卡片仪表盘。
+- 依赖 [GACP-02](grokACP计划/gacp-02-session-restore-capability-contract.md)：点进历史 Task 就是进入可发送的对话，后台自动 resume/load，**不要再做「继续任务」确认按钮**。GACP-02 又依赖 [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) 的真机观察。
+- 子 Agent 嵌套展示见 [GACP-06](grokACP计划/gacp-06-subagent-timeline.md)，皮肤跟 P0-10A。
 
 **文件范围：**
 - 创建 `src/renderer/src/composables/useTaskWorkbench.ts`、`useProjectRegistry.ts` 及测试。
@@ -74,8 +77,8 @@
 预期：用户能快速定位后台 Task、失败 Task 和可继续的最近 Task。
 
 - [ ] **第 3 步: 实现新建和重新打开 Task**
-说明：新建 Task 显式创建新的产品 Task 与 Grok session；打开历史只加载记录，不自动连接或继续 Runtime。
-预期：“新 Task”“打开旧 Task”“继续旧 Task”三个动作不会混为一个按钮。
+说明：新建 Task 显式创建新的产品 Task 与 Grok session。点开历史 Task 立即进入该对话：先画本地记录，后台按 GACP-02 自动接 session，输入框默认可用。不要再做「打开只读」和「继续旧 Task」两个动作。
+预期：用户感知里只有「新对话」和「点进旧对话接着聊」。
 
 - [ ] **第 4 步: 实现重命名、归档与删除记录**
 说明：重命名只修改 Task 展示标题；运行中/等待审批 Task 不允许归档或删除。删除仅删除历史记录，执行前展示 Turn、Artifact/环境引用影响，不触碰项目文件、Runtime 原生历史或未来 Worktree。
@@ -130,7 +133,7 @@
 ## 验收标准
 
 - [ ] 侧栏展示真实持久 Project 和 Task；重启后列表恢复，失效目录和不可继续 Task 有明确状态。
-- [ ] 同一 Task 可以连续执行多个 Turn；新 Task、打开历史和继续 Runtime 上下文是三个清晰动作。
+- [ ] 同一 Task 可以连续执行多个 Turn；点进历史即可发送下一条，没有第二下「继续」确认。
 - [ ] Task 可重命名、归档和删除记录；运行中 Task 受保护，删除历史不会触碰项目文件或执行环境。
 - [ ] `selectedTaskId` 与活动执行状态分离，查看其它 Task 不会取消、清空或串流正在运行的 Task。
 - [ ] App.vue 只承担顶层组装，Project、Task、Timeline 和 Composer 逻辑进入独立组件/composable 并有测试。

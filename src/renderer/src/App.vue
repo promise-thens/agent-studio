@@ -2,8 +2,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   PhArrowClockwise as ArrowClockwise,
-  PhCaretDown as CaretDown,
-  PhCaretRight as CaretRight,
   PhCheckCircle as CheckCircle,
   PhCircleNotch as CircleNotch,
   PhPaperPlaneTilt as PaperPlaneTilt,
@@ -15,14 +13,13 @@ import {
   PhWarningCircle as WarningCircle
 } from '@phosphor-icons/vue'
 import type {
-  AgentEvent,
   AgentPermissionDecision,
   AgentPermissionRequest,
   AgentPlanEntry,
   AgentRuntimeStatus,
-  AgentTaskRuntimeState,
-  AgentToolEvent
+  AgentTaskRuntimeState
 } from '../../shared/agent'
+import type { PublicAgentEvent, PublicAgentToolEvent } from '../../shared/agent-event'
 import type {
   ProviderConfigInput,
   ProviderConfigSummary,
@@ -41,12 +38,12 @@ import { unwrapDesktopIpcResult } from './desktop-ipc-result'
 import ModelSelector from './components/ModelSelector.vue'
 import PermissionPrompt from './components/PermissionPrompt.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
-import WorkspaceSidebar, {
-  type SidebarProjectItem,
-  type SidebarSessionItem
-} from './components/WorkspaceSidebar.vue'
+import WorkspaceSidebar, { type SidebarProjectItem } from './components/WorkspaceSidebar.vue'
+import ExecutionTimeline from './components/ExecutionTimeline.vue'
+import TaskResultReview from './components/TaskResultReview.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
 import { useTaskHistory } from './composables/useTaskHistory'
+import { useTaskTimeline } from './composables/useTaskTimeline'
 import { createTaskExecutionConsumer } from './task-execution-consumer'
 import { projectTaskHistory } from './task-history-projector'
 import {
@@ -142,6 +139,7 @@ const executionConsumer = createTaskExecutionConsumer({
   subscribe: (listener) => window.agent.onExecutionUpdate(listener),
   onSnapshot: (snapshot) => {
     executionSnapshot.value = snapshot
+    taskTimeline.acceptExecutionSnapshot(snapshot)
   }
 })
 const providerSummary = ref<ProviderConfigSummary | null>(null)
@@ -149,6 +147,7 @@ const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
 const showProviderSettings = ref(false)
 const workspace = ref('')
 const taskHistory = useTaskHistory()
+const taskTimeline = useTaskTimeline({ manageSubscriptions: false })
 type HistoryConfirmationKind = 'task-delete' | 'project-remove' | 'project-history-delete'
 const historyConfirmation = ref<{
   kind: HistoryConfirmationKind
@@ -198,11 +197,12 @@ const taskOrder = ref<string[]>([])
 let taskSelectionRequestId = 0
 /** 当前激活的产品 Task；Runtime session 始终只留在主进程。 */
 const activeTaskId = ref('')
+/** 以 App 的查看身份驱动 Timeline；保留后台 facts，但绝不将旧 Task 展示到新 Project。 */
+watch(activeTaskId, (taskId) => taskTimeline.setActiveTask(taskId), { flush: 'sync' })
 /** 尚未建立 Task 时只承接真实错误消息，不伪造 Runtime 欢迎回复。 */
 const welcomeMessages = ref<ChatMessage[]>([])
 const emptyPlanEntries = ref<AgentPlanEntry[]>([])
 const emptyToolActivities = ref<ToolActivity[]>([])
-const emptyThoughtOverrides = ref<Record<string, boolean>>({})
 const activeTaskView = computed(() => taskViews.value[activeTaskId.value] ?? null)
 /** 审批标题按请求真实 taskId 解析，查看 B 时不能把后台 A 冒充成 B。 */
 const permissionTaskTitle = computed(() => {
@@ -252,21 +252,9 @@ const toolActivities = computed<ToolActivity[]>({
     else emptyToolActivities.value = value
   }
 })
-/** 当前 Task 的思考折叠覆盖；切换 Task 时自动读回各自状态。 */
-const thoughtExpandOverride = computed<Record<string, boolean>>({
-  get: () => activeTaskView.value?.thoughtExpandOverride ?? emptyThoughtOverrides.value,
-  set: (value) => {
-    const view = activeTaskView.value
-    if (view) view.thoughtExpandOverride = value
-    else emptyThoughtOverrides.value = value
-  }
-})
-const activeSessionId = computed(() => (projectSelectionPending.value ? '' : activeTaskId.value))
-/** 最近列表由主进程持久化历史提供，重启后不依赖 Renderer 内存。 */
-const recentSessions = computed<SidebarSessionItem[]>(() => {
-  if (projectSelectionPending.value) return []
-  return taskHistory.tasks.value.map((task) => ({ id: task.taskId, title: task.title }))
-})
+const activeSidebarTaskId = computed(() =>
+  projectSelectionPending.value ? '' : activeTaskId.value
+)
 
 const cleanupListeners: Array<() => void> = []
 const acceptAgentEvent = createAgentEventGuard()
@@ -306,35 +294,11 @@ const showExecutionPlaceholder = computed(
  * 把毫秒格式化成用户可读耗时。
  * 小于 1 分钟显示秒，超过后显示分秒，方便判断是否还在执行。
  */
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.max(0, ms) / 1000
-  if (totalSeconds < 60) {
-    return `${totalSeconds < 10 ? totalSeconds.toFixed(1) : Math.floor(totalSeconds)}s`
-  }
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = Math.floor(totalSeconds % 60)
-  return `${minutes}m ${String(seconds).padStart(2, '0')}s`
-}
-
 /** 当前这一轮的总耗时文案；运行中实时跳，结束后读冻结值。 */
-const turnDurationLabel = computed(() => {
-  if (!isTurnTiming.value || turnStartedAt.value == null) return ''
-  const end = turnEndedAt.value ?? nowTick.value
-  return formatDuration(end - turnStartedAt.value)
-})
-
 /**
  * 从思考正文提取一行短摘要，让用户先看到“正在想什么”，
  * 而不是只面对大段原始思维文本。
  */
-function deriveThoughtSummary(text: string): string {
-  const compact = text.replace(/\s+/g, ' ').trim()
-  if (!compact) return '整理思路'
-  // 优先取第一句，避免摘要被长段落淹没。
-  const sentence = compact.split(/(?<=[。！？.!?])\s+/)[0] ?? compact
-  return sentence.length > 42 ? `${sentence.slice(0, 42)}…` : sentence
-}
-
 /**
  * 把扁平消息流归并为 Codex 风格的“一轮一组”。
  * 规则：遇到 user 开启新轮；其后的 thought/assistant/error 都归入同一轮，
@@ -486,58 +450,6 @@ function scrollToTurnAnchor(turnId: string): void {
     ignoreAnchorScrollSync = false
     syncActiveTurnAnchor()
   }, 360)
-}
-
-/** 处理区标题：执行中强调“正在处理”，结束后改为“已处理”。 */
-function processTitle(turn: ConversationTurn): string {
-  if (turn.active || turn.streaming) return '正在处理'
-  return '已处理'
-}
-
-/** 读取某一轮应展示的耗时文案；活跃轮用实时值，历史轮用冻结值。 */
-function turnDurationText(turn: ConversationTurn): string {
-  // 当前执行轮优先读实时总计时，保证用户始终只看到“这一条指令”的进度。
-  if (turn.active || turn.streaming) return turnDurationLabel.value
-  if (turn.durationMs != null) return formatDuration(turn.durationMs)
-  return ''
-}
-
-/** 本轮是否显示耗时徽章。 */
-function shouldShowTurnDuration(turn: ConversationTurn): boolean {
-  return Boolean(turnDurationText(turn))
-}
-
-/** 折叠态下展示的思考摘要，多段思考时拼成一段可读预览。 */
-function turnThoughtSummary(turn: ConversationTurn): string {
-  const merged = turn.thoughts
-    .map((item) => item.text.trim())
-    .filter(Boolean)
-    .join(' ')
-  if (!merged) {
-    return turn.active || turn.streaming ? '已收到任务，正在组织思路与下一步动作' : '查看思考过程'
-  }
-  return deriveThoughtSummary(merged)
-}
-
-/**
- * 思考区是否展开。
- * 用户点过折叠按钮后以手动状态为准；否则执行中展开、结束后收起。
- */
-function isThoughtExpanded(turn: ConversationTurn): boolean {
-  const override = thoughtExpandOverride.value[turn.id]
-  if (override != null) return override
-  return turn.active || turn.streaming
-}
-
-/** 切换某一轮思考过程的展开/收起。 */
-function toggleThoughtExpanded(turnId: string): void {
-  const turn = timelineTurns.value.find((item) => item.id === turnId)
-  if (!turn) return
-  const next = !isThoughtExpanded(turn)
-  thoughtExpandOverride.value = {
-    ...thoughtExpandOverride.value,
-    [turnId]: next
-  }
 }
 
 /** 启动/停止整轮耗时刷新定时器。 */
@@ -713,6 +625,13 @@ const workspaceName = computed(() => {
 })
 /** 侧栏 Project 直接映射持久化 Registry。 */
 const sidebarProjects = computed<SidebarProjectItem[]>(() => {
+  // 任务缓存只属于当前活动 Project，不能错误投影到其它项目。
+  const activeProjectTasks = taskHistory.tasks.value.map((task) => ({
+    id: task.taskId,
+    title: task.title,
+    state: task.state
+  }))
+
   return taskHistory.projects.value
     .filter((project) => project.status === 'active')
     .map((project) => ({
@@ -720,7 +639,8 @@ const sidebarProjects = computed<SidebarProjectItem[]>(() => {
       name: project.displayName,
       path: project.canonicalRoot,
       status: project.status,
-      availability: project.availability.state
+      availability: project.availability.state,
+      tasks: project.projectId === taskHistory.activeProjectId.value ? activeProjectTasks : []
     }))
 })
 const activeProjectId = computed(() => taskHistory.activeProjectId.value)
@@ -826,12 +746,17 @@ onMounted(async () => {
   try {
     await taskHistory.initialize()
     workspace.value = taskHistory.activeProject.value?.canonicalRoot ?? workspace.value
+    const initialTask = taskHistory.tasks.value[0]
+    if (initialTask && !activeTaskId.value) {
+      await selectTask(initialTask.taskId)
+    }
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
 
   try {
     await executionConsumer.start()
+    await taskTimeline.start()
     status.value = unwrapDesktopIpcResult(await window.agent.getStatus())
     syncWorkspaceDisplay(status.value.workspace)
     if (activeProjectId.value) await ensureProjectConnected(activeProjectId.value)
@@ -842,6 +767,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   executionConsumer.dispose()
+  taskTimeline.dispose()
   cleanupListeners.forEach((cleanup) => cleanup())
   if (permissionExpiryTimer) {
     clearTimeout(permissionExpiryTimer)
@@ -921,11 +847,9 @@ async function ensureActiveTask(): Promise<string> {
   return task.taskId
 }
 
-/** 点击最近 Task 只装配本地历史；已有 execution 可切回实时视图，但绝不连接或恢复 Runtime。 */
+/** 点击最近 Task 只装配本地历史；重复点击也重新水合，清除热更新遗留的半状态，但绝不连接或恢复 Runtime。 */
 async function selectTask(taskId: string): Promise<void> {
-  if (!taskId || taskId === activeTaskId.value || projectSelectionPending.value) {
-    return
-  }
+  if (!taskId || projectSelectionPending.value) return
   const selectionRequestId = ++taskSelectionRequestId
 
   try {
@@ -949,6 +873,12 @@ async function selectTask(taskId: string): Promise<void> {
       toolActivities: projection.toolActivities,
       thoughtExpandOverride: {}
     }
+    taskTimeline.hydrateHistory(
+      detail,
+      taskHistory.openedTurns.value,
+      taskHistory.eventsByTurn.value,
+      taskHistory.permissionAudits.value
+    )
     activeTaskId.value = taskId
     reconcilePermissionQueue(taskId, detail.projectId)
     if (selectionRequestId !== taskSelectionRequestId || activeTaskId.value !== taskId) return
@@ -1280,8 +1210,9 @@ function handleComposerKeydown(event: KeyboardEvent): void {
   void sendPrompt()
 }
 
-function handleAgentEvent(event: AgentEvent): void {
+function handleAgentEvent(event: PublicAgentEvent): void {
   if (!acceptAgentEvent(event)) return
+  taskTimeline.acceptLiveEvent(event)
   if (event.taskId !== activeTaskId.value) return
 
   if (event.kind === 'agent-message' && event.text) {
@@ -1322,8 +1253,9 @@ async function resumeHistoryTask(): Promise<void> {
 }
 
 function refreshOpenedHistoryProjection(): void {
-  const taskId = taskHistory.openedTask.value?.taskId
-  if (!taskId) return
+  const detail = taskHistory.openedTask.value
+  if (!detail) return
+  const taskId = detail.taskId
   const view = taskViews.value[taskId]
   if (!view || view.mode !== 'history') return
   const projection = projectTaskHistory(
@@ -1333,6 +1265,13 @@ function refreshOpenedHistoryProjection(): void {
   view.messages = projection.messages
   view.planEntries = projection.planEntries
   view.toolActivities = projection.toolActivities
+  // 历史分页会更新事件集合；同步再次水合，避免 Timeline 仍停在首次打开时的首屏事实。
+  taskTimeline.hydrateHistory(
+    detail,
+    taskHistory.openedTurns.value,
+    taskHistory.eventsByTurn.value,
+    taskHistory.permissionAudits.value
+  )
 }
 
 async function loadMoreHistoryTurns(): Promise<void> {
@@ -1458,7 +1397,7 @@ function appendMessage(role: ChatMessage['role'], text: string): void {
   scrollMessagesToBottom()
 }
 
-function upsertToolActivity(event: AgentToolEvent): void {
+function upsertToolActivity(event: PublicAgentToolEvent): void {
   const id = createAgentToolKey(event)
   const current = toolActivities.value.find((item) => item.id === id)
 
@@ -1523,12 +1462,10 @@ function scrollMessagesToBottom(): void {
 
     <div v-else class="workspace-layout" :class="{ 'inspector-hidden': !showInspector }">
       <WorkspaceSidebar
-        brand-name="Agent Studio"
+        :projects="sidebarProjects"
         :workspace-path="workspace"
         :workspace-name="workspaceName"
-        :projects="sidebarProjects"
-        :sessions="recentSessions"
-        :active-session-id="activeSessionId"
+        :active-task-id="activeSidebarTaskId"
         :active-project-id="activeProjectId"
         :new-chat-disabled="newChatDisabled"
         :new-chat-disabled-reason="newChatDisabledReason"
@@ -1536,17 +1473,17 @@ function scrollMessagesToBottom(): void {
         history-navigation-disabled-reason="正在切换 Project，请稍候。"
         :mutation-actions-disabled="projectInteractionBlocked"
         mutation-actions-disabled-reason="任务执行或主进程操作期间，只读历史仍可查看，修改入口暂不可用。"
-        :has-more-sessions="Boolean(taskHistory.taskCursor.value)"
-        :loading-more-sessions="taskHistory.loadingMoreTasks.value"
+        :has-more-tasks="Boolean(taskHistory.taskCursor.value)"
+        :loading-more-tasks="taskHistory.loadingMoreTasks.value"
         @new-chat="startNewChat"
         @open-project="chooseWorkspace"
         @open-settings="openProviderSettings"
-        @select-session="selectTask"
+        @select-task="selectTask"
         @select-project="selectProject"
-        @delete-session="requestTaskDeletion"
+        @delete-task="requestTaskDeletion"
         @remove-project="requestProjectRemoval"
         @delete-project-history="requestProjectHistoryDeletion"
-        @load-more-sessions="taskHistory.loadMoreTasks"
+        @load-more-tasks="taskHistory.loadMoreTasks"
       />
 
       <main class="chat-panel">
@@ -1652,128 +1589,26 @@ function scrollMessagesToBottom(): void {
             >
               {{ taskHistory.loadingMoreTurns.value ? '正在加载…' : '加载更早轮次' }}
             </button>
-            <!-- 按“一轮指令”聚合渲染；锚点目标 id 仍挂在轮次容器上 -->
-            <article
-              v-for="turn in timelineTurns"
-              :id="turn.user ? turnAnchorDomId(turn.id) : undefined"
-              :key="turn.id"
-              class="turn-group"
-              :data-anchor="turn.user ? 'true' : 'false'"
-              :data-active-anchor="turn.user && activeTurnAnchorId === turn.id ? 'true' : 'false'"
-            >
-              <div v-if="turn.user" class="turn-user">
-                <div class="turn-user-bubble">
-                  <p>{{ turn.user.text }}</p>
-                </div>
-              </div>
-
-              <div
-                v-if="turn.showProcess"
-                class="turn-process"
-                :data-active="turn.active || turn.streaming ? 'true' : 'false'"
-              >
-                <button
-                  type="button"
-                  class="turn-process-toggle"
-                  :aria-expanded="isThoughtExpanded(turn) ? 'true' : 'false'"
-                  :title="isThoughtExpanded(turn) ? '收起思考过程' : '展开思考过程'"
-                  @click="toggleThoughtExpanded(turn.id)"
-                >
-                  <span class="turn-process-leading">
-                    <CircleNotch v-if="turn.active || turn.streaming" :size="14" class="spin" />
-                    <CaretDown v-else-if="isThoughtExpanded(turn)" :size="14" />
-                    <CaretRight v-else :size="14" />
-                    <span class="turn-process-title">{{ processTitle(turn) }}</span>
-                    <span
-                      v-if="shouldShowTurnDuration(turn)"
-                      class="message-duration"
-                      :data-live="turn.active || turn.streaming ? 'true' : 'false'"
-                    >
-                      <span
-                        >{{ turn.active || turn.streaming ? '已执行' : '耗时' }}
-                        {{ turnDurationText(turn) }}</span
-                      >
-                    </span>
-                  </span>
-                  <span class="message-summary" :title="turnThoughtSummary(turn)">
-                    {{ turnThoughtSummary(turn) }}
-                  </span>
-                </button>
-
-                <div v-if="isThoughtExpanded(turn)" class="turn-process-body">
-                  <div v-if="turn.thoughts.length" class="turn-thoughts">
-                    <p v-for="thought in turn.thoughts" :key="thought.id">
-                      {{ thought.text }}<span v-if="thought.streaming" class="stream-caret" />
-                    </p>
-                  </div>
-                  <p v-else class="turn-process-placeholder">
-                    任务处理中，思考内容会在这里完整展开，也可随时收起。
-                  </p>
-                </div>
-              </div>
-
-              <div
-                v-if="turn.answers.length"
-                class="turn-answer"
-                :data-streaming="turn.answers.some((item) => item.streaming) ? 'true' : 'false'"
-              >
-                <div class="turn-answer-avatar">
-                  <Robot :size="17" weight="fill" />
-                </div>
-                <div class="turn-answer-body">
-                  <div class="message-meta">
-                    <span class="message-author">Grok Build</span>
-                    <!-- 无思考的轮次把整轮耗时挂在最终回复上，保证一条指令仍只有一个计时 -->
-                    <span
-                      v-if="!turn.showProcess && shouldShowTurnDuration(turn)"
-                      class="message-duration"
-                      :data-live="turn.active || turn.streaming ? 'true' : 'false'"
-                    >
-                      <span
-                        >{{ turn.active || turn.streaming ? '已执行' : '耗时' }}
-                        {{ turnDurationText(turn) }}</span
-                      >
-                    </span>
-                  </div>
-                  <div class="turn-answer-content">
-                    <p v-for="answer in turn.answers" :key="answer.id">
-                      {{ answer.text }}<span v-if="answer.streaming" class="stream-caret" />
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div v-if="turn.errors.length" class="turn-error">
-                <div class="turn-answer-avatar" data-role="error">
-                  <WarningCircle :size="17" weight="fill" />
-                </div>
-                <div class="turn-answer-body">
-                  <div class="message-meta">
-                    <span class="message-author">运行提示</span>
-                  </div>
-                  <div class="turn-answer-content">
-                    <p v-for="error in turn.errors" :key="error.id">{{ error.text }}</p>
-                  </div>
-                </div>
-              </div>
-              <button
-                v-if="
-                  activeTaskView?.mode === 'history' &&
-                  turn.turnId &&
-                  taskHistory.hasMoreEvents(turn.turnId)
-                "
-                class="history-load-more"
-                type="button"
-                :disabled="taskHistory.loadingEventTurnIds.value.includes(turn.turnId)"
-                @click="loadMoreHistoryEvents(turn.turnId)"
-              >
-                {{
-                  taskHistory.loadingEventTurnIds.value.includes(turn.turnId)
-                    ? '正在加载…'
-                    : '加载本轮更多事件'
-                }}
-              </button>
-            </article>
+            <ExecutionTimeline
+              v-if="taskTimeline.activeTimeline.value"
+              :model="taskTimeline.activeTimeline.value"
+              :loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
+              :event-after-sequence-by-turn="taskHistory.eventAfterSequenceByTurn.value"
+              :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
+              @load-more-events="loadMoreHistoryEvents"
+            />
+            <TaskResultReview
+              v-if="taskTimeline.activeTimeline.value?.turns.length"
+              :model="taskTimeline.activeTimeline.value.resultReview"
+              :can-resume="
+                activeTaskView?.mode === 'history' &&
+                Boolean(taskHistory.openedTask.value?.resumable)
+              "
+              :resume-pending="resumePending"
+              :can-create-task="!newChatDisabled"
+              @resume-task="resumeHistoryTask"
+              @create-task="startNewChat"
+            />
           </section>
         </div>
 

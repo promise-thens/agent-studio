@@ -147,7 +147,31 @@ describe('Task execution consumer', () => {
 
     consumer.accept({ ...EMPTY, executionRevision: 1 })
     consumer.accept({ ...EMPTY, executionRevision: 2 })
-    expect(published).toEqual([0, 0, 1, 2, 3])
+    expect(published).toEqual([0, 1, 2, 3])
+  })
+
+  it('resync 返回同 epoch 旧 revision 时不回滚已经接受的 Push', async () => {
+    const resync = deferred<TaskExecutionSnapshot>()
+    let queryCount = 0
+    const published: number[] = []
+    const consumer = createTaskExecutionConsumer({
+      getSnapshot: () => {
+        queryCount += 1
+        return queryCount === 1 ? Promise.resolve(EMPTY) : resync.promise
+      },
+      subscribe: () => () => undefined,
+      onSnapshot: (snapshot) => published.push(snapshot.executionRevision)
+    })
+    await consumer.start()
+
+    consumer.accept({ ...EMPTY, executionRevision: 3 })
+    consumer.accept({ ...EMPTY, executionRevision: 1 })
+    consumer.accept({ ...EMPTY, executionRevision: 2 })
+    expect(published).toEqual([0, 1, 2, 3])
+    resync.resolve({ ...EMPTY, executionRevision: 2 })
+    await Promise.resolve()
+
+    expect(published).toEqual([0, 1, 2, 3])
   })
 
   it('epoch 变化触发全量替换，dispose 后忽略迟到响应', async () => {

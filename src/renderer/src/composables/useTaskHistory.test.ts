@@ -90,7 +90,8 @@ describe('useTaskHistory', () => {
                   text: '完成'
                 }
               ],
-              ...(after === 0 ? { nextCursor: '1' } : {})
+              ...(after === 0 ? { nextAfterSequence: 1 } : {}),
+              watermark: after + 1
             })
           ),
           listPermissionAudits: vi.fn(async (taskId: string, cursor?: string) =>
@@ -149,6 +150,9 @@ describe('useTaskHistory', () => {
     await history.loadMorePermissionAudits()
     expect(history.openedTurns.value.map((turn) => turn.turnId)).toEqual(['turn-1', 'turn-2'])
     expect(history.eventsByTurn.value['turn-1']?.map((event) => event.sequence)).toEqual([1, 2])
+    expect(history.eventAfterSequenceByTurn.value['turn-1']).toBeNull()
+    expect(history.eventWatermarkByTurn.value['turn-1']).toBe(2)
+    expect(window.task.listEvents).toHaveBeenLastCalledWith('task-1', 'turn-1', 1, 200)
     expect(history.hasMoreEvents('turn-1')).toBe(false)
     expect(history.permissionAudits.value.map((audit) => audit.auditId)).toEqual([
       'audit-1',
@@ -380,7 +384,8 @@ describe('useTaskHistory', () => {
             kind: 'agent-message',
             text: '旧响应'
           }
-        ]
+        ],
+        watermark: 2
       })
     )
     await loadingOldEvents

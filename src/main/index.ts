@@ -11,6 +11,7 @@ import type {
   ProviderModelOption
 } from '../shared/provider'
 import { AgentService, AgentServiceError } from './agent/agent-service'
+import { projectPublicAgentEvent } from './agent/agent-event-projection'
 import { registerAgentIpcHandlers } from './agent/ipc'
 import { registerTaskIpcHandlers } from './agent/task-ipc'
 import { TaskStore } from './agent/task-store'
@@ -171,9 +172,8 @@ async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | nul
       onStatus: (status) =>
         sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.status, status),
       onEvent: (event) => {
-        // TaskExecutor/AgentService 先收束主进程事实，再向 Renderer 发布实时内容。
+        // TaskExecutor 负责持久化确认后发布；旧 Service 路径只收束兼容历史，不得绕过提交门。
         if (!taskExecutor?.handleRuntimeEvent(event)) agentService?.handleRuntimeEvent(event)
-        sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.event, event)
       },
       onPermission: (request) => {
         const service = agentService
@@ -204,7 +204,13 @@ async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | nul
     onCancelTimeout: (identity) =>
       requirePermissionBroker().cancelTurn(identity.taskId, identity.turnId),
     onSnapshot: (snapshot) =>
-      sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.executionUpdate, snapshot)
+      sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.executionUpdate, snapshot),
+    onEvent: (event) =>
+      sendToTrustedRenderer(
+        rendererTrust,
+        AGENT_PUSH_CHANNELS.event,
+        projectPublicAgentEvent(event, redactProviderText)
+      )
   })
   agentService = new AgentService(adapter, new TaskExecutionController(), {
     projectRegistry,
@@ -219,7 +225,13 @@ async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | nul
     redactText: redactProviderText,
     permissionBroker: requirePermissionBroker(),
     taskExecutor,
-    operationGate
+    operationGate,
+    onEvent: (event) =>
+      sendToTrustedRenderer(
+        rendererTrust,
+        AGENT_PUSH_CHANNELS.event,
+        projectPublicAgentEvent(event, redactProviderText)
+      )
   })
 }
 
@@ -341,8 +353,13 @@ function registerIpcHandlers(): void {
         listTasks: (projectId, cursor, limit) => store.listTasks(projectId, cursor, limit),
         getTaskDetail: (taskId) => store.getTaskDetail(taskId),
         listTurns: (taskId, cursor, limit) => store.listTurns(taskId, cursor, limit),
-        listEvents: (taskId, turnId, afterSequence, limit) =>
-          store.listEvents(taskId, turnId, afterSequence, limit),
+        listEvents: async (taskId, turnId, afterSequence, limit) => {
+          const page = await store.listEvents(taskId, turnId, afterSequence, limit)
+          return {
+            ...page,
+            items: page.items.map((event) => projectPublicAgentEvent(event, redactProviderText))
+          }
+        },
         listPermissionAudits: (taskId, cursor, limit) =>
           requirePermissionAuditStore().list(taskId, cursor, limit),
         resumeTask: (taskId) => service.resumeTask(taskId),

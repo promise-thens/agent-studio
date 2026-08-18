@@ -331,7 +331,7 @@ async function selectSidebarTaskById(
     { currentProjectId: projectId, currentTaskId: taskId }
   )
   if (index < 0) throw new Error('侧栏中未找到受控 Task。')
-  const item = page.locator('section[aria-label="最近"] .session-item').nth(index)
+  const item = page.locator('section[aria-label="任务"] .session-item').nth(index)
   await expect(item).toBeVisible()
   if (force) await item.evaluate((element) => (element as HTMLButtonElement).click())
   else await item.click()
@@ -339,7 +339,7 @@ async function selectSidebarTaskById(
 }
 
 async function selectSidebarTaskByTitle(page: Page, title: string, force = false): Promise<void> {
-  const item = page.locator('section[aria-label="最近"] .session-item').filter({ hasText: title })
+  const item = page.locator('section[aria-label="任务"] .session-item').filter({ hasText: title })
   await expect(item).toHaveCount(1)
   if (force) await item.evaluate((element) => (element as HTMLButtonElement).click())
   else await item.click()
@@ -360,9 +360,9 @@ async function expectExecutionMutationsDisabled(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: '新对话' })).toBeDisabled()
   await expect(page.getByRole('button', { name: '打开项目' })).toBeDisabled()
   await expect(page.locator('section[aria-label="项目"] .sidebar-item-main').first()).toBeEnabled()
-  await expect(page.locator('section[aria-label="最近"] .session-item').first()).toBeEnabled()
+  await expect(page.locator('section[aria-label="任务"] .session-item').first()).toBeEnabled()
   await expect(
-    page.locator('section[aria-label="最近"] .sidebar-row-action').first()
+    page.locator('section[aria-label="任务"] .sidebar-row-action').first()
   ).toBeDisabled()
 }
 

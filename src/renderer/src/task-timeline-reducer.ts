@@ -1,0 +1,715 @@
+import type {
+  AgentCapabilityState,
+  AgentContextUsage,
+  AgentPlanEntry,
+  AgentToolStatus,
+  AgentTurnUsage
+} from '../../shared/agent'
+import type { PublicAgentEvent } from '../../shared/agent-event'
+import type { TaskExecutionSnapshot, TaskExecutionState } from '../../shared/task-execution'
+import type {
+  PermissionAuditRecord,
+  TaskHistoryDetail,
+  TurnHistoryRecord,
+  TurnModelSnapshot
+} from '../../shared/task-history'
+
+export interface AdmittedTurnFact {
+  taskId: string
+  turnId: string
+  executionId: string
+  promptDisplayText: string
+  model: TurnModelSnapshot
+  acceptedAt: string
+}
+
+export type VersionedFactSlot<T> =
+  | { kind: 'empty' }
+  | { kind: 'accepted'; revision: number; value: T }
+  | { kind: 'conflict'; revision: number }
+
+export type TimelineEventSlot =
+  | { kind: 'accepted'; event: PublicAgentEvent }
+  | { kind: 'conflict'; sequence: number; observedKinds: PublicAgentEvent['kind'][] }
+
+export type TimelineAuditSlot =
+  { kind: 'accepted'; audit: PermissionAuditRecord } | { kind: 'conflict'; auditId: string }
+
+export type TimelineIntegrityIssueCode =
+  | 'task-revision-conflict'
+  | 'turn-revision-conflict'
+  | 'event-sequence-conflict'
+  | 'audit-id-conflict'
+  | 'identity-mismatch'
+  | 'multiple-terminal-events'
+  | 'post-terminal-event'
+  | 'status-conflict'
+
+export interface TimelineIntegrityIssue {
+  code: TimelineIntegrityIssueCode
+  taskId: string
+  turnId?: string
+  sequence?: number
+  revision?: number
+  auditId?: string
+}
+
+export interface TimelineTurnFacts {
+  taskId: string
+  turnId: string
+  admission?: AdmittedTurnFact
+  record: VersionedFactSlot<TurnHistoryRecord>
+  eventsBySequence: Record<number, TimelineEventSlot>
+  auditsById: Record<string, TimelineAuditSlot>
+}
+
+export interface TaskTimelineFacts {
+  taskId: string
+  task: VersionedFactSlot<TaskHistoryDetail>
+  turnsById: Record<string, TimelineTurnFacts>
+  integrityIssuesByKey: Record<string, TimelineIntegrityIssue>
+}
+
+export type TaskTimelineFactAction =
+  | { type: 'task/upsert'; task: TaskHistoryDetail }
+  | { type: 'turn/admitted'; admission: AdmittedTurnFact }
+  | { type: 'turns/upsert'; turns: readonly TurnHistoryRecord[] }
+  | { type: 'events/ingest-public'; events: readonly PublicAgentEvent[] }
+  | { type: 'permission-audits/merge'; audits: readonly PermissionAuditRecord[] }
+
+export type TaskTimelineNode =
+  | TimelineTextNode
+  | TimelinePlanNode
+  | TimelineToolNode
+  | TimelinePermissionNode
+  | TimelineDiffNode
+  | TimelineUsageNode
+  | TimelineErrorNode
+  | TimelineCompletionNode
+  | TimelineAvailabilityNode
+
+interface TimelineNodeBase {
+  nodeId: string
+  taskId: string
+  turnId: string
+  firstSequence?: number
+  source: 'turn-record' | 'agent-event' | 'permission-audit' | 'admission'
+  capabilityState?: AgentCapabilityState
+  truncated?: true
+}
+
+export interface TimelineTextNode extends TimelineNodeBase {
+  kind: 'user-prompt' | 'message' | 'thought'
+  text: string
+}
+
+export interface TimelinePlanNode extends TimelineNodeBase {
+  kind: 'plan'
+  entries: AgentPlanEntry[]
+}
+
+export interface TimelineToolNode extends TimelineNodeBase {
+  kind: 'tool'
+  toolCallId: string
+  title: string
+  status: AgentToolStatus | 'unknown'
+}
+
+export interface TimelinePermissionNode extends TimelineNodeBase {
+  kind: 'permission-audit'
+  audit: PermissionAuditRecord
+}
+
+export interface TimelineDiffNode extends TimelineNodeBase {
+  kind: 'diff-reference'
+  changedPathCount: number
+  pathSummaries: string[]
+  availability: 'unavailable'
+  reason: string
+}
+
+export interface TimelineUsageNode extends TimelineNodeBase {
+  kind: 'usage'
+  usage: AgentContextUsage | AgentTurnUsage
+}
+
+export interface TimelineErrorNode extends TimelineNodeBase {
+  kind: 'error'
+  message: string
+  recoverable: boolean
+  code?: string
+}
+
+export interface TimelineCompletionNode extends TimelineNodeBase {
+  kind: 'turn-complete'
+  outcome: string
+}
+
+export interface TimelineAvailabilityNode extends TimelineNodeBase {
+  kind: 'availability'
+  reason: 'history-truncated' | 'event-truncated' | 'integrity-conflict'
+  message: string
+}
+
+export interface TurnUsageViewModel {
+  turnUsage?: {
+    value: AgentTurnUsage
+    source: 'turn-record' | 'turn-complete' | 'usage-event'
+  }
+  contextSamples: AgentContextUsage[]
+}
+
+export interface TurnTimelineViewModel {
+  taskId: string
+  turnId: string
+  prompt: string
+  model: TurnModelSnapshot
+  status: TaskExecutionState | 'pending'
+  statusProvisional: boolean
+  statusConflict: boolean
+  createdAt: string
+  dispatchedAt?: string
+  endedAt?: string
+  nodes: TaskTimelineNode[]
+  usage: TurnUsageViewModel
+  historyTruncated: boolean
+  truncationReason?: TurnHistoryRecord['truncationReason']
+}
+
+export interface TaskResultReviewModel {
+  status: { value: TaskExecutionState | 'pending'; source: 'turn-record' | 'execution' }
+  usage: TurnUsageViewModel['turnUsage'] | { availability: 'not-observed' }
+  changedPaths: { count: number; availability: 'observed' | 'not-observed' }
+  validations: { count: number; availability: 'unavailable' | 'not-observed'; reason?: string }
+  artifacts: { count: number; availability: 'unavailable' | 'not-observed'; reason?: string }
+  warnings: string[]
+}
+
+export interface TaskTimelineViewModel {
+  taskId: string
+  title: string
+  turns: TurnTimelineViewModel[]
+  resultReview: TaskResultReviewModel
+  integrityIssues: TimelineIntegrityIssue[]
+}
+
+export interface TimelineSelectorContext {
+  executionSnapshot: TaskExecutionSnapshot
+}
+
+export function createTaskTimelineFacts(taskId: string): TaskTimelineFacts {
+  return { taskId, task: { kind: 'empty' }, turnsById: {}, integrityIssuesByKey: {} }
+}
+
+export function reduceTaskTimelineFacts(
+  state: TaskTimelineFacts,
+  action: TaskTimelineFactAction
+): TaskTimelineFacts {
+  const next = structuredClone(state)
+  if (action.type === 'task/upsert') {
+    if (action.task.taskId !== state.taskId)
+      return addIssue(next, { code: 'identity-mismatch', taskId: state.taskId })
+    next.task = mergeVersioned(
+      next.task,
+      action.task.revision,
+      action.task,
+      next,
+      'task-revision-conflict'
+    )
+    return next
+  }
+  if (action.type === 'turn/admitted') {
+    if (action.admission.taskId !== state.taskId)
+      return addIssue(next, {
+        code: 'identity-mismatch',
+        taskId: state.taskId,
+        turnId: action.admission.turnId
+      })
+    const turn = ensureTurn(next, action.admission.turnId)
+    turn.admission ??= structuredClone(action.admission)
+    return next
+  }
+  if (action.type === 'turns/upsert') {
+    for (const record of action.turns) {
+      if (record.taskId !== state.taskId) {
+        addIssue(next, { code: 'identity-mismatch', taskId: state.taskId, turnId: record.turnId })
+        continue
+      }
+      const turn = ensureTurn(next, record.turnId)
+      turn.record = mergeVersioned(
+        turn.record,
+        record.revision,
+        record,
+        next,
+        'turn-revision-conflict',
+        record.turnId
+      )
+    }
+    return next
+  }
+  if (action.type === 'events/ingest-public') {
+    for (const event of action.events) ingestEvent(next, event)
+    return next
+  }
+  for (const audit of action.audits) ingestAudit(next, audit)
+  return next
+}
+
+export function selectTaskTimeline(
+  facts: TaskTimelineFacts,
+  context: TimelineSelectorContext
+): TaskTimelineViewModel {
+  const turns = Object.values(facts.turnsById)
+    .map((turn) => selectTurnTimeline(turn, context, facts))
+    .sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.turnId.localeCompare(right.turnId)
+    )
+  const latest = turns.at(-1)
+  return {
+    taskId: facts.taskId,
+    title: facts.task.kind === 'accepted' ? facts.task.value.title : 'Task',
+    turns,
+    resultReview: selectTaskResultReview(facts, context, latest),
+    integrityIssues: Object.values(facts.integrityIssuesByKey)
+  }
+}
+
+function selectTurnTimeline(
+  turn: TimelineTurnFacts,
+  context: TimelineSelectorContext,
+  facts: TaskTimelineFacts
+): TurnTimelineViewModel {
+  const record = turn.record.kind === 'accepted' ? turn.record.value : undefined
+  const prompt = record?.promptDisplayText ?? turn.admission?.promptDisplayText ?? '用户指令不可用'
+  const model = record?.model ?? turn.admission?.model ?? { modelId: 'unknown' }
+  const createdAt = record?.createdAt ?? turn.admission?.acceptedAt ?? ''
+  const acceptedEvents = Object.values(turn.eventsBySequence)
+    .filter(
+      (slot): slot is Extract<TimelineEventSlot, { kind: 'accepted' }> => slot.kind === 'accepted'
+    )
+    .map((slot) => slot.event)
+    .sort((left, right) => left.sequence - right.sequence)
+  const terminalEvents = acceptedEvents.filter((event) => event.kind === 'turn-complete')
+  const terminalSequence = terminalEvents.at(0)?.sequence
+  if (terminalEvents.length > 1)
+    addDerivedIssue(facts, {
+      code: 'multiple-terminal-events',
+      taskId: turn.taskId,
+      turnId: turn.turnId
+    })
+  const trustedEvents = acceptedEvents.filter(
+    (event) => terminalSequence == null || event.sequence <= terminalSequence
+  )
+  if (
+    acceptedEvents.some((event) => terminalSequence != null && event.sequence > terminalSequence)
+  ) {
+    addDerivedIssue(facts, {
+      code: 'post-terminal-event',
+      taskId: turn.taskId,
+      turnId: turn.turnId
+    })
+  }
+  const nodes = projectNodes(turn, trustedEvents, record)
+  const status = selectTurnStatus(turn, context.executionSnapshot)
+  return {
+    taskId: turn.taskId,
+    turnId: turn.turnId,
+    prompt,
+    model,
+    status: status.value,
+    statusProvisional: status.provisional,
+    statusConflict: status.conflict,
+    createdAt,
+    ...(record?.dispatchedAt ? { dispatchedAt: record.dispatchedAt } : {}),
+    ...(record?.endedAt ? { endedAt: record.endedAt } : {}),
+    nodes,
+    usage: selectTurnUsage(record, trustedEvents),
+    historyTruncated: record?.historyTruncated === true,
+    ...(record?.truncationReason ? { truncationReason: record.truncationReason } : {})
+  }
+}
+
+function projectNodes(
+  turn: TimelineTurnFacts,
+  events: PublicAgentEvent[],
+  record?: TurnHistoryRecord
+): TaskTimelineNode[] {
+  const nodes: TaskTimelineNode[] = []
+  const prompt = record?.promptDisplayText ?? turn.admission?.promptDisplayText
+  if (prompt)
+    nodes.push({
+      nodeId: `${turn.taskId}:${turn.turnId}:user`,
+      taskId: turn.taskId,
+      turnId: turn.turnId,
+      source: record ? 'turn-record' : 'admission',
+      kind: 'user-prompt',
+      text: prompt
+    })
+  const messageNodes = new Map<string, TimelineTextNode>()
+  let previousAnonymousText:
+    | {
+        kind: 'agent-message' | 'agent-thought'
+        sequence: number
+        node: TimelineTextNode
+      }
+    | undefined
+  const tools = new Map<string, TimelineToolNode>()
+  for (const event of events) {
+    const base = {
+      taskId: event.taskId,
+      turnId: event.turnId,
+      firstSequence: event.sequence,
+      source: 'agent-event' as const,
+      capabilityState: event.capabilityState,
+      ...(event.truncated ? { truncated: true as const } : {})
+    }
+    if (event.kind === 'agent-message' || event.kind === 'agent-thought') {
+      const key = `${event.taskId}:${event.turnId}:${event.kind}:id:${event.messageId ?? ''}`
+      const existing = event.messageId
+        ? messageNodes.get(key)
+        : previousAnonymousText?.kind === event.kind &&
+            previousAnonymousText.sequence + 1 === event.sequence
+          ? previousAnonymousText.node
+          : undefined
+      const node: TimelineTextNode = existing ?? {
+        ...base,
+        nodeId: key,
+        kind: event.kind === 'agent-message' ? 'message' : 'thought',
+        text: event.text
+      }
+      if (existing) node.text += event.text
+      else {
+        nodes.push(node)
+      }
+      if (event.messageId) {
+        messageNodes.set(key, node)
+        previousAnonymousText = undefined
+      } else {
+        // 流式 Runtime 未提供 messageId 时，只合并相邻同类片段，保留工具与消息边界。
+        previousAnonymousText = { kind: event.kind, sequence: event.sequence, node }
+      }
+      continue
+    }
+    previousAnonymousText = undefined
+    if (event.kind === 'plan')
+      nodes.push({
+        ...base,
+        nodeId: `${event.taskId}:${event.turnId}:plan:${event.sequence}`,
+        kind: 'plan',
+        entries: event.entries.map((entry) => ({ ...entry }))
+      })
+    else if (event.kind === 'tool-call' || event.kind === 'tool-update') {
+      const key = `${event.taskId}:${event.turnId}:tool:${event.toolCallId}`
+      const existing = tools.get(key)
+      if (existing) {
+        if (event.title) existing.title = event.title
+        if (event.status) existing.status = event.status
+      } else {
+        const node: TimelineToolNode = {
+          ...base,
+          nodeId: key,
+          kind: 'tool',
+          toolCallId: event.toolCallId,
+          title: event.title ?? event.toolCallId,
+          status: event.status ?? 'unknown'
+        }
+        tools.set(key, node)
+        nodes.push(node)
+      }
+    } else if (event.kind === 'diff') {
+      for (const [index, reference] of event.references.entries())
+        nodes.push({
+          ...base,
+          nodeId: `${event.taskId}:${event.turnId}:diff:${event.sequence}:${index}`,
+          kind: 'diff-reference',
+          changedPathCount: reference.changedPathCount,
+          pathSummaries: [...reference.pathSummaries],
+          availability: reference.availability,
+          reason: reference.reason
+        })
+    } else if (event.kind === 'usage') {
+      nodes.push({
+        ...base,
+        nodeId: `${event.taskId}:${event.turnId}:usage:${event.sequence}`,
+        kind: 'usage',
+        usage: structuredClone(event.usage)
+      })
+    } else if (event.kind === 'error') {
+      nodes.push({
+        ...base,
+        nodeId: `${event.taskId}:${event.turnId}:error:${event.sequence}`,
+        kind: 'error',
+        message: event.message,
+        recoverable: event.recoverable,
+        ...(event.code ? { code: event.code } : {})
+      })
+    } else if (event.kind === 'turn-complete') {
+      nodes.push({
+        ...base,
+        nodeId: `${event.taskId}:${event.turnId}:complete:${event.sequence}`,
+        kind: 'turn-complete',
+        outcome: event.outcome
+      })
+    }
+  }
+  for (const slot of Object.values(turn.auditsById))
+    if (slot.kind === 'accepted')
+      nodes.push({
+        nodeId: `${turn.taskId}:${turn.turnId}:audit:${slot.audit.auditId}`,
+        taskId: turn.taskId,
+        turnId: turn.turnId,
+        source: 'permission-audit',
+        kind: 'permission-audit',
+        audit: structuredClone(slot.audit)
+      })
+  if (record?.historyTruncated)
+    nodes.push({
+      nodeId: `${turn.taskId}:${turn.turnId}:history-truncated`,
+      taskId: turn.taskId,
+      turnId: turn.turnId,
+      source: 'turn-record',
+      kind: 'availability',
+      reason: 'history-truncated',
+      message: '部分执行历史因容量限制不可用。'
+    })
+  return nodes.sort(
+    (left, right) =>
+      (left.firstSequence ?? 0) - (right.firstSequence ?? 0) ||
+      left.nodeId.localeCompare(right.nodeId)
+  )
+}
+
+function selectTurnUsage(
+  record: TurnHistoryRecord | undefined,
+  events: PublicAgentEvent[]
+): TurnUsageViewModel {
+  const contextSamples = events
+    .filter(
+      (event): event is Extract<PublicAgentEvent, { kind: 'usage' }> =>
+        event.kind === 'usage' && event.usage.scope === 'context'
+    )
+    .map((event) => structuredClone(event.usage) as AgentContextUsage)
+  if (record?.usage)
+    return {
+      turnUsage: { value: structuredClone(record.usage), source: 'turn-record' },
+      contextSamples
+    }
+  const terminal = [...events]
+    .reverse()
+    .find(
+      (event): event is Extract<PublicAgentEvent, { kind: 'turn-complete' }> =>
+        event.kind === 'turn-complete' && event.usage?.scope === 'turn'
+    )
+  if (terminal?.usage)
+    return {
+      turnUsage: { value: structuredClone(terminal.usage), source: 'turn-complete' },
+      contextSamples
+    }
+  const usage = [...events]
+    .reverse()
+    .find(
+      (event): event is Extract<PublicAgentEvent, { kind: 'usage' }> =>
+        event.kind === 'usage' && event.usage.scope === 'turn'
+    )
+  return {
+    ...(usage
+      ? {
+          turnUsage: {
+            value: structuredClone(usage.usage) as AgentTurnUsage,
+            source: 'usage-event' as const
+          }
+        }
+      : {}),
+    contextSamples
+  }
+}
+
+function selectTurnStatus(
+  turn: TimelineTurnFacts,
+  snapshot: TaskExecutionSnapshot
+): { value: TaskExecutionState | 'pending'; provisional: boolean; conflict: boolean } {
+  const record = turn.record.kind === 'accepted' ? turn.record.value : undefined
+  const execution =
+    snapshot.execution?.taskId === turn.taskId && snapshot.execution.turnId === turn.turnId
+      ? snapshot.execution
+      : undefined
+  const persisted = record?.state
+  const persistedTerminal =
+    persisted != null && ['completed', 'failed', 'cancelled', 'interrupted'].includes(persisted)
+  const executionTerminal =
+    execution != null &&
+    ['completed', 'failed', 'cancelled', 'interrupted'].includes(execution.state)
+  if (persistedTerminal)
+    return {
+      value: persisted as TaskExecutionState,
+      provisional: false,
+      conflict: Boolean(execution && execution.state !== persisted)
+    }
+  if (execution) return { value: execution.state, provisional: executionTerminal, conflict: false }
+  return {
+    value: (persisted as TaskExecutionState | 'pending' | undefined) ?? 'pending',
+    provisional: false,
+    conflict: false
+  }
+}
+
+function selectTaskResultReview(
+  facts: TaskTimelineFacts,
+  _context: TimelineSelectorContext,
+  latest?: TurnTimelineViewModel
+): TaskResultReviewModel {
+  const status = latest?.status ?? 'pending'
+  const diffNodes =
+    latest?.nodes.filter((node): node is TimelineDiffNode => node.kind === 'diff-reference') ?? []
+  const record = latest ? facts.turnsById[latest.turnId]?.record : undefined
+  const turnRecord = record?.kind === 'accepted' ? record.value : undefined
+  const warnings: string[] = []
+  if (latest?.historyTruncated) warnings.push('部分执行历史不可用。')
+  if (latest?.statusConflict) warnings.push('实时执行状态与持久化状态不一致。')
+  return {
+    status: { value: status, source: latest?.statusProvisional ? 'execution' : 'turn-record' },
+    usage: latest?.usage.turnUsage ?? { availability: 'not-observed' },
+    changedPaths: diffNodes.length
+      ? {
+          count: diffNodes.reduce((total, node) => total + node.changedPathCount, 0),
+          availability: 'observed'
+        }
+      : { count: 0, availability: 'not-observed' },
+    validations: turnRecord?.validationIds?.length
+      ? {
+          count: turnRecord.validationIds.length,
+          availability: 'unavailable',
+          reason: 'Validation 服务尚未接入。'
+        }
+      : { count: 0, availability: 'not-observed' },
+    artifacts: turnRecord?.artifactIds?.length
+      ? {
+          count: turnRecord.artifactIds.length,
+          availability: 'unavailable',
+          reason: 'Artifact 服务尚未接入。'
+        }
+      : { count: 0, availability: 'not-observed' },
+    warnings
+  }
+}
+
+function ensureTurn(state: TaskTimelineFacts, turnId: string): TimelineTurnFacts {
+  return (state.turnsById[turnId] ??= {
+    taskId: state.taskId,
+    turnId,
+    record: { kind: 'empty' },
+    eventsBySequence: {},
+    auditsById: {}
+  })
+}
+
+function ingestEvent(state: TaskTimelineFacts, event: PublicAgentEvent): void {
+  if (
+    event.taskId !== state.taskId ||
+    !event.turnId ||
+    !Number.isSafeInteger(event.sequence) ||
+    event.sequence < 1
+  ) {
+    addIssue(state, { code: 'identity-mismatch', taskId: state.taskId, turnId: event.turnId })
+    return
+  }
+  const turn = ensureTurn(state, event.turnId)
+  const existing = turn.eventsBySequence[event.sequence]
+  if (!existing) {
+    turn.eventsBySequence[event.sequence] = { kind: 'accepted', event: structuredClone(event) }
+    return
+  }
+  if (existing.kind === 'accepted' && canonicalEqual(existing.event, event)) return
+  const kinds =
+    existing.kind === 'accepted'
+      ? [existing.event.kind, event.kind]
+      : [...existing.observedKinds, event.kind]
+  turn.eventsBySequence[event.sequence] = {
+    kind: 'conflict',
+    sequence: event.sequence,
+    observedKinds: [...new Set(kinds)].sort() as PublicAgentEvent['kind'][]
+  }
+  addIssue(state, {
+    code: 'event-sequence-conflict',
+    taskId: state.taskId,
+    turnId: event.turnId,
+    sequence: event.sequence
+  })
+}
+
+function ingestAudit(state: TaskTimelineFacts, audit: PermissionAuditRecord): void {
+  if (audit.taskId !== state.taskId || !audit.turnId) {
+    addIssue(state, { code: 'identity-mismatch', taskId: state.taskId, turnId: audit.turnId })
+    return
+  }
+  const turn = ensureTurn(state, audit.turnId)
+  const existing = turn.auditsById[audit.auditId]
+  if (!existing)
+    turn.auditsById[audit.auditId] = { kind: 'accepted', audit: structuredClone(audit) }
+  else if (existing.kind !== 'accepted' || !canonicalEqual(existing.audit, audit)) {
+    turn.auditsById[audit.auditId] = { kind: 'conflict', auditId: audit.auditId }
+    addIssue(state, {
+      code: 'audit-id-conflict',
+      taskId: state.taskId,
+      turnId: audit.turnId,
+      auditId: audit.auditId
+    })
+  }
+}
+
+function mergeVersioned<T extends object>(
+  slot: VersionedFactSlot<T>,
+  revision: number,
+  value: T,
+  state: TaskTimelineFacts,
+  issueCode: 'task-revision-conflict' | 'turn-revision-conflict',
+  turnId?: string
+): VersionedFactSlot<T> {
+  if (slot.kind === 'empty' || revision > slot.revision)
+    return { kind: 'accepted', revision, value: structuredClone(value) }
+  if (revision < slot.revision) return slot
+  if (slot.kind === 'accepted' && canonicalEqual(slot.value, value)) return slot
+  addIssue(state, {
+    code: issueCode,
+    taskId: state.taskId,
+    ...(turnId ? { turnId } : {}),
+    revision
+  })
+  return { kind: 'conflict', revision }
+}
+
+function canonicalEqual(left: unknown, right: unknown): boolean {
+  return canonicalStringify(left) === canonicalStringify(right)
+}
+
+function canonicalStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalStringify).join(',')}]`
+  if (value && typeof value === 'object')
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, nested]) => `${JSON.stringify(key)}:${canonicalStringify(nested)}`)
+      .join(',')}}`
+  return JSON.stringify(value)
+}
+
+function addIssue(state: TaskTimelineFacts, issue: TimelineIntegrityIssue): TaskTimelineFacts {
+  state.integrityIssuesByKey[issueKey(issue)] = issue
+  return state
+}
+
+function addDerivedIssue(state: TaskTimelineFacts, issue: TimelineIntegrityIssue): void {
+  if (!state.integrityIssuesByKey[issueKey(issue)])
+    state.integrityIssuesByKey[issueKey(issue)] = issue
+}
+
+function issueKey(issue: TimelineIntegrityIssue): string {
+  return [
+    issue.code,
+    issue.taskId,
+    issue.turnId ?? '',
+    issue.sequence ?? '',
+    issue.revision ?? '',
+    issue.auditId ?? ''
+  ].join('/')
+}

@@ -1,5 +1,6 @@
 import type { AgentPlanEntry, AgentToolStatus } from '../../shared/agent'
-import type { PersistedAgentEvent, TurnHistoryRecord } from '../../shared/task-history'
+import type { PublicAgentEvent } from '../../shared/agent-event'
+import type { TurnHistoryRecord } from '../../shared/task-history'
 
 export interface ProjectedChatMessage {
   id: string
@@ -28,7 +29,7 @@ export function createTaskHistoryProjection(): TaskHistoryProjection {
 /** 实时与历史事件共用同一纯投影，避免重启回放出现另一套 UI 语义。 */
 export function applyDisplayEvent(
   projection: TaskHistoryProjection,
-  event: PersistedAgentEvent
+  event: PublicAgentEvent
 ): TaskHistoryProjection {
   if (event.kind === 'agent-message' || event.kind === 'agent-thought') {
     const role = event.kind === 'agent-message' ? 'assistant' : 'thought'
@@ -65,7 +66,7 @@ export function applyDisplayEvent(
 /** Turn 按时间升序、事件按 sequence 升序回放，sequence 每个 Turn 从 1 独立开始。 */
 export function projectTaskHistory(
   turns: TurnHistoryRecord[],
-  eventsByTurn: Record<string, PersistedAgentEvent[]>
+  eventsByTurn: Record<string, PublicAgentEvent[]>
 ): TaskHistoryProjection {
   const projection = createTaskHistoryProjection()
   for (const turn of [...turns].sort((left, right) =>

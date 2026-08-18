@@ -1,0 +1,92 @@
+<script setup lang="ts">
+import type { TaskResultReviewModel } from '../task-timeline-reducer'
+
+defineProps<{
+  model: TaskResultReviewModel
+  canResume?: boolean
+  resumePending?: boolean
+  canCreateTask?: boolean
+}>()
+
+defineEmits<{
+  resumeTask: []
+  createTask: []
+}>()
+
+/** 将没有可用值的审阅能力明确标注为未观察或未接入，避免结果卡暗示成功。 */
+function availabilityLabel(model: {
+  availability: 'observed' | 'not-observed' | 'unavailable'
+  reason?: string
+}): string {
+  if (model.availability === 'observed') return '已观察'
+  return model.reason ?? (model.availability === 'unavailable' ? '能力尚未接入' : '本轮未提供')
+}
+
+function usageLabel(model: TaskResultReviewModel): string {
+  const usage = model.usage
+  if (!usage || 'availability' in usage) return usage ? availabilityLabel(usage) : '本轮未提供'
+  return `${usage.value.totalTokens ?? '已提供'} tokens（来源：${usage.source}）`
+}
+</script>
+
+<template>
+  <section class="task-result-review" aria-label="结果审阅">
+    <header class="task-result-review-heading">
+      <div>
+        <h2>结果审阅</h2>
+        <p>基于已持久化的 Turn、事件和审计事实生成。</p>
+      </div>
+      <span class="result-status" :data-status="model.status.value">
+        {{ model.status.value }}
+      </span>
+    </header>
+
+    <dl class="result-facts">
+      <div>
+        <dt>Usage</dt>
+        <dd>{{ usageLabel(model) }}</dd>
+      </div>
+      <div>
+        <dt>修改路径</dt>
+        <dd>
+          <template v-if="model.changedPaths.availability === 'observed'">
+            {{ model.changedPaths.count }} 个已观察路径
+          </template>
+          <template v-else>本轮未提供 Diff 引用</template>
+        </dd>
+      </div>
+      <div>
+        <dt>验证</dt>
+        <dd>{{ availabilityLabel(model.validations) }}</dd>
+      </div>
+      <div>
+        <dt>Artifact</dt>
+        <dd>{{ availabilityLabel(model.artifacts) }}</dd>
+      </div>
+    </dl>
+
+    <ul v-if="model.warnings.length" class="result-warnings" role="status">
+      <li v-for="warning in model.warnings" :key="warning">{{ warning }}</li>
+    </ul>
+
+    <div class="result-actions">
+      <button
+        v-if="canResume"
+        class="secondary-button"
+        type="button"
+        :disabled="resumePending"
+        @click="$emit('resumeTask')"
+      >
+        {{ resumePending ? '正在继续…' : '继续同一 Task' }}
+      </button>
+      <button
+        class="secondary-button"
+        type="button"
+        :disabled="!canCreateTask"
+        @click="$emit('createTask')"
+      >
+        创建新 Task
+      </button>
+    </div>
+  </section>
+</template>

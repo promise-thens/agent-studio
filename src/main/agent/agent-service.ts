@@ -78,6 +78,7 @@ export interface AgentServiceOptions {
   permissionBroker?: PermissionBroker
   taskExecutor?: TaskExecutor
   operationGate?: OperationGate
+  onEvent?: (event: AgentEvent) => void
 }
 
 interface AgentTaskRecord extends AgentTaskRuntimeState {
@@ -132,6 +133,7 @@ export class AgentService {
   private readonly permissionBroker?: PermissionBroker
   private readonly taskExecutor?: TaskExecutor
   private readonly operationGate?: OperationGate
+  private readonly onEvent: (event: AgentEvent) => void
   private readonly historyWrites = new Map<string, Promise<void>>()
   private readonly runtimePermissionRequests = new Map<string, AgentRuntimePermissionRequest>()
 
@@ -149,6 +151,7 @@ export class AgentService {
     this.permissionBroker = options.permissionBroker
     this.taskExecutor = options.taskExecutor
     this.operationGate = options.operationGate
+    this.onEvent = options.onEvent ?? (() => undefined)
     for (const persistedTask of this.taskStore?.listTaskRecords() ?? []) {
       const task = restoreRuntimeTask(persistedTask)
       this.tasks.set(task.taskId, task)
@@ -478,14 +481,14 @@ export class AgentService {
     ) {
       return
     }
-    this.queueHistoryWrite(
-      event.taskId,
-      event.turnId,
-      () =>
-        this.taskStore
-          ?.appendEvent(projectPersistedAgentEvent(event, this.redactText))
-          .then(() => undefined) ?? Promise.resolve()
-    )
+    this.queueHistoryWrite(event.taskId, event.turnId, async () => {
+      const result =
+        (await this.taskStore?.appendEvent(projectPersistedAgentEvent(event, this.redactText))) ??
+        null
+      if (result?.kind === 'committed' || result?.kind === 'repaired') {
+        this.safeNotifyCommittedEvent(event)
+      }
+    })
     if (event.kind !== 'turn-complete') return
 
     this.finishTurn(event.taskId, event.turnId, event.outcome)
@@ -792,6 +795,14 @@ export class AgentService {
     return this.projectRegistry
       ? this.projectRegistry.resolveAvailableRoot(projectIdOrWorkspace)
       : validateWorkspace(projectIdOrWorkspace)
+  }
+
+  private safeNotifyCommittedEvent(event: AgentEvent): void {
+    try {
+      this.onEvent(event)
+    } catch {
+      // Renderer observer 失败不能回滚已提交的历史事实。
+    }
   }
 
   private queueHistoryWrite(taskId: string, turnId: string, operation: () => Promise<void>): void {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentEvent, AgentRuntimeCapabilitySnapshot } from '../../shared/agent'
+import type { AgentEvent, AgentRuntimeCapabilitySnapshot, AgentTurnUsage } from '../../shared/agent'
 import type {
   TaskExecutionCancellationRequest,
   QueuedTaskExecution,
@@ -70,6 +70,11 @@ interface ActiveExecution {
   > | null
   firstHistoryError: unknown
   historyTail: Promise<void>
+  nextExpectedEventSequence: number
+  eventHistoryTruncated: boolean
+  terminalEventUsage?: AgentTurnUsage
+  acceptedEvents: AgentEvent[]
+  publishedEventSequences: Set<number>
   terminalPreparation: Promise<void>
   completionPromise: Promise<void>
   resolveCompletion: () => void
@@ -252,6 +257,10 @@ export class TaskExecutor {
         terminalCandidate: null,
         firstHistoryError: null,
         historyTail: Promise.resolve(),
+        nextExpectedEventSequence: 1,
+        eventHistoryTruncated: false,
+        acceptedEvents: [],
+        publishedEventSequences: new Set(),
         terminalPreparation: Promise.resolve(),
         completionPromise: completion.promise,
         resolveCompletion: completion.resolve,
@@ -270,15 +279,34 @@ export class TaskExecutor {
 
   handleRuntimeEvent(event: AgentEvent): boolean {
     const active = this.active
-    if (!active || !matchesEvent(active, event)) return false
-    this.queueHistory(active, () =>
-      this.taskStore
-        .appendEvent(projectPersistedAgentEvent(event, this.redactText))
-        .then(() => undefined)
-    )
-    this.safeNotifyEvent(event)
+    if (!active || !matchesEvent(active, event) || active.terminalCandidate) return false
+    if (event.sequence !== active.nextExpectedEventSequence) return false
+    active.nextExpectedEventSequence += 1
+    active.acceptedEvents.push(structuredClone(event))
     if (event.kind === 'turn-complete') {
-      void this.complete(active, toTerminalTransition(event.outcome, this.now()))
+      active.terminalCandidate = toTerminalTransition(event.outcome, this.now())
+      active.terminalEventUsage = event.usage
+    }
+    this.queueHistory(active, async () => {
+      if (active.eventHistoryTruncated) return
+      const result = await this.taskStore.appendEvent(
+        projectPersistedAgentEvent(event, this.redactText)
+      )
+      if (result.kind === 'committed') {
+        active.publishedEventSequences.add(event.sequence)
+        this.safeNotifyEvent(event)
+      } else if (result.kind === 'repaired') {
+        if (!active.publishedEventSequences.has(event.sequence)) {
+          active.publishedEventSequences.add(event.sequence)
+          this.safeNotifyEvent(event)
+        }
+      } else if (result.kind === 'history-truncated') {
+        active.eventHistoryTruncated = true
+      }
+    })
+    if (event.kind === 'turn-complete') {
+      const terminalCandidate = active.terminalCandidate
+      if (terminalCandidate) void this.complete(active, terminalCandidate)
     }
     return true
   }
@@ -391,6 +419,7 @@ export class TaskExecutor {
     if (!active || !active.terminalCandidate) return false
     active.terminalPromise = null
     active.firstHistoryError = null
+    active.historyTail = Promise.resolve()
     try {
       await this.complete(active, active.terminalCandidate)
       return !this.active
@@ -425,7 +454,8 @@ export class TaskExecutor {
         const committed = await this.taskStore.commitExecutionTerminal(active.identity, {
           state: terminal.state,
           endedAt: terminal.endedAt,
-          ...('reason' in terminal ? { reason: terminal.reason } : {})
+          ...('reason' in terminal ? { reason: terminal.reason } : {}),
+          ...(active.terminalEventUsage ? { usage: active.terminalEventUsage } : {})
         })
         if (
           committed.kind === 'committed' ||
@@ -505,14 +535,17 @@ export class TaskExecutor {
   }
 
   private queueHistory(active: ActiveExecution, operation: () => Promise<void>): void {
-    active.historyTail = active.historyTail
-      .catch((error) => {
-        if (!active.firstHistoryError) active.firstHistoryError = error
-      })
-      .then(operation)
-      .catch((error) => {
-        if (!active.firstHistoryError) active.firstHistoryError = error
-      })
+    const previous = active.historyTail.catch(() => undefined)
+    active.historyTail = previous.then(async () => {
+      if (active.firstHistoryError) throw active.firstHistoryError
+      try {
+        await operation()
+      } catch (error) {
+        active.firstHistoryError ??= error
+        throw error
+      }
+    })
+    void active.historyTail.catch(() => undefined)
   }
 
   private safeNotifyEvent(event: AgentEvent): void {

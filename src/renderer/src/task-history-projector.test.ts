@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { PersistedAgentEvent, TurnHistoryRecord } from '../../shared/task-history'
+import type { PublicAgentEvent } from '../../shared/agent-event'
+import type { TurnHistoryRecord } from '../../shared/task-history'
 import { projectTaskHistory } from './task-history-projector'
 
 const turn: TurnHistoryRecord = {
@@ -35,7 +36,7 @@ function base(sequence: number): {
 
 describe('Task 历史投影', () => {
   it('按 Turn sequence 回放消息、思考、计划和工具状态', () => {
-    const events: PersistedAgentEvent[] = [
+    const events: PublicAgentEvent[] = [
       { ...base(2), kind: 'agent-message', text: '完成' },
       { ...base(1), kind: 'agent-thought', text: '分析中' },
       {

@@ -133,6 +133,91 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
     }
   })
 
+  test('Timeline：持久化 Tool、权限审计与完成态在历史回放中投影正确', async () => {
+    const context = await launchScenario('E2E:TOOLCALL_CANCEL')
+    try {
+      await prepareWorkbench(context)
+      const prompt = '受控 Timeline ToolCall 场景'
+      await startScenarioPrompt(context.page, prompt)
+
+      await waitForAdapterEvents(
+        context.layout,
+        ['toolcall-A', 'toolcall-B'],
+        'adapter-permission-pending'
+      )
+      const dialog = context.page.getByRole('dialog', { name: '需要你的确认' })
+      await expect(dialog).toContainText('写入受控 marker A')
+      await writeControlledBarrier(context.layout, 'toolcall-cancel-A')
+      await waitForAdapterEvents(context.layout, ['toolcall-A'], 'adapter-permission-cancelled')
+      await expect(dialog).toContainText('写入受控 marker B')
+      await dialog.getByRole('button', { name: '仅允许这一次' }).click()
+
+      await waitForFixtureEvents(context.layout, (records) =>
+        hasFixtureEvents(records, [
+          'permission-resolved:A:cancelled',
+          'permission-resolved:B:selected:allow-toolcall-B'
+        ])
+      )
+      await expectMarker(context.layout, 'B\n')
+      const terminal = await waitForExecutionTerminal(context.page)
+      expect(terminal.execution?.state).toBe('completed')
+
+      const taskId = await waitForTaskId(context.page)
+      const audits = await waitForAudits(
+        context.page,
+        taskId,
+        (items) => items.filter((item) => item.operationType === 'write-file').length === 2
+      )
+      expect(audits.map((item) => item.reason)).toEqual(
+        expect.arrayContaining(['cancelled', 'user-allowed'])
+      )
+
+      const projectId = await projectIdForTask(context.page, taskId)
+      await selectSidebarTaskById(context.page, projectId, taskId)
+      await expect(context.page.getByText('只读历史', { exact: true })).toBeVisible()
+
+      const timeline = context.page.getByRole('region', { name: '执行时间线' })
+      const turn = timeline
+        .locator('article.timeline-turn[data-status="completed"]')
+        .filter({ hasText: prompt })
+      await expect(turn).toHaveCount(1)
+      await expect(turn.locator('.timeline-prompt')).toHaveText(prompt)
+      await expect(turn.locator('.timeline-node[data-kind="tool"]')).toContainText('toolcall-A')
+      await expect(turn.locator('.timeline-node[data-kind="tool"]')).toContainText('completed')
+      await expect(turn.locator('.timeline-node[data-kind="permission-audit"]')).toHaveCount(2)
+      await expect(turn.locator('.timeline-node[data-kind="turn-complete"]')).toContainText(
+        'completed'
+      )
+      await expect(context.page.getByRole('region', { name: '结果审阅' })).toContainText(
+        'completed'
+      )
+
+      // 切到没有 Task 的 Project 时，旧 Task 的 Timeline 与结果审阅不得继续显示。
+      const secondaryProject = context.page
+        .locator('section[aria-label="项目"]')
+        .getByTitle(context.layout.secondaryWorkspace, { exact: true })
+      await secondaryProject.click()
+      await expect(secondaryProject).toHaveClass(/active/)
+      await expect(context.page.getByRole('region', { name: '执行时间线' })).toHaveCount(0)
+      await expect(context.page.getByRole('region', { name: '结果审阅' })).toHaveCount(0)
+
+      const primaryProject = context.page
+        .locator('section[aria-label="项目"]')
+        .getByTitle(context.layout.workspace, { exact: true })
+      await primaryProject.click()
+      await expect(primaryProject).toHaveClass(/active/)
+      await selectSidebarTaskById(context.page, projectId, taskId)
+      await expect(context.page.getByRole('region', { name: '执行时间线' })).toBeVisible()
+      await expect(context.page.getByRole('region', { name: '结果审阅' })).toBeVisible()
+
+      // 新 Task 没有 Timeline facts，不能沿用刚才历史 Task 的可见内容。
+      await context.page.getByRole('button', { name: '创建新 Task', exact: true }).click()
+      await expect(context.page.getByRole('region', { name: '执行时间线' })).toHaveCount(0)
+      await expect(context.page.getByRole('region', { name: '结果审阅' })).toHaveCount(0)
+    } finally {
+      await context.close()
+    }
+  })
   test('Turn 取消：真实停止操作清空队列、发送同 session cancel 且不写 marker', async () => {
     const context = await launchScenario('E2E:TURN_CANCEL')
     try {
@@ -227,7 +312,44 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
   })
 })
 
-/** 仅订阅既有 Renderer 可见权限 DTO，供晚到响应回归使用；不会暴露 Runtime requestId 或测试 IPC。 */
+/** 根据公开历史查询 Task 所属 Project，侧栏回放仍只走正式 UI 路径。 */
+async function projectIdForTask(page: ScenarioContext['page'], taskId: string): Promise<string> {
+  const projectId = await page.evaluate(async (currentTaskId) => {
+    const projects = await window.app.listProjects()
+    if (!projects.ok) return undefined
+    for (const project of projects.value) {
+      const tasks = await window.task.list(project.projectId, undefined, 50)
+      if (tasks.ok && tasks.value.items.some((task) => task.taskId === currentTaskId)) {
+        return project.projectId
+      }
+    }
+    return undefined
+  }, taskId)
+  if (!projectId) throw new Error('未找到受控 Task 所属 Project。')
+  return projectId
+}
+
+/** 使用持久化顺序定位当前 Task，避免随机 taskId 成为 DOM 选择器。 */
+async function selectSidebarTaskById(
+  page: ScenarioContext['page'],
+  projectId: string,
+  taskId: string
+): Promise<void> {
+  const index = await page.evaluate(
+    async ({ currentProjectId, currentTaskId }) => {
+      const result = await window.task.list(currentProjectId, undefined, 50)
+      if (!result.ok) return -1
+      return result.value.items.findIndex((task) => task.taskId === currentTaskId)
+    },
+    { currentProjectId: projectId, currentTaskId: taskId }
+  )
+  if (index < 0) throw new Error('侧栏中未找到受控 Task。')
+  const item = page.locator('section[aria-label="任务"] .session-item').nth(index)
+  await expect(item).toBeVisible()
+  await item.click()
+  await expect(item).toHaveClass(/active/)
+}
+
 async function capturePermissionRequests(page: ScenarioContext['page']): Promise<void> {
   await page.evaluate(() => {
     const target = window as typeof window & {

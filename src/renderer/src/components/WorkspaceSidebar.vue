@@ -17,6 +17,12 @@ export interface SidebarSessionItem {
   state?: string
 }
 
+export interface SidebarTaskItem {
+  id: string
+  title: string
+  state?: string
+}
+
 /** 侧栏展示用的项目条目，路径只用于展示与高亮，不直接访问文件系统。 */
 export interface SidebarProjectItem {
   id: string
@@ -24,16 +30,16 @@ export interface SidebarProjectItem {
   path: string
   status: 'active' | 'removed'
   availability: 'available' | 'unavailable' | 'version-unsupported' | 'corrupt'
+  tasks?: SidebarTaskItem[]
 }
 
 const props = withDefaults(
   defineProps<{
     brandName?: string
-    workspacePath: string
-    workspaceName: string
+    workspacePath?: string
+    workspaceName?: string
     projects: SidebarProjectItem[]
-    sessions: SidebarSessionItem[]
-    activeSessionId: string
+    activeTaskId: string
     activeProjectId?: string
     /** 连接或执行期间由上层禁用新对话，避免并发重建 Runtime 会话。 */
     newChatDisabled?: boolean
@@ -47,11 +53,13 @@ const props = withDefaults(
     mutationActionsDisabled?: boolean
     /** mutation 禁用原因只解释打开、删除、移除等会改变状态的入口。 */
     mutationActionsDisabledReason?: string
-    hasMoreSessions?: boolean
-    loadingMoreSessions?: boolean
+    hasMoreTasks?: boolean
+    loadingMoreTasks?: boolean
   }>(),
   {
     brandName: 'Agent Studio',
+    workspacePath: '',
+    workspaceName: '',
     activeProjectId: '',
     newChatDisabled: false,
     newChatDisabledReason: '',
@@ -59,8 +67,8 @@ const props = withDefaults(
     historyNavigationDisabledReason: '',
     mutationActionsDisabled: false,
     mutationActionsDisabledReason: '',
-    hasMoreSessions: false,
-    loadingMoreSessions: false
+    hasMoreTasks: false,
+    loadingMoreTasks: false
   }
 )
 
@@ -68,12 +76,12 @@ const emit = defineEmits<{
   newChat: []
   openProject: []
   openSettings: []
-  selectSession: [sessionId: string]
+  selectTask: [taskId: string]
   selectProject: [projectId: string]
-  deleteSession: [sessionId: string]
+  deleteTask: [taskId: string]
   removeProject: [projectId: string]
   deleteProjectHistory: [projectId: string]
-  loadMoreSessions: []
+  loadMoreTasks: []
 }>()
 
 /** 本地搜索只过滤侧栏列表，不触发主进程查询。 */
@@ -92,16 +100,12 @@ function toggleSearch(): void {
 const filteredProjects = computed(() => {
   if (!normalizedQuery.value) return props.projects
   return props.projects.filter((project) => {
+    const taskMatch = project.tasks?.some((task) =>
+      task.title.toLowerCase().includes(normalizedQuery.value)
+    )
     const haystack = `${project.name} ${project.path}`.toLowerCase()
-    return haystack.includes(normalizedQuery.value)
+    return haystack.includes(normalizedQuery.value) || taskMatch
   })
-})
-
-const filteredSessions = computed(() => {
-  if (!normalizedQuery.value) return props.sessions
-  return props.sessions.filter((session) =>
-    session.title.toLowerCase().includes(normalizedQuery.value)
-  )
 })
 </script>
 
@@ -264,9 +268,9 @@ const filteredSessions = computed(() => {
         </button>
       </section>
 
-      <!-- 最近分区：展示本地点会话标题列表 -->
-      <section class="sidebar-section" aria-label="最近">
-        <div class="section-label">最近</div>
+      <!-- Task 分区：按当前 Project 展示持久化任务。 -->
+      <section class="sidebar-section" aria-label="任务">
+        <div class="section-label">任务</div>
         <p
           v-if="historyNavigationDisabled && historyNavigationDisabledReason"
           id="recent-navigation-disabled-reason"
@@ -281,48 +285,50 @@ const filteredSessions = computed(() => {
           {{ mutationActionsDisabledReason }}
         </p>
 
-        <div v-if="filteredSessions.length" class="section-list">
-          <div v-for="session in filteredSessions" :key="session.id" class="sidebar-item-row">
-            <button
-              class="sidebar-item sidebar-item-main session-item"
-              type="button"
-              :class="{ active: session.id === activeSessionId }"
-              :disabled="historyNavigationDisabled"
-              :aria-describedby="
-                historyNavigationDisabled && historyNavigationDisabledReason
-                  ? 'recent-navigation-disabled-reason'
-                  : undefined
-              "
-              :title="session.title"
-              @click="emit('selectSession', session.id)"
-            >
-              <span>{{ session.title }}</span>
-            </button>
-            <button
-              class="sidebar-row-action danger"
-              type="button"
-              :disabled="mutationActionsDisabled"
-              :title="`删除 Task：${session.title}`"
-              :aria-label="`删除 Task：${session.title}`"
-              @click.stop="emit('deleteSession', session.id)"
-            >
-              删除
-            </button>
-          </div>
+        <div v-if="filteredProjects.some((project) => project.tasks?.length)" class="section-list">
+          <template v-for="project in filteredProjects" :key="project.id">
+            <div v-for="task in project.tasks ?? []" :key="task.id" class="sidebar-item-row">
+              <button
+                class="sidebar-item sidebar-item-main session-item"
+                type="button"
+                :class="{ active: task.id === activeTaskId }"
+                :disabled="historyNavigationDisabled"
+                :aria-describedby="
+                  historyNavigationDisabled && historyNavigationDisabledReason
+                    ? 'recent-navigation-disabled-reason'
+                    : undefined
+                "
+                :title="task.title"
+                @click="emit('selectTask', task.id)"
+              >
+                <span>{{ task.title }}</span>
+              </button>
+              <button
+                class="sidebar-row-action danger"
+                type="button"
+                :disabled="mutationActionsDisabled"
+                :title="`删除 Task：${task.title}`"
+                :aria-label="`删除 Task：${task.title}`"
+                @click.stop="emit('deleteTask', task.id)"
+              >
+                删除
+              </button>
+            </div>
+          </template>
           <button
-            v-if="hasMoreSessions"
+            v-if="hasMoreTasks"
             class="load-more-button"
             type="button"
-            :disabled="loadingMoreSessions || historyNavigationDisabled"
-            :aria-busy="loadingMoreSessions"
-            @click="emit('loadMoreSessions')"
+            :disabled="loadingMoreTasks || historyNavigationDisabled"
+            :aria-busy="loadingMoreTasks"
+            @click="emit('loadMoreTasks')"
           >
-            {{ loadingMoreSessions ? '正在加载…' : '加载更多任务' }}
+            {{ loadingMoreTasks ? '正在加载…' : '加载更多任务' }}
           </button>
         </div>
 
         <div v-else class="sidebar-empty static">
-          <span>暂无最近对话</span>
+          <span>暂无任务</span>
         </div>
       </section>
     </div>

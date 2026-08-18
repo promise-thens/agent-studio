@@ -152,6 +152,161 @@ describe('TaskStore', () => {
     expect(disk).not.toContain('fake-secret')
   })
 
+  it('相同事件重复写入幂等，相同 sequence 不同内容失败关闭', async () => {
+    const { store } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '测试',
+      model: { modelId: 'model-1' }
+    })
+    const event = {
+      runtimeId: 'grok' as const,
+      capabilityState: 'native' as const,
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-12T00:00:01.000Z',
+      kind: 'agent-message' as const,
+      text: '完成'
+    }
+
+    await expect(store.appendEvent(event)).resolves.toEqual({ kind: 'committed' })
+    await expect(store.appendEvent(event)).resolves.toEqual({ kind: 'duplicate' })
+    await expect(store.appendEvent({ ...event, text: '冲突内容' })).rejects.toMatchObject({
+      code: 'history-corrupt'
+    })
+    expect((await store.listEvents('task-1', 'turn-1')).items).toHaveLength(1)
+    expect((await store.listTurns('task-1')).items[0]).toMatchObject({ eventCount: 1 })
+  })
+
+  it('事件块已提交但 Turn 元数据失败时，同事件重试只修复元数据', async () => {
+    const { store, registry, project } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '测试',
+      model: { modelId: 'model-1' }
+    })
+    const writer = (store as unknown as { writer: AtomicJsonWriter }).writer
+    const originalWrite = writer.write.bind(writer)
+    let failedTurnWrite = false
+    writer.write = async (path, value) => {
+      if (
+        !failedTurnWrite &&
+        path.endsWith('/turn-1/turn.json') &&
+        (value as { eventCount?: number }).eventCount === 1
+      ) {
+        failedTurnWrite = true
+        throw new Error('fake turn metadata failure')
+      }
+      await originalWrite(path, value)
+    }
+    const event = {
+      runtimeId: 'grok' as const,
+      capabilityState: 'native' as const,
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-12T00:00:01.000Z',
+      kind: 'agent-message' as const,
+      text: '完成'
+    }
+
+    await expect(store.appendEvent(event)).rejects.toThrow('fake turn metadata failure')
+    const eventPath = join(
+      registry.getProjectDirectory(project.projectId),
+      'tasks/task-1/turns/turn-1/events/000001.json'
+    )
+    expect(
+      (JSON.parse(await readFile(eventPath, 'utf8')) as { events: unknown[] }).events
+    ).toHaveLength(1)
+    await expect(store.appendEvent(event)).resolves.toEqual({ kind: 'repaired' })
+    await expect(store.appendEvent(event)).resolves.toEqual({ kind: 'duplicate' })
+    expect((await store.listEvents('task-1', 'turn-1')).items).toHaveLength(1)
+    expect((await store.listTurns('task-1')).items[0]).toMatchObject({ eventCount: 1 })
+  })
+
+  it('事件分页按 sequence 排序去重并返回数值 watermark', async () => {
+    const { store, registry, project } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '测试',
+      model: { modelId: 'model-1' }
+    })
+    const eventsDirectory = join(
+      registry.getProjectDirectory(project.projectId),
+      'tasks/task-1/turns/turn-1/events'
+    )
+    await mkdir(eventsDirectory, { recursive: true })
+    const event = (
+      sequence: number,
+      text = `事件 ${sequence}`
+    ): {
+      runtimeId: 'grok'
+      capabilityState: 'native'
+      taskId: string
+      turnId: string
+      sequence: number
+      observedAt: string
+      kind: 'agent-message'
+      text: string
+    } => ({
+      runtimeId: 'grok' as const,
+      capabilityState: 'native' as const,
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence,
+      observedAt: `2026-08-12T00:00:0${sequence}.000Z`,
+      kind: 'agent-message' as const,
+      text
+    })
+    await writeFile(
+      join(eventsDirectory, '000001.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        chunkIndex: 1,
+        events: [event(3), event(1), event(2)]
+      })
+    )
+    await writeFile(
+      join(eventsDirectory, '000002.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        chunkIndex: 2,
+        events: [event(2)]
+      })
+    )
+
+    await expect(store.listEvents('task-1', 'turn-1', 0, 2)).resolves.toEqual({
+      items: [event(1), event(2)],
+      nextAfterSequence: 2,
+      watermark: 3
+    })
+    await expect(store.listEvents('task-1', 'turn-1', 2, 2)).resolves.toEqual({
+      items: [event(3)],
+      watermark: 3
+    })
+    await writeFile(
+      join(eventsDirectory, '000002.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        chunkIndex: 2,
+        events: [event(2, '冲突')]
+      })
+    )
+    await expect(store.listEvents('task-1', 'turn-1')).rejects.toMatchObject({
+      code: 'history-corrupt'
+    })
+  })
+
   it('事件块超过 512KiB 时递增块号，不覆盖已经落盘的前一块', async () => {
     const { store } = await createStore()
     await store.createTurn({
@@ -640,7 +795,7 @@ describe('TaskStore', () => {
         kind: 'agent-message',
         text: 'x'.repeat(257 * 1024)
       })
-    ).resolves.toBe(false)
+    ).resolves.toEqual({ kind: 'history-truncated', reason: 'event-bytes' })
     expect((await store.listTurns('task-1')).items[0]).toMatchObject({
       historyTruncated: true,
       truncationReason: 'event-bytes',

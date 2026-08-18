@@ -1,12 +1,12 @@
 import type {
   DeletionPreview,
   PermissionAuditPage,
-  PersistedAgentEventPage,
   RuntimeResumeSummary,
   TaskHistoryDetail,
   TaskHistoryPage,
   TurnHistoryPage
 } from '../../shared/task-history'
+import type { PublicAgentEventPage } from '../../shared/task-ipc'
 import { TASK_INVOKE_CHANNELS } from '../../shared/task-ipc'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
 import type { DesktopIpcMain } from '../ipc-types'
@@ -28,7 +28,7 @@ export interface TaskHistoryIpcRuntime {
     turnId: string,
     afterSequence?: number,
     limit?: number
-  ): Promise<PersistedAgentEventPage>
+  ): Promise<PublicAgentEventPage>
   listPermissionAudits(
     taskId: string,
     cursor?: string,

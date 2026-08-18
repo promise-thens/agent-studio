@@ -149,7 +149,15 @@ export interface CursorPage<T> {
 
 export type TaskHistoryPage = CursorPage<TaskHistorySummary>
 export type TurnHistoryPage = CursorPage<TurnHistoryRecord>
-export type PersistedAgentEventPage = CursorPage<PersistedAgentEvent>
+
+/** Event 分页使用 Turn 内数值 sequence，不与实体身份 cursor 混用。 */
+export interface PersistedAgentEventPage {
+  items: PersistedAgentEvent[]
+  /** 当前快照仍有下一页时，下一次查询使用的 exclusive afterSequence。 */
+  nextAfterSequence?: number
+  /** 本次查询观察到的最高持久化 sequence；没有事件时保持请求基线。 */
+  watermark: number
+}
 
 /** 权限审计独立于对话事件，P0-09 再决定如何投影到统一 Timeline。 */
 export interface PermissionAuditRecord {

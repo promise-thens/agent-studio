@@ -2,13 +2,13 @@ import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import type {
   DeletionPreview,
   PermissionAuditRecord,
-  PersistedAgentEvent,
   ProjectSummary,
   RuntimeResumeSummary,
   TaskHistoryDetail,
   TaskHistorySummary,
   TurnHistoryRecord
 } from '../../../shared/task-history'
+import type { PublicAgentEvent } from '../../../shared/agent-event'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 
 interface TaskHistoryState {
@@ -18,14 +18,15 @@ interface TaskHistoryState {
   activeProject: ComputedRef<ProjectSummary | null>
   openedTask: Ref<TaskHistoryDetail | null>
   openedTurns: Ref<TurnHistoryRecord[]>
-  eventsByTurn: Ref<Record<string, PersistedAgentEvent[]>>
+  eventsByTurn: Ref<Record<string, PublicAgentEvent[]>>
   permissionAudits: Ref<PermissionAuditRecord[]>
   loading: Ref<boolean>
   errorMessage: Ref<string>
   deletionPreview: Ref<DeletionPreview | null>
   taskCursor: Ref<string | null>
   turnCursor: Ref<string | null>
-  eventCursorByTurn: Ref<Record<string, number | null>>
+  eventAfterSequenceByTurn: Ref<Record<string, number | null>>
+  eventWatermarkByTurn: Ref<Record<string, number>>
   permissionAuditCursor: Ref<string | null>
   loadingMoreTasks: Ref<boolean>
   loadingMoreTurns: Ref<boolean>
@@ -56,14 +57,15 @@ export function useTaskHistory(): TaskHistoryState {
   const activeProjectId = ref('')
   const openedTask = ref<TaskHistoryDetail | null>(null)
   const openedTurns = ref<TurnHistoryRecord[]>([])
-  const eventsByTurn = ref<Record<string, PersistedAgentEvent[]>>({})
+  const eventsByTurn = ref<Record<string, PublicAgentEvent[]>>({})
   const permissionAudits = ref<PermissionAuditRecord[]>([])
   const loading = ref(false)
   const errorMessage = ref('')
   const deletionPreview = ref<DeletionPreview | null>(null)
   const taskCursor = ref<string | null>(null)
   const turnCursor = ref<string | null>(null)
-  const eventCursorByTurn = ref<Record<string, number | null>>({})
+  const eventAfterSequenceByTurn = ref<Record<string, number | null>>({})
+  const eventWatermarkByTurn = ref<Record<string, number>>({})
   const permissionAuditCursor = ref<string | null>(null)
   const loadingMoreTasks = ref(false)
   const loadingMoreTurns = ref(false)
@@ -160,7 +162,8 @@ export function useTaskHistory(): TaskHistoryState {
       turnCursor.value = turnPage.nextCursor ?? null
       permissionAuditCursor.value = auditPage.nextCursor ?? null
       eventsByTurn.value = eventPages.events
-      eventCursorByTurn.value = eventPages.cursors
+      eventAfterSequenceByTurn.value = eventPages.afterSequences
+      eventWatermarkByTurn.value = eventPages.watermarks
       return true
     } catch (error) {
       if (requestId !== taskRequestId) return false
@@ -185,11 +188,14 @@ export function useTaskHistory(): TaskHistoryState {
       openedTurns.value = mergeUnique(openedTurns.value, page.items, (turn) => turn.turnId)
       turnCursor.value = page.nextCursor ?? null
       const nextEvents = { ...eventsByTurn.value }
-      const nextCursors = { ...eventCursorByTurn.value }
+      const nextAfterSequences = { ...eventAfterSequenceByTurn.value }
+      const nextWatermarks = { ...eventWatermarkByTurn.value }
       Object.assign(nextEvents, eventPages.events)
-      Object.assign(nextCursors, eventPages.cursors)
+      Object.assign(nextAfterSequences, eventPages.afterSequences)
+      Object.assign(nextWatermarks, eventPages.watermarks)
       eventsByTurn.value = nextEvents
-      eventCursorByTurn.value = nextCursors
+      eventAfterSequenceByTurn.value = nextAfterSequences
+      eventWatermarkByTurn.value = nextWatermarks
     } catch (error) {
       if (!isCurrentOpenedTaskRequest(requestId, taskId)) return
       throw error
@@ -200,24 +206,33 @@ export function useTaskHistory(): TaskHistoryState {
 
   async function loadMoreEvents(turnId: string): Promise<void> {
     const taskId = openedTask.value?.taskId
-    const cursor = eventCursorByTurn.value[turnId]
+    const afterSequence = eventAfterSequenceByTurn.value[turnId]
     const requestId = taskRequestId
-    if (!taskId || cursor == null || loading.value || loadingEventTurnIds.value.includes(turnId)) {
+    if (
+      !taskId ||
+      afterSequence == null ||
+      loading.value ||
+      loadingEventTurnIds.value.includes(turnId)
+    ) {
       return
     }
     loadingEventTurnIds.value = [...loadingEventTurnIds.value, turnId]
     try {
-      const page = unwrapDesktopIpcResult(await window.task.listEvents(taskId, turnId, cursor, 200))
+      const page = unwrapDesktopIpcResult(
+        await window.task.listEvents(taskId, turnId, afterSequence, 200)
+      )
       if (!isCurrentOpenedTaskRequest(requestId, taskId)) return
       eventsByTurn.value = {
         ...eventsByTurn.value,
-        [turnId]: mergeUnique(eventsByTurn.value[turnId] ?? [], page.items, (event) =>
-          String(event.sequence)
-        ).sort((left, right) => left.sequence - right.sequence)
+        [turnId]: mergeEventsBySequence(eventsByTurn.value[turnId] ?? [], page.items)
       }
-      eventCursorByTurn.value = {
-        ...eventCursorByTurn.value,
-        [turnId]: parseSequenceCursor(page.nextCursor)
+      eventAfterSequenceByTurn.value = {
+        ...eventAfterSequenceByTurn.value,
+        [turnId]: page.nextAfterSequence ?? null
+      }
+      eventWatermarkByTurn.value = {
+        ...eventWatermarkByTurn.value,
+        [turnId]: page.watermark
       }
     } catch (error) {
       if (!isCurrentOpenedTaskRequest(requestId, taskId)) return
@@ -230,7 +245,7 @@ export function useTaskHistory(): TaskHistoryState {
   }
 
   function hasMoreEvents(turnId: string): boolean {
-    return eventCursorByTurn.value[turnId] != null
+    return eventAfterSequenceByTurn.value[turnId] != null
   }
 
   async function loadMorePermissionAudits(): Promise<void> {
@@ -315,8 +330,9 @@ export function useTaskHistory(): TaskHistoryState {
     taskId: string,
     turns: TurnHistoryRecord[]
   ): Promise<{
-    events: Record<string, PersistedAgentEvent[]>
-    cursors: Record<string, number | null>
+    events: Record<string, PublicAgentEvent[]>
+    afterSequences: Record<string, number | null>
+    watermarks: Record<string, number>
   }> {
     const entries = await Promise.all(
       turns.map(async (turn) => {
@@ -327,10 +343,13 @@ export function useTaskHistory(): TaskHistoryState {
       })
     )
     return {
-      events: Object.fromEntries(entries.map(([turnId, page]) => [turnId, page.items])),
-      cursors: Object.fromEntries(
-        entries.map(([turnId, page]) => [turnId, parseSequenceCursor(page.nextCursor)])
-      )
+      events: Object.fromEntries(
+        entries.map(([turnId, page]) => [turnId, mergeEventsBySequence([], page.items)])
+      ),
+      afterSequences: Object.fromEntries(
+        entries.map(([turnId, page]) => [turnId, page.nextAfterSequence ?? null])
+      ),
+      watermarks: Object.fromEntries(entries.map(([turnId, page]) => [turnId, page.watermark]))
     }
   }
 
@@ -359,7 +378,8 @@ export function useTaskHistory(): TaskHistoryState {
     eventsByTurn.value = {}
     permissionAudits.value = []
     turnCursor.value = null
-    eventCursorByTurn.value = {}
+    eventAfterSequenceByTurn.value = {}
+    eventWatermarkByTurn.value = {}
     permissionAuditCursor.value = null
     errorMessage.value = ''
   }
@@ -382,7 +402,8 @@ export function useTaskHistory(): TaskHistoryState {
     deletionPreview,
     taskCursor,
     turnCursor,
-    eventCursorByTurn,
+    eventAfterSequenceByTurn,
+    eventWatermarkByTurn,
     permissionAuditCursor,
     loadingMoreTasks,
     loadingMoreTurns,
@@ -420,8 +441,11 @@ function mergeUnique<T>(current: T[], incoming: T[], identify: (value: T) => str
   return result
 }
 
-function parseSequenceCursor(cursor?: string): number | null {
-  if (cursor == null || !/^\d+$/.test(cursor)) return null
-  const value = Number(cursor)
-  return Number.isSafeInteger(value) && value >= 0 ? value : null
+function mergeEventsBySequence(
+  current: PublicAgentEvent[],
+  incoming: PublicAgentEvent[]
+): PublicAgentEvent[] {
+  return mergeUnique(current, incoming, (event) => String(event.sequence)).sort(
+    (left, right) => left.sequence - right.sequence
+  )
 }

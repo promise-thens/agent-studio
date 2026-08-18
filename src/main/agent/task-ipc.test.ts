@@ -31,7 +31,7 @@ function createFixture(historyAvailable = true): {
       permissionPolicy: { kind: 'legacy-runtime' as const }
     })),
     listTurns: vi.fn(async () => ({ items: [] })),
-    listEvents: vi.fn(async () => ({ items: [] })),
+    listEvents: vi.fn(async () => ({ items: [], watermark: 0 })),
     listPermissionAudits: vi.fn(async () => ({ items: [] })),
     resumeTask: vi.fn(async () => ({ resumed: false, message: '不可恢复' })),
     previewTaskDeletion: vi.fn(async () => ({
@@ -102,6 +102,28 @@ describe('Task 历史 IPC', () => {
         extra: true
       })
     ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+  })
+
+  it('事件分页原样转发数值 afterSequence 并保留数值响应字段', async () => {
+    const fixture = createFixture()
+    vi.mocked(fixture.history.listEvents).mockResolvedValueOnce({
+      items: [],
+      nextAfterSequence: 42,
+      watermark: 100
+    })
+
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.listEvents, {
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        afterSequence: 42,
+        limit: 200
+      })
+    ).toEqual({
+      ok: true,
+      value: { items: [], nextAfterSequence: 42, watermark: 100 }
+    })
+    expect(fixture.history.listEvents).toHaveBeenCalledWith('task-1', 'turn-1', 42, 200)
   })
 
   it('删除 token 与 Task ID原样绑定到历史服务，不暴露其它能力', async () => {

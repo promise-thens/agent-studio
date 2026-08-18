@@ -102,6 +102,21 @@ interface EventChunkV1 {
   events: PersistedAgentEvent[]
 }
 
+export type AppendEventResult =
+  | { kind: 'committed' }
+  | { kind: 'duplicate' }
+  | { kind: 'repaired' }
+  | {
+      kind: 'history-truncated'
+      reason: NonNullable<TurnHistoryRecord['truncationReason']>
+    }
+
+interface NormalizedEventHistory {
+  events: PersistedAgentEvent[]
+  eventCount: number
+  eventBytes: number
+}
+
 interface DeleteTokenRecord {
   targetType: DeletionPreview['targetType']
   targetId: string
@@ -500,11 +515,32 @@ export class TaskStore {
     }))
   }
 
-  async appendEvent(event: PersistedAgentEvent): Promise<boolean> {
+  async appendEvent(event: PersistedAgentEvent): Promise<AppendEventResult> {
     return this.enqueueTask(event.taskId, async () => {
+      if (!isValidPersistedEventIdentity(event, event.taskId, event.turnId)) {
+        throw new TaskStoreError('history-corrupt', '事件历史身份或 sequence 无效。')
+      }
       const task = this.requireTask(event.taskId)
       const turn = await this.readTurn(task, event.turnId)
-      const serializedBytes = Buffer.byteLength(JSON.stringify(event), 'utf8')
+      const history = await this.readNormalizedEventHistory(task, turn)
+      const existing = history.events.find((candidate) => candidate.sequence === event.sequence)
+      if (existing) {
+        if (!arePersistedEventsEqual(existing, event)) {
+          throw new TaskStoreError('history-corrupt', '同一 Turn 的事件 sequence 对应了不同内容。')
+        }
+        if (turn.eventCount !== history.eventCount || turn.eventBytes !== history.eventBytes) {
+          await this.saveTurn(task, {
+            ...turn,
+            eventCount: history.eventCount,
+            eventBytes: history.eventBytes,
+            revision: turn.revision + 1
+          })
+          return { kind: 'repaired' }
+        }
+        return { kind: 'duplicate' }
+      }
+
+      const serializedBytes = serializedEventBytes(event)
       if (serializedBytes > MAX_EVENT_BYTES) {
         if (!turn.historyTruncated) {
           await this.saveTurn(task, {
@@ -514,22 +550,27 @@ export class TaskStore {
             revision: turn.revision + 1
           })
         }
-        return false
+        return { kind: 'history-truncated', reason: 'event-bytes' }
       }
       if (
-        turn.eventCount >= MAX_EVENTS_PER_TURN ||
-        turn.eventBytes + serializedBytes > MAX_TURN_EVENT_BYTES
+        history.eventCount >= MAX_EVENTS_PER_TURN ||
+        history.eventBytes + serializedBytes > MAX_TURN_EVENT_BYTES
       ) {
+        const reason =
+          history.eventCount >= MAX_EVENTS_PER_TURN
+            ? ('event-count' as const)
+            : ('turn-bytes' as const)
         if (!turn.historyTruncated) {
-          const reason = turn.eventCount >= MAX_EVENTS_PER_TURN ? 'event-count' : 'turn-bytes'
           await this.saveTurn(task, {
             ...turn,
+            eventCount: history.eventCount,
+            eventBytes: history.eventBytes,
             historyTruncated: true,
             truncationReason: reason,
             revision: turn.revision + 1
           })
         }
-        return false
+        return { kind: 'history-truncated', reason }
       }
 
       const chunkIndex = await this.getLastChunkIndex(task, turn.turnId)
@@ -553,11 +594,11 @@ export class TaskStore {
       )
       await this.saveTurn(task, {
         ...turn,
-        eventCount: turn.eventCount + 1,
-        eventBytes: turn.eventBytes + serializedBytes,
+        eventCount: history.eventCount + 1,
+        eventBytes: history.eventBytes + serializedBytes,
         revision: turn.revision + 1
       })
-      return true
+      return { kind: 'committed' }
     })
   }
 
@@ -624,42 +665,21 @@ export class TaskStore {
     afterSequence = 0,
     limit = 100
   ): Promise<PersistedAgentEventPage> {
+    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
+      throw new TaskStoreError('history-corrupt', '事件历史查询 sequence 无效。')
+    }
     const task = this.requireTask(taskId)
     const turn = await this.readTurn(task, turnId)
     const acceptedLimit = clampLimit(limit, 100, 200)
-    const eventFiles = (await fs.readdir(this.eventsDirectory(task, turnId)).catch(() => []))
-      .filter((name) => name.endsWith('.json'))
-      .sort()
-    const events: PersistedAgentEvent[] = []
-    for (const eventFile of eventFiles) {
-      const path = join(this.eventsDirectory(task, turnId), eventFile)
-      try {
-        const parsed = parseEventChunk(
-          await this.writer.read(path, MAX_EVENT_CHUNK_BYTES * 2),
-          taskId,
-          turnId
-        )
-        if (parsed.kind === 'unsupported') {
-          throw new TaskStoreError('history-version-unsupported', '事件历史版本高于当前客户端。')
-        }
-        if (parsed.kind === 'corrupt') {
-          await this.quarantine(path, 'event-chunk', 'invalid-fields')
-          continue
-        }
-        events.push(...parsed.record.events)
-      } catch (error) {
-        if (error instanceof TaskStoreError) throw error
-        await this.quarantine(path, 'event-chunk', 'invalid-json')
-      }
-    }
-    const page = events.filter((event) => event.sequence > afterSequence).slice(0, acceptedLimit)
+    const history = await this.readNormalizedEventHistory(task, turn)
+    const matching = history.events.filter((event) => event.sequence > afterSequence)
+    const page = matching.slice(0, acceptedLimit)
     const finalSequence = page.at(-1)?.sequence ?? afterSequence
+    const watermark = history.events.at(-1)?.sequence ?? afterSequence
     return {
       items: page,
-      ...(events.some((event) => event.sequence > finalSequence)
-        ? { nextCursor: String(finalSequence) }
-        : {}),
-      ...(turn.historyTruncated && page.length === 0 ? {} : {})
+      ...(matching.length > page.length ? { nextAfterSequence: finalSequence } : {}),
+      watermark
     }
   }
 
@@ -1023,6 +1043,57 @@ export class TaskStore {
     }
     if (parsed.needsUpgrade) await this.writer.write(path, parsed.record)
     return parsed.record
+  }
+
+  /** 从所有合法事件块重建 Turn 内唯一、有序的持久化事件事实。 */
+  private async readNormalizedEventHistory(
+    task: TaskRecordV1,
+    turn: TurnRecordV1
+  ): Promise<NormalizedEventHistory> {
+    const eventFiles = (await fs.readdir(this.eventsDirectory(task, turn.turnId)).catch(() => []))
+      .filter((name) => /^\d{6}\.json$/.test(name))
+      .sort()
+    const eventsBySequence = new Map<number, PersistedAgentEvent>()
+
+    for (const eventFile of eventFiles) {
+      const path = join(this.eventsDirectory(task, turn.turnId), eventFile)
+      try {
+        const parsed = parseEventChunk(
+          await this.writer.read(path, MAX_EVENT_CHUNK_BYTES * 2),
+          task.taskId,
+          turn.turnId
+        )
+        if (parsed.kind === 'unsupported') {
+          throw new TaskStoreError('history-version-unsupported', '事件历史版本高于当前客户端。')
+        }
+        if (parsed.kind === 'corrupt') {
+          await this.quarantine(path, 'event-chunk', 'invalid-fields')
+          continue
+        }
+        for (const event of parsed.record.events) {
+          const existing = eventsBySequence.get(event.sequence)
+          if (existing && !arePersistedEventsEqual(existing, event)) {
+            throw new TaskStoreError(
+              'history-corrupt',
+              '同一 Turn 的事件 sequence 对应了不同内容。'
+            )
+          }
+          if (!existing) eventsBySequence.set(event.sequence, event)
+        }
+      } catch (error) {
+        if (error instanceof TaskStoreError) throw error
+        await this.quarantine(path, 'event-chunk', 'invalid-json')
+      }
+    }
+
+    const events = [...eventsBySequence.values()].sort(
+      (left, right) => left.sequence - right.sequence
+    )
+    return {
+      events,
+      eventCount: events.length,
+      eventBytes: events.reduce((total, event) => total + serializedEventBytes(event), 0)
+    }
   }
 
   private async readEventChunk(
@@ -1619,7 +1690,7 @@ function parseEventChunk(
   }
   if (
     value.events.some(
-      (event) => !isRecord(event) || event.taskId !== taskId || event.turnId !== turnId
+      (event) => !isRecord(event) || !isValidPersistedEventIdentity(event, taskId, turnId)
     )
   ) {
     return { kind: 'corrupt' }
@@ -1715,6 +1786,27 @@ function asTerminalHistoryState(
     throw new TaskStoreError('history-corrupt', '执行历史终态无效。')
   }
   return state
+}
+
+function serializedEventBytes(event: PersistedAgentEvent): number {
+  return Buffer.byteLength(JSON.stringify(event), 'utf8')
+}
+
+function arePersistedEventsEqual(left: PersistedAgentEvent, right: PersistedAgentEvent): boolean {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function isValidPersistedEventIdentity(
+  event: Record<string, unknown> | PersistedAgentEvent,
+  taskId: string,
+  turnId: string
+): event is PersistedAgentEvent {
+  return (
+    event.taskId === taskId &&
+    event.turnId === turnId &&
+    Number.isSafeInteger(event.sequence) &&
+    Number(event.sequence) > 0
+  )
 }
 
 function isIsoTimestamp(value: unknown): value is string {

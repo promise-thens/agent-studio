@@ -132,6 +132,123 @@ describe('TaskExecutor', () => {
     expect(fixture.adapter.startTurn).not.toHaveBeenCalled()
   })
 
+  it('事件持久化完成后才发布，重复和截断事件不会形成正式实时节点', async () => {
+    const fixture = await createFixture()
+    const runtimeResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockReturnValue(runtimeResult.promise)
+    const admitted = await fixture.executor.start(fixture.input)
+    const execution = admitted.execution
+    if (!execution) throw new Error('缺少 execution。')
+    await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledOnce())
+
+    const writer = (
+      fixture.store as unknown as {
+        writer: { write(path: string, value: unknown): Promise<void> }
+      }
+    ).writer
+    const originalWrite = writer.write.bind(writer)
+    const eventWriteStarted = deferred<void>()
+    const releaseEventWrite = deferred<void>()
+    writer.write = async (path: string, value: unknown): Promise<void> => {
+      if (path.endsWith('/events/000001.json')) {
+        eventWriteStarted.resolve()
+        await releaseEventWrite.promise
+      }
+      return originalWrite(path, value)
+    }
+    const event = {
+      runtimeId: 'grok' as const,
+      capabilityState: 'native' as const,
+      runtimeSessionId: SESSION.runtimeSessionId,
+      taskId: execution.taskId,
+      turnId: execution.turnId,
+      sequence: 1,
+      observedAt: '2026-08-17T10:00:02.000Z',
+      kind: 'agent-message' as const,
+      text: '已提交后发布'
+    }
+
+    expect(fixture.executor.handleRuntimeEvent(event)).toBe(true)
+    await eventWriteStarted.promise
+    expect(fixture.onEvent).not.toHaveBeenCalled()
+    releaseEventWrite.resolve()
+    await vi.waitFor(() => expect(fixture.onEvent).toHaveBeenCalledWith(event))
+
+    fixture.executor.handleRuntimeEvent(event)
+    await vi.waitFor(() => expect(fixture.onEvent).toHaveBeenCalledTimes(1))
+    fixture.executor.handleRuntimeEvent({
+      ...event,
+      sequence: 2,
+      text: 'x'.repeat(257 * 1024)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(fixture.onEvent).toHaveBeenCalledTimes(1)
+
+    runtimeResult.resolve({ outcome: 'completed' })
+    await fixture.executor.waitForTerminal()
+  })
+
+  it('拒绝 sequence gap 与终态后晚到事件，并把终态 Usage 原子写入 Turn', async () => {
+    const fixture = await createFixture()
+    const runtimeResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockReturnValue(runtimeResult.promise)
+    const admitted = await fixture.executor.start(fixture.input)
+    const execution = admitted.execution
+    if (!execution) throw new Error('缺少 execution。')
+    await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledOnce())
+
+    expect(
+      fixture.executor.handleRuntimeEvent({
+        runtimeId: 'grok',
+        capabilityState: 'native',
+        runtimeSessionId: SESSION.runtimeSessionId,
+        taskId: execution.taskId,
+        turnId: execution.turnId,
+        sequence: 2,
+        observedAt: '2026-08-17T10:00:02.000Z',
+        kind: 'agent-message',
+        text: '跳号事件'
+      })
+    ).toBe(false)
+    expect(fixture.onEvent).not.toHaveBeenCalled()
+
+    const terminal = {
+      runtimeId: 'grok' as const,
+      capabilityState: 'native' as const,
+      runtimeSessionId: SESSION.runtimeSessionId,
+      taskId: execution.taskId,
+      turnId: execution.turnId,
+      sequence: 1,
+      observedAt: '2026-08-17T10:00:03.000Z',
+      kind: 'turn-complete' as const,
+      outcome: 'completed' as const,
+      usage: {
+        scope: 'turn' as const,
+        inputTokens: 10,
+        outputTokens: 20,
+        totalTokens: 30
+      }
+    }
+    expect(fixture.executor.handleRuntimeEvent(terminal)).toBe(true)
+    expect(
+      fixture.executor.handleRuntimeEvent({
+        ...terminal,
+        sequence: 2,
+        kind: 'agent-message' as const,
+        text: '终态后晚到'
+      })
+    ).toBe(false)
+    runtimeResult.resolve({ outcome: 'failed' })
+    await fixture.executor.waitForTerminal()
+
+    expect((await fixture.store.listTurns('task-1')).items[0]).toMatchObject({
+      state: 'completed',
+      usage: { totalTokens: 30 }
+    })
+    expect(fixture.onEvent).toHaveBeenCalledTimes(1)
+    expect(fixture.onEvent).toHaveBeenCalledWith(terminal)
+  })
+
   it('事件落盘先做安全投影，不保存 Runtime session 或未脱敏文本', async () => {
     const fixture = await createFixture({
       redactText: (text) => text.replaceAll('fake-secret', '[REDACTED]')
@@ -434,6 +551,7 @@ async function createFixture(
   executor: TaskExecutor
   gate: OperationGate
   onSnapshot: ReturnType<typeof vi.fn>
+  onEvent: ReturnType<typeof vi.fn>
   input: ReturnType<typeof startInput>
 }> {
   const userDataPath = await mkdtemp(join(tmpdir(), 'task-executor-'))
@@ -455,6 +573,7 @@ async function createFixture(
   })
   const adapter = new ExecutorAdapter()
   const onSnapshot = vi.fn()
+  const onEvent = vi.fn()
   const gate = new OperationGate()
   const ids = ['execution-1', 'turn-1', 'execution-2', 'turn-2']
   const executor = new TaskExecutor({
@@ -465,6 +584,7 @@ async function createFixture(
     executorEpoch: 'epoch-1',
     now: createClock(),
     onSnapshot,
+    onEvent,
     redactText: options.redactText,
     cancelTimeoutMs: options.cancelTimeoutMs,
     forceDisconnectTimeoutMs: options.forceDisconnectTimeoutMs,
@@ -477,7 +597,7 @@ async function createFixture(
     environmentId: store.getTaskRecord('task-1').environment.environmentId,
     workspace: project.canonicalRoot
   })
-  return { store, adapter, executor, gate, onSnapshot, input }
+  return { store, adapter, executor, gate, onSnapshot, onEvent, input }
 }
 
 function startInput(identity: {

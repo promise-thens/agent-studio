@@ -1,10 +1,10 @@
 import type {
-  AgentEvent,
   AgentPermissionDecision,
   AgentPermissionRequest,
   AgentRuntimeStatus,
   AgentTaskRuntimeState
 } from './agent'
+import type { PublicAgentEvent } from './agent-event'
 import type {
   AgentStartTurnAdmissionResult,
   TaskExecutionCancellationRequest,
@@ -82,7 +82,7 @@ export interface AgentDesktopApi {
   respondPermission: (request: AgentRespondPermissionRequest) => Promise<DesktopIpcResult<null>>
   onStatus: (listener: (status: AgentRuntimeStatus) => void) => () => void
   onExecutionUpdate: (listener: (snapshot: TaskExecutionSnapshot) => void) => () => void
-  onEvent: (listener: (event: AgentEvent) => void) => () => void
+  onEvent: (listener: (event: PublicAgentEvent) => void) => () => void
   onPermission: (listener: (request: AgentPermissionRequest) => void) => () => void
   onPermissionCancelled: (listener: (request: AgentPermissionCancellation) => void) => () => void
 }

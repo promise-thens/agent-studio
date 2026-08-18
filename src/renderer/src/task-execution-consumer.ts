@@ -20,7 +20,19 @@ export function createTaskExecutionConsumer(options: TaskExecutionConsumerOption
   let baseline: TaskExecutionSnapshot | null = null
   let buffered: TaskExecutionSnapshot[] = []
   let resync: Promise<void> | null = null
+  let resyncGeneration = 0
   let cleanup: (() => void) | null = null
+
+  function isNewerOrDifferentEpoch(
+    snapshot: TaskExecutionSnapshot,
+    current: TaskExecutionSnapshot | null
+  ): boolean {
+    return (
+      !current ||
+      snapshot.executorEpoch !== current.executorEpoch ||
+      snapshot.executionRevision > current.executionRevision
+    )
+  }
 
   function publish(snapshot: TaskExecutionSnapshot): void {
     baseline = snapshot
@@ -72,12 +84,14 @@ export function createTaskExecutionConsumer(options: TaskExecutionConsumerOption
 
   async function requestResync(): Promise<void> {
     if (disposed || resync) return resync ?? Promise.resolve()
+    const generation = ++resyncGeneration
     resync = (async () => {
       const previous = baseline
       let fetched: TaskExecutionSnapshot | null = null
       try {
         const snapshot = await options.getSnapshot()
-        if (disposed) return
+        if (disposed || generation !== resyncGeneration) return
+        if (!isNewerOrDifferentEpoch(snapshot, baseline)) return
         fetched = snapshot
         publish(snapshot)
         drainBuffered()
@@ -114,6 +128,7 @@ export function createTaskExecutionConsumer(options: TaskExecutionConsumerOption
     accept,
     dispose(): void {
       disposed = true
+      resyncGeneration += 1
       buffered = []
       cleanup?.()
       cleanup = null
