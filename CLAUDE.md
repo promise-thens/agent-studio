@@ -260,8 +260,8 @@ git diff --check
 - 完成度：P0-01 至 P0-07 已完成；P0-08 单槽 TaskExecutor、恢复、后台权限和退出三选项已落地；P0-09 公开事件投影、Timeline 与真机多轮/权限/终态/退出三分支已收口
 - Grok ACP 加深：评估与分计划在 [docs/superpowers/plans/grokACP计划/README.md](docs/superpowers/plans/grokACP计划/README.md)。顺序为 GACP-01 真机观察 → GACP-02 恢复契约 → P0-10 工作台；GACP-03 在 P0-11 后，GACP-04 在 P2 前，GACP-05 默认不进 P0-A
 - 兼容边界：首版仍只有一个执行槽；应用退出后不继续运行；受控 ACP fixture 不等价于真实 Grok 黑盒；`clientCapabilities: {}` 是诚实广告，未实现 fs/terminal 前不得打开
-- 下一步：开始 GACP-01（只观察、记录、补能力核实，不扩协议面）；不要开始 GACP-02 或 P0-10 主体
-- 最近验证：2026-08-18 夜间，Windows 开发版 `f19cb2e` 补测 P0-09 剩余真机项；相关 Vitest 13 项通过。完整自动门禁仍以 2026-08-18 macOS 记录为准，本次未重跑全仓 ESLint/typecheck/build/E2E
+- 下一步：用开发版桌面填 [grok-acp-observation.md](docs/superpowers/plans/grokACP计划/observations/grok-acp-observation.md) 的 A–E；不要开始 GACP-02 或 P0-10 主体
+- 最近验证：2026-08-18 已冻结观察环境并新增方言夹具。完整自动门禁仍以 2026-08-18 macOS 记录为准
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

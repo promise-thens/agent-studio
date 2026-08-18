@@ -2,7 +2,7 @@
 
 > **致执行者：** 优先按任务顺序逐项落地。本计划以观察和验收为主，没有 GACP-01 冻结记录，禁止开始 GACP-02 或把 `session.resume` 写成产品已验证。
 >
-> **状态：** 可开始（前置 P0-09 真机测试门已于 2026-08-18 受限关闭）
+> **状态：** 进行中（观察模板与方言夹具已落地；A–E 真机字段待开发版桌面走查）
 >
 > **插入点：** P0-09 之后、GACP-02 / P0-10 之前
 
@@ -171,17 +171,19 @@ Windows/Linux 平台矩阵仍归 P0-08，本计划在 macOS 上完成上述 Grok
 
 **前置依赖：** P0-09 测试门；本机 `grok` 可启动且已登录。
 
-- [ ] **第 1 步: 冻结观察环境**
+- [x] **第 1 步: 冻结观察环境**
       说明：记录 Node、pnpm、Electron、Grok CLI、`@agentclientprotocol/sdk` 版本。使用独立测试仓库，不要用用户正在开发的脏工作区当 cwd。确认 Adapter 写入的是 `userData/grok-home`，`~/.grok/config.toml` 在观察前后 hash 不变。
       预期：观察可以在另一台同样版本的机器上复做；用户全局 Grok 配置未被修改。
+      实际：2026-08-18 已写入观察文档第 0 节：Node `v24.11.0`、pnpm `10.33.0`、Electron `39.8.10`、Grok `1.0.0 (3cd0d0cbce)`、SDK `1.3.0`、`PROTOCOL_VERSION` `1`。独立 fixture 与 `~/.grok/config.toml` hash 仍待真机走查填写。
 
-- [ ] **第 2 步: 建立脱敏记录模板**
+- [x] **第 2 步: 建立脱敏记录模板**
       说明：在 `observations/grok-acp-observation.md` 按本计划 A–E 节建表。禁止粘贴完整 JSON-RPC。字段值只允许枚举、布尔、计数和已脱敏短文案。
       预期：文档可进 Git；`git grep` 找不到 sk- / Bearer / `AGENT_STUDIO_MODEL_API_KEY` 值。
 
-- [ ] **第 3 步: 确认观察入口不绕过产品边界**
+- [x] **第 3 步: 确认观察入口不绕过产品边界**
       说明：走查必须通过正式桌面路径：`window.agent.connect` → `createTask` → `startTurn`。禁止直接对 `grok agent stdio` 另写一套临时 Client 然后把结果当成 Adapter 行为。
       预期：观察到的失败能对应到 `GrokAcpAdapter` / `AgentService` / `TaskExecutor` 的现有错误码。
+      实际：观察文档已写明必须走开发版桌面；自动化代理不能代替点击。真机失败码对照仍待走查。
 
 ## 任务 2: 完成握手、session、prompt 观察
 
@@ -225,9 +227,10 @@ Windows/Linux 平台矩阵仍归 P0-08，本计划在 macOS 上完成上述 Grok
 
 **涉及范围：** 脱敏冻结夹具、单元测试、路线图状态。
 
-- [ ] **第 1 步: 增加不连网的方言断言**
+- [x] **第 1 步: 增加不连网的方言断言**
       说明：用观察文档中的字段名/枚举做 `grok-acp-mappers` 测试：例如“只有 allow_always 时 executionSupported 为 false”、“resume 未声明时 activateTaskSession 抛 session-restore-unsupported”、“未知 sessionUpdate 变成 recoverable error”。
       预期：这些测试不启动 Electron，不读真实 Key。
+      实际：新增 `grok-acp-observation.test.ts`，冻结握手未声明、`allow_always` 不可执行、未知 update 可恢复忽略、已声明丢弃事件。`activateTaskSession` 的 `session-restore-unsupported` 仍由既有 `agent-service.test.ts` / adapter 测试覆盖。真机见到新枚举后再补行，不得把夹具写成真实 Grok。
 
 - [ ] **第 2 步: 明确哪些缺口交给后续计划**
       说明：在观察文档末尾列出：恢复 UX → GACP-02；execute/fetch 不可读 → GACP-03；set_model 形状 → GACP-04；fs/terminal → GACP-05。禁止在本计划顺手实现。

@@ -1,6 +1,6 @@
 # Grok ACP 加深计划
 
-> 状态：已立项，P0-09 真机测试门已受限关闭，可以开始 GACP-01
+> 状态：已立项，P0-09 真机测试门已受限关闭，GACP-01 进行中（观察模板与方言夹具已落地）
 > 创建日期：2026-08-18
 > 定位：在现有 `GrokAcpAdapter` 最小闭环之上，按真实 Grok ACP 方言补齐验证、恢复、审批可解释性和 Client 能力广告
 > 产品愿景仍以 [product-vision.md](../../../product-vision.md) 为准；本目录不改 Runtime × Provider × Capability 分层
@@ -84,7 +84,7 @@ P0-A 主表因此变成：
 | 开发顺序 | 计划 | 权重 | 能否开始 | 说明 |
 | ---: | --- | ---: | --- | --- |
 | 5 | P0-09 | 4 | 真机验收已受限关闭 | 本目录的前置观察面 |
-| 5a | [GACP-01](gacp-01-real-grok-protocol-verification.md) | 5 | 可开始 | 只观察、记录、补真机验收，不扩协议面 |
+| 5a | [GACP-01](gacp-01-real-grok-protocol-verification.md) | 5 | 进行中 | 观察模板与方言夹具已落地；真机 A–E 待走查 |
 | 5b | [GACP-02](gacp-02-session-restore-capability-contract.md) | 5 | GACP-01 后 | 点进历史即可接着聊，无二次确认 |
 | 6 | P0-10 | 5 | GACP-02 后 | 工作台按「点进去就能发」来做，禁止加回继续按钮 |
 | 7 | P0-11 | 5 | 仍按原依赖 | 命令证据事实源 |

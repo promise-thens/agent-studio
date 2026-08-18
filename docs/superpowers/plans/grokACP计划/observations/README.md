@@ -8,4 +8,4 @@
 - 没见到的字段写 `not-observed`，禁止补“应该有”。
 - 受控 fixture 的行为不得写进这些表冒充真实 Grok。
 
-正式表格见计划开始后新增的 `grok-acp-observation.md`。方言版本矩阵见 GACP-04 产出的 `grok-acp-dialect-matrix.md`。
+正式表格见 [grok-acp-observation.md](grok-acp-observation.md)。方言版本矩阵见 GACP-04 产出的 `grok-acp-dialect-matrix.md`。

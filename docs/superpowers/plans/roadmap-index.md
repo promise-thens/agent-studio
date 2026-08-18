@@ -35,7 +35,7 @@
 |        3 | P0-07   |    5 | [核心权限 Broker](p0-07-core-permission-broker.md)                                           | 已完成                             | P0-04、P0-05、P0-06                      |
 |        4 | P0-08   |    5 | [Task Executor 与后台生命周期](p0-08-task-executor-background-lifecycle.md)                  | 核心与首批 E2E 完成，真机/平台待补 | P0-05、P0-06、P0-07                      |
 |        5 | P0-09   |    4 | [执行时间线与结果审阅](p0-09-execution-timeline-review.md)                                   | 真机验收已受限关闭                 | P0-02、P0-03、P0-06、P0-07、P0-08        |
-|       5a | GACP-01 |    5 | [真机 Grok ACP 协议观察与能力核实](grokACP计划/gacp-01-real-grok-protocol-verification.md)   | 待开始                             | P0-09 测试门                             |
+|       5a | GACP-01 |    5 | [真机 Grok ACP 协议观察与能力核实](grokACP计划/gacp-01-real-grok-protocol-verification.md)   | 进行中                             | P0-09 测试门                             |
 |       5b | GACP-02 |    5 | [会话恢复能力产品契约](grokACP计划/gacp-02-session-restore-capability-contract.md)           | 待开始                             | GACP-01                                  |
 |       5c | P0-10A  |    5 | [Claude Desktop 风格工作台大修](p0-10a-claude-desktop-workbench-ui.md)                       | 待开始                             | P0-09 测试门；与 GACP-02/06 对齐皮肤     |
 |        6 | P0-10   |    5 | [单 Runtime 任务工作台](p0-10-single-runtime-task-workbench.md)                              | 待开始                             | P0-06、P0-08、P0-09、P0-10A、GACP-02     |
@@ -76,7 +76,7 @@
 
 | 计划 | 权重 | 功能 | 状态 | 插入点 |
 | --- | ---: | --- | --- | --- |
-| [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) | 5 | 真机协议观察与能力核实 | 可开始 | P0-09 测试门已受限关闭 |
+| [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) | 5 | 真机协议观察与能力核实 | 进行中 | 观察模板与方言夹具已落地；真机 A–E 待走查 |
 | [GACP-02](grokACP计划/gacp-02-session-restore-capability-contract.md) | 5 | 点进历史即可接着聊 | 待开始 | GACP-01 后、P0-10 前 |
 | [GACP-03](grokACP计划/gacp-03-structured-permission-evidence.md) | 4 | 能过的自动过，不要一个个点 | 待开始 | P0-11 后 |
 | [GACP-04](grokACP计划/gacp-04-grok-acp-dialect-compat.md) | 4 | Grok ACP 方言兼容契约 | 待开始 | P0-10 后、P2 前 |
