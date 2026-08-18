@@ -230,7 +230,7 @@ Windows/Linux 平台矩阵仍归 P0-08，本计划在 macOS 上完成上述 Grok
 - [x] **第 1 步: 增加不连网的方言断言**
       说明：用观察文档中的字段名/枚举做 `grok-acp-mappers` 测试：例如“只有 allow_always 时 executionSupported 为 false”、“resume 未声明时 activateTaskSession 抛 session-restore-unsupported”、“未知 sessionUpdate 变成 recoverable error”。
       预期：这些测试不启动 Electron，不读真实 Key。
-      实际：新增 `grok-acp-observation.test.ts`，冻结握手未声明、`allow_always` 不可执行、未知 update 可恢复忽略、已声明丢弃事件。`activateTaskSession` 的 `session-restore-unsupported` 仍由既有 `agent-service.test.ts` / adapter 测试覆盖。真机见到新枚举后再补行，不得把夹具写成真实 Grok。
+      实际：`grok-acp-observation.test.ts` 冻结 mapper 方言；`grok-acp-adapter-observation.test.ts` 补剩余 Adapter 观察挂钩：initialize / set_model / 权限 option.kind / 未知与丢弃 update / stopReason，以及未声明恢复时阻断 load/resume。不连真实网络。
 
 - [ ] **第 2 步: 明确哪些缺口交给后续计划**
       说明：在观察文档末尾列出：恢复 UX → GACP-02；execute/fetch 不可读 → GACP-03；set_model 形状 → GACP-04；fs/terminal → GACP-05。禁止在本计划顺手实现。
