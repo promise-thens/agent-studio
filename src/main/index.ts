@@ -24,6 +24,11 @@ import {
   resolveControlledAcpE2eBootstrap,
   type ControlledAcpE2eBootstrap
 } from './e2e/controlled-acp-e2e-bootstrap'
+import {
+  resolveGacp01ObserveBootstrap,
+  type Gacp01ObserveBootstrap
+} from './e2e/gacp01-observe-bootstrap'
+import { createGrokAcpFileObserver } from './runtime/grok/grok-acp-protocol-observer'
 import type { DesktopIpcMain } from './ipc-types'
 import { ProviderConfigStore, type ProviderRuntimeConfig } from './provider/provider-config-store'
 import { ProviderConnectionTester } from './provider/provider-connection-tester'
@@ -93,7 +98,10 @@ function createWindow(): void {
 }
 
 /** safeStorage 只能在 app.whenReady() 后注入，避免模块加载阶段提前访问系统密钥库。 */
-async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | null): Promise<void> {
+async function initializeServices(
+  controlledE2e: ControlledAcpE2eBootstrap | null,
+  gacp01Observe: Gacp01ObserveBootstrap | null = null
+): Promise<void> {
   providerStore = new ProviderConfigStore({
     userDataPath: app.getPath('userData'),
     platform: process.platform,
@@ -119,6 +127,9 @@ async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | nul
     // Project 由 Main 注册，避免 E2E 借助 Renderer 或系统目录选择框传入工作区路径。
     await projectRegistry.register(controlledE2e.workspacePath)
     await projectRegistry.register(controlledE2e.secondaryWorkspacePath)
+  }
+  if (gacp01Observe) {
+    await projectRegistry.register(gacp01Observe.workspacePath)
   }
   taskStore = new TaskStore({ projectRegistry })
   await taskStore.initialize()
@@ -191,7 +202,10 @@ async function initializeServices(controlledE2e: ControlledAcpE2eBootstrap | nul
       userDataPath: app.getPath('userData'),
       getProviderConfig: () => requireProviderStore().getRuntimeConfig(),
       redactText: redactProviderText,
-      ...(controlledE2e ? { controlledFixture: controlledE2e.fixture } : {})
+      ...(controlledE2e ? { controlledFixture: controlledE2e.fixture } : {}),
+      ...(gacp01Observe
+        ? { protocolObserver: createGrokAcpFileObserver(gacp01Observe.observationFilePath) }
+        : {})
     }
   )
   runtimeAdapter = adapter
@@ -625,6 +639,7 @@ function requirePermissionBroker(): PermissionBroker {
  * 参数残缺、非开发态或路径越界都会直接失败关闭，不能回退到用户真实 Profile。
  */
 let controlledAcpE2e: ControlledAcpE2eBootstrap | null
+let gacp01Observe: Gacp01ObserveBootstrap | null
 try {
   controlledAcpE2e = resolveControlledAcpE2eBootstrap({
     development: is.dev,
@@ -632,11 +647,19 @@ try {
     // 构建后的 Main 固定在 out/main；从模块位置反推仓库根，不能信任 Playwright loader 改写的 appPath 或可变 cwd。
     repositoryRoot: resolve(__dirname, '../..')
   })
+  gacp01Observe = resolveGacp01ObserveBootstrap({
+    development: is.dev,
+    packaged: app.isPackaged
+  })
+  if (controlledAcpE2e && gacp01Observe) {
+    throw new Error('受控 E2E 与 GACP-01 观察不能同时启动。')
+  }
   if (controlledAcpE2e) app.setPath('userData', controlledAcpE2e.userDataPath)
+  if (gacp01Observe) app.setPath('userData', gacp01Observe.userDataPath)
 } catch {
-  console.error('[Agent Studio] 受控 ACP Runtime E2E 配置无效。')
+  console.error('[Agent Studio] 隔离 Electron 启动配置无效。')
   app.exit(1)
-  throw new Error('受控 ACP Runtime E2E 配置无效。')
+  throw new Error('隔离 Electron 启动配置无效。')
 }
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -655,7 +678,7 @@ if (hasSingleInstanceLock)
     .then(async () => {
       electronApp.setAppUserModelId('com.promise-thens.agent-studio')
       app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
-      await initializeServices(controlledAcpE2e)
+      await initializeServices(controlledAcpE2e, gacp01Observe)
       registerIpcHandlers()
       createWindow()
 

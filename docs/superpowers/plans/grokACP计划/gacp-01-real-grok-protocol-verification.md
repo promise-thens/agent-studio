@@ -192,7 +192,7 @@ Windows/Linux 平台矩阵仍归 P0-08，本计划在 macOS 上完成上述 Grok
 **涉及范围：** 真实连接、`mapGrokInitializeCapabilitySnapshot()`、`bindAgentStudioModel()`、`startTurn()`。
 
 - [ ] **第 1 步: 记录 initialize 与 set_model**
-      说明：首次连接后检查能力快照。`session.load` / `session.resume` 在握手声明后应为 `support: native, verification: declared, source: protocol`；未声明则为 `unsupported`。`session/set_model` 必须对 `agent-studio-default` 返回 object，否则按现有逻辑拆连接并记录为方言风险。
+      说明：优先跑 `pnpm test:gacp01:observe`（需 `GACP01_REAL_GROK=1` 与本机 Provider）。脚本必须走正式 `window.agent` 路径，禁止另写 ACP Client。首次连接后检查能力快照。`session.load` / `session.resume` 在握手声明后应为 `support: native, verification: declared, source: protocol`；未声明则为 `unsupported`。`session/set_model` 必须对 `agent-studio-default` 返回 object，否则按现有逻辑拆连接并记录为方言风险。
       预期：观察文档能解释 P0-03 快照里每一项为什么是 declared 而不是 verified。
 
 - [ ] **第 2 步: 记录 Task A 两轮、Task B、再回 A**

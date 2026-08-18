@@ -20,7 +20,9 @@
 
 - 另写一套临时 `grok agent stdio` Client，再把结果当成 `GrokAcpAdapter` 行为。
 - 用 `tests/e2e/controlled-acp-runtime.mjs` 或受控 fixture 填本表。
-- 自动化代理代替点击开发版桌面。真机走查需要本机已登录的 Grok，由人在开发版窗口里操作。
+- 在 CI 或 `pnpm test` 里连真实 Grok。
+
+推荐入口：本机设置 `GACP01_REAL_GROK=1` 后跑 `pnpm test:gacp01:observe`。脚本启动隔离开发版 Electron，走 `window.agent.connect → createTask → startTurn`。
 
 观察到的失败必须能对应到现有错误码：`GrokAcpAdapter` / `AgentService` / `TaskExecutor`。
 

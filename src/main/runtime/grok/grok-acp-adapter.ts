@@ -54,6 +54,14 @@ import {
   CONTROLLED_ACP_E2E_ADAPTER_TRACE_FILE,
   type ControlledAcpFixtureLaunch
 } from './controlled-acp-fixture'
+import {
+  describeSessionIdShape,
+  summarizeInitializeResponse,
+  summarizePermissionRequest,
+  summarizeSessionUpdate,
+  type GrokAcpObservationRecord,
+  type GrokAcpProtocolObserver
+} from './grok-acp-protocol-observer'
 
 interface PendingPermission {
   request: AgentRuntimePermissionCancellation
@@ -100,6 +108,8 @@ export interface GrokAcpAdapterOptions {
   redactText: (text: string) => string
   /** 仅由 Main 开发态 E2E bootstrap 注入；绝不接受 Renderer、IPC 或普通环境变量。 */
   controlledFixture?: ControlledAcpFixtureLaunch
+  /** 仅 GACP-01 真机观察 bootstrap 注入；生产路径必须缺省。 */
+  protocolObserver?: GrokAcpProtocolObserver
 }
 
 /**
@@ -209,6 +219,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     child.stderr.on('data', (text: string) => {
       // Runtime stderr 只在主进程排空并脱敏，不提升为产品事件。
       void this.safeRedact(text)
+      if (text.trim()) this.observe({ kind: 'stderr', hasText: true })
     })
     child.once('error', (error) => {
       this.handleRuntimeProcessError(child, connectionGeneration, workspace, error)
@@ -270,8 +281,21 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       })
       this.assertSessionOperationCurrent(current)
       if (!response.sessionId) {
+        this.observe({
+          kind: 'session-op',
+          method: 'new',
+          sessionIdShape: 'empty',
+          ok: false,
+          errorCode: 'operation-failed'
+        })
         throw this.createError('operation-failed', 'Runtime 未返回有效会话标识。')
       }
+      this.observe({
+        kind: 'session-op',
+        method: 'new',
+        sessionIdShape: describeSessionIdShape(response.sessionId),
+        ok: true
+      })
       await this.bindAgentStudioModel(current, response.sessionId, context.workspace)
 
       const session: AgentRuntimeSessionRef = {
@@ -305,7 +329,20 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       await this.bindAgentStudioModel(current, session.runtimeSessionId, session.workspace)
       this.activateSession(session)
       this.verifyCapability('session.load', 'stable')
+      this.observe({
+        kind: 'session-op',
+        method: 'load',
+        sessionIdShape: describeSessionIdShape(session.runtimeSessionId),
+        ok: true
+      })
     } catch (error) {
+      this.observe({
+        kind: 'session-op',
+        method: 'load',
+        sessionIdShape: describeSessionIdShape(session.runtimeSessionId),
+        ok: false,
+        errorCode: error instanceof AgentRuntimeAdapterError ? error.code : 'operation-failed'
+      })
       if (error instanceof AgentRuntimeAdapterError) throw error
       this.assertSessionOperationCurrent(current)
       throw this.toRestoreError(error, '加载 Runtime 会话失败')
@@ -328,7 +365,20 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       await this.bindAgentStudioModel(current, session.runtimeSessionId, session.workspace)
       this.activateSession(session)
       this.verifyCapability('session.resume', 'stable')
+      this.observe({
+        kind: 'session-op',
+        method: 'resume',
+        sessionIdShape: describeSessionIdShape(session.runtimeSessionId),
+        ok: true
+      })
     } catch (error) {
+      this.observe({
+        kind: 'session-op',
+        method: 'resume',
+        sessionIdShape: describeSessionIdShape(session.runtimeSessionId),
+        ok: false,
+        errorCode: error instanceof AgentRuntimeAdapterError ? error.code : 'operation-failed'
+      })
       if (error instanceof AgentRuntimeAdapterError) throw error
       this.assertSessionOperationCurrent(current)
       throw this.toRestoreError(error, '恢复 Runtime 会话失败')
@@ -380,6 +430,13 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       }
     }
 
+    this.observe({
+      kind: 'session-op',
+      method: 'close',
+      sessionIdShape: describeSessionIdShape(session.runtimeSessionId),
+      ok: closeError == null,
+      ...(closeError ? { errorCode: closeError.code } : {})
+    })
     if (closeError) throw closeError
   }
 
@@ -421,6 +478,9 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       }
 
       this.verifyCapability('session.prompt.text', 'stable', undefined, false)
+      if (typeof response.stopReason === 'string') {
+        this.observe({ kind: 'prompt-stop', stopReason: response.stopReason })
+      }
       const terminal = mapGrokPromptResponse(response, context.runtimeSessionId)
       this.emitDraft(activeTurn, terminal)
       this.restoreReadyStatus(activeTurn)
@@ -506,6 +566,12 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     })
     if (!this.isCurrentConnection(connection, child, connectionGeneration)) return false
 
+    this.observe(
+      summarizeInitializeResponse(
+        response as unknown as Record<string, unknown>,
+        acp.PROTOCOL_VERSION
+      )
+    )
     this.capabilitySnapshot = mapGrokInitializeCapabilitySnapshot(
       this.capabilitySnapshot,
       response,
@@ -554,6 +620,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
     const id = randomUUID()
     const { allowOnceOptionId, rejectOnceOptionId } = findPermissionOptions(params)
+    this.observe(summarizePermissionRequest(params as unknown as Record<string, unknown>))
     const previousSnapshot = activeTurn.toolCallAuthorizationSnapshots.get(
       params.toolCall.toolCallId
     )
@@ -635,6 +702,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     }
 
     const update = params.update
+    this.observe(summarizeSessionUpdate(update as unknown as Record<string, unknown>))
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       if (!isSafeGrokToolCallId(update.toolCallId)) {
         this.rejectAllToolPermissions(activeTurn)
@@ -809,14 +877,23 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       this.assertSessionOperationCurrent(current)
 
       if (response === null || typeof response !== 'object' || Array.isArray(response)) {
+        this.observe({
+          kind: 'set-model',
+          accepted: false,
+          responseShape: response === null ? 'null' : 'missing'
+        })
         throw this.createError(
           'operation-failed',
           'Grok Runtime 未确认 Agent Studio 模型绑定，已阻止继续执行。'
         )
       }
+      this.observe({ kind: 'set-model', accepted: true, responseShape: 'object' })
     } catch (error) {
       // Runtime 可能已经切换到目标 session；绑定失败时必须废弃整条连接，避免本地仍记录旧 Task。
       this.assertSessionOperationCurrent(current)
+      if (!(error instanceof AgentRuntimeAdapterError)) {
+        this.observe({ kind: 'set-model', accepted: false, responseShape: 'failed' })
+      }
       const adapterError = this.toAdapterError(
         error,
         'operation-failed',
@@ -1118,6 +1195,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         stdio: ['pipe', 'pipe', 'pipe']
       }
     )
+  }
+
+  /** 观察记录缺省为空操作，避免生产路径多写协议字段。 */
+  private observe(record: GrokAcpObservationRecord): void {
+    this.options.protocolObserver?.record(record)
   }
 
   /** 受控 E2E 辅助 trace 按 Adapter 调用顺序串行写入，生产路径不会触及该文件。 */
