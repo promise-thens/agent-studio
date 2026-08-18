@@ -1,6 +1,6 @@
 # Agent Studio 分阶段功能路线索引
 
-> 状态：P0-01 至 P0-07 已完成代码、自动验证与 Electron 验收；P0-08 核心实现、完整自动门禁和首批受控 lifecycle Electron E2E 已完成，真机与跨平台验收待补；P0-09 执行时间线正在测试，RG-09-01 实时/历史 Prompt 已受限通过，同一 Task 第二轮与 RG-09-04 至 RG-09-08 未关；Grok ACP 加深计划从 P0-09 测试门之后开始，见 [grokACP计划](grokACP计划/README.md)
+> 状态：P0-01 至 P0-07 已完成代码、自动验证与 Electron 验收；P0-08 核心实现、完整自动门禁和首批受控 lifecycle Electron E2E 已完成，真机与跨平台验收待补；P0-09 真机验收已受限关闭，可以开始 GACP-01；Grok ACP 加深计划见 [grokACP计划](grokACP计划/README.md)
 >
 > 本索引只负责开发顺序、权重、依赖和进度导航；每一个实际功能只在对应独立 Markdown 中定义任务。产品愿景仍以 [product-vision.md](../../product-vision.md) 为唯一愿景来源。
 
@@ -10,7 +10,7 @@
 - **权重 5：** 阻塞性基础能力或安全边界；权重 4：核心闭环；权重 3：增强能力；权重 2：有足够真实数据后再做的优化。
 - **三个验收层：** P0-A 是本地可用闭环；P0-B 是隔离交付闭环；P0+ 是不阻塞第一可用版本的增强能力。后续计划应依赖明确验收层或具体计划，不再使用含义模糊的“依赖整个 P0”。
 - **安全不是过度安全：** 只读项目元信息允许任务范围授权；写文件/执行命令展示影响；删除、外发数据、登录态、屏幕和剪贴板始终明确确认。不会做自研加密、逐文件弹窗、默认全盘扫描或未有生态就先做插件市场。
-- **状态说明：** P0-01 至 P0-07 已完成代码、自动验证和 Electron 验收；P0-06 已通过真实 Provider 调用、多轮、重启恢复成功/失败、不可用 Project、异常中断、取消、损坏隔离和物理删除走查。P0-07 已通过完整自动门禁、主要真实 Grok 权限路径与受控 ACP Runtime Electron E2E；后者使用固定本地 fixture 验证完整 Electron/stdio ACP 管线，不等价于真实 Grok 黑盒触发，也不把 Broker 描述为 Runtime 进程沙箱。P0-08 已完成核心实现、Permission E2E 和首批 lifecycle E2E，真实 Grok 活动退出、窗口重建/重启 interrupted 与 Windows/Linux 仍待验收。P0-09 正在测试：RG-09-01 阻塞的实时/历史 Prompt 不一致已在 Windows 复测中受限通过，同一 Task 第二轮与 RG-09-04 至 RG-09-08 未完成；测试门关闭前不得开始 Grok ACP 加深或 P0-10 主体。P1 前五项已有实现提交 `fe2a81a`，但仍列为“实现待复核”。
+- **状态说明：** P0-01 至 P0-07 已完成代码、自动验证和 Electron 验收；P0-06 已通过真实 Provider 调用、多轮、重启恢复成功/失败、不可用 Project、异常中断、取消、损坏隔离和物理删除走查。P0-07 已通过完整自动门禁、主要真实 Grok 权限路径与受控 ACP Runtime Electron E2E；后者使用固定本地 fixture 验证完整 Electron/stdio ACP 管线，不等价于真实 Grok 黑盒触发，也不把 Broker 描述为 Runtime 进程沙箱。P0-08 已完成核心实现、Permission E2E 和首批 lifecycle E2E，Windows/Linux 生命周期平台差异仍待验收；真实 Grok 活动退出与重启 interrupted 已由 2026-08-18 Windows 夜间补测在 Grok 路径上收口，正式协议观察仍归 GACP-01。P0-09 真机验收已受限关闭：同一 Task 两轮实时/历史一致，权限允许/拒绝、终态、退出三分支已有结论；Windows 窗口销毁/重建与历史截断保持限制。可以开始 GACP-01，不可开始 GACP-02 或 P0-10 主体。P1 前五项已有实现提交 `fe2a81a`，但仍列为“实现待复核”。
 - **产品主线：** 先用 Grok Runtime 做成首个 Codex-style 单 Runtime 工作台，再扩展 Provider 宽度、Codex Runtime、插件和多大脑协作。HTML 预览是 Artifact 的隔离扩展，不是产品本体。
 
 ## P0：统一核心骨架与 Codex-style 单 Runtime 工作台
@@ -34,7 +34,7 @@
 |        2 | P0-06   |    5 | [Project、Task、Turn 与历史恢复](p0-06-task-session-history.md)                              | 已完成                             | P0-01、P0-02、P0-05                      |
 |        3 | P0-07   |    5 | [核心权限 Broker](p0-07-core-permission-broker.md)                                           | 已完成                             | P0-04、P0-05、P0-06                      |
 |        4 | P0-08   |    5 | [Task Executor 与后台生命周期](p0-08-task-executor-background-lifecycle.md)                  | 核心与首批 E2E 完成，真机/平台待补 | P0-05、P0-06、P0-07                      |
-|        5 | P0-09   |    4 | [执行时间线与结果审阅](p0-09-execution-timeline-review.md)                                   | 测试中；RG-09-01 受限通过          | P0-02、P0-03、P0-06、P0-07、P0-08        |
+|        5 | P0-09   |    4 | [执行时间线与结果审阅](p0-09-execution-timeline-review.md)                                   | 真机验收已受限关闭                 | P0-02、P0-03、P0-06、P0-07、P0-08        |
 |       5a | GACP-01 |    5 | [真机 Grok ACP 协议观察与能力核实](grokACP计划/gacp-01-real-grok-protocol-verification.md)   | 待开始                             | P0-09 测试门                             |
 |       5b | GACP-02 |    5 | [会话恢复能力产品契约](grokACP计划/gacp-02-session-restore-capability-contract.md)           | 待开始                             | GACP-01                                  |
 |       5c | P0-10A  |    5 | [Claude Desktop 风格工作台大修](p0-10a-claude-desktop-workbench-ui.md)                       | 待开始                             | P0-09 测试门；与 GACP-02/06 对齐皮肤     |
@@ -76,7 +76,7 @@
 
 | 计划 | 权重 | 功能 | 状态 | 插入点 |
 | --- | ---: | --- | --- | --- |
-| [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) | 5 | 真机协议观察与能力核实 | 待开始 | P0-09 测试门之后 |
+| [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) | 5 | 真机协议观察与能力核实 | 可开始 | P0-09 测试门已受限关闭 |
 | [GACP-02](grokACP计划/gacp-02-session-restore-capability-contract.md) | 5 | 点进历史即可接着聊 | 待开始 | GACP-01 后、P0-10 前 |
 | [GACP-03](grokACP计划/gacp-03-structured-permission-evidence.md) | 4 | 能过的自动过，不要一个个点 | 待开始 | P0-11 后 |
 | [GACP-04](grokACP计划/gacp-04-grok-acp-dialect-compat.md) | 4 | Grok ACP 方言兼容契约 | 待开始 | P0-10 后、P2 前 |

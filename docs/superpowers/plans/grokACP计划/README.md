@@ -1,15 +1,15 @@
 # Grok ACP 加深计划
 
-> 状态：已立项，**不得插入正在测试的 P0-09**
+> 状态：已立项，P0-09 真机测试门已受限关闭，可以开始 GACP-01
 > 创建日期：2026-08-18
 > 定位：在现有 `GrokAcpAdapter` 最小闭环之上，按真实 Grok ACP 方言补齐验证、恢复、审批可解释性和 Client 能力广告
 > 产品愿景仍以 [product-vision.md](../../../product-vision.md) 为准；本目录不改 Runtime × Provider × Capability 分层
 
 ## 1. 为什么单独开这个目录
 
-P0-05 已经把 `GrokAgentBridge` 收成 `GrokAcpAdapter`，P0-01 至 P0-08 把产品身份、事件、权限和单槽执行立住了。当前（2026-08-18）**P0-09 执行时间线正在测试**。
+P0-05 已经把 `GrokAgentBridge` 收成 `GrokAcpAdapter`，P0-01 至 P0-08 把产品身份、事件、权限和单槽执行立住了。当前（2026-08-18 夜间）**P0-09 执行时间线真机验收已受限关闭**。
 
-这时再扩 ACP，最容易犯两种错：
+P0-09 真机测试门已于 2026-08-18 Windows 夜间补测后受限关闭。这时再扩 ACP，最容易犯两种错：
 
 1. 打断 P0-09 的 persist-before-publish / 公开事件边界，把协议字段重新打进 Timeline。
 2. 在还没看清真实 Grok 握手和 `session/update` 形状时，提前做 fs/terminal/MCP，或把 `rawInput` 重新打开当权限证据。
@@ -83,8 +83,8 @@ P0-A 主表因此变成：
 
 | 开发顺序 | 计划 | 权重 | 能否开始 | 说明 |
 | ---: | --- | ---: | --- | --- |
-| 5 | P0-09 | 4 | 测试中 | 本目录的前置观察面 |
-| 5a | [GACP-01](gacp-01-real-grok-protocol-verification.md) | 5 | P0-09 测试门后 | 只观察、记录、补真机验收，不扩协议面 |
+| 5 | P0-09 | 4 | 真机验收已受限关闭 | 本目录的前置观察面 |
+| 5a | [GACP-01](gacp-01-real-grok-protocol-verification.md) | 5 | 可开始 | 只观察、记录、补真机验收，不扩协议面 |
 | 5b | [GACP-02](gacp-02-session-restore-capability-contract.md) | 5 | GACP-01 后 | 点进历史即可接着聊，无二次确认 |
 | 6 | P0-10 | 5 | GACP-02 后 | 工作台按「点进去就能发」来做，禁止加回继续按钮 |
 | 7 | P0-11 | 5 | 仍按原依赖 | 命令证据事实源 |
@@ -94,7 +94,7 @@ P0-A 主表因此变成：
 | 5c | [GACP-06](gacp-06-subagent-timeline.md) | 3 | P0-09 测试门后，可与 GACP-02 交错 | 子 Agent 嵌套卡片，对标 Claude Desktop |
 | 晚 | [GACP-05](gacp-05-client-capability-advertisement.md) | 3 | P0-15 后且产品确认 | 未实现不得广告 |
 
-P0-08 尚未完成的真实 Grok 活动退出、窗口重建、重启 `interrupted`，由 **GACP-01 收口 Grok 协议相关部分**；Windows/Linux 生命周期平台差异仍记在 P0-08，不搬进本目录。
+P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windows 夜间补测中见到产品终态；GACP-01 仍要补协议级字段观察。Windows/Linux 生命周期平台差异仍记在 P0-08，不搬进本目录。
 
 ### 3.2 明确不要提前做的事
 

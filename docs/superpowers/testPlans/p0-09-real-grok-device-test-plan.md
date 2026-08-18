@@ -74,7 +74,7 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 - [ ] 配置 Provider 后确认页面只显示“已保存”，不会回填明文 Key。
 
 **门禁证据：** 2026-08-18 macOS：Node `v22.22.0`、pnpm `10.33.0`；`pnpm exec eslint . --no-cache` 通过；`pnpm test` 为 45 files / 437 tests 通过；`pnpm typecheck`、`pnpm build`、`git diff --check` 通过；`pnpm test:permission:e2e` 5/5 通过；`pnpm test:lifecycle:e2e` 5/5 通过。开发版 UI 显示 Agent Studio、Grok Build 已连接和独立的 `grok-4.6` modelId。未进入设置页，Key 不回填项未验证。2026-08-18 Windows 复测：Node `v24.11.0`、pnpm `10.33.0`；相关 Vitest `task-timeline-reducer` + `useTaskTimeline` 共 13 项通过；开发版基于 `2a786f7` 加上 `startTurn` 后 `acceptAdmission` 修复。
-**门禁结论：** `自动化基线仍以 2026-08-18 macOS 全量门禁为准；Windows 已复测 RG-09-01 实时/历史 Prompt 一致，标受限通过。P0-09 真机验收仍未关闭：同一 Task 第二轮、RG-09-04 至 RG-09-08 未完成。`
+**门禁结论：** `自动化基线仍以 2026-08-18 macOS 全量门禁为准。2026-08-18 夜间 Windows 补测后，P0-09 真机验收按受限关闭：同一 Task 第二轮、权限允许一次、reload、终态、退出三分支已有结论；Windows 窗口销毁/重建与安全历史截断保持平台/安全限制。`
 
 ---
 
@@ -109,14 +109,14 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 3. [x] 在执行期间记录 Timeline：用户 Prompt、当前状态、Runtime 实际提供的 Plan/Tool/消息/Reasoning/完成节点。没有提供的节点不作为失败。
 4. [x] 等待可信终态；记录是 `completed`、`failed`、`cancelled` 还是 `interrupted`，不要根据聊天文案推断成功。
 5. [x] 记录 TaskResultReview：状态、Usage（若提供）、修改路径数（若提供）、验证/Artifact 的“未提供/未接入”说明，以及任何 warnings。
-6. [ ] 在同一 Task 发送第二轮 Prompt，例如：`基于刚才的结论，用两句话说明下一步建议；不要修改文件。`
-7. [ ] 确认第二轮创建新的 Turn，而第一轮的节点和终态不被覆盖或串入第二轮。
+6. [x] 在同一 Task 发送第二轮 Prompt，例如：`基于刚才的结论，用两句话说明下一步建议；不要修改文件。`
+7. [x] 确认第二轮创建新的 Turn，而第一轮的节点和终态不被覆盖或串入第二轮。
 8. [x] 从侧栏切到其他 Task 后再打开 Task A，进入只读历史；逐轮核对 Prompt、节点顺序、终态、错误和结果审阅与实时状态一致。
-9. [ ] 记录最终 `git status --short`；只读任务不应产生未预期变更。
+9. [x] 记录最终 `git status --short`；只读任务不应产生未预期变更。
 
 ### 通过判定
 
-- [ ] 两轮分别显示，顺序正确，没有交叉节点。
+- [x] 两轮分别显示，顺序正确，没有交叉节点。
 - [x] 终态来自真实执行事实；不把运行中的 UI 文案作为完成证据。
 - [x] 历史回放与实时展示一致。
 - [x] Usage/Diff/Validation/Artifact 缺失时明确降级，不展示空白成功状态。
@@ -129,12 +129,12 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 
 ### A. 允许一次
 
-1. [ ] 新建 **Task Permission-Allow**，发送只会作用于 fixture 的可逆 Prompt，例如请求在 `scratch/allowed.txt` 写入固定文本，并明确要求在操作前请求确认。
-2. [ ] 权限弹窗出现后，记录操作摘要、关联 Task/Turn、风险级别、当前 Timeline 状态和执行快照状态。
-3. [ ] 确认等待期间，操作尚未在 fixture 中发生；不得提前把它记为成功。
-4. [ ] 点击“仅允许这一次”。
-5. [ ] 等待可信终态；检查 Timeline 与历史审计中出现对应的 `user-allowed` 事实。
-6. [ ] 仅检查 `scratch/allowed.txt` 这一个预期路径，记录内容摘要与 `git diff --stat`；不要读取无关文件。
+1. [x] 新建 **Task Permission-Allow**，发送只会作用于 fixture 的可逆 Prompt，例如请求在 `scratch/allowed.txt` 写入固定文本，并明确要求在操作前请求确认。
+2. [x] 权限弹窗出现后，记录操作摘要、关联 Task/Turn、风险级别、当前 Timeline 状态和执行快照状态。
+3. [x] 确认等待期间，操作尚未在 fixture 中发生；不得提前把它记为成功。
+4. [x] 点击“仅允许这一次”。
+5. [x] 等待可信终态；检查 Timeline 与历史审计中出现对应的 `user-allowed` 事实。
+6. [x] 仅检查预期写入路径，记录内容摘要与 `git status --short`；不要读取无关文件。
 
 ### B. 拒绝或停止
 
@@ -147,9 +147,9 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 
 ### 通过判定
 
-- [ ] 等待状态、弹窗与审计都绑定正确 Task/Turn。
-- [ ] 允许和拒绝都不自动发生；操作结果与审计原因一致。
-- [ ] 不把“拒绝”误写为“成功”或“已取消”。
+- [x] 等待状态、弹窗与审计都绑定正确 Task/Turn。
+- [x] 允许和拒绝都不自动发生；操作结果与审计原因一致。
+- [x] 不把“拒绝”误写为“成功”或“已取消”。
 
 ---
 
@@ -298,14 +298,14 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 
 | 场景 | 必测 | 结论 | 证据位置 | 关联验收标准 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| RG-09-01 多轮 Timeline | 是 | **受限通过** | 2026-08-18 Windows 开发版：Project `pA` 真实 Grok 单轮只读复测；历史回放对照截图 | 实时/历史一致 | 修复 `startTurn` 后 `acceptAdmission`。实时 Timeline 与权限弹窗 Task 字段均显示完整 Prompt，不再出现“用户指令不可用”。切到其他 Task 再打开只读历史，Prompt、Tool、Reasoning 与 `completed` 终态与实时一致。结果审阅 Usage 为“本轮未提供”。**未做同一 Task 第二轮**；并排两个同名 Task 不能代替多轮不串流验收。 |
-| RG-09-02 权限 | 是 | 受限通过（仅拒绝分支） | 2026-08-18 真实 Grok L1 写入请求 | 等待/审计正确 | 宿主在写入前展示正确的 Task、`write-file`、相对受限路径和 L1 风险；用户拒绝后 Turn 为 `cancelled`，历史审计记录 `user-denied`，fixture 无写入。允许一次分支未验证。 |
-| RG-09-03 Task/Project 切换 | 是 | 受限通过 | 2026-08-18 真实 Grok：A 运行时切空 Task，再切空 Project B | 不跨流 | 空 Task/Project B 未显示 A 的 Timeline、结果审阅、错误、消息或权限审计；回到 A 仅有原 Turn，未观察到重复 Prompt/Turn/可见重连。A 在 Project B 观察前已正常完成，未能证明持续后台执行；待决权限为强制模态，未决时不能切换 Task/Project。 |
-| RG-09-04 reload/窗口重建 | 是 | 未验证 | 暂停 | 恢复一致 | RG-09-01 实时/历史一致性失败后，继续不能形成有效通过证据。 |
-| RG-09-05 终态 | 是 | 未验证 | 暂停 | 错误与终态可见 | 已观察到真实 `completed` 与拒绝后的 `cancelled`，但场景全量验收依赖 RG-09-01，未判通过。 |
-| RG-09-06 长任务 | 是 | 未验证 | 暂停 | 高频可交互 | 同上。 |
-| RG-09-07 能力降级 | 是 | 未验证 | 暂停 | 不伪造成功 | 未使用不安全方式触发历史截断。 |
-| RG-09-08 退出/重启 | 是 | 未验证 | 暂停 | interrupted 回放 | 同上。 |
+| RG-09-01 多轮 Timeline | 是 | **通过** | 2026-08-18 Windows 开发版 + 夜间补测：隔离 fixture `pA`；实时/历史对照截图；持久化 Task `dc35087a` 两轮均为 `completed` | 实时/历史一致 | 同一 Task 第一轮只读 README，第二轮基于结论给建议。两轮 Prompt、节点和终态分开，历史回放 Prompt 与实时一致。结果审阅 Usage/Diff/Validation/Artifact 均为“本轮未提供”。只读任务 fixture `git status` 干净。 |
+| RG-09-02 权限 | 是 | **通过** | 拒绝：2026-08-18 真实 Grok L1 写入；允许：同日夜间 `execute-command` L3 | 等待/审计正确 | 拒绝分支仍成立。允许一次：弹窗为 `waiting-permission`，操作 `execute-command`、风险 L3，用户点“仅允许这一次”后审计 `user-allowed`/`once`，Turn `completed`，fixture 新增 `scratch/p009-allow.txt`（内容为约定标记）。真实 Grok 未走 `write-file` L1，而是命令执行。 |
+| RG-09-03 Task/Project 切换 | 是 | 受限通过 | 2026-08-18 白天 + 夜间：A 运行中切空 Task/Project B | 不跨流 | 空 Task/Project B 未显示 A 的结果审阅或权限审计。夜间补测切回 A 时仍是同一 `executionId`。长任务很快结束，未能稳定证明持续后台执行；待决权限仍是强制模态。 |
+| RG-09-04 reload/窗口重建 | 是 | 受限通过 | 2026-08-18 夜间 Windows 开发版 | 恢复一致 | running reload：同一 `executionId` 保留，但 reload 期间任务已完成，Stop 不再可见。waiting-permission reload：execution 仍为 `waiting-permission`，同一 `executionId`；审批弹窗未恢复，符合当前没有 pending approval 查询协议的冻结契约。Windows 关闭最后窗口等于退出，不能当作 macOS Dock 窗口重建。 |
+| RG-09-05 终态 | 是 | **通过** | 2026-08-18 夜间真实 Grok | 错误与终态可见 | 已见 `completed`、拒绝/停止后的 `cancelled`（`runtime-cancelled`）、以及杀掉 `grok agent --no-leader` 子进程后的 `failed`/`runtime-error`（状态芯片“连接异常”）。历史未倒退为运行中，也未自动重放 Prompt。 |
+| RG-09-06 长任务 | 是 | 受限通过 | 2026-08-18 夜间分步分析 Prompt | 高频可交互 | 真实 Grok 很快完成，未形成长时间高频流。状态芯片与 Stop 在执行中可见；截获到的交互窗口偏短，不按“很流畅”记通过。 |
+| RG-09-07 能力降级 | 是 | **通过**（截断未验证） | 2026-08-18 夜间只读两轮 Task 的结果审阅 | 不伪造成功 | Usage/Diff/Validation/Artifact 均明确“本轮未提供”或“尚未接入”，无空白成功。未使用不安全方式触发历史截断，截断小节保持未验证。 |
+| RG-09-08 退出/重启 | 是 | **通过** | 2026-08-18 夜间独立长任务三分支 | interrupted 回放 | 继续等待：进程未退出，execution 仍 `running`。取消并退出后重启：Task/Turn 为 `cancelled`，不自动重放。强制退出后重启：Task/Turn 为 `interrupted`，没有变成 `completed`。原生 MessageBox 由测试夹具按按钮序号选择，已核对标题为“任务仍在执行”。 |
 
 ### 13.2 阻塞失败条件
 
@@ -338,4 +338,6 @@ P0-09 只有在下列条件均满足时，才能在实施计划和 roadmap 中�
 - 真机结果：Project A/B 均使用干净、可丢弃的本地 Git fixture。真实 Grok 已完成只读、权限拒绝和 Task/Project 隔离复测；两份 fixture 在结束时 `git status --short` 与 `git diff --stat` 均为空。未访问设置页，未记录 Key、Cookie、Header、环境变量、绝对路径或原始协议负载。
 - 已确认失败（同日较早）：全新只读 Task 在不切换 Task/Project 的情况下，实时 Timeline 显示“用户指令不可用”，重新打开同一 Task 的历史 Timeline 则正确显示 Prompt。
 - Windows 复测（同日稍后，开发版 `2a786f7` + `acceptAdmission` 修复；Node `v24.11.0`、pnpm `10.33.0`；界面 modelId 为 `grok-4.5`）：Project 显示名 `pA` / `pB`。实时执行中 Timeline 与权限弹窗 Task 字段均显示完整 Prompt；终态 `completed` 后切到其他 Task 再打开只读历史，Prompt 与已观察节点一致。RG-09-01 改为**受限通过**。同一 Task 第二轮未做；并排两个同名 Task 不能代替多轮验收。其中一个 Task 额外出现 `execute-command` 权限并被用户允许一次，历史审计为 `user-allowed`；这不是 RG-09-02 允许分支的完整验收。
-- 已知限制：真实写入请求可被宿主在执行前以 L1 权限弹窗拦截；拒绝后的审计与终态正确。弹窗是强制模态层，未决时无法切换 Task/Project，因此不能在保留弹窗的同时验证 Project 切换。允许一次分支、同一 Task 第二轮、RG-09-04 至 RG-09-08、pending permission reload 恢复和安全历史截断触发仍未验证。P0-09 测试门仍未关闭。
+- 白天已知限制（夜间补测前）：真实写入请求可被宿主在执行前以 L1 权限弹窗拦截；拒绝后的审计与终态正确。弹窗是强制模态层，未决时无法切换 Task/Project。当时允许一次、同一 Task 第二轮、RG-09-04 至 RG-09-08 尚未关闭。
+- Windows 夜间补测（同日稍后，开发版 `f19cb2e`；Node `v24.11.0`、pnpm `10.33.0`；Grok CLI `1.0.0 (3cd0d0cbce)`；界面 modelId 为 `grok-4.5`）：使用可丢弃 Temp fixture `pA`/`pB`，经正式桌面路径 `打开项目 → 连接 Grok → 新对话 → startTurn`。HTTP Provider 设置页可见“HTTP 连接未加密”提示。相关 Vitest `task-timeline-reducer` + `useTaskTimeline` 13 项通过。未重跑全仓 ESLint/typecheck/build/E2E。
+- 夜间补测结论：RG-09-01 同一 Task 两轮 + 历史回放改为**通过**。RG-09-02 允许一次改为**通过**（真实 Grok 申请的是 `execute-command` L3，不是 `write-file` L1；允许后写入 `scratch/p009-allow.txt`）。RG-09-05、RG-09-07、RG-09-08 改为**通过**。RG-09-03、RG-09-04、RG-09-06 保持或改为**受限通过**。Windows 窗口销毁/重建与安全历史截断仍记限制。P0-09 真机测试门按受限关闭；可以开始 GACP-01，不可开始 GACP-02 或 P0-10 主体。
