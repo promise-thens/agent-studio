@@ -1,7 +1,8 @@
 import type { TaskExecutionDto } from '../../shared/task-execution'
 import type { HistoryExecutionState, TaskHistorySummary } from '../../shared/task-history'
 
-const LIVE_TASK_STATES = new Set<string>(['running', 'waiting-permission'])
+/** 与 activeExecution 非终态对齐：排队、运行、待审批、停止中都算活动项。 */
+const LIVE_TASK_STATES = new Set<string>(['queued', 'running', 'waiting-permission', 'cancelling'])
 /** 尚未被首条 Prompt 命名的占位标题；历史默认「新任务」，UI 新建默认「新对话」。 */
 const UNTITLED_TASK_TITLES = new Set(['新对话', '新任务'])
 const SESSION_TITLE_MAX_LENGTH = 28
@@ -43,7 +44,7 @@ export interface TaskListItemView {
   taskId: string
   title: string
   selected: boolean
-  /** 运行或等待审批：由列表状态或后台 execution 共同决定，不依赖当前选中项。 */
+  /** 排队/运行/待审批/停止中：由列表状态或后台 execution 共同决定，不依赖当前选中项。 */
   live: boolean
   waitingPermission: boolean
   state: HistoryExecutionState

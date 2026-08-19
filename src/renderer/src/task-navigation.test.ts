@@ -62,6 +62,44 @@ describe('Task 导航展示', () => {
     expect(view.canArchiveOrDelete).toBe(false)
   })
 
+  it('queued 与 cancelling 也是活动项，不能归档删除', () => {
+    const queued = toTaskListItemView(task('task-a', 'queued'), 'task-b', {
+      taskId: 'task-a',
+      state: 'queued'
+    })
+    expect(queued).toMatchObject({
+      live: true,
+      canArchiveOrDelete: false
+    })
+
+    const cancelling = toTaskListItemView(task('task-a', 'cancelling'), 'task-b', {
+      taskId: 'task-a',
+      state: 'cancelling'
+    })
+    expect(cancelling).toMatchObject({
+      live: true,
+      canArchiveOrDelete: false
+    })
+
+    const queuedOnList = toTaskListItemView(task('task-a', 'queued'), 'task-b', null)
+    expect(queuedOnList.live).toBe(true)
+    expect(queuedOnList.canArchiveOrDelete).toBe(false)
+    expect(
+      countProjectLiveTasks('p-a', [task('task-a', 'completed')], 'p-a', {
+        taskId: 'task-a',
+        state: 'queued',
+        projectId: 'p-a'
+      })
+    ).toBe(1)
+    expect(
+      countProjectLiveTasks('p-a', [task('task-a', 'completed')], 'p-a', {
+        taskId: 'task-a',
+        state: 'cancelling',
+        projectId: 'p-a'
+      })
+    ).toBe(1)
+  })
+
   it('未选中 Project 仍能按后台 execution 计运行数', () => {
     expect(
       countProjectLiveTasks('p-a', [task('task-b', 'completed', 'p-b')], 'p-b', {

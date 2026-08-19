@@ -213,7 +213,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
             type="button"
             role="menuitem"
             :disabled="mutationActionsDisabled || !item.canArchiveOrDelete"
-            :title="item.canArchiveOrDelete ? '归档对话' : '运行中或等待审批时不能归档'"
+            :title="item.canArchiveOrDelete ? '归档对话' : '执行中不能归档'"
             @click="archive(item.taskId)"
           >
             归档
@@ -223,7 +223,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
             role="menuitem"
             class="danger"
             :disabled="mutationActionsDisabled || !item.canArchiveOrDelete"
-            :title="item.canArchiveOrDelete ? '删除记录' : '运行中或等待审批时不能删除'"
+            :title="item.canArchiveOrDelete ? '删除记录' : '执行中不能删除'"
             @click="remove(item.taskId)"
           >
             删除记录

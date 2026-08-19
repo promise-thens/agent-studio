@@ -87,6 +87,20 @@ export function resolveConversationScrollSource(input: {
   return 'user-input'
 }
 
+/**
+ * 贴底写入后是否保持 programmaticFollow。
+ * 已在底部或赋值未位移时浏览器不发 scroll，不得把后续键盘翻页当成 layout-scroll。
+ */
+export function nextProgrammaticFollowFlag(input: {
+  previousTop: number
+  nextTop: number
+  assignedTop: number
+}): boolean {
+  if (input.previousTop === input.nextTop) return false
+  if (input.assignedTop === input.previousTop) return false
+  return true
+}
+
 function nodeFollowLength(node: TurnTimelineViewModel['nodes'][number]): number {
   if ('text' in node && typeof node.text === 'string') return node.text.length
   if ('message' in node && typeof node.message === 'string') return node.message.length

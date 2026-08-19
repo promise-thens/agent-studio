@@ -11,6 +11,7 @@ import {
   nextConversationPinnedState,
   nextConversationScrollIntent,
   nextPinnedConversationScrollTop,
+  nextProgrammaticFollowFlag,
   resolveConversationScrollSource,
   shouldHoldPinnedFollow,
   timelineModelForTurn,
@@ -148,8 +149,15 @@ function scrollToLatestIfPinned(): void {
   if (shouldHoldPinnedFollow(scrollIntent)) return
   const nextTop = nextPinnedConversationScrollTop(root, pinnedToBottom)
   if (nextTop == null) return
-  programmaticFollow = true
+  const previousTop = root.scrollTop
+  // 先按是否位移武装，避免同步 scroll 在赋值期间被当成用户翻页。
+  programmaticFollow = previousTop !== nextTop
   root.scrollTop = nextTop
+  programmaticFollow = nextProgrammaticFollowFlag({
+    previousTop,
+    nextTop,
+    assignedTop: root.scrollTop
+  })
 }
 
 watch(

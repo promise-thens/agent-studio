@@ -11,6 +11,7 @@ import {
   nextConversationPinnedState,
   nextConversationScrollIntent,
   nextPinnedConversationScrollTop,
+  nextProgrammaticFollowFlag,
   resolveConversationScrollSource,
   shouldHoldPinnedFollow,
   shouldMirrorLiveAgentErrorLocally,
@@ -233,6 +234,43 @@ describe('对话滚动与折叠', () => {
         programmaticFollow: true
       })
     ).toBe('user-input')
+  })
+
+  it('已在底部的 no-op 贴底不得武装 programmaticFollow，键盘翻页仍按用户输入', () => {
+    expect(
+      nextProgrammaticFollowFlag({
+        previousTop: 920,
+        nextTop: 920,
+        assignedTop: 920
+      })
+    ).toBe(false)
+    expect(
+      resolveConversationScrollSource({
+        pendingUserScroll: false,
+        programmaticFollow: nextProgrammaticFollowFlag({
+          previousTop: 920,
+          nextTop: 920,
+          assignedTop: 920
+        })
+      })
+    ).toBe('user-input')
+  })
+
+  it('贴底真正位移时武装 programmaticFollow；赋值未动则立即解除', () => {
+    expect(
+      nextProgrammaticFollowFlag({
+        previousTop: 920,
+        nextTop: 1320,
+        assignedTop: 1320
+      })
+    ).toBe(true)
+    expect(
+      nextProgrammaticFollowFlag({
+        previousTop: 920,
+        nextTop: 1320,
+        assignedTop: 920
+      })
+    ).toBe(false)
   })
 
   it('用户上翻永远取消贴底，layout/程序化滚动不得吞掉这次意图', () => {
