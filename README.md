@@ -13,7 +13,7 @@
 - 使用 Electron `safeStorage` 加密保存 API Key，重启后无需重复输入
 - 支持 HTTP 和 HTTPS Provider；HTTP 配置会持续显示明文传输风险提示
 - 选择本地工作目录并启动 Grok Build ACP 会话
-- 接收流式回复、思考信息、计划和工具调用状态
+- 接收流式回复、思考信息、计划和工具调用状态；助手正式回复按 Markdown 渲染标题、列表、代码、表格和安全外链
 - 发送任务与停止当前执行
 - 在桌面端处理 Grok Build 权限确认
 - 使用隔离的 Electron preload 和窄 IPC 边界保护渲染进程

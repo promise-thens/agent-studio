@@ -19,6 +19,7 @@ import {
   type ConversationScrollIntent,
   type ConversationScrollInteraction
 } from '../task-conversation-view'
+import AssistantMarkdown from './AssistantMarkdown.vue'
 import ExecutionTimeline from './ExecutionTimeline.vue'
 import TaskResultReview from './TaskResultReview.vue'
 
@@ -241,7 +242,7 @@ watch(
         :key="`${turn.turnId}:answer:${answerIndex}`"
         class="conversation-assistant"
       >
-        <p>{{ text }}</p>
+        <AssistantMarkdown :text="text" />
       </div>
 
       <p

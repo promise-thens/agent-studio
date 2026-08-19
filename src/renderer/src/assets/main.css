@@ -342,7 +342,6 @@ button:disabled {
 }
 
 .conversation-user p,
-.conversation-assistant p,
 .conversation-error {
   margin: 0;
   font-size: 15px;
@@ -361,8 +360,104 @@ button:disabled {
   background: color-mix(in srgb, var(--surface-3) 78%, transparent);
 }
 
-.conversation-assistant p {
+.assistant-markdown {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
   color: var(--text-1);
+  font-size: 15px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.assistant-md-heading {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.assistant-markdown h1.assistant-md-heading {
+  font-size: 18px;
+}
+
+.assistant-md-paragraph {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.assistant-md-list {
+  margin: 0;
+  padding-left: 1.25em;
+}
+
+.assistant-md-list li + li {
+  margin-top: 4px;
+}
+
+.assistant-md-code {
+  padding: 0.1em 0.35em;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-3) 88%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.assistant-md-pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 86%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.assistant-md-pre code {
+  font: inherit;
+}
+
+.assistant-md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.assistant-md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.assistant-md-table th,
+.assistant-md-table td {
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  text-align: left;
+  vertical-align: top;
+}
+
+.assistant-md-table th {
+  color: var(--text-2);
+  font-weight: 650;
+  background: color-mix(in srgb, var(--surface-3) 70%, transparent);
+}
+
+.assistant-md-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.assistant-md-link:hover {
+  text-decoration: underline;
+}
+
+.assistant-md-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 76%, white);
+  outline-offset: 2px;
 }
 
 .conversation-error {

@@ -2,7 +2,7 @@
 
 > **致执行者：** 产品已确认当前界面太重、太碎，要按 **Claude Code Desktop** 的便捷度大修：对话是唯一主角，工具和子 Agent 收进安静的嵌套行，不要再做三栏卡片仪表盘。
 >
-> **状态：** 待开始（前置：P0-09 测试门关闭，时间线数据模型稳住）
+> **状态：** 助手正文 Markdown 已接入主列；布局/计划卡/子 Agent 换皮仍待开始（前置：P0-09 测试门关闭，时间线数据模型稳住）
 >
 > **插入点：** P0-09 之后、P0-10 状态拆分之前或与之同迭代。**P0-10 必须消费本计划的视觉语言，禁止再发明第三套皮肤。**
 >
@@ -36,7 +36,7 @@
 - 和 P0-10 抢着拆 `App.vue`，两套组件。本计划先定壳和视觉，P0-10 把状态搬进这些壳。
 - 把工具信息藏太深，审批和失败看不见。进行中的工具/子 Agent/权限必须在折叠态也看得出状态。
 
-**技术栈：** Vue 3、现有 Phosphor 图标、现有 CSS 变量、Vitest + Vue Test Utils。不新增 UI 框架。
+**技术栈：** Vue 3、现有 Phosphor 图标、现有 CSS 变量、Vitest + Vue Test Utils。不新增 UI 框架。助手 Markdown 用自研 AST + Vue 节点渲染，不引入 markdown 库，不使用 `v-html`。
 
 ---
 
@@ -164,7 +164,7 @@ Claude Code Desktop 相反：
 | 块 | 怎么画 |
 | --- | --- |
 | 用户 | 轻底或靠右一小段，字 14–15px，不要大描边气泡 |
-| 助手正式回复 | 无气泡，Markdown 可读（标题、列表、代码块） |
+| 助手正式回复 | 无气泡，Markdown 可读（标题、列表、行内强调、围栏代码、GFM 表格、http/https 外链） |
 | 思考 | 一行「思考过程」，默认折；展开是灰字，不和回复抢权重 |
 | 流式 | 同一个 message 节点往后长，不要每个 chunk 一张卡 |
 | 错误 | 流里一条短错误，可重试；不要模态 |
@@ -280,9 +280,10 @@ Tool    读取 package.json · in_progress
 - 重放：`PermissionPrompt.vue` 进对话流
 - 输入：把 composer 从 `App.vue` 抽到 `TaskComposer.vue`（P0-10 会继续用）
 - 检查器：改成抽屉，不占栅格第三列
-- 测试：组件能渲染新结构；不测像素
+- 助手正文：`assistant-markdown.ts`、`AssistantMarkdown.vue`、`AssistantMarkdownInline.vue`、`src/shared/external-href.ts`
+- 测试：组件能渲染新结构；不测像素。Markdown 解析与外链白名单必须有单测。
 
-**安全策略：** 纯视觉。不新增 IPC，不把路径、session、Key 画进界面。折叠展开仍受现有文本上限约束。
+**安全策略：** 换皮本身不新增 IPC，不把路径、session、Key 画进界面。折叠展开仍受现有文本上限约束。助手 Markdown 额外遵守：禁止 `v-html` 和原始 HTML 节点；图片只保留 alt、不加载远程资源；链接协议仅 `http`/`https` 且去掉账号密码；主进程 `setWindowOpenHandler` 用同一套白名单，拒绝后仍不让 Renderer 开窗。Artifact 文件审阅仍归 P0-13。
 
 ---
 
@@ -303,7 +304,7 @@ Tool    读取 package.json · in_progress
 ## 任务 2: 把时间线收成对话
 
 - [ ] **第 1 步: 重画 Turn 为对话块**
-      说明：用户句、助手句、折叠思考。禁止输出 `Tool`/`Plan` 调试名。同一轮用户句只留一处。
+      说明：用户句、助手句、折叠思考。禁止输出 `Tool`/`Plan` 调试名。同一轮用户句只留一处。助手句用任务 2a 的 Markdown 渲染，不要退回整段 `pre-wrap` 原文。
       预期：关掉工具和计划后，主列就是 Claude Desktop 那种对话。
 
 - [ ] **第 2 步: 计划改成一张原地打勾的清单**
@@ -317,6 +318,22 @@ Tool    读取 package.json · in_progress
 - [ ] **第 4 步: 权限进流**
       说明：`PermissionPrompt` 变成流内卡片，宽度跟正文和计划卡一致。主按钮「本任务允许」。
       预期：审批时仍能看见上面的对话和计划当前步。
+
+## 任务 2a: 助手回复 Markdown 可读
+
+本任务可先于换皮落地，只改主列助手正文。用户句、思考、时间线日志仍是纯文本。
+
+- [x] **第 1 步: 安全 AST**
+      说明：`parseAssistantMarkdown` 产出标题 / 列表 / 围栏代码 / GFM 表格 / 强调 / 行内代码 / 外链。原始 HTML、图片、`javascript:` / `data:` / `file:` / 带账号密码的 URL 不得进入可点击节点。流式未闭合围栏把剩余文本当代码块。
+      预期：`assistant-markdown.test.ts` 与 `external-href.test.ts` 覆盖上述路径。
+
+- [x] **第 2 步: Vue 节点渲染**
+      说明：`TaskConversation` 助手回复改用 `AssistantMarkdown`。用 Vue 节点画 AST，不用 `v-html`。表格可横向滚动；链接 `target="_blank"` + `rel="noopener noreferrer"`。
+      预期：主列能读标题、列表、表格、代码和加粗，不再整段露出 `|---|` 原文。
+
+- [x] **第 3 步: 窗口打开白名单**
+      说明：`createWindow` 的 `setWindowOpenHandler` 复用 `sanitizeExternalHref`，危险 URL 不调用 `shell.openExternal`。
+      预期：Renderer 即使画出错误 href，主进程也不会打开非 http(s) 地址。
 
 ## 任务 3: 输入框和侧栏收成 Desktop 密度
 
@@ -353,6 +370,7 @@ Tool    读取 package.json · in_progress
 - [ ] 默认布局是侧栏 + 对话 + 底栏输入，没有常驻第三列，没有三块投影卡片。
 - [ ] 主路径没有「连接 Grok」主按钮和「继续任务」横幅。
 - [ ] 时间线读起来是对话，不是 `Tool · status` 日志。
+- [x] 助手正式回复按 Markdown 可读渲染（标题、列表、代码、表格、强调、安全外链），不使用 `v-html`。
 - [ ] 每个 Turn 只有一张计划清单，步骤原地打勾；主界面不再把计划放在右侧栏。
 - [ ] 子 Agent 仅在有数据时以嵌套卡片出现，和计划卡同一套皮肤，逻辑从属于 GACP-06。
 - [ ] 停止、模型、发送始终在输入区可达。
@@ -363,5 +381,6 @@ Tool    读取 package.json · in_progress
 
 - 不做浅色主题（以后再说）。
 - 不复制 Claude 品牌。
-- 不在这次做消息里的完整 Markdown 编辑器/代码 IDE。代码块可读即可。
+- 不做消息里的 Markdown 编辑器 / 代码 IDE；代码块只求可读，不做语法高亮。
 - 不把 P0-10 的状态机重构吞进来；本计划交壳，P0-10 填状态。
+- 不在对话里加载远程图片，也不做 Artifact 文件 Viewer（P0-13）。

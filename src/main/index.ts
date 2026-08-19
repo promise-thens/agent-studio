@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
+import { sanitizeExternalHref } from '../shared/external-href'
 import type {
   ProviderConfigInput,
   ProviderConfigSummary,
@@ -85,8 +86,10 @@ function createWindow(): void {
     mainWindow = null
   })
 
+  // 对话 Markdown 外链走 target=_blank；这里再拦一层，避免 javascript: / file: 进系统浏览器。
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
+    const safeHref = sanitizeExternalHref(url)
+    if (safeHref) void shell.openExternal(safeHref)
     return { action: 'deny' }
   })
 
