@@ -202,9 +202,7 @@ export function executionStatusLocator(
   page: Page,
   scope: 'foreign' | 'selected' | 'none'
 ): ReturnType<Page['locator']> {
-  return page.locator(
-    `.task-header[data-execution="${scope}"], .task-header-status[data-execution="${scope}"]`
-  )
+  return page.locator(`.task-header-status[data-execution="${scope}"]`)
 }
 
 /** 通过项目下拉只切换查看身份与本地历史，不重建 Runtime；不再点「连接 Grok」。 */
@@ -217,8 +215,7 @@ export async function selectWorkbenchProject(
   const name = basename(workspace)
   const alreadySelected = (await current.locator('strong').textContent())?.trim() === name
   if (!alreadySelected) {
-    if (force) await current.evaluate((element) => (element as HTMLButtonElement).click())
-    else await current.click()
+    await current.click()
     const option = page.locator('.project-menu [role="option"]').filter({ hasText: name }).first()
     await expect(option).toBeVisible()
     if (force) await option.evaluate((element) => (element as HTMLButtonElement).click())
