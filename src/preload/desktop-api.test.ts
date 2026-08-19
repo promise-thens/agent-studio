@@ -34,6 +34,7 @@ describe('窄 Preload API', () => {
     await agent.connect('project-1')
     await agent.disconnect()
     await agent.createTask('project-1')
+    await agent.enterTask('task-1')
     await agent.startTurn('task-1', '执行测试')
     await agent.cancelTurn({
       executionId: 'execution-1',
@@ -59,6 +60,7 @@ describe('窄 Preload API', () => {
       [AGENT_INVOKE_CHANNELS.connect, { projectId: 'project-1' }],
       [AGENT_INVOKE_CHANNELS.disconnect],
       [AGENT_INVOKE_CHANNELS.createTask, { projectId: 'project-1' }],
+      [AGENT_INVOKE_CHANNELS.enterTask, { taskId: 'task-1' }],
       [AGENT_INVOKE_CHANNELS.startTurn, { taskId: 'task-1', prompt: '执行测试' }],
       [
         AGENT_INVOKE_CHANNELS.cancelTurn,
@@ -180,6 +182,37 @@ describe('窄 Preload API', () => {
     expect(JSON.stringify(listener.mock.calls)).not.toContain('private-patch')
     expect(JSON.stringify(listener.mock.calls)).not.toContain('private-before')
     expect(JSON.stringify(listener.mock.calls)).not.toContain('fake-secret')
+  })
+
+  it('进入对话只重建公开恢复状态，剥掉 runtimeSessionId', async () => {
+    const ipcRenderer = createIpcRenderer()
+    ipcRenderer.invoke.mockResolvedValue({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        historyReady: true,
+        restore: 'degraded',
+        method: 'load',
+        verification: 'declared',
+        reason: '可能回放旧输出，上下文完整性未核实。',
+        runtimeSessionId: 'runtime-session-private'
+      }
+    })
+    const agent = createAgentDesktopApi(ipcRenderer)
+    const result = await agent.enterTask('task-1')
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        historyReady: true,
+        restore: 'degraded',
+        method: 'load',
+        verification: 'declared',
+        reason: '可能回放旧输出，上下文完整性未核实。'
+      }
+    })
+    expect(JSON.stringify(result)).not.toContain('runtime-session-private')
   })
 
   it('Agent 事件身份、枚举或大小越界时整条拒绝', () => {

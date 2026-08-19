@@ -206,7 +206,8 @@ button:disabled {
   background: color-mix(in srgb, var(--surface-1) 88%, #0b1016);
 }
 
-.chat-panel:has(> .history-readonly-banner) {
+.chat-panel:has(> .history-readonly-banner),
+.chat-panel:has(> .conversation-entry-banner) {
   grid-template-areas:
     'header'
     'history'
@@ -392,7 +393,8 @@ button:disabled {
   padding: 18px 0 10px;
 }
 
-.history-readonly-banner {
+.history-readonly-banner,
+.conversation-entry-banner {
   grid-area: history;
   display: flex;
   align-items: center;
@@ -403,13 +405,29 @@ button:disabled {
   border-bottom: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
 }
 
-.history-readonly-banner strong {
+.conversation-entry-banner[data-restore='degraded'] strong {
+  color: color-mix(in srgb, var(--warning, #e3b341) 82%, var(--text-2));
+}
+
+.conversation-entry-banner[data-restore='unavailable'] strong {
+  color: var(--text-2);
+}
+
+.conversation-entry-banner p {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.history-readonly-banner strong,
+.conversation-entry-banner strong {
   color: var(--text-2);
   font-size: 11px;
   font-weight: 650;
 }
 
-.history-readonly-banner p {
+.history-readonly-banner p,
+.conversation-entry-banner p {
   margin: 3px 0 0;
   color: var(--text-3);
   font-size: 10px;
@@ -417,7 +435,8 @@ button:disabled {
 }
 
 /* 只读说明允许收缩，继续按钮只占自身宽度，避免挤出工作台边界。 */
-.history-readonly-banner > div {
+.history-readonly-banner > div,
+.conversation-entry-banner > div {
   min-width: 0;
   flex: 1 1 auto;
 }
@@ -1486,7 +1505,8 @@ kbd {
     display: none;
   }
 
-  .history-readonly-banner {
+  .history-readonly-banner,
+  .conversation-entry-banner {
     align-items: stretch;
     flex-direction: column;
     gap: 10px;

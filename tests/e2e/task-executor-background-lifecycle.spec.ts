@@ -65,7 +65,8 @@ test.describe('P0-08 Task Executor 后台生命周期 Electron E2E', () => {
 
       await expectExecutionMutationsDisabled(context.page)
       await selectSidebarTaskByTitle(context.page, '新任务')
-      await expect(context.page.getByText('只读历史', { exact: true })).toBeVisible()
+      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(0)
+      await expect(context.page.getByPlaceholder('描述你想修改、排查或验证的内容…')).toBeEnabled()
       await expect(context.page.getByTitle(`停止 Task ${pair.taskAId}`)).toBeVisible()
       await expectSameExecution(context.page, running)
 
@@ -82,7 +83,7 @@ test.describe('P0-08 Task Executor 后台生命周期 Electron E2E', () => {
 
       await selectSidebarProject(context.page, context.layout.workspace)
       await selectSidebarTaskByTitle(context.page, prompt)
-      await expect(context.page.getByText('只读历史', { exact: true })).toHaveCount(0)
+      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(0)
       await expect(context.page.locator('.status-chip')).toContainText('执行中')
       expect(summarizeSessionTrace(await readControlledTrace(context.layout))).toEqual(baseline)
 
@@ -120,7 +121,7 @@ test.describe('P0-08 Task Executor 后台生命周期 Electron E2E', () => {
 
       // 审批弹窗是模态层；force 只用于触发底层历史导航，验证查看身份变化不会改写审批身份。
       await selectSidebarTaskByTitle(context.page, '新任务', true)
-      await expect(context.page.getByText('只读历史', { exact: true })).toBeVisible()
+      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(0)
       await expect(dialog.locator('.permission-summary')).toContainText(prompt)
       await expectSameExecution(context.page, waiting)
 
@@ -275,9 +276,7 @@ async function prepareTaskPairAndResumeA(
   await selectSidebarProject(context.page, context.layout.secondaryWorkspace)
   await selectSidebarProject(context.page, context.layout.workspace)
   await selectSidebarTaskById(context.page, projects.primaryProjectId, tasks.taskAId)
-  await expect(context.page.getByText('只读历史', { exact: true })).toBeVisible()
-  await context.page.getByRole('button', { name: '继续任务', exact: true }).click()
-  await expect(context.page.getByText('只读历史', { exact: true })).toHaveCount(0)
+  await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(0)
   await expect(context.page.getByPlaceholder('描述你想修改、排查或验证的内容…')).toBeEnabled()
   await waitForFixtureTrace(context.layout, (records) =>
     records.some((record) => record.event === 'session-resumed')

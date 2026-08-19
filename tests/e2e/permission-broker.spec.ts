@@ -174,7 +174,7 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
 
       const projectId = await projectIdForTask(context.page, taskId)
       await selectSidebarTaskById(context.page, projectId, taskId)
-      await expect(context.page.getByText('只读历史', { exact: true })).toBeVisible()
+      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(0)
 
       const timeline = context.page.getByRole('region', { name: '执行时间线' })
       const turn = timeline

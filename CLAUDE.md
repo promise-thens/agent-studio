@@ -256,12 +256,12 @@ git diff --check
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
 - 当前计划：[GACP-02 会话恢复能力产品契约](docs/superpowers/plans/grokACP计划/gacp-02-session-restore-capability-contract.md)
-- 状态：P0-09 真机验收已受限关闭；GACP-01 已于 2026-08-19 受限关闭；P0-08 核心实现与首批 lifecycle E2E 已完成，Windows/Linux 平台差异仍待补
-- 完成度：P0-01 至 P0-07 已完成；P0-08 单槽 TaskExecutor、恢复、后台权限和退出三选项已落地；P0-09 公开事件投影、Timeline 与真机多轮/权限/终态/退出三分支已收口；GACP-01 已冻结握手、`set_model`、A→B→A `resume` 与一次 `execute` 权限
+- 状态：GACP-02 核心实现已落地（点进历史自动 enterTask，无「继续任务」按钮）；待开发版手工验收与受控 lifecycle e2e 回归
+- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 主进程 enter/同 Task 降级/单飞、激活短路修复、Composer 去门禁与状态条已合入功能分支
 - Grok ACP 加深：评估与分计划在 [docs/superpowers/plans/grokACP计划/README.md](docs/superpowers/plans/grokACP计划/README.md)。顺序为 GACP-01（已关闭）→ GACP-02 恢复契约 → P0-10 工作台；GACP-03 在 P0-11 后，GACP-04 在 P2 前，GACP-05 默认不进 P0-A
 - 兼容边界：首版仍只有一个执行槽；应用退出后不继续运行；受控 ACP fixture 不等价于真实 Grok 黑盒；`clientCapabilities: {}` 是诚实广告，未实现 fs/terminal 前不得打开；GACP-01 未见的 `load` / 子 Agent 父子字段不得写成已验证
-- 下一步：开始 GACP-02（点进历史即可接着聊）。不要开始 P0-10 主体。GACP-01 遗留（load/close/退出协议路径/能力升 verified）不挡开工
-- 最近验证：2026-08-19 正式产品路径观察表已写入；默认 Vitest 不连真实 Grok
+- 下一步：在开发版手工走点选/连点/外槽/目录不可用；通过后可开始 P0-10 主体。不要加回「继续任务」按钮
+- 最近验证：2026-08-19 GACP-02 单元测试、typecheck、build 已过；默认 Vitest 不连真实 Grok；lifecycle e2e 尚未在本分支实跑
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

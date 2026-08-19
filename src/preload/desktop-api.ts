@@ -20,6 +20,7 @@ import { APP_INVOKE_CHANNELS, type AppDesktopApi } from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import type { TaskExecutionSnapshot } from '../shared/task-execution'
 import type { ProviderDesktopApi } from '../shared/provider'
+import type { ConversationEntryState } from '../shared/task-history'
 import { TASK_INVOKE_CHANNELS, type TaskDesktopApi } from '../shared/task-ipc'
 
 export interface NarrowIpcRenderer {
@@ -448,6 +449,47 @@ function isOptionalNonNegativeFiniteNumber(value: unknown): value is number | un
   return value === undefined || isNonNegativeFiniteNumber(value)
 }
 
+const CONVERSATION_RESTORE_STATES = [
+  'idle',
+  'connecting',
+  'ready',
+  'degraded',
+  'unavailable'
+] as const
+const CONVERSATION_RESTORE_METHODS = ['resume', 'load', 'new-session'] as const
+const CONVERSATION_VERIFICATIONS = ['unverified', 'declared', 'verified'] as const
+
+/**
+ * 点进对话的恢复状态只重建公开字段；主进程多塞的 runtimeSessionId 等私有键在这里剥掉。
+ */
+function parseConversationEntryState(value: unknown): ConversationEntryState | null {
+  if (!isPlainRecord(value)) return null
+  const taskId = readBoundedText(value.taskId, MAX_EVENT_FIELD_BYTES)
+  if (!taskId || typeof value.historyReady !== 'boolean') return null
+  if (!isOneOf(value.restore, CONVERSATION_RESTORE_STATES)) return null
+  if (!isOneOf(value.verification, CONVERSATION_VERIFICATIONS)) return null
+  const method =
+    value.method === undefined
+      ? undefined
+      : isOneOf(value.method, CONVERSATION_RESTORE_METHODS)
+        ? value.method
+        : null
+  if (method === null) return null
+  const reason =
+    value.reason === undefined
+      ? undefined
+      : readBoundedText(value.reason, MAX_EVENT_FIELD_BYTES, true)
+  if (reason === null) return null
+  return {
+    taskId,
+    historyReady: value.historyReady,
+    restore: value.restore,
+    verification: value.verification,
+    ...(method ? { method } : {}),
+    ...(reason ? { reason } : {})
+  }
+}
+
 /** 创建不暴露 channel 或 Electron event 的中性 Agent API。 */
 export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesktopApi {
   return {
@@ -471,6 +513,20 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.createTask, { projectId }) as Promise<
         DesktopIpcResult<AgentTaskRuntimeState>
       >,
+    enterTask: async (taskId) => {
+      const result = (await ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.enterTask, {
+        taskId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const entry = parseConversationEntryState(result.value)
+      if (!entry) {
+        return {
+          ok: false,
+          error: { code: 'operation-failed', message: '进入对话的恢复状态无效。' }
+        }
+      }
+      return { ok: true, value: entry }
+    },
     startTurn: (taskId, prompt) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.startTurn, { taskId, prompt }) as Promise<
         DesktopIpcResult<TaskExecutionSnapshot>

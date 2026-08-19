@@ -19,6 +19,7 @@ describe('桌面 IPC 静态契约', () => {
       'agent:connect',
       'agent:disconnect',
       'agent:create-task',
+      'agent:enter-task',
       'agent:start-turn',
       'agent:cancel-turn',
       'agent:get-task-runtime-state',

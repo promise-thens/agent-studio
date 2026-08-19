@@ -152,6 +152,39 @@ describe('TaskStore', () => {
     expect(disk).not.toContain('fake-secret')
   })
 
+  it('同 Task 重绑 Runtime session 时保留历史身份，且详情 DTO 仍不暴露 session ID', async () => {
+    const { store, project } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '第一轮',
+      model: { modelId: 'model-1' }
+    })
+    await store.finishTurn('task-1', 'turn-1', 'completed')
+
+    const rebound = await store.rebindRuntimeSession(
+      'task-1',
+      {
+        runtimeId: 'grok',
+        runtimeSessionId: 'replacement-session',
+        workspace: project.canonicalRoot
+      },
+      capabilitySnapshot()
+    )
+
+    expect(rebound.taskId).toBe('task-1')
+    expect(rebound.turnCount).toBe(1)
+    expect(rebound.environment.projectId).toBe(project.projectId)
+    expect(rebound.runtimeSession.runtimeSessionId).toBe('replacement-session')
+    expect(store.getTaskRecord('task-1').runtimeSession.runtimeSessionId).toBe(
+      'replacement-session'
+    )
+    expect(JSON.stringify(store.getTaskDetail('task-1'))).not.toContain('replacement-session')
+    expect(await store.listTurns('task-1')).toMatchObject({
+      items: [{ turnId: 'turn-1', state: 'completed' }]
+    })
+  })
+
   it('相同事件重复写入幂等，相同 sequence 不同内容失败关闭', async () => {
     const { store } = await createStore()
     await store.createTurn({

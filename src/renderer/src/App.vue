@@ -28,7 +28,11 @@ import type {
   ProviderTestResult
 } from '../../shared/provider'
 import type { TaskExecutionSnapshot } from '../../shared/task-execution'
-import type { DeletionPreview, PermissionAuditRecord } from '../../shared/task-history'
+import type {
+  ConversationEntryState,
+  DeletionPreview,
+  PermissionAuditRecord
+} from '../../shared/task-history'
 import {
   createAgentEventGuard,
   createAgentMessageKey,
@@ -57,7 +61,6 @@ import {
 } from './permission-queue'
 import { createProjectSelectionCoordinator } from './project-selection-coordinator'
 import {
-  canSendRuntimePrompt,
   createAsyncSingleFlight,
   isRuntimeConnectedToProject,
   shouldConnectProject
@@ -156,7 +159,9 @@ const historyConfirmation = ref<{
   preview?: DeletionPreview
 } | null>(null)
 const historyConfirmationPending = ref(false)
-const resumePending = ref(false)
+const conversationEntry = ref<ConversationEntryState | null>(null)
+let conversationEnterGeneration = 0
+let conversationEnterPromise: Promise<ConversationEntryState | null> | null = null
 const prompt = ref('')
 const promptSubmissionPending = ref(false)
 const projectConnectionPending = ref(false)
@@ -557,15 +562,32 @@ const planCapability = computed(() => resolveCapability('event.plan', '展示执
 const toolCapability = computed(() => resolveCapability('event.tool', '展示工具活动'))
 const createSessionCapability = computed(() => resolveCapability('session.create', '创建新对话'))
 const connectCapability = computed(() => resolveCapability('runtime.connect', '连接 Runtime'))
+const foreignExecutionBlockingSend = computed(() => {
+  const execution = activeExecution.value
+  return Boolean(
+    execution &&
+    execution.taskId !== activeTaskId.value &&
+    !TERMINAL_EXECUTION_STATES.has(execution.state)
+  )
+})
+const canSendWhileRestoring = computed(
+  () =>
+    conversationEntry.value?.restore === 'connecting' ||
+    conversationEntry.value?.restore === 'degraded' ||
+    conversationEntry.value?.restore === 'ready' ||
+    conversationEntry.value?.restore === 'idle'
+)
 const canSend = computed(
   () =>
     !projectSelectionPending.value &&
-    activeTaskView.value?.mode !== 'history' &&
+    conversationEntry.value?.restore !== 'unavailable' &&
     Boolean(providerSummary.value?.configured) &&
-    isConnected.value &&
+    !foreignExecutionBlockingSend.value &&
     !isTurnTiming.value &&
     !promptSubmissionPending.value &&
-    canSendRuntimePrompt(prompt.value, status.value, promptCapability.value.available)
+    Boolean(prompt.value.trim()) &&
+    promptCapability.value.available &&
+    (isConnected.value || canSendWhileRestoring.value)
 )
 const promptCapabilityMessage = computed(
   () => promptCapability.value.reason ?? promptCapability.value.notice
@@ -583,10 +605,16 @@ const activeProjectExecutionReason = computed(() => {
 })
 const composerDisabledMessage = computed(() => {
   if (projectSelectionPending.value) return '正在切换 Project，请稍候。'
-  if (activeTaskView.value?.mode === 'history') return '当前为只读历史，继续任务成功后才能输入。'
+  if (conversationEntry.value?.restore === 'unavailable') {
+    return conversationEntry.value.reason || activeProjectExecutionReason.value
+  }
+  if (foreignExecutionBlockingSend.value) return '先停掉当前任务。'
   if (!providerSummary.value?.configured) return '请先配置 Provider。'
   if (!activeProjectExecutable.value) return activeProjectExecutionReason.value
-  if (!isConnected.value) return '当前查看的 Project 尚未连接 Runtime。'
+  if (conversationEntry.value?.restore === 'connecting') return '正在接回上次上下文…'
+  if (!isConnected.value && conversationEntry.value?.restore !== 'degraded') {
+    return '当前查看的 Project 尚未连接 Runtime。'
+  }
   return promptCapabilityMessage.value
 })
 const planEmptyMessage = computed(
@@ -826,6 +854,12 @@ function activateTaskView(task: AgentTaskRuntimeState, mode: 'live' | 'history' 
   }
 
   activeTaskId.value = task.taskId
+  conversationEntry.value = {
+    taskId: task.taskId,
+    historyReady: true,
+    restore: 'ready',
+    verification: 'unverified'
+  }
   taskOrder.value = [task.taskId, ...taskOrder.value.filter((id) => id !== task.taskId)].slice(
     0,
     12
@@ -839,7 +873,7 @@ function activateTaskView(task: AgentTaskRuntimeState, mode: 'live' | 'history' 
 async function ensureActiveTask(): Promise<string> {
   if (projectSelectionPending.value) throw new Error('正在切换 Project，请稍候。')
   const current = activeTaskView.value
-  if (current?.projectId === activeProjectId.value && current.mode === 'live') return current.taskId
+  if (current?.projectId === activeProjectId.value && current.taskId) return current.taskId
 
   const task = unwrapDesktopIpcResult(await window.agent.createTask(activeProjectId.value))
   activateTaskView(task)
@@ -847,10 +881,19 @@ async function ensureActiveTask(): Promise<string> {
   return task.taskId
 }
 
-/** 点击最近 Task 只装配本地历史；重复点击也重新水合，清除热更新遗留的半状态，但绝不连接或恢复 Runtime。 */
+/** 点选即进入对话；本地历史先画出来，Runtime 恢复在后台自动发生。 */
 async function selectTask(taskId: string): Promise<void> {
   if (!taskId || projectSelectionPending.value) return
   const selectionRequestId = ++taskSelectionRequestId
+  const enterGeneration = ++conversationEnterGeneration
+  conversationEnterPromise = null
+  conversationEntry.value = {
+    taskId,
+    historyReady: false,
+    restore: 'connecting',
+    verification: 'unverified',
+    reason: '正在接回上次上下文…'
+  }
 
   try {
     if (!(await taskHistory.openTask(taskId))) return
@@ -881,17 +924,43 @@ async function selectTask(taskId: string): Promise<void> {
     )
     activeTaskId.value = taskId
     reconcilePermissionQueue(taskId, detail.projectId)
+    conversationEntry.value = {
+      taskId,
+      historyReady: true,
+      restore: 'connecting',
+      verification: 'unverified',
+      reason: '正在接回上次上下文…'
+    }
     if (selectionRequestId !== taskSelectionRequestId || activeTaskId.value !== taskId) return
+    const pendingEnter = window.agent
+      .enterTask(taskId)
+      .then((result) => unwrapDesktopIpcResult(result))
+    conversationEnterPromise = pendingEnter
+    const entry = await pendingEnter
+    if (enterGeneration !== conversationEnterGeneration || activeTaskId.value !== taskId) return
+    conversationEntry.value = entry
   } catch (error) {
     if (selectionRequestId !== taskSelectionRequestId) return
+    if (enterGeneration === conversationEnterGeneration) {
+      conversationEntry.value = {
+        taskId,
+        historyReady: Boolean(taskHistory.openedTask.value),
+        restore: 'degraded',
+        verification: 'unverified',
+        reason: error instanceof Error ? error.message : String(error)
+      }
+    }
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
 }
 
-/** Project 选择只切换本地历史身份；连接 Runtime 必须由显式 Connect 或“继续任务”触发。 */
+/** Project 选择只切换本地历史身份；点进 Task 后由 enterTask 自动接回 Runtime。 */
 async function selectProject(projectId: string): Promise<void> {
   if (!projectId || projectSelectionPending.value || projectId === activeProjectId.value) return
   taskSelectionRequestId += 1
+  conversationEnterGeneration += 1
+  conversationEnterPromise = null
+  conversationEntry.value = null
   const selection = projectSelection.begin()
   activeTaskId.value = ''
   reconcilePermissionQueue('', projectId)
@@ -918,6 +987,9 @@ function syncWorkspaceDisplay(runtimeWorkspace?: string): void {
 async function chooseWorkspace(): Promise<void> {
   if (isBusy.value || projectSelectionPending.value) return
   taskSelectionRequestId += 1
+  conversationEnterGeneration += 1
+  conversationEnterPromise = null
+  conversationEntry.value = null
   const selection = projectSelection.begin()
   const previousProjectId = activeProjectId.value
   const previousTaskId = activeTaskId.value
@@ -990,6 +1062,9 @@ function closeProviderSettings(): void {
 
 async function clearProvider(): Promise<void> {
   taskSelectionRequestId += 1
+  conversationEnterGeneration += 1
+  conversationEnterPromise = null
+  conversationEntry.value = null
   projectSelection.invalidate()
   providerSummary.value = await window.provider.clear()
   providerBootState.value = 'needs-provider'
@@ -1067,6 +1142,12 @@ async function sendPrompt(): Promise<void> {
     try {
       const taskId = await ensureActiveTask()
       submittedTaskId = taskId
+      if (conversationEnterPromise && conversationEntry.value?.taskId === taskId) {
+        await conversationEnterPromise.catch(() => undefined)
+      }
+      if (foreignExecutionBlockingSend.value) {
+        throw new Error('先停掉当前任务。')
+      }
       prompt.value = ''
       // 一条用户指令只开一个总计时，从发送当下就开始。
       beginCurrentTurn(taskId)
@@ -1097,6 +1178,16 @@ async function sendPrompt(): Promise<void> {
         })
       }
       await taskHistory.refreshTasks()
+      if (
+        conversationEntry.value?.taskId === taskId &&
+        conversationEntry.value.restore === 'degraded'
+      ) {
+        conversationEntry.value = {
+          ...conversationEntry.value,
+          method: 'new-session',
+          reason: '已用新上下文接着聊。'
+        }
+      }
     } catch (error) {
       // 只收束本次已经启动的 Turn，创建 Task 失败不能误结束其他计时。
       if (turnStarted) completeCurrentTurn(submittedTaskId)
@@ -1249,19 +1340,19 @@ function handleAgentEvent(event: PublicAgentEvent): void {
   }
 }
 
-async function resumeHistoryTask(): Promise<void> {
-  if (resumePending.value) return
-  resumePending.value = true
-  try {
-    const result = await taskHistory.resumeOpenedTask()
-    if (!result.resumed || !result.task) throw new Error(result.message)
-    activateTaskView(result.task, 'live')
-    await taskHistory.refreshTasks()
-  } catch (error) {
-    appendMessage('error', error instanceof Error ? error.message : String(error))
-  } finally {
-    resumePending.value = false
-  }
+function conversationEntryTitle(entry: ConversationEntryState): string {
+  if (entry.restore === 'connecting') return '正在接回上次上下文'
+  if (entry.restore === 'degraded') return '已用新上下文接着聊'
+  if (entry.restore === 'unavailable') return '当前只能查看历史'
+  return '对话状态'
+}
+
+function conversationEntryDescription(entry: ConversationEntryState): string {
+  if (entry.reason) return entry.reason
+  if (entry.restore === 'connecting') return '正在接回上次上下文…'
+  if (entry.method === 'load') return '可能回放旧输出，上下文完整性未核实。'
+  if (entry.method === 'new-session') return '已用新上下文接着聊。'
+  return ''
 }
 
 function refreshOpenedHistoryProjection(): void {
@@ -1530,37 +1621,31 @@ function scrollMessagesToBottom(): void {
         </header>
 
         <section
-          v-if="activeTaskView?.mode === 'history'"
-          class="history-readonly-banner"
-          aria-labelledby="history-readonly-title"
-          aria-describedby="history-readonly-description"
+          v-if="
+            conversationEntry &&
+            conversationEntry.taskId === activeTaskId &&
+            (conversationEntry.restore === 'connecting' ||
+              conversationEntry.restore === 'degraded' ||
+              conversationEntry.restore === 'unavailable')
+          "
+          class="conversation-entry-banner"
+          :data-restore="conversationEntry.restore"
+          aria-labelledby="conversation-entry-title"
+          aria-describedby="conversation-entry-description"
         >
           <div>
-            <strong id="history-readonly-title">只读历史</strong>
-            <p id="history-readonly-description" role="status">
-              正在查看本地历史，Runtime 尚未恢复。
-              {{
-                taskHistory.openedTask.value?.resumable
-                  ? activeProjectExecutionReason
-                  : taskHistory.openedTask.value?.resumeMessage
-              }}
+            <strong id="conversation-entry-title">
+              {{ conversationEntryTitle(conversationEntry) }}
+            </strong>
+            <p id="conversation-entry-description" role="status">
+              <CircleNotch
+                v-if="conversationEntry.restore === 'connecting'"
+                :size="12"
+                class="spin"
+              />
+              {{ conversationEntryDescription(conversationEntry) }}
             </p>
           </div>
-          <button
-            class="secondary-button"
-            type="button"
-            :disabled="
-              projectInteractionBlocked ||
-              resumePending ||
-              !providerSummary?.configured ||
-              !activeProjectExecutable ||
-              !taskHistory.openedTask.value?.resumable
-            "
-            title="重新验证 Runtime 并继续此 Task"
-            @click="resumeHistoryTask"
-          >
-            {{ resumePending ? '正在继续…' : '继续任务' }}
-          </button>
         </section>
 
         <!-- 消息舞台：左侧固定锚点轨，右侧才是会滚动的对话列表 -->
@@ -1612,13 +1697,8 @@ function scrollMessagesToBottom(): void {
             <TaskResultReview
               v-if="taskTimeline.activeTimeline.value?.turns.length"
               :model="taskTimeline.activeTimeline.value.resultReview"
-              :can-resume="
-                activeTaskView?.mode === 'history' &&
-                Boolean(taskHistory.openedTask.value?.resumable)
-              "
-              :resume-pending="resumePending"
+              :can-resume="false"
               :can-create-task="!newChatDisabled"
-              @resume-task="resumeHistoryTask"
               @create-task="startNewChat"
             />
           </section>
@@ -1630,11 +1710,9 @@ function scrollMessagesToBottom(): void {
               ref="composer"
               v-model="prompt"
               :disabled="
-                status.state !== 'ready' ||
-                !isConnected ||
                 projectSelectionPending ||
+                conversationEntry?.restore === 'unavailable' ||
                 !promptCapability.available ||
-                activeTaskView?.mode === 'history' ||
                 !providerSummary?.configured
               "
               :aria-describedby="composerDisabledMessage ? 'prompt-capability-message' : undefined"

@@ -231,6 +231,45 @@ export class TaskStore {
     await this.interruptUnfinishedRecords()
   }
 
+  /**
+   * 同一 Task 降级开新 Runtime session 时改写绑定，不新建 taskId、不碰历史 Turn。
+   */
+  async rebindRuntimeSession(
+    taskId: string,
+    session: AgentRuntimeSessionRef,
+    capabilitySnapshot: AgentRuntimeCapabilitySnapshot
+  ): Promise<TaskRecordV1> {
+    return this.enqueueTask(taskId, async () => {
+      const task = this.requireTask(taskId)
+      if (task.activeTurnId || task.activeExecutionId) {
+        throw new TaskStoreError('invalid-state', '活动 Turn 期间不能重绑 Runtime session。')
+      }
+      if (
+        session.runtimeId !== task.runtimeId ||
+        session.workspace !== task.environment.rootSnapshot
+      ) {
+        throw new TaskStoreError(
+          'invalid-state',
+          '新 session 必须属于同一 Runtime 与 Project 根目录。'
+        )
+      }
+      const observedAt = this.now()
+      const nextTask: TaskRecordV1 = {
+        ...task,
+        runtimeSession: {
+          ...session,
+          capabilityEvidence: toCapabilityEvidence(capabilitySnapshot),
+          lastConfirmedAt: observedAt
+        },
+        updatedAt: observedAt,
+        revision: task.revision + 1
+      }
+      await this.writer.write(this.taskPath(nextTask), nextTask)
+      this.tasks.set(taskId, nextTask)
+      return structuredClone(nextTask)
+    })
+  }
+
   getTaskRecord(taskId: string): TaskRecordV1 {
     const record = this.tasks.get(taskId)
     if (!record) throw new TaskStoreError('history-not-found', '未找到指定 Task 历史。')

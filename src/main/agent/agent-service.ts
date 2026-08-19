@@ -9,7 +9,11 @@ import type {
   AgentTurnExecutionResult,
   AgentTurnOutcome
 } from '../../shared/agent'
-import type { RuntimeResumeSummary, TurnModelSnapshot } from '../../shared/task-history'
+import type {
+  ConversationEntryState,
+  RuntimeResumeSummary,
+  TurnModelSnapshot
+} from '../../shared/task-history'
 import type {
   TaskExecutionCancellationRequest,
   TaskExecutionSnapshot
@@ -108,6 +112,12 @@ function isUsableRestoreCapability(
   return capability.support === 'native' && capability.verification !== 'unverified'
 }
 
+function isTerminalExecutionState(state: string): boolean {
+  return (
+    state === 'completed' || state === 'failed' || state === 'cancelled' || state === 'interrupted'
+  )
+}
+
 function mapOutcomeToExecutionState(outcome: AgentTurnOutcome): AgentExecutionState {
   if (outcome === 'completed') return 'completed'
   if (outcome === 'cancelled') return 'cancelled'
@@ -124,6 +134,12 @@ export class AgentService {
   private readonly allocatedTurnIds = new Set<string>()
   private selectedTaskId: string | null = null
   private sessionOperationActive = false
+  private enterGeneration = 0
+  private enterInFlight: {
+    taskId: string
+    generation: number
+    promise: Promise<ConversationEntryState>
+  } | null = null
   private readonly createId: () => string
   private readonly now: () => string
   private readonly projectRegistry?: ProjectRegistry
@@ -294,52 +310,55 @@ export class AgentService {
    * 第二个并发调用在生成 ID 前即被明确拒绝。
    */
   async startTurn(taskId: string, prompt: string): Promise<AgentTurnExecutionResult> {
-    const task = this.requireTask(taskId)
+    this.requireTask(taskId)
     const validatedPrompt = validatePrompt(prompt)
     if (this.sessionOperationActive || this.executionController.hasActiveTurn()) {
       throw new AgentServiceError('invalid-state', '已有 Turn 正在执行。')
     }
-    this.assertRuntimeReady(task.workspace)
+    // 先确保本 Task 的 session 已接上或已同 Task 降级重建，再生成 turnId。
+    await this.ensureTaskSessionForTurn(taskId)
+    const liveTask = this.requireTask(taskId)
+    this.assertRuntimeReady(liveTask.workspace)
 
     const turnId = this.allocateTurnId()
     const turnRef: AgentRuntimeTurnRef = {
-      taskId: task.taskId,
+      taskId: liveTask.taskId,
       turnId,
-      runtimeSessionId: task.runtimeSessionId
+      runtimeSessionId: liveTask.runtimeSessionId
     }
     if (this.taskStore) {
       await this.taskStore.createTurn({
-        taskId: task.taskId,
+        taskId: liveTask.taskId,
         turnId,
         promptDisplayText: this.redactText(validatedPrompt),
         model: this.getTurnModel()
       })
     }
-    this.markTurnRunning(task, turnId)
+    this.markTurnRunning(liveTask, turnId)
 
     try {
       const result = await this.executionController.execute(turnRef, async () => {
-        await this.activateTaskSession(task)
-        await this.taskStore?.markTurnDispatched(task.taskId, turnId)
+        await this.activateTaskSession(liveTask)
+        await this.taskStore?.markTurnDispatched(liveTask.taskId, turnId)
         return this.adapter.startTurn({
           ...turnRef,
-          workspace: task.workspace,
+          workspace: liveTask.workspace,
           prompt: validatedPrompt
         })
       })
-      await this.flushHistoryWrites(task.taskId, turnId)
-      this.finishTurn(task.taskId, turnId, result.outcome)
-      await this.taskStore?.finishTurn(task.taskId, turnId, result.outcome)
+      await this.flushHistoryWrites(liveTask.taskId, turnId)
+      this.finishTurn(liveTask.taskId, turnId, result.outcome)
+      await this.taskStore?.finishTurn(liveTask.taskId, turnId, result.outcome)
       return {
-        taskId: task.taskId,
+        taskId: liveTask.taskId,
         turnId,
         outcome: result.outcome,
-        task: cloneTask(task)
+        task: cloneTask(liveTask)
       }
     } catch (error) {
-      await this.flushHistoryWrites(task.taskId, turnId)
-      this.finishTurn(task.taskId, turnId, 'failed')
-      await this.taskStore?.finishTurn(task.taskId, turnId, 'failed').catch(() => undefined)
+      await this.flushHistoryWrites(liveTask.taskId, turnId)
+      this.finishTurn(liveTask.taskId, turnId, 'failed')
+      await this.taskStore?.finishTurn(liveTask.taskId, turnId, 'failed').catch(() => undefined)
       throw normalizeServiceError(error)
     }
   }
@@ -499,6 +518,51 @@ export class AgentService {
     })
   }
 
+  /**
+   * 点进历史后的自动进入：只提交 taskId，恢复失败返回可序列化结论而不是必须确认的硬错。
+   */
+  async enterTask(taskId: string): Promise<ConversationEntryState> {
+    const task = this.requireTask(taskId)
+    const generation = ++this.enterGeneration
+    const previous = this.enterInFlight
+    if (previous) {
+      await previous.promise.catch(() => undefined)
+    }
+    if (generation !== this.enterGeneration) {
+      return this.supersededEntry(task.taskId)
+    }
+    const promise = this.runEnterTask(task, generation)
+    this.enterInFlight = { taskId: task.taskId, generation, promise }
+    try {
+      return await promise
+    } finally {
+      if (this.enterInFlight?.generation === generation) {
+        this.enterInFlight = null
+      }
+    }
+  }
+
+  /** 发送前等待同一 Task 尚未结束的自动进入，避免和 session 操作抢 Gate。 */
+  async waitForEnter(taskId: string): Promise<ConversationEntryState | null> {
+    if (this.enterInFlight?.taskId === taskId) {
+      return this.enterInFlight.promise
+    }
+    return null
+  }
+
+  /**
+   * 发送前保证本 Task 已接上绑定 session；resume/load 都失败则同 Task 重建，不换 taskId。
+   */
+  async ensureTaskSessionForTurn(taskId: string, inheritedLease?: OperationLease): Promise<void> {
+    await this.waitForEnter(taskId)
+    const task = this.requireTask(taskId)
+    if (this.isForeignExecutionActive(taskId)) {
+      throw new AgentServiceError('invalid-state', '先停掉当前任务。')
+    }
+    if (this.isTaskSessionActive(task)) return
+    await this.activateOrRebuildTaskSession(task, inheritedLease)
+  }
+
   /** 只读历史显式继续时重新连接 Project，并在当前能力验证后恢复原生会话。 */
   async resumeTask(taskId: string, inheritedLease?: OperationLease): Promise<RuntimeResumeSummary> {
     const task = this.requireTask(taskId)
@@ -550,9 +614,10 @@ export class AgentService {
   /** 切 Task 时优先 resume；连接仍可信时才回退 load，成功后才更新当前会话指针。 */
   private async activateTaskSession(
     task: AgentTaskRecord,
-    lease?: OperationLease
+    lease?: OperationLease,
+    generation?: number
   ): Promise<'resume' | 'load' | undefined> {
-    if (this.selectedTaskId === task.taskId) return undefined
+    if (this.isTaskSessionActive(task)) return undefined
 
     const snapshot = this.adapter.getCapabilitySnapshot()
     const canResume = isUsableRestoreCapability(snapshot, 'session.resume')
@@ -569,6 +634,7 @@ export class AgentService {
       try {
         await this.adapter.resumeSession(task.session)
         this.assertOperationLeaseCurrent(lease)
+        if (!this.canCommitEnter(generation)) return undefined
         this.selectedTaskId = task.taskId
         return 'resume'
       } catch (error) {
@@ -589,6 +655,7 @@ export class AgentService {
       try {
         await this.adapter.loadSession(task.session)
         this.assertOperationLeaseCurrent(lease)
+        if (!this.canCommitEnter(generation)) return undefined
         this.selectedTaskId = task.taskId
         return 'load'
       } catch (error) {
@@ -597,6 +664,204 @@ export class AgentService {
     }
 
     throw normalizeServiceError(resumeError)
+  }
+
+  private async runEnterTask(
+    task: AgentTaskRecord,
+    generation: number
+  ): Promise<ConversationEntryState> {
+    if (!task.projectId || !this.projectRegistry) {
+      return this.createEntryState(task.taskId, {
+        restore: 'unavailable',
+        verification: 'unverified',
+        reason: '该 Task 不包含可恢复的 Project 历史。'
+      })
+    }
+    if (this.isForeignExecutionActive(task.taskId)) {
+      return this.createEntryState(task.taskId, {
+        restore: 'idle',
+        verification: 'unverified',
+        reason: '先停掉当前任务。'
+      })
+    }
+    try {
+      await this.projectRegistry.resolveAvailableRoot(task.projectId)
+    } catch (error) {
+      return this.createEntryState(task.taskId, {
+        restore: 'unavailable',
+        verification: 'unverified',
+        reason: error instanceof Error ? error.message : 'Project 目录不可用。'
+      })
+    }
+    if (!this.canCommitEnter(generation)) return this.supersededEntry(task.taskId)
+
+    try {
+      return await this.runExclusiveSessionOperation(async (lease) => {
+        if (!this.canCommitEnter(generation)) return this.supersededEntry(task.taskId)
+        const validatedWorkspace = await this.projectRegistry!.resolveAvailableRoot(task.projectId!)
+        this.assertOperationLeaseCurrent(lease)
+        if (!this.canCommitEnter(generation)) return this.supersededEntry(task.taskId)
+        await this.connectWithinSessionOperation(validatedWorkspace, lease)
+        if (!this.canCommitEnter(generation)) return this.supersededEntry(task.taskId)
+        const liveTask = this.requireTask(task.taskId)
+        if (this.isTaskSessionActive(liveTask)) {
+          return this.createEntryState(liveTask.taskId, {
+            restore: 'ready',
+            method: 'resume',
+            verification: this.restoreVerification('session.resume')
+          })
+        }
+        try {
+          const method = await this.activateTaskSession(liveTask, lease, generation)
+          if (!this.canCommitEnter(generation)) return this.supersededEntry(liveTask.taskId)
+          if (method === 'load') {
+            return this.createEntryState(liveTask.taskId, {
+              restore: 'degraded',
+              method: 'load',
+              verification: this.restoreVerification('session.load'),
+              reason: '可能回放旧输出，上下文完整性未核实。'
+            })
+          }
+          return this.createEntryState(liveTask.taskId, {
+            restore: 'ready',
+            method: method ?? 'resume',
+            verification: this.restoreVerification('session.resume')
+          })
+        } catch {
+          if (!this.canCommitEnter(generation)) return this.supersededEntry(liveTask.taskId)
+          return this.createEntryState(liveTask.taskId, {
+            restore: 'degraded',
+            verification: 'unverified',
+            reason: '未能接回上次上下文，发送时会用新上下文接着聊。'
+          })
+        }
+      })
+    } catch (error) {
+      if (!this.canCommitEnter(generation)) return this.supersededEntry(task.taskId)
+      return this.createEntryState(task.taskId, {
+        restore: this.isForeignExecutionActive(task.taskId) ? 'idle' : 'degraded',
+        verification: 'unverified',
+        reason:
+          error instanceof AgentServiceError
+            ? error.message
+            : '未能接回上次上下文，发送时会用新上下文接着聊。'
+      })
+    }
+  }
+
+  private async activateOrRebuildTaskSession(
+    task: AgentTaskRecord,
+    inheritedLease?: OperationLease
+  ): Promise<void> {
+    await this.runExclusiveSessionOperation(async (lease) => {
+      if (task.projectId && this.projectRegistry) {
+        const root = await this.projectRegistry.resolveAvailableRoot(task.projectId)
+        this.assertOperationLeaseCurrent(lease)
+        await this.connectWithinSessionOperation(root, lease)
+      } else {
+        this.assertRuntimeReady(task.workspace)
+      }
+      const liveTask = this.requireTask(task.taskId)
+      if (this.isTaskSessionActive(liveTask)) return
+      try {
+        await this.activateTaskSession(liveTask, lease)
+      } catch (error) {
+        const status = this.adapter.getStatus()
+        const connectionTrusted =
+          status.state === 'ready' && status.workspace === liveTask.workspace
+        if (!connectionTrusted) {
+          if (liveTask.projectId && this.projectRegistry) {
+            try {
+              const root = await this.projectRegistry.resolveAvailableRoot(liveTask.projectId)
+              this.assertOperationLeaseCurrent(lease)
+              await this.connectWithinSessionOperation(root, lease)
+              await this.rebuildTaskSession(liveTask, lease)
+              return
+            } catch {
+              throw normalizeServiceError(error)
+            }
+          }
+          throw normalizeServiceError(error)
+        }
+        await this.rebuildTaskSession(liveTask, lease)
+      }
+    }, inheritedLease)
+  }
+
+  /** 丢掉失效 RuntimeSessionRef，在同一 taskId 上 createSession 并写回 TaskStore。 */
+  private async rebuildTaskSession(task: AgentTaskRecord, lease?: OperationLease): Promise<void> {
+    const session = await this.runAdapterOperation(() =>
+      this.adapter.createSession({ workspace: task.workspace })
+    )
+    this.assertOperationLeaseCurrent(lease)
+    this.assertSessionRef(session, task.workspace)
+    task.session = session
+    task.runtimeSessionId = session.runtimeSessionId
+    task.updatedAt = this.now()
+    if (this.taskStore && task.projectId) {
+      await this.taskStore.rebindRuntimeSession(
+        task.taskId,
+        session,
+        this.adapter.getCapabilitySnapshot()
+      )
+    }
+    this.selectedTaskId = task.taskId
+  }
+
+  private isTaskSessionActive(task: AgentTaskRecord): boolean {
+    const status = this.adapter.getStatus()
+    return (
+      this.selectedTaskId === task.taskId &&
+      status.state === 'ready' &&
+      status.runtimeId === task.runtimeId &&
+      status.workspace === task.workspace &&
+      status.runtimeSessionId === task.runtimeSessionId &&
+      task.session.runtimeId === task.runtimeId &&
+      task.session.workspace === task.workspace &&
+      task.session.runtimeSessionId === task.runtimeSessionId
+    )
+  }
+
+  private isForeignExecutionActive(taskId: string): boolean {
+    const execution = this.taskExecutor?.getSnapshot().execution
+    if (execution && execution.taskId !== taskId && !isTerminalExecutionState(execution.state)) {
+      return true
+    }
+    const activeTurn = this.executionController.getActiveTurn()
+    return Boolean(activeTurn && activeTurn.taskId !== taskId)
+  }
+
+  private canCommitEnter(generation?: number): boolean {
+    return generation === undefined || generation === this.enterGeneration
+  }
+
+  private restoreVerification(
+    capabilityId: 'session.resume' | 'session.load'
+  ): ConversationEntryState['verification'] {
+    const capability = this.adapter.getCapabilitySnapshot().capabilities[capabilityId]
+    if (capability.support !== 'native' || capability.verification === 'unverified') {
+      return 'unverified'
+    }
+    return capability.verification === 'verified' ? 'verified' : 'declared'
+  }
+
+  private supersededEntry(taskId: string): ConversationEntryState {
+    return this.createEntryState(taskId, {
+      restore: 'idle',
+      verification: 'unverified',
+      reason: '已切换到其他对话'
+    })
+  }
+
+  private createEntryState(
+    taskId: string,
+    fields: Omit<ConversationEntryState, 'taskId' | 'historyReady'>
+  ): ConversationEntryState {
+    return {
+      taskId,
+      historyReady: true,
+      ...fields
+    }
   }
 
   private markTurnRunning(task: AgentTaskRecord, turnId: string): void {

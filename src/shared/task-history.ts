@@ -52,10 +52,23 @@ export interface LocalExecutionEnvironmentSummary {
   projectId: string
 }
 
+/** 点进历史后的弱状态；只描述能不能接着聊，不携带 Runtime 私有 session。 */
+export type ConversationRestoreState = 'idle' | 'connecting' | 'ready' | 'degraded' | 'unavailable'
+
+/** 点进对话后的恢复结论；Renderer 只读这些字段，禁止夹带 runtimeSessionId。 */
+export interface ConversationEntryState {
+  taskId: string
+  historyReady: boolean
+  restore: ConversationRestoreState
+  method?: 'resume' | 'load' | 'new-session'
+  verification: 'unverified' | 'declared' | 'verified'
+  reason?: string
+}
+
 /** Runtime 原生恢复能力的有限摘要，不包含私有 session identifier。 */
 export interface RuntimeResumeSummary {
   resumed: boolean
-  method?: 'resume' | 'load'
+  method?: 'resume' | 'load' | 'new-session'
   message: string
   task?: AgentTaskRuntimeState
 }

@@ -2,7 +2,7 @@
 
 > **致执行者：** 产品已确认：点进一条历史就是进入这个对话，可以直接打字发送，**不要二次确认、不要单独的「继续任务」按钮**。本计划把这条体验落到主进程恢复契约上。
 >
-> **状态：** 待开始（前置：GACP-01 已于 2026-08-19 受限关闭，本计划可以开工）
+> **状态：** 核心实现已落地（2026-08-19）；待 Electron 开发版手工点选/连点/外槽/目录不可用验收，以及 lifecycle e2e 在受控 fixture 上回归
 >
 > **插入点：** GACP-01 之后、P0-10 之前
 >
@@ -138,15 +138,15 @@
 
 **任务目标：** Renderer 点选只提交 `taskId`；接不接得上由主进程自动决定。
 
-- [ ] **第 1 步: 定义 enterTask / 扩展 resumeTask**
+- [x] **第 1 步: 定义 enterTask / 扩展 resumeTask**
       说明：要么让现有 `resumeTask` 成为点选后的自动调用，要么新增语义相同的 `enterTask`。失败返回可序列化结论，不要抛成必须用户确认的硬错。`resumed: false` 仍算这次点选成功（历史已经打开）。
       预期：点选历史不再出现必须处理的错误弹窗，除非 Project 都读不到。
 
-- [ ] **第 2 步: 同一 Task 重建 session**
+- [x] **第 2 步: 同一 Task 重建 session**
       说明：自动 resume/load 都失败后，保留 `taskId`、历史、environment，丢掉失效 `RuntimeSessionRef`，在首次发送时 `createSession` 并写回 TaskStore。这是降级，不是新 Task。
       预期：侧栏还是同一条对话；Grok 侧是新 session；状态条说明上下文可能不完整。
 
-- [ ] **第 3 步: 单飞与取消**
+- [x] **第 3 步: 单飞与取消**
       说明：同一时刻只自动恢复一条 Task。切走就取消未完成的 enter。晚到的 resume 成功不得改掉当前选中 Task 的绑定。
       预期：连点五条历史，只给最后一条接 session。
 
@@ -154,15 +154,15 @@
 
 **任务目标：** live Composer 不再依赖用户先点继续。
 
-- [ ] **第 1 步: 用 RuntimeSessionRef 相等性替换 selectedTaskId 短路**
+- [x] **第 1 步: 用 RuntimeSessionRef 相等性替换 selectedTaskId 短路**
       说明：见上文第 4 节。连续 Turn 且 session 真匹配才跳过 resume。
       预期：杀进程后再点同一条，会自动重连，而不是空成功。
 
-- [ ] **第 2 步: selectTask 去掉只读门禁**
+- [x] **第 2 步: selectTask 去掉只读门禁**
       说明：打开历史后 `mode` 不要长期锁在必须 resume 才能发送。输入框默认可写。自动恢复 pending 时发送等待；Project 不可用或外槽占用时才 disable，并写原因。
       预期：点进就能打字；不再出现「只读历史 + 继续按钮」。
 
-- [ ] **第 3 步: 发送与自动恢复汇合**
+- [x] **第 3 步: 发送与自动恢复汇合**
       说明：`startTurn` 前如果这场 enter 还在飞，等它。失败则走同 Task 新 session。不要弹出「要不要恢复」。
       预期：用户只按一次发送。
 
@@ -182,15 +182,15 @@ interface ConversationEntryState {
 }
 ```
 
-- [ ] **第 1 步: Preload 白名单重建该 DTO**
+- [x] **第 1 步: Preload 白名单重建该 DTO**
       说明：不得带 `runtimeSessionId`。
       预期：主进程多塞私有字段会被剥掉。
 
-- [ ] **第 2 步: 页眉/Composer 只读 restore 状态**
+- [x] **第 2 步: 页眉/Composer 只读 restore 状态**
       说明：`connecting` 显示轻量 spinner；`degraded` 黄色说明；`unavailable` 才禁用输入。不要模态框。
       预期：P0-10 可以直接用，不会再设计「继续」主按钮。
 
-- [ ] **第 3 步: reload 后同样自动进入**
+- [x] **第 3 步: reload 后同样自动进入**
       说明：应用起来若恢复了上次选中 Task，行为与点选相同：先画历史，再自动接。pending 审批只靠已有 snapshot/Push，不伪造按钮。
       预期：重启后点着的那条对话仍能直接打字。
 
@@ -198,14 +198,14 @@ interface ConversationEntryState {
 
 ## 验收标准
 
-- [ ] 点历史 Task 后无需任何第二下确认就能发送下一条。
-- [ ] 界面没有「继续任务」主按钮或「是否恢复」对话框。
-- [ ] 自动 resume/load 在后台进行；失败不打断浏览，首次发送在同一 Task 降级新 session。
-- [ ] 快速切换只恢复最后一条；晚到 resume 不绑错 Task。
-- [ ] 其它 Task 正在执行时，点进来能看，不能把正在跑的那条杀掉。
-- [ ] Project 不可用时只能看不能发。
-- [ ] Renderer DTO 无 `runtimeSessionId`。
-- [ ] 相关 Vitest + `pnpm typecheck` + `pnpm build` + `git diff --check` 通过。
+- [ ] 点历史 Task 后无需任何第二下确认就能发送下一条。（代码已去掉第二步；待开发版手工点选）
+- [x] 界面没有「继续任务」主按钮或「是否恢复」对话框。
+- [x] 自动 resume/load 在后台进行；失败不打断浏览，首次发送在同一 Task 降级新 session。
+- [x] 快速切换只恢复最后一条；晚到 resume 不绑错 Task。
+- [ ] 其它 Task 正在执行时，点进来能看，不能把正在跑的那条杀掉。（代码已拒绝抢槽；待开发版/lifecycle e2e 确认）
+- [x] Project 不可用时只能看不能发。
+- [x] Renderer DTO 无 `runtimeSessionId`。
+- [x] 相关 Vitest + `pnpm typecheck` + `pnpm build` + `git diff --check` 通过。
 
 ## 非目标
 

@@ -59,6 +59,13 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
       message: '已断开'
     })),
     createTask: vi.fn(async () => task),
+    enterTask: vi.fn(async () => ({
+      taskId: 'task-1',
+      historyReady: true,
+      restore: 'ready' as const,
+      method: 'resume' as const,
+      verification: 'declared' as const
+    })),
     startTurn: vi.fn(async () => turn),
     cancelTurn: vi.fn(async () => undefined),
     getTaskRuntimeState: vi.fn(() => task),
@@ -152,6 +159,18 @@ describe('Agent IPC Handler', () => {
 
     expect(result).toMatchObject({ ok: true, value: { taskId: 'task-1' } })
     expect(fixture.runtime.createTask).toHaveBeenCalledWith('project-1')
+    expect(JSON.stringify(result)).not.toContain('runtimeSessionId')
+  })
+
+  it('进入对话只接收 taskId，返回恢复结论且不包含 Runtime session 引用', async () => {
+    const fixture = createFixture()
+    const result = await fixture.invoke(AGENT_INVOKE_CHANNELS.enterTask, { taskId: 'task-1' })
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: { taskId: 'task-1', historyReady: true, restore: 'ready', method: 'resume' }
+    })
+    expect(fixture.runtime.enterTask).toHaveBeenCalledWith('task-1')
     expect(JSON.stringify(result)).not.toContain('runtimeSessionId')
   })
 

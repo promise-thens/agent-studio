@@ -274,7 +274,10 @@ function registerIpcHandlers(): void {
         connect: (projectId) => service.connect(projectId),
         disconnect: () => service.disconnect(),
         createTask: (projectId) => service.createTask(projectId),
+        enterTask: (taskId) => service.enterTask(taskId),
         startTurn: async (taskId, prompt) => {
+          await service.waitForEnter(taskId)
+          await service.ensureTaskSessionForTurn(taskId)
           const task = requireTaskStore().getTaskRecord(taskId)
           return executor.start({
             taskId,

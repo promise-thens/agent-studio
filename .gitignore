@@ -5,6 +5,7 @@ out
 .eslintcache
 *.log*
 .gitnexus/
+.worktrees/
 .env
 .env.*
 !.env.example

@@ -10,6 +10,7 @@ import type {
   TaskExecutionCancellationRequest,
   TaskExecutionSnapshot
 } from './task-execution'
+import type { ConversationEntryState } from './task-history'
 import type { DesktopIpcResult } from './ipc-result'
 
 export const AGENT_INVOKE_CHANNELS = {
@@ -18,6 +19,7 @@ export const AGENT_INVOKE_CHANNELS = {
   connect: 'agent:connect',
   disconnect: 'agent:disconnect',
   createTask: 'agent:create-task',
+  enterTask: 'agent:enter-task',
   startTurn: 'agent:start-turn',
   cancelTurn: 'agent:cancel-turn',
   getTaskRuntimeState: 'agent:get-task-runtime-state',
@@ -38,6 +40,10 @@ export interface AgentConnectRequest {
 
 export interface AgentCreateTaskRequest {
   projectId: string
+}
+
+export interface AgentEnterTaskRequest {
+  taskId: string
 }
 
 export interface AgentStartTurnRequest {
@@ -73,6 +79,7 @@ export interface AgentDesktopApi {
   connect: (projectId: string) => Promise<DesktopIpcResult<AgentRuntimeStatus>>
   disconnect: () => Promise<DesktopIpcResult<AgentRuntimeStatus>>
   createTask: (projectId: string) => Promise<DesktopIpcResult<AgentTaskRuntimeState>>
+  enterTask: (taskId: string) => Promise<DesktopIpcResult<ConversationEntryState>>
   startTurn: (
     taskId: string,
     prompt: string

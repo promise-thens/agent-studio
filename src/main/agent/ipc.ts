@@ -1,9 +1,11 @@
 import type { AgentRuntimeStatus, AgentTaskRuntimeState } from '../../shared/agent'
+import type { ConversationEntryState } from '../../shared/task-history'
 import {
   AGENT_INVOKE_CHANNELS,
   type AgentCancelTurnRequest,
   type AgentConnectRequest,
   type AgentCreateTaskRequest,
+  type AgentEnterTaskRequest,
   type AgentGetTaskRuntimeStateRequest,
   type AgentRespondPermissionRequest,
   type AgentStartTurnRequest
@@ -33,6 +35,7 @@ export interface AgentIpcRuntime {
   connect: (projectId: string) => Promise<AgentRuntimeStatus>
   disconnect: () => Promise<AgentRuntimeStatus>
   createTask: (projectId: string) => Promise<AgentTaskRuntimeState>
+  enterTask: (taskId: string) => Promise<ConversationEntryState>
   startTurn: (
     taskId: string,
     prompt: string
@@ -119,6 +122,11 @@ function readConnectRequest(args: unknown[]): AgentConnectRequest {
 function readCreateTaskRequest(args: unknown[]): AgentCreateTaskRequest {
   const request = readRequest(args, ['projectId'])
   return { projectId: readRequiredString(request, 'projectId', MAX_PROJECT_ID_BYTES) }
+}
+
+function readEnterTaskRequest(args: unknown[]): AgentEnterTaskRequest {
+  const request = readRequest(args, ['taskId'])
+  return { taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES) }
 }
 
 function readStartTurnRequest(args: unknown[]): AgentStartTurnRequest {
@@ -232,6 +240,11 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
     const agent = requireAgent(dependencies.getAgent)
     assertPromptState(agent.getStatus())
     return agent.createTask(request.projectId)
+  })
+
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.enterTask, async (args) => {
+    const request = readEnterTaskRequest(args)
+    return requireAgent(dependencies.getAgent).enterTask(request.taskId)
   })
 
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.startTurn, async (args) => {

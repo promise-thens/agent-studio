@@ -102,12 +102,14 @@ describe('AgentService Task / Turn 编排', () => {
 
     await expect(
       blockedService.startTurn(blockedTaskA.taskId, '不能串错上下文')
-    ).rejects.toMatchObject({ code: 'session-restore-unsupported' })
-    expect(blockedAdapter.startTurn).not.toHaveBeenCalled()
-    expect(blockedService.getTaskRuntimeState(blockedTaskA.taskId)).toMatchObject({
-      state: 'failed',
-      lastTurnId: 'turn-a'
+    ).resolves.toMatchObject({
+      taskId: blockedTaskA.taskId,
+      turnId: 'turn-a'
     })
+    expect(blockedAdapter.createSession).toHaveBeenCalledTimes(3)
+    expect(blockedAdapter.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeSessionId: 'runtime-session-3' })
+    )
   })
 
   it('resume 安全失败并废弃连接时保留原始诊断，不再用 load 错误覆盖根因', async () => {
@@ -780,6 +782,116 @@ describe('AgentService Task / Turn 编排', () => {
       new AgentServiceError('operation-failed', 'Agent Runtime 操作失败。')
     )
   })
+
+  it('点进历史走 enterTask：恢复失败不抛错，晚到 resume 不得绑错 Task', async () => {
+    const fixture = await createHistoryServiceFixture(['task-a', 'task-b', 'turn-a'])
+    try {
+      const taskA = await fixture.service.createTask(fixture.project.projectId)
+      const taskB = await fixture.service.createTask(fixture.project.projectId)
+      const resumeStarted = deferred<void>()
+      const releaseFirstResume = deferred<void>()
+      let resumeCalls = 0
+      fixture.adapter.resumeSession.mockImplementation(async (session) => {
+        resumeCalls += 1
+        if (resumeCalls === 1) {
+          resumeStarted.resolve()
+          await releaseFirstResume.promise
+        }
+        fixture.adapter.assignSession(session)
+      })
+
+      const firstEnter = fixture.service.enterTask(taskA.taskId)
+      await resumeStarted.promise
+      const secondEnter = fixture.service.enterTask(taskB.taskId)
+      releaseFirstResume.resolve()
+      const [firstResult, secondResult] = await Promise.all([firstEnter, secondEnter])
+
+      expect(firstResult).toMatchObject({
+        taskId: taskA.taskId,
+        historyReady: true,
+        restore: 'idle'
+      })
+      expect(secondResult).toMatchObject({
+        taskId: taskB.taskId,
+        historyReady: true,
+        restore: 'ready',
+        method: 'resume',
+        verification: 'declared'
+      })
+      expect(JSON.stringify(firstResult)).not.toContain('runtimeSessionId')
+      expect(JSON.stringify(secondResult)).not.toContain('runtimeSessionId')
+      expect(fixture.service.getSelectedTaskId()).toBe(taskB.taskId)
+    } finally {
+      await fixture.dispose()
+    }
+  })
+
+  it('enterTask 在 Project 不可用或恢复能力缺失时不打断浏览，发送时同 Task 重建 session', async () => {
+    const missingRoot = await createHistoryServiceFixture(['task-a'])
+    try {
+      const task = await missingRoot.service.createTask(missingRoot.project.projectId)
+      await rm(missingRoot.project.canonicalRoot, { recursive: true, force: true })
+      await expect(missingRoot.service.enterTask(task.taskId)).resolves.toMatchObject({
+        taskId: task.taskId,
+        historyReady: true,
+        restore: 'unavailable'
+      })
+      expect(missingRoot.adapter.resumeSession).not.toHaveBeenCalled()
+    } finally {
+      await missingRoot.dispose()
+    }
+
+    const rebuild = await createHistoryServiceFixture(['task-a', 'turn-a'], {
+      resume: false,
+      load: false
+    })
+    try {
+      const task = await rebuild.service.createTask(rebuild.project.projectId)
+      await rebuild.service.disconnect()
+      const entered = await rebuild.service.enterTask(task.taskId)
+      expect(entered).toMatchObject({
+        taskId: task.taskId,
+        restore: 'degraded',
+        verification: 'unverified'
+      })
+      expect(rebuild.adapter.resumeSession).not.toHaveBeenCalled()
+
+      await expect(rebuild.service.startTurn(task.taskId, '接着聊')).resolves.toMatchObject({
+        taskId: task.taskId,
+        turnId: 'turn-a'
+      })
+      expect(rebuild.adapter.createSession).toHaveBeenCalledTimes(2)
+      expect(rebuild.store.getTaskRecord(task.taskId).runtimeSession.runtimeSessionId).toBe(
+        'runtime-session-2'
+      )
+      expect(JSON.stringify(rebuild.service.getTaskRuntimeState(task.taskId))).not.toContain(
+        'runtimeSessionId'
+      )
+    } finally {
+      await rebuild.dispose()
+    }
+  })
+
+  it('Adapter 进程已死后 enterTask 不会因 selectedTaskId 短路而假成功', async () => {
+    const fixture = await createHistoryServiceFixture(['task-a'])
+    try {
+      const task = await fixture.service.createTask(fixture.project.projectId)
+      expect(fixture.service.getSelectedTaskId()).toBe(task.taskId)
+      await fixture.adapter.disconnect()
+
+      await expect(fixture.service.enterTask(task.taskId)).resolves.toMatchObject({
+        taskId: task.taskId,
+        restore: 'ready',
+        method: 'resume'
+      })
+      expect(fixture.adapter.connect).toHaveBeenCalledWith(fixture.project.canonicalRoot)
+      expect(fixture.adapter.resumeSession).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimeSessionId: 'runtime-session-1' })
+      )
+    } finally {
+      await fixture.dispose()
+    }
+  })
 })
 
 class FakeRuntimeAdapter implements AgentRuntimeAdapter {
@@ -827,8 +939,28 @@ class FakeRuntimeAdapter implements AgentRuntimeAdapter {
   })
 
   readonly resumeSession = vi.fn(async (session: AgentRuntimeSessionRef): Promise<void> => {
-    this.status = { ...this.status, runtimeSessionId: session.runtimeSessionId }
+    this.assignSession(session)
   })
+
+  /** 把 Adapter 预置到目标工作区，避免 fixture 把 connect 次数算进断言。 */
+  primeWorkspace(workspace: string): void {
+    this.status = {
+      ...this.status,
+      state: 'ready',
+      workspace,
+      message: '已连接'
+    }
+  }
+
+  /** 测试里模拟 Adapter 已选中某个 session，不绕过 connect/resume 的状态字段。 */
+  assignSession(session: AgentRuntimeSessionRef): void {
+    this.status = {
+      ...this.status,
+      state: 'ready',
+      workspace: session.workspace,
+      runtimeSessionId: session.runtimeSessionId
+    }
+  }
 
   readonly closeSession = vi.fn(async (): Promise<void> => undefined)
   readonly startTurn = vi.fn<(context: AgentRuntimeTurnContext) => Promise<AgentRuntimeTurnResult>>(
@@ -900,6 +1032,42 @@ function restoreSnapshot({
           }
     ]
   })
+}
+
+async function createHistoryServiceFixture(
+  ids: string[],
+  capabilities: { resume: boolean; load: boolean } = { resume: true, load: true }
+): Promise<{
+  adapter: FakeRuntimeAdapter
+  service: AgentService
+  store: TaskStore
+  project: { projectId: string; canonicalRoot: string }
+  dispose: () => Promise<void>
+}> {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'agent-service-enter-'))
+  const projectPath = join(userDataPath, 'project')
+  await mkdir(projectPath)
+  const registry = new ProjectRegistry({ userDataPath, createId: () => 'project-1' })
+  await registry.initialize()
+  const project = await registry.register(projectPath)
+  const store = new TaskStore({ projectRegistry: registry })
+  await store.initialize()
+  const adapter = new FakeRuntimeAdapter(capabilities)
+  adapter.primeWorkspace(project.canonicalRoot)
+  let idIndex = 0
+  const service = new AgentService(adapter, new TaskExecutionController(), {
+    projectRegistry: registry,
+    taskStore: store,
+    operationGate: new OperationGate(),
+    createId: () => ids[idIndex++] ?? `unexpected-id-${idIndex}`
+  })
+  return {
+    adapter,
+    service,
+    store,
+    project,
+    dispose: () => rm(userDataPath, { recursive: true, force: true })
+  }
 }
 
 function createService(

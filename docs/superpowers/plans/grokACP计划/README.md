@@ -85,7 +85,7 @@ P0-A 主表因此变成：
 | ---: | --- | ---: | --- | --- |
 | 5 | P0-09 | 4 | 真机验收已受限关闭 | 本目录的前置观察面 |
 | 5a | [GACP-01](gacp-01-real-grok-protocol-verification.md) | 5 | 已完成（受限关闭） | 2026-08-19 冻结观察表；遗留见该计划「遗留且不挡后续」 |
-| 5b | [GACP-02](gacp-02-session-restore-capability-contract.md) | 5 | 可以开始 | 点进历史即可接着聊，无二次确认；load 仍按未核实降级 |
+| 5b | [GACP-02](gacp-02-session-restore-capability-contract.md) | 5 | 核心已落地，待手工/e2e 收口 | 点进历史即可接着聊，无二次确认；load 仍按未核实降级 |
 | 6 | P0-10 | 5 | GACP-02 后 | 工作台按「点进去就能发」来做，禁止加回继续按钮 |
 | 7 | P0-11 | 5 | 仍按原依赖 | 命令证据事实源 |
 | 7a | [GACP-03](gacp-03-structured-permission-evidence.md) | 4 | P0-11 后 | 能过的自动过，不要一个个点 |
