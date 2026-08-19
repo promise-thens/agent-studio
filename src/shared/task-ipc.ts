@@ -17,7 +17,9 @@ export const TASK_INVOKE_CHANNELS = {
   listPermissionAudits: 'task:list-permission-audits',
   resume: 'task:resume',
   previewDelete: 'task:preview-delete',
-  delete: 'task:delete'
+  delete: 'task:delete',
+  rename: 'task:rename',
+  archive: 'task:archive'
 } as const
 
 export interface PublicAgentEventPage {
@@ -52,4 +54,6 @@ export interface TaskDesktopApi {
   resume: (taskId: string) => Promise<DesktopIpcResult<RuntimeResumeSummary>>
   previewDelete: (taskId: string) => Promise<DesktopIpcResult<DeletionPreview>>
   delete: (taskId: string, token: string) => Promise<DesktopIpcResult<null>>
+  rename: (taskId: string, title: string) => Promise<DesktopIpcResult<TaskHistoryDetail>>
+  archive: (taskId: string) => Promise<DesktopIpcResult<TaskHistoryDetail>>
 }

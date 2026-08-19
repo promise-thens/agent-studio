@@ -908,6 +908,141 @@ describe('TaskStore', () => {
     await restarted.initialize()
     expect(await readdir(join(registry.historyRoot, 'deleting'))).toHaveLength(0)
   })
+
+  it('重命名只改展示标题，不碰 Runtime session 与项目文件', async () => {
+    const { store, project } = await createStore()
+    const before = store.getTaskRecord('task-1')
+
+    const renamed = await store.renameTask('task-1', '  登录改邮箱  ')
+
+    expect(renamed.title).toBe('登录改邮箱')
+    expect(renamed.taskId).toBe('task-1')
+    expect(renamed.projectId).toBe(project.projectId)
+    expect(renamed.runtimeSession).toEqual(before.runtimeSession)
+    expect(renamed.state).toBe(before.state)
+    expect(renamed.turnCount).toBe(before.turnCount)
+    expect(renamed.revision).toBe(before.revision + 1)
+    expect(store.getTaskDetail('task-1').title).toBe('登录改邮箱')
+    expect(store.getTaskRecord('task-1').runtimeSession.runtimeSessionId).toBe('private-session')
+  })
+
+  it('标题为空、仅空白或含 NUL 时拒绝重命名', async () => {
+    const { store } = await createStore()
+    const before = store.getTaskRecord('task-1')
+
+    await expect(store.renameTask('task-1', '')).rejects.toMatchObject({ code: 'invalid-state' })
+    await expect(store.renameTask('task-1', '   ')).rejects.toMatchObject({ code: 'invalid-state' })
+    await expect(store.renameTask('task-1', 'bad\0title')).rejects.toMatchObject({
+      code: 'invalid-state'
+    })
+    expect(store.getTaskRecord('task-1').title).toBe(before.title)
+    expect(store.getTaskRecord('task-1').revision).toBe(before.revision)
+  })
+
+  it.each(['running', 'waiting-permission'] as const)(
+    '%s Task 拒绝归档，且历史文件仍在',
+    async (state) => {
+      const { store } = await createStore()
+      const environmentId = store.getTaskRecord('task-1').environment.environmentId
+      await store.admitExecutionTurn({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        executionId: 'execution-1',
+        environmentId,
+        promptDisplayText: '测试',
+        model: { modelId: 'model-1' }
+      })
+      await store.transitionExecution(
+        { taskId: 'task-1', turnId: 'turn-1', executionId: 'execution-1' },
+        'running',
+        '2026-08-12T00:00:01.000Z'
+      )
+      if (state === 'waiting-permission') {
+        await store.transitionExecution(
+          { taskId: 'task-1', turnId: 'turn-1', executionId: 'execution-1' },
+          'waiting-permission',
+          '2026-08-12T00:00:02.000Z'
+        )
+      }
+
+      await expect(store.archiveTask('task-1')).rejects.toMatchObject({ code: 'invalid-state' })
+      expect(store.getTaskRecord('task-1').archivedAt).toBeUndefined()
+      expect(store.getTaskRecord('task-1').state).toBe(state)
+    }
+  )
+
+  it.each(['running', 'waiting-permission'] as const)(
+    '%s Task 拒绝删除，token 协议不变',
+    async (state) => {
+      const { store } = await createStore()
+      const environmentId = store.getTaskRecord('task-1').environment.environmentId
+      await store.admitExecutionTurn({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        executionId: 'execution-1',
+        environmentId,
+        promptDisplayText: '测试',
+        model: { modelId: 'model-1' }
+      })
+      await store.transitionExecution(
+        { taskId: 'task-1', turnId: 'turn-1', executionId: 'execution-1' },
+        'running',
+        '2026-08-12T00:00:01.000Z'
+      )
+      if (state === 'waiting-permission') {
+        await store.transitionExecution(
+          { taskId: 'task-1', turnId: 'turn-1', executionId: 'execution-1' },
+          'waiting-permission',
+          '2026-08-12T00:00:02.000Z'
+        )
+      }
+
+      const preview = await store.previewTaskDeletion('task-1')
+      await expect(store.deleteTask('task-1', preview.token)).rejects.toMatchObject({
+        code: 'invalid-state'
+      })
+      expect(store.getTaskDetail('task-1').state).toBe(state)
+    }
+  )
+
+  it('默认 list 省略已归档 Task，get 仍能打开', async () => {
+    const { store, project } = await createStore()
+    await store.createTask({
+      taskId: 'task-2',
+      projectId: project.projectId,
+      root: project.canonicalRoot,
+      runtimeId: 'grok',
+      session: {
+        runtimeId: 'grok',
+        runtimeSessionId: 'private-session-2',
+        workspace: project.canonicalRoot
+      },
+      capabilitySnapshot: capabilitySnapshot()
+    })
+
+    const archived = await store.archiveTask('task-1')
+    expect(archived.archivedAt).toEqual(expect.any(String))
+    expect(store.getTaskDetail('task-1')).toMatchObject({
+      taskId: 'task-1',
+      archived: true,
+      title: expect.any(String)
+    })
+
+    const page = await store.listTasks(project.projectId)
+    expect(page.items.map((item) => item.taskId)).toEqual(['task-2'])
+    expect(page.items.some((item) => item.taskId === 'task-1')).toBe(false)
+  })
+
+  it('归档后重启仍省略默认列表，get 仍能读到 archived', async () => {
+    const { store, registry, project } = await createStore()
+    await store.archiveTask('task-1')
+
+    const restarted = new TaskStore({ projectRegistry: registry })
+    await restarted.initialize()
+    expect((await restarted.listTasks(project.projectId)).items).toEqual([])
+    expect(restarted.getTaskDetail('task-1').archived).toBe(true)
+    expect(restarted.getTaskRecord('task-1').archivedAt).toEqual(expect.any(String))
+  })
 })
 
 /** 构造无 sleep 的并发门禁，精确控制历史写入与删除提交时序。 */

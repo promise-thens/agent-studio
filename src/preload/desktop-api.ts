@@ -644,6 +644,14 @@ export function createTaskDesktopApi(ipcRenderer: NarrowIpcRenderer): TaskDeskto
     delete: (taskId, token) =>
       ipcRenderer.invoke(TASK_INVOKE_CHANNELS.delete, { taskId, token }) as ReturnType<
         TaskDesktopApi['delete']
+      >,
+    rename: (taskId, title) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.rename, { taskId, title }) as ReturnType<
+        TaskDesktopApi['rename']
+      >,
+    archive: (taskId) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.archive, { taskId }) as ReturnType<
+        TaskDesktopApi['archive']
       >
   }
 }

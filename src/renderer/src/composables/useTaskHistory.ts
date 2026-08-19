@@ -42,6 +42,8 @@ export interface TaskHistoryState {
   resumeOpenedTask(): Promise<RuntimeResumeSummary>
   previewTaskDeletion(taskId: string): Promise<DeletionPreview>
   deleteTask(taskId: string, token: string): Promise<void>
+  renameTask(taskId: string, title: string): Promise<void>
+  archiveTask(taskId: string): Promise<void>
 }
 
 export interface UseTaskHistoryOptions {
@@ -279,6 +281,26 @@ export function useTaskHistory(options: UseTaskHistoryOptions = {}): TaskHistory
     await refreshTasks()
   }
 
+  /** 只更新本地标题；失败时保留旧列表，避免详情和列表短暂分叉。 */
+  async function renameTask(taskId: string, title: string): Promise<void> {
+    const detail = unwrapDesktopIpcResult(await window.task.rename(taskId, title))
+    tasks.value = tasks.value.map((task) =>
+      task.taskId === taskId ? { ...task, title: detail.title, revision: detail.revision } : task
+    )
+    if (openedTask.value?.taskId === taskId) {
+      openedTask.value = { ...openedTask.value, title: detail.title, revision: detail.revision }
+    }
+  }
+
+  /** 归档成功后立刻从默认列表拿掉；详情若正打开则收起以免继续当可管理项。 */
+  async function archiveTask(taskId: string): Promise<void> {
+    unwrapDesktopIpcResult(await window.task.archive(taskId))
+    tasks.value = tasks.value.filter((task) => task.taskId !== taskId)
+    if (openedTask.value?.taskId === taskId) {
+      clearOpenedTaskState()
+    }
+  }
+
   /** 先在局部变量读取完整首屏，只有最新 openTask 请求才一次性提交响应式状态。 */
   async function readEventPages(
     taskId: string,
@@ -365,7 +387,9 @@ export function useTaskHistory(options: UseTaskHistoryOptions = {}): TaskHistory
     hasMoreEvents,
     resumeOpenedTask,
     previewTaskDeletion,
-    deleteTask
+    deleteTask,
+    renameTask,
+    archiveTask
   }
 }
 

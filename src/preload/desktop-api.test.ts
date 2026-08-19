@@ -53,6 +53,8 @@ describe('窄 Preload API', () => {
     await task.listEvents('task-1', 'turn-1', 42, 200)
     await task.listPermissionAudits('task-1')
     await task.resume('task-1')
+    await task.rename('task-1', '新标题')
+    await task.archive('task-1')
 
     expect(ipcRenderer.invoke.mock.calls).toEqual([
       [AGENT_INVOKE_CHANNELS.getStatus],
@@ -83,7 +85,9 @@ describe('窄 Preload API', () => {
         { taskId: 'task-1', turnId: 'turn-1', afterSequence: 42, limit: 200 }
       ],
       [TASK_INVOKE_CHANNELS.listPermissionAudits, { taskId: 'task-1' }],
-      [TASK_INVOKE_CHANNELS.resume, { taskId: 'task-1' }]
+      [TASK_INVOKE_CHANNELS.resume, { taskId: 'task-1' }],
+      [TASK_INVOKE_CHANNELS.rename, { taskId: 'task-1', title: '新标题' }],
+      [TASK_INVOKE_CHANNELS.archive, { taskId: 'task-1' }]
     ])
   })
 

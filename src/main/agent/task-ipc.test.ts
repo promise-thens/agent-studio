@@ -45,7 +45,36 @@ function createFixture(historyAvailable = true): {
       token: 'token',
       expiresAt: '2026-08-12T00:05:00.000Z'
     })),
-    deleteTask: vi.fn(async () => undefined)
+    deleteTask: vi.fn(async () => undefined),
+    renameTask: vi.fn(async () => ({
+      taskId: 'task-1',
+      projectId: 'project-1',
+      runtimeId: 'grok' as const,
+      title: '新标题',
+      state: 'completed' as const,
+      turnCount: 1,
+      resumable: true,
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:01:00.000Z',
+      revision: 2,
+      environment: { kind: 'local' as const, projectId: 'project-1' },
+      permissionPolicy: { kind: 'legacy-runtime' as const }
+    })),
+    archiveTask: vi.fn(async () => ({
+      taskId: 'task-1',
+      projectId: 'project-1',
+      runtimeId: 'grok' as const,
+      title: '测试',
+      state: 'completed' as const,
+      turnCount: 1,
+      resumable: true,
+      archived: true as const,
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:01:00.000Z',
+      revision: 2,
+      environment: { kind: 'local' as const, projectId: 'project-1' },
+      permissionPolicy: { kind: 'legacy-runtime' as const }
+    }))
   }
   const assertTrustedSender = vi.fn()
   registerTaskIpcHandlers({
@@ -135,6 +164,41 @@ describe('Task 历史 IPC', () => {
       })
     ).toEqual({ ok: true, value: null })
     expect(fixture.history.deleteTask).toHaveBeenCalledWith('task-1', 'token-1')
+  })
+
+  it('重命名只转发 taskId 与 title，空标题在进入历史服务前被拒绝', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.rename, {
+        taskId: 'task-1',
+        title: '登录改邮箱'
+      })
+    ).toMatchObject({ ok: true, value: { title: '新标题' } })
+    expect(fixture.history.renameTask).toHaveBeenCalledWith('task-1', '登录改邮箱')
+
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.rename, { taskId: 'task-1', title: '   ' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.rename, {
+        taskId: 'task-1',
+        title: 'ok',
+        extra: true
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.history.renameTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('归档只接受 taskId，并原样交给历史服务', async () => {
+    const fixture = createFixture()
+    expect(await fixture.invoke(TASK_INVOKE_CHANNELS.archive, { taskId: 'task-1' })).toMatchObject({
+      ok: true,
+      value: { archived: true }
+    })
+    expect(fixture.history.archiveTask).toHaveBeenCalledWith('task-1')
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.archive, { taskId: 'task-1', extra: true })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
   })
 
   it('权限审计查询只接受 Task ID、cursor 和 limit', async () => {

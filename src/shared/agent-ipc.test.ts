@@ -41,7 +41,9 @@ describe('桌面 IPC 静态契约', () => {
       'task:list-permission-audits',
       'task:resume',
       'task:preview-delete',
-      'task:delete'
+      'task:delete',
+      'task:rename',
+      'task:archive'
     ])
   })
 

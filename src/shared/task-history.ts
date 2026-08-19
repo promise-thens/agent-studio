@@ -86,6 +86,8 @@ export interface TaskHistorySummary {
   createdAt: string
   updatedAt: string
   revision: number
+  /** 归档后默认列表隐藏；get 仍会带上该标记。 */
+  archived?: true
 }
 
 /** Task 详情保持环境与权限策略中性，不暴露 Runtime 私有引用。 */

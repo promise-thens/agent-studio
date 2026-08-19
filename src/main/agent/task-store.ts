@@ -81,6 +81,8 @@ export interface TaskRecordV1 {
   createdAt: string
   updatedAt: string
   revision: number
+  /** 归档时间；存在即视为已归档，默认 list 省略但 get 仍可读。 */
+  archivedAt?: string
 }
 
 type PersistedExecutionReason =
@@ -655,10 +657,51 @@ export class TaskStore {
     }))
   }
 
+  /**
+   * 只改展示标题。不碰项目文件、Runtime session，也不改变执行状态。
+   */
+  async renameTask(taskId: string, title: string): Promise<TaskRecordV1> {
+    const nextTitle = normalizeTaskTitle(title)
+    return this.enqueueTask(taskId, async () => {
+      const task = this.requireTask(taskId)
+      const observedAt = this.now()
+      const nextTask: TaskRecordV1 = {
+        ...task,
+        title: nextTitle,
+        updatedAt: observedAt,
+        revision: task.revision + 1
+      }
+      await this.writer.write(this.taskPath(nextTask), nextTask)
+      this.tasks.set(taskId, nextTask)
+      return structuredClone(nextTask)
+    })
+  }
+
+  /**
+   * 归档只写 archivedAt，不删历史文件。运行中或等待审批时必须拒绝。
+   */
+  async archiveTask(taskId: string): Promise<TaskRecordV1> {
+    return this.enqueueTask(taskId, async () => {
+      const task = this.requireTask(taskId)
+      this.assertTaskNotActive(task, '活动 Task 不能归档。')
+      if (task.archivedAt) return structuredClone(task)
+      const observedAt = this.now()
+      const nextTask: TaskRecordV1 = {
+        ...task,
+        archivedAt: observedAt,
+        updatedAt: observedAt,
+        revision: task.revision + 1
+      }
+      await this.writer.write(this.taskPath(nextTask), nextTask)
+      this.tasks.set(taskId, nextTask)
+      return structuredClone(nextTask)
+    })
+  }
+
   async listTasks(projectId: string, cursor?: string, limit = 50): Promise<TaskHistoryPage> {
     const acceptedLimit = clampLimit(limit, 50, 100)
     const all = [...this.tasks.values()]
-      .filter((task) => task.projectId === projectId)
+      .filter((task) => task.projectId === projectId && !task.archivedAt)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     const start = cursor ? Math.max(0, all.findIndex((task) => task.taskId === cursor) + 1) : 0
     const page = all.slice(start, start + acceptedLimit)
@@ -1377,6 +1420,18 @@ export class TaskStore {
       await this.writer.removeDurably(join(deletingRoot, entry)).catch(() => undefined)
   }
 
+  /** 运行中、等待审批或仍有活动 Turn/execution 时禁止归档。 */
+  private assertTaskNotActive(task: TaskRecordV1, message: string): void {
+    if (
+      task.activeTurnId ||
+      task.activeExecutionId ||
+      task.state === 'running' ||
+      task.state === 'waiting-permission'
+    ) {
+      throw new TaskStoreError('invalid-state', message)
+    }
+  }
+
   private requireTask(taskId: string): TaskRecordV1 {
     if (this.unsupportedTasks.has(taskId)) {
       throw new TaskStoreError('history-version-unsupported', '该 Task 历史版本高于当前客户端。')
@@ -1542,7 +1597,8 @@ function toTaskSummary(task: TaskRecordV1): TaskHistorySummary {
     ...(!resumable ? { resumeMessage: 'Runtime 未声明可用的会话恢复能力。' } : {}),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
-    revision: task.revision
+    revision: task.revision,
+    ...(task.archivedAt ? { archived: true as const } : {})
   }
 }
 
@@ -1582,6 +1638,20 @@ function mapCapabilityEvidence(
 ): 'unsupported' | 'declared' | 'verified' {
   if (capability.support !== 'native') return 'unsupported'
   return capability.verification === 'verified' ? 'verified' : 'declared'
+}
+
+const MAX_TASK_TITLE_BYTES = 4 * 1024
+
+/** 重命名标题必须可展示：去空白、禁 NUL、限制大小。 */
+function normalizeTaskTitle(title: string): string {
+  if (typeof title !== 'string' || title.includes('\0')) {
+    throw new TaskStoreError('invalid-state', 'Task 标题无效。')
+  }
+  const trimmed = title.trim()
+  if (!trimmed || Buffer.byteLength(trimmed, 'utf8') > MAX_TASK_TITLE_BYTES) {
+    throw new TaskStoreError('invalid-state', 'Task 标题无效。')
+  }
+  return trimmed
 }
 
 function deriveTaskTitle(prompt: string): string {
@@ -1638,7 +1708,8 @@ function parseTaskRecord(value: unknown): RecordParseResult<TaskRecordV1> {
     !isIsoTimestamp(value.updatedAt) ||
     (value.activeTurnId !== undefined && !isValidIdentifier(value.activeTurnId)) ||
     (value.activeExecutionId !== undefined && !isValidIdentifier(value.activeExecutionId)) ||
-    (value.lastTurnId !== undefined && !isValidIdentifier(value.lastTurnId))
+    (value.lastTurnId !== undefined && !isValidIdentifier(value.lastTurnId)) ||
+    (value.archivedAt !== undefined && !isIsoTimestamp(value.archivedAt))
   ) {
     return { kind: 'corrupt' }
   }

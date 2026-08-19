@@ -132,7 +132,25 @@ describe('useTaskHistory', () => {
               expiresAt: '2026-08-12T00:05:00.000Z'
             })
           ),
-          delete: vi.fn(async () => ok(null))
+          delete: vi.fn(async () => ok(null)),
+          rename: vi.fn(async (taskId: string, title: string) =>
+            ok({
+              ...task(taskId),
+              title,
+              revision: 2,
+              environment: { kind: 'local' as const, projectId: project.projectId },
+              permissionPolicy: { kind: 'legacy-runtime' as const }
+            })
+          ),
+          archive: vi.fn(async (taskId: string) =>
+            ok({
+              ...task(taskId),
+              archived: true as const,
+              revision: 2,
+              environment: { kind: 'local' as const, projectId: project.projectId },
+              permissionPolicy: { kind: 'legacy-runtime' as const }
+            })
+          )
         }
       }
     })
@@ -158,6 +176,33 @@ describe('useTaskHistory', () => {
       'audit-1',
       'audit-2'
     ])
+  })
+
+  it('重命名只改标题，失败时保留旧列表', async () => {
+    const history = useTaskHistory()
+    await history.selectProject(project.projectId)
+    await history.openTask('task-1')
+    await history.renameTask('task-1', '登录改邮箱')
+    expect(window.task.rename).toHaveBeenCalledWith('task-1', '登录改邮箱')
+    expect(history.tasks.value[0]?.title).toBe('登录改邮箱')
+    expect(history.openedTask.value?.title).toBe('登录改邮箱')
+
+    vi.mocked(window.task.rename).mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'invalid-input', message: '标题无效' }
+    })
+    await expect(history.renameTask('task-1', '')).rejects.toThrow('标题无效')
+    expect(history.tasks.value[0]?.title).toBe('登录改邮箱')
+  })
+
+  it('归档后从默认列表移除并清理打开态', async () => {
+    const history = useTaskHistory()
+    await history.selectProject(project.projectId)
+    await history.openTask('task-1')
+    await history.archiveTask('task-1')
+    expect(window.task.archive).toHaveBeenCalledWith('task-1')
+    expect(history.tasks.value.map((item) => item.taskId)).toEqual([])
+    expect(history.openedTask.value).toBeNull()
   })
 
   it('删除 Task 后同步清理打开状态并刷新当前 Project 列表', async () => {

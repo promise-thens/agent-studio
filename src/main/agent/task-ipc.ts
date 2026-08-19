@@ -37,6 +37,8 @@ export interface TaskHistoryIpcRuntime {
   resumeTask(taskId: string): Promise<RuntimeResumeSummary>
   previewTaskDeletion(taskId: string): Promise<DeletionPreview>
   deleteTask(taskId: string, token: string): Promise<void>
+  renameTask(taskId: string, title: string): Promise<TaskHistoryDetail>
+  archiveTask(taskId: string): Promise<TaskHistoryDetail>
 }
 
 export interface TaskIpcDependencies {
@@ -156,5 +158,18 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
       readText(request, 'token')!
     )
     return null
+  })
+  /** 重命名只改展示标题；空值、NUL 与超长由 readText 在进 Store 前拒绝。 */
+  register(TASK_INVOKE_CHANNELS.rename, (args) => {
+    const request = readRequest(args, ['taskId', 'title'])
+    return requireHistory(dependencies.getHistory).renameTask(
+      readText(request, 'taskId')!,
+      readText(request, 'title')!
+    )
+  })
+  /** 归档由主进程再次校验运行/等待审批状态，UI 禁用不是安全边界。 */
+  register(TASK_INVOKE_CHANNELS.archive, (args) => {
+    const request = readRequest(args, ['taskId'])
+    return requireHistory(dependencies.getHistory).archiveTask(readText(request, 'taskId')!)
   })
 }

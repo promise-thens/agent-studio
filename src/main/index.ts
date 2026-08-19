@@ -381,6 +381,16 @@ function registerIpcHandlers(): void {
           requirePermissionAuditStore().list(taskId, cursor, limit),
         resumeTask: (taskId) => service.resumeTask(taskId),
         previewTaskDeletion: (taskId) => store.previewTaskDeletion(taskId),
+        /** 只改展示标题，不在入口层做业务校验。 */
+        renameTask: async (taskId, title) => {
+          await store.renameTask(taskId, title)
+          return store.getTaskDetail(taskId)
+        },
+        /** 归档结果回详情 DTO，默认 list 由 Store 省略。 */
+        archiveTask: async (taskId) => {
+          await store.archiveTask(taskId)
+          return store.getTaskDetail(taskId)
+        },
         deleteTask: async (taskId, token) => {
           const preparation = store.prepareTaskDeletion(taskId, token)
           let deletionLease: Awaited<ReturnType<PermissionBroker['beginTaskDeletion']>>
