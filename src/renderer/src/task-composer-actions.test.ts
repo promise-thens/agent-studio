@@ -6,6 +6,7 @@ import {
   resolveCancelTurnRequest,
   resolveComposerAction,
   resolveProviderModelLabel,
+  resolveStopButtonAriaLabel,
   resolveStopButtonTitle,
   restoreComposerPromptAfterFailure,
   resolveTaskHeaderFacts
@@ -46,8 +47,9 @@ describe('发送与停止身份', () => {
     })
     expect(request?.taskId).not.toBe('task-b')
     expect(resolveComposerAction(runningExecution)).toBe('stop')
-    expect(resolveStopButtonTitle(runningExecution, '后台调研')).toBe('停止 后台调研')
-    expect(resolveStopButtonTitle(runningExecution, undefined)).toBe('停止 Task task-a')
+    expect(resolveStopButtonTitle(runningExecution)).toBe('停止 Task task-a')
+    expect(resolveStopButtonAriaLabel(runningExecution, '后台调研')).toBe('停止 后台调研')
+    expect(resolveStopButtonAriaLabel(runningExecution, undefined)).toBe('停止 Task task-a')
   })
 
   it('外槽执行占用单执行槽时禁止向当前选中 Task 发送', () => {

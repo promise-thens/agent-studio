@@ -2,6 +2,42 @@ import type { TaskExecutionDto } from '../../shared/task-execution'
 import type { HistoryExecutionState, TaskHistorySummary } from '../../shared/task-history'
 
 const LIVE_TASK_STATES = new Set<string>(['running', 'waiting-permission'])
+/** 尚未被首条 Prompt 命名的占位标题；历史默认「新任务」，UI 新建默认「新对话」。 */
+const UNTITLED_TASK_TITLES = new Set(['新对话', '新任务'])
+const SESSION_TITLE_MAX_LENGTH = 28
+
+/** 空标题和产品占位名都视为未命名，避免审批摘要卡在「新任务」。 */
+export function isUntitledTaskTitle(title: string | null | undefined): boolean {
+  const compact = title?.trim() ?? ''
+  return !compact || UNTITLED_TASK_TITLES.has(compact)
+}
+
+/** 从用户首条消息生成侧栏与审批摘要标题，超长时截断保持列表清爽。 */
+export function deriveSessionTitle(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim()
+  if (!compact) return '新对话'
+  return compact.length > SESSION_TITLE_MAX_LENGTH
+    ? `${compact.slice(0, SESSION_TITLE_MAX_LENGTH)}…`
+    : compact
+}
+
+/**
+ * 审批摘要优先用本地已从首条 Prompt 派生的标题。
+ * 视图或仓库仍是未命名占位时，回退到派生标题，而不是继续展示「新任务」。
+ */
+export function resolvePermissionTaskTitle(input: {
+  viewTitle?: string | null
+  storeTitle?: string | null
+  firstPrompt?: string | null
+  taskId: string
+}): string {
+  const derived = input.firstPrompt ? deriveSessionTitle(input.firstPrompt) : ''
+  for (const candidate of [input.viewTitle, derived, input.storeTitle]) {
+    const compact = candidate?.trim() ?? ''
+    if (compact && !isUntitledTaskTitle(compact)) return compact
+  }
+  return input.taskId
+}
 
 export interface TaskListItemView {
   taskId: string

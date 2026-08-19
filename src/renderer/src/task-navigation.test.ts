@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { TaskHistorySummary } from '../../shared/task-history'
-import { countProjectLiveTasks, createAndSelectTask, toTaskListItemView } from './task-navigation'
+import {
+  countProjectLiveTasks,
+  createAndSelectTask,
+  deriveSessionTitle,
+  isUntitledTaskTitle,
+  resolvePermissionTaskTitle,
+  toTaskListItemView
+} from './task-navigation'
 
 function task(
   taskId: string,
@@ -70,6 +77,31 @@ describe('Task 导航展示', () => {
         projectId: 'p-a'
       })
     ).toBe(0)
+  })
+
+  it('新对话与新任务都视为未命名，审批摘要优先用派生标题', () => {
+    expect(isUntitledTaskTitle('新对话')).toBe(true)
+    expect(isUntitledTaskTitle('新任务')).toBe(true)
+    expect(isUntitledTaskTitle('   ')).toBe(true)
+    expect(isUntitledTaskTitle('生命周期审批任务 A')).toBe(false)
+    expect(deriveSessionTitle('生命周期审批任务 A')).toBe('生命周期审批任务 A')
+    expect(deriveSessionTitle('  ')).toBe('新对话')
+    expect(
+      resolvePermissionTaskTitle({
+        viewTitle: '新任务',
+        storeTitle: '新任务',
+        firstPrompt: '生命周期审批任务 A',
+        taskId: 'task-a'
+      })
+    ).toBe('生命周期审批任务 A')
+    expect(
+      resolvePermissionTaskTitle({
+        viewTitle: '生命周期审批任务 A',
+        storeTitle: '新任务',
+        firstPrompt: '另一条',
+        taskId: 'task-a'
+      })
+    ).toBe('生命周期审批任务 A')
   })
 
   it('新对话先 createTask 再 selectTask', async () => {

@@ -248,6 +248,8 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
       :loading-more-tasks="loadingMoreTasks"
       :history-navigation-disabled="historyNavigationDisabled"
       :history-navigation-disabled-reason="historyNavigationDisabledReason"
+      :mutation-actions-disabled="mutationActionsDisabled"
+      :mutation-actions-disabled-reason="mutationActionsDisabledReason"
       @select-task="emit('selectTask', $event)"
       @rename-task="(taskId, title) => emit('renameTask', taskId, title)"
       @archive-task="emit('archiveTask', $event)"

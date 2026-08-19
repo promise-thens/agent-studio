@@ -43,6 +43,7 @@ import {
   isForeignExecutionBlockingSend,
   resolveCancelTurnRequest,
   resolveComposerAction,
+  resolveStopButtonAriaLabel,
   resolveStopButtonTitle,
   resolveTaskHeaderFacts,
   restoreComposerPromptAfterFailure
@@ -60,7 +61,12 @@ import {
   toggleInspectorOpen,
   type InspectorTab
 } from './task-inspector'
-import { createAndSelectTask } from './task-navigation'
+import {
+  createAndSelectTask,
+  deriveSessionTitle,
+  isUntitledTaskTitle,
+  resolvePermissionTaskTitle
+} from './task-navigation'
 import {
   clearRespondingPermission,
   clearPermissionQueueState,
@@ -179,15 +185,17 @@ const welcomeMessages = ref<ChatMessage[]>([])
 const emptyPlanEntries = ref<AgentPlanEntry[]>([])
 const emptyToolActivities = ref<ToolActivity[]>([])
 const activeTaskView = computed(() => taskViews.value[activeTaskId.value] ?? null)
-/** 审批标题按请求真实 taskId 解析，查看 B 时不能把后台 A 冒充成 B。 */
+/** 审批标题按请求真实 taskId 解析，优先用首条 Prompt 派生的视图标题。 */
 const permissionTaskTitle = computed(() => {
   const request = permission.value
   if (!request) return ''
-  return (
-    taskViews.value[request.taskId]?.title ??
-    taskHistory.tasks.value.find((task) => task.taskId === request.taskId)?.title ??
-    request.taskId
-  )
+  const view = taskViews.value[request.taskId]
+  return resolvePermissionTaskTitle({
+    viewTitle: view?.title,
+    storeTitle: taskHistory.tasks.value.find((task) => task.taskId === request.taskId)?.title,
+    firstPrompt: view?.messages.find((item) => item.role === 'user')?.text,
+    taskId: request.taskId
+  })
 })
 
 /** 当前 Task 的消息、计划和工具状态通过计算属性切换，A/B 视图不会串台。 */
@@ -391,8 +399,9 @@ const composerSend = computed(() =>
 const canSend = computed(() => composerSend.value.canSend)
 const composerDisabledMessage = computed(() => composerSend.value.reason)
 const composerAction = computed(() => resolveComposerAction(activeExecution.value))
-const stopButtonTitle = computed(() =>
-  resolveStopButtonTitle(activeExecution.value, runningTaskTitle.value)
+const stopButtonTitle = computed(() => resolveStopButtonTitle(activeExecution.value))
+const stopButtonAriaLabel = computed(() =>
+  resolveStopButtonAriaLabel(activeExecution.value, runningTaskTitle.value)
 )
 const localErrorMessages = computed(() => {
   const timelineErrors = (taskTimeline.activeTimeline.value?.turns ?? []).flatMap((turn) =>
@@ -574,13 +583,6 @@ onBeforeUnmount(() => {
     durationTimer = null
   }
 })
-
-/** 从用户首条消息生成侧栏最近项标题，超长时截断保持列表清爽。 */
-function deriveSessionTitle(text: string): string {
-  const compact = text.replace(/\s+/g, ' ').trim()
-  if (!compact) return '新对话'
-  return compact.length > 28 ? `${compact.slice(0, 28)}…` : compact
-}
 
 /** 新对话先 createTask，再走同一条 selectTask / enterTask，不再另开只读入口。 */
 async function startNewChat(): Promise<void> {
@@ -926,7 +928,7 @@ async function sendPrompt(): Promise<void> {
       turnStarted = true
 
       const current = taskViews.value[taskId]
-      if (current && (current.title === '新对话' || current.title.startsWith('新对话'))) {
+      if (current && isUntitledTaskTitle(current.title)) {
         current.title = deriveSessionTitle(text)
         taskOrder.value = [taskId, ...taskOrder.value.filter((id) => id !== taskId)]
       }
@@ -1384,6 +1386,7 @@ function scrollMessagesToBottom(): void {
           :can-send="canSend"
           :action="composerAction"
           :stop-title="stopButtonTitle"
+          :stop-aria-label="stopButtonAriaLabel"
           :disabled-message="composerDisabledMessage"
           :textarea-disabled="composerTextareaDisabled"
           :model="currentModel"

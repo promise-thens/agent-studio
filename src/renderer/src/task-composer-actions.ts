@@ -123,13 +123,22 @@ export function resolveComposerAction(
   return activeExecution ? 'stop' : 'send'
 }
 
+/** 停止按钮 title 永远带 running taskId，避免停错当前选中而非正在跑的 Task。 */
 export function resolveStopButtonTitle(
+  activeExecution: Pick<TaskExecutionDto, 'taskId'> | null
+): string {
+  if (!activeExecution) return ''
+  return `停止 Task ${activeExecution.taskId}`
+}
+
+/** 可读标题只进 aria-label，不替代 taskId 身份。 */
+export function resolveStopButtonAriaLabel(
   activeExecution: Pick<TaskExecutionDto, 'taskId'> | null,
   runningTaskTitle?: string | null
 ): string {
   if (!activeExecution) return ''
   const title = runningTaskTitle?.trim()
-  return title ? `停止 ${title}` : `停止 Task ${activeExecution.taskId}`
+  return title ? `停止 ${title}` : resolveStopButtonTitle(activeExecution)
 }
 
 /** GACP-02：接回中/降级/就绪/空闲都可以打字发送，unavailable 才锁住。 */

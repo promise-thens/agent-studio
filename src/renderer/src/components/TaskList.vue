@@ -16,12 +16,17 @@ const props = withDefaults(
     loadingMoreTasks?: boolean
     historyNavigationDisabled?: boolean
     historyNavigationDisabledReason?: string
+    /** 执行中只禁用 ⋯ 变更菜单，历史行 task-main 仍可点选。 */
+    mutationActionsDisabled?: boolean
+    mutationActionsDisabledReason?: string
   }>(),
   {
     hasMoreTasks: false,
     loadingMoreTasks: false,
     historyNavigationDisabled: false,
-    historyNavigationDisabledReason: ''
+    historyNavigationDisabledReason: '',
+    mutationActionsDisabled: false,
+    mutationActionsDisabledReason: ''
   }
 )
 
@@ -59,6 +64,7 @@ function closeMenus(): void {
 }
 
 function toggleMenu(taskId: string): void {
+  if (props.mutationActionsDisabled) return
   menuTaskId.value = menuTaskId.value === taskId ? '' : taskId
 }
 
@@ -67,6 +73,7 @@ function setRenameInput(el: unknown): void {
 }
 
 function beginRename(taskId: string, title: string): void {
+  if (props.mutationActionsDisabled) return
   menuTaskId.value = ''
   renamingTaskId.value = taskId
   renameDraft.value = title
@@ -84,7 +91,20 @@ function cancelRename(): void {
   renameDraft.value = ''
 }
 
+watch(
+  () => props.mutationActionsDisabled,
+  (disabled) => {
+    if (!disabled) return
+    closeMenus()
+    cancelRename()
+  }
+)
+
 function commitRename(taskId: string): void {
+  if (props.mutationActionsDisabled) {
+    cancelRename()
+    return
+  }
   const title = renameDraft.value.trim()
   if (!title) {
     cancelRename()
@@ -95,11 +115,13 @@ function commitRename(taskId: string): void {
 }
 
 function archive(taskId: string): void {
+  if (props.mutationActionsDisabled) return
   menuTaskId.value = ''
   emit('archiveTask', taskId)
 }
 
 function remove(taskId: string): void {
+  if (props.mutationActionsDisabled) return
   menuTaskId.value = ''
   emit('deleteTask', taskId)
 }
@@ -166,7 +188,12 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
         <button
           class="task-menu-button"
           type="button"
-          title="对话操作"
+          :disabled="mutationActionsDisabled"
+          :title="
+            mutationActionsDisabled
+              ? mutationActionsDisabledReason || '对话操作暂不可用'
+              : '对话操作'
+          "
           :aria-label="`对话操作：${item.title}`"
           :aria-expanded="menuTaskId === item.taskId"
           @click.stop="toggleMenu(item.taskId)"
@@ -174,13 +201,18 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
           <DotsThree :size="16" weight="bold" />
         </button>
         <div v-if="menuTaskId === item.taskId" class="task-menu" role="menu">
-          <button type="button" role="menuitem" @click="beginRename(item.taskId, item.title)">
+          <button
+            type="button"
+            role="menuitem"
+            :disabled="mutationActionsDisabled"
+            @click="beginRename(item.taskId, item.title)"
+          >
             重命名
           </button>
           <button
             type="button"
             role="menuitem"
-            :disabled="!item.canArchiveOrDelete"
+            :disabled="mutationActionsDisabled || !item.canArchiveOrDelete"
             :title="item.canArchiveOrDelete ? '归档对话' : '运行中或等待审批时不能归档'"
             @click="archive(item.taskId)"
           >
@@ -190,7 +222,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
             type="button"
             role="menuitem"
             class="danger"
-            :disabled="!item.canArchiveOrDelete"
+            :disabled="mutationActionsDisabled || !item.canArchiveOrDelete"
             :title="item.canArchiveOrDelete ? '删除记录' : '运行中或等待审批时不能删除'"
             @click="remove(item.taskId)"
           >
@@ -292,6 +324,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
 }
 
 .task-main:disabled,
+.task-menu-button:disabled,
 .task-menu button:disabled,
 .task-text-button:disabled {
   cursor: not-allowed;
@@ -335,7 +368,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   color: var(--text-3);
 }
 
-.task-menu-button:hover,
+.task-menu-button:not(:disabled):hover,
 .task-main:not(:disabled):hover,
 .task-text-button:not(:disabled):hover,
 .task-menu button:not(:disabled):hover {

@@ -12,7 +12,10 @@ const props = defineProps<{
   prompt: string
   canSend: boolean
   action: 'send' | 'stop'
+  /** title 永远是「停止 Task ${taskId}」，避免停错当前选中项。 */
   stopTitle: string
+  /** 可读标题只进 aria-label，不替代 taskId 身份。 */
+  stopAriaLabel?: string
   disabledMessage?: string
   textareaDisabled?: boolean
   model: ProviderModelOption | null
@@ -78,7 +81,7 @@ defineExpose({ focus })
           class="stop-button"
           type="button"
           :title="stopTitle"
-          :aria-label="stopTitle"
+          :aria-label="stopAriaLabel || stopTitle"
           @click="emit('stop')"
         >
           <Stop :size="15" weight="fill" />停止
