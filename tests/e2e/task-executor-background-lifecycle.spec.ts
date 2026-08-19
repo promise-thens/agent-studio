@@ -1,11 +1,15 @@
 import { expect, test, type Page } from '@playwright/test'
-import { basename } from 'node:path'
 import type { TaskExecutionSnapshot } from '../../src/shared/task-execution'
 import {
+  executionStatusLocator,
   expectControlledMarker,
   launchControlledScenario,
   prepareControlledWorkbench,
   readControlledTrace,
+  runtimeStatusLocator,
+  selectWorkbenchProject,
+  selectWorkbenchTaskById,
+  selectWorkbenchTaskByTitle,
   startControlledPrompt,
   waitForExecutionState,
   waitForExecutionTerminal,
@@ -64,33 +68,37 @@ test.describe('P0-08 Task Executor 后台生命周期 Electron E2E', () => {
       expect(baseline).toEqual({ created: 2, resumed: 1, loaded: 0, cancelled: 0 })
 
       await expectExecutionMutationsDisabled(context.page)
-      await selectSidebarTaskByTitle(context.page, '新任务')
-      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(0)
+      await selectWorkbenchTaskByTitle(context.page, '新任务')
+      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(
+        0
+      )
       await expect(context.page.getByPlaceholder('描述你想修改、排查或验证的内容…')).toBeEnabled()
       await expect(context.page.getByTitle(`停止 Task ${pair.taskAId}`)).toBeVisible()
       await expectSameExecution(context.page, running)
 
-      await selectSidebarProject(context.page, context.layout.secondaryWorkspace)
-      await expect(context.page.locator('.status-chip')).toContainText('后台执行中')
+      await selectWorkbenchProject(context.page, context.layout.secondaryWorkspace)
+      await expect(executionStatusLocator(context.page, 'foreign')).toBeVisible()
       await expectSameExecution(context.page, running)
       expect(summarizeSessionTrace(await readControlledTrace(context.layout))).toEqual(baseline)
 
       // reload 只重建 Renderer 消费者；活动 execution 仍由 Main snapshot 恢复，不触发 session 恢复。
       await context.page.reload({ waitUntil: 'domcontentloaded' })
-      await expect(context.page.locator('.status-chip')).toContainText('后台执行中')
+      await expect(executionStatusLocator(context.page, 'foreign')).toBeVisible()
       await expect(context.page.getByTitle(`停止 Task ${pair.taskAId}`)).toBeVisible()
       await expectSameExecution(context.page, running)
 
-      await selectSidebarProject(context.page, context.layout.workspace)
-      await selectSidebarTaskByTitle(context.page, prompt)
-      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(0)
-      await expect(context.page.locator('.status-chip')).toContainText('执行中')
+      await selectWorkbenchProject(context.page, context.layout.workspace)
+      await selectWorkbenchTaskByTitle(context.page, prompt)
+      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(
+        0
+      )
+      await expect(executionStatusLocator(context.page, 'selected')).toBeVisible()
       expect(summarizeSessionTrace(await readControlledTrace(context.layout))).toEqual(baseline)
 
       await writeControlledBarrier(context.layout, 'long-running-release')
       const terminal = await waitForExecutionTerminal(context.page)
       expect(terminal.execution).toMatchObject({ taskId: pair.taskAId, state: 'completed' })
-      await expect(context.page.locator('.status-chip[data-state="ready"]')).toContainText('已连接')
+      await expect(runtimeStatusLocator(context.page, 'ready')).toBeVisible()
       expect(summarizeSessionTrace(await readControlledTrace(context.layout))).toEqual(baseline)
     } finally {
       await context.close()
@@ -120,18 +128,20 @@ test.describe('P0-08 Task Executor 后台生命周期 Electron E2E', () => {
       await expectControlledMarker(context.layout, 'unchanged\n')
 
       // 审批弹窗是模态层；force 只用于触发底层历史导航，验证查看身份变化不会改写审批身份。
-      await selectSidebarTaskByTitle(context.page, '新任务', true)
-      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(0)
+      await selectWorkbenchTaskByTitle(context.page, '新任务', true)
+      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(
+        0
+      )
       await expect(dialog.locator('.permission-summary')).toContainText(prompt)
       await expectSameExecution(context.page, waiting)
 
-      await selectSidebarProject(context.page, context.layout.secondaryWorkspace, true)
-      await expect(context.page.locator('.status-chip')).toContainText('后台执行中')
+      await selectWorkbenchProject(context.page, context.layout.secondaryWorkspace, true)
+      await expect(executionStatusLocator(context.page, 'foreign')).toBeVisible()
       await expect(dialog.locator('.permission-summary')).toContainText(prompt)
       await expectSameExecution(context.page, waiting)
 
-      await selectSidebarProject(context.page, context.layout.workspace, true)
-      await selectSidebarTaskByTitle(context.page, prompt, true)
+      await selectWorkbenchProject(context.page, context.layout.workspace, true)
+      await selectWorkbenchTaskByTitle(context.page, prompt, true)
       await expect(dialog.locator('.permission-summary')).toContainText(prompt)
       expect(summarizeSessionTrace(await readControlledTrace(context.layout))).toEqual(baseline)
 
@@ -178,10 +188,10 @@ test.describe('P0-08 Task Executor 后台生命周期 Electron E2E', () => {
         reason: 'cancel-timeout'
       })
       await expect.poll(async () => countFixtureEvents(context.layout, 'session-cancelled')).toBe(1)
-      await expect(context.page.locator('.status-chip[data-state="idle"]')).toContainText('未连接')
+      await expect(runtimeStatusLocator(context.page, 'idle')).toBeVisible()
 
       await expectGateReleasedForNewTask(context.page, projects.primaryProjectId)
-      await expect(context.page.locator('.status-chip[data-state="ready"]')).toContainText('已连接')
+      await expect(runtimeStatusLocator(context.page, 'ready')).toBeVisible()
       expect(await countFixtureEvents(context.layout, 'session-cancelled')).toBe(1)
     } finally {
       await context.close()
@@ -213,13 +223,10 @@ test.describe('P0-08 Task Executor 后台生命周期 Electron E2E', () => {
         state: 'failed',
         reason: 'runtime-error'
       })
-      await expect(context.page.locator('.status-chip[data-state="error"]')).toContainText(
-        '连接异常'
-      )
-      await expect(context.page.locator('.chat-header p')).toContainText('代码 17')
+      await expect(runtimeStatusLocator(context.page, 'error')).toContainText('代码 17')
 
       await expectGateReleasedForNewTask(context.page, projects.primaryProjectId)
-      await expect(context.page.locator('.status-chip[data-state="ready"]')).toContainText('已连接')
+      await expect(runtimeStatusLocator(context.page, 'ready')).toBeVisible()
     } finally {
       await context.close()
     }
@@ -254,7 +261,7 @@ async function preparePrimaryWorkbench(
       return result.ok ? `${result.value.state}:${result.value.workspace ?? ''}` : 'error'
     })
     .toBe(`ready:${context.layout.workspace}`)
-  await selectSidebarProject(context.page, context.layout.workspace)
+  await selectWorkbenchProject(context.page, context.layout.workspace)
   await expect(context.page.getByPlaceholder('描述你想修改、排查或验证的内容…')).toBeEnabled()
   return projects
 }
@@ -273,9 +280,9 @@ async function prepareTaskPairAndResumeA(
   }, projects.primaryProjectId)
 
   // Project 往返只刷新 Renderer 本地历史，不连接、断开或恢复 Runtime。
-  await selectSidebarProject(context.page, context.layout.secondaryWorkspace)
-  await selectSidebarProject(context.page, context.layout.workspace)
-  await selectSidebarTaskById(context.page, projects.primaryProjectId, tasks.taskAId)
+  await selectWorkbenchProject(context.page, context.layout.secondaryWorkspace)
+  await selectWorkbenchProject(context.page, context.layout.workspace)
+  await selectWorkbenchTaskById(context.page, projects.primaryProjectId, tasks.taskAId)
   await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(0)
   await expect(context.page.getByPlaceholder('描述你想修改、排查或验证的内容…')).toBeEnabled()
   await waitForFixtureTrace(context.layout, (records) =>
@@ -314,55 +321,12 @@ async function prepareTaskPairWithLiveA(
   return { ...projects, taskAId: taskAId!, taskBId }
 }
 
-/** 用持久化 Task 顺序定位同名“新对话”，避免测试依赖随机 taskId 出现在 DOM。 */
-async function selectSidebarTaskById(
-  page: Page,
-  projectId: string,
-  taskId: string,
-  force = false
-): Promise<void> {
-  const index = await page.evaluate(
-    async ({ currentProjectId, currentTaskId }) => {
-      const result = await window.task.list(currentProjectId, undefined, 50)
-      if (!result.ok) return -1
-      return result.value.items.findIndex((task) => task.taskId === currentTaskId)
-    },
-    { currentProjectId: projectId, currentTaskId: taskId }
-  )
-  if (index < 0) throw new Error('侧栏中未找到受控 Task。')
-  const item = page.locator('section[aria-label="任务"] .session-item').nth(index)
-  await expect(item).toBeVisible()
-  if (force) await item.evaluate((element) => (element as HTMLButtonElement).click())
-  else await item.click()
-  await expect(item).toHaveClass(/active/)
-}
-
-async function selectSidebarTaskByTitle(page: Page, title: string, force = false): Promise<void> {
-  const item = page.locator('section[aria-label="任务"] .session-item').filter({ hasText: title })
-  await expect(item).toHaveCount(1)
-  if (force) await item.evaluate((element) => (element as HTMLButtonElement).click())
-  else await item.click()
-  await expect(item).toHaveClass(/active/)
-}
-
-async function selectSidebarProject(page: Page, workspace: string, force = false): Promise<void> {
-  const item = page.locator('section[aria-label="项目"]').getByTitle(workspace, { exact: true })
-  await expect(item).toBeVisible()
-  if (force) await item.evaluate((element) => (element as HTMLButtonElement).click())
-  else await item.click()
-  await expect(item).toHaveClass(/active/)
-  await expect(page.locator('.chat-header h1')).toHaveText(basename(workspace))
-}
-
 /** 后台执行只禁用 mutation；Project/Task 历史入口和绑定 execution 的 Stop 必须保留。 */
 async function expectExecutionMutationsDisabled(page: Page): Promise<void> {
   await expect(page.getByRole('button', { name: '新对话' })).toBeDisabled()
-  await expect(page.getByRole('button', { name: '打开项目' })).toBeDisabled()
-  await expect(page.locator('section[aria-label="项目"] .sidebar-item-main').first()).toBeEnabled()
-  await expect(page.locator('section[aria-label="任务"] .session-item').first()).toBeEnabled()
-  await expect(
-    page.locator('section[aria-label="任务"] .sidebar-row-action').first()
-  ).toBeDisabled()
+  await expect(page.locator('.project-current')).toBeEnabled()
+  await expect(page.locator('.task-main').first()).toBeEnabled()
+  await expect(page.locator('.task-menu-button').first()).toBeDisabled()
 }
 
 async function expectSameExecution(page: Page, expected: TaskExecutionSnapshot): Promise<void> {

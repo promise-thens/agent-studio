@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { TurnTimelineViewModel } from './task-timeline-reducer'
+import type { TaskTimelineViewModel } from './task-timeline-reducer'
 import {
+  collectLocalComposerErrors,
   collectTurnAssistantTexts,
   collectTurnErrorMessages,
+  conversationFollowSignature,
   isConversationPinnedToBottom,
   isTurnProcessExpandedByDefault,
+  nextPinnedConversationScrollTop,
+  shouldMirrorLiveAgentErrorLocally,
   turnHasCollapsibleProcess
 } from './task-conversation-view'
 
@@ -91,5 +96,59 @@ describe('对话滚动与折叠', () => {
     expect(isTurnProcessExpandedByDefault(running)).toBe(true)
     expect(collectTurnAssistantTexts(completed)).toEqual(['已经改好'])
     expect(collectTurnErrorMessages(completed)).toEqual([])
+  })
+
+  it('贴底时滚到容器底部，上翻后不改 scrollTop', () => {
+    const pinned = { scrollTop: 920, clientHeight: 80, scrollHeight: 1400 }
+    expect(nextPinnedConversationScrollTop(pinned, true)).toBe(1320)
+    expect(
+      nextPinnedConversationScrollTop(
+        { scrollTop: 40, clientHeight: 80, scrollHeight: 1400 },
+        false
+      )
+    ).toBeNull()
+  })
+
+  it('流式同一节点变长时跟随签名变化', () => {
+    const running = turn('turn-live', 'running', [
+      {
+        nodeId: 'm',
+        taskId: 'task-1',
+        turnId: 'turn-live',
+        source: 'agent-event',
+        kind: 'message',
+        text: '已'
+      }
+    ])
+    const model: TaskTimelineViewModel = {
+      taskId: 'task-1',
+      title: '改登录',
+      turns: [running],
+      resultReview: {
+        status: { value: 'running', source: 'execution' },
+        usage: { availability: 'not-observed' },
+        changedPaths: { count: 0, availability: 'not-observed' },
+        validations: { count: 0, availability: 'not-observed' },
+        artifacts: { count: 0, availability: 'not-observed' },
+        warnings: []
+      },
+      integrityIssues: []
+    }
+    const before = conversationFollowSignature(model)
+    running.nodes[0] = { ...running.nodes[0], kind: 'message', text: '已经改好登录' }
+    expect(conversationFollowSignature(model)).not.toBe(before)
+  })
+
+  it('Agent 时间线错误不进本地条，Composer/IPC 失败才保留', () => {
+    expect(shouldMirrorLiveAgentErrorLocally()).toBe(false)
+    expect(
+      collectLocalComposerErrors(
+        [
+          { role: 'error', text: 'Runtime 拒绝了这次调用' },
+          { role: 'error', text: '发送失败：网络中断' }
+        ],
+        ['Runtime 拒绝了这次调用']
+      )
+    ).toEqual(['发送失败：网络中断'])
   })
 })

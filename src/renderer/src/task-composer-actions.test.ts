@@ -135,6 +135,7 @@ describe('Task 页眉事实', () => {
     expect(viewingB.environmentLabel).toBe('Local')
     expect(viewingB.worktreeLabel).toContain('尚未接入')
     expect(viewingB.viewingForeignExecution).toBe(true)
+    expect(viewingB.executionScope).toBe('foreign')
     expect(viewingB.modelReadOnly).toBe(false)
     expect(viewingB.weakStatusLine).toContain('后台调研')
 
@@ -154,6 +155,38 @@ describe('Task 页眉事实', () => {
     expect(viewingA.modelLabel).toBe('Code Fast')
     expect(viewingA.modelReadOnly).toBe(true)
     expect(viewingA.viewingForeignExecution).toBe(false)
+    expect(viewingA.executionScope).toBe('selected')
     expect(viewingA.weakStatusLine).toBe('正在接回上次上下文…')
+  })
+
+  it('无活动执行时页眉提供弱状态连接钩子，而不是主按钮文案', () => {
+    const idle = resolveTaskHeaderFacts({
+      selectedTaskId: 'task-b',
+      selectedTitle: '改登录',
+      selectedProjectName: 'studio',
+      selectedRuntimeId: 'grok',
+      runtimeState: 'idle',
+      runtimeMessage: '尚未连接 Grok Build',
+      providerConfigured: true,
+      activeExecution: null
+    })
+    expect(idle.runtimeState).toBe('idle')
+    expect(idle.executionScope).toBe('none')
+    expect(idle.canRetryConnect).toBe(true)
+    expect(idle.weakStatusLine).not.toContain('连接 Grok')
+
+    const crashed = resolveTaskHeaderFacts({
+      selectedTaskId: 'task-b',
+      selectedTitle: '改登录',
+      selectedProjectName: 'studio',
+      selectedRuntimeId: 'grok',
+      runtimeState: 'error',
+      runtimeMessage: 'Runtime 异常退出（代码 17）',
+      providerConfigured: true,
+      activeExecution: null
+    })
+    expect(crashed.runtimeState).toBe('error')
+    expect(crashed.canRetryConnect).toBe(true)
+    expect(crashed.weakStatusLine).toContain('代码 17')
   })
 })

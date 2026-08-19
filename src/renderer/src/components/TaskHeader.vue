@@ -8,6 +8,7 @@ defineProps<{
 
 defineEmits<{
   retryLoad: []
+  retryConnect: []
 }>()
 </script>
 
@@ -15,7 +16,12 @@ defineEmits<{
   <header class="task-header">
     <div class="task-header-copy">
       <h1 :title="facts.title">{{ facts.title }}</h1>
-      <p v-if="facts.weakStatusLine" class="task-header-status" role="status">
+      <p
+        class="task-header-status"
+        role="status"
+        :data-runtime-state="facts.runtimeState"
+        :data-execution="facts.executionScope"
+      >
         {{ facts.weakStatusLine }}
         <button
           v-if="loadError"
@@ -24,6 +30,16 @@ defineEmits<{
           @click="$emit('retryLoad')"
         >
           重试
+        </button>
+        <button
+          v-else-if="facts.canRetryConnect"
+          class="history-load-more"
+          type="button"
+          title="重新连接 Runtime"
+          aria-label="重新连接 Runtime"
+          @click="$emit('retryConnect')"
+        >
+          重试连接
         </button>
       </p>
     </div>

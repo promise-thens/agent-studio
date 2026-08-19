@@ -53,6 +53,11 @@ import {
   resolveTaskHeaderFacts,
   restoreComposerPromptAfterFailure
 } from './task-composer-actions'
+import {
+  collectLocalComposerErrors,
+  collectTurnErrorMessages,
+  shouldMirrorLiveAgentErrorLocally
+} from './task-conversation-view'
 import { projectTaskHistory } from './task-history-projector'
 import { createAndSelectTask } from './task-navigation'
 import {
@@ -399,12 +404,12 @@ const composerAction = computed(() => resolveComposerAction(activeExecution.valu
 const stopButtonTitle = computed(() =>
   resolveStopButtonTitle(activeExecution.value, runningTaskTitle.value)
 )
-const localErrorMessages = computed(() =>
-  messages.value
-    .filter((item) => item.role === 'error')
-    .map((item) => item.text)
-    .slice(-3)
-)
+const localErrorMessages = computed(() => {
+  const timelineErrors = (taskTimeline.activeTimeline.value?.turns ?? []).flatMap((turn) =>
+    collectTurnErrorMessages(turn)
+  )
+  return collectLocalComposerErrors(messages.value, timelineErrors)
+})
 const composerTextareaDisabled = computed(
   () =>
     projectSelectionPending.value ||
@@ -484,7 +489,8 @@ const taskHeaderFacts = computed(() => {
     restoreReason: conversationEntry.value?.reason,
     runtimeState: status.value.state,
     runtimeMessage: status.value.message,
-    workbenchLoadMessage: workbenchLoadMessage.value
+    workbenchLoadMessage: workbenchLoadMessage.value,
+    providerConfigured: Boolean(providerSummary.value?.configured)
   })
 })
 const workbenchLoadError = computed(
@@ -734,7 +740,7 @@ async function selectTask(taskId: string): Promise<void> {
   }
 }
 
-/** Project 选择只切换本地历史身份；点进 Task 后由 enterTask 自动接回 Runtime。 */
+/** Project 选择只切换本地历史身份；无活动执行时才后台接 Runtime，避免打断外槽任务。 */
 async function selectProject(projectId: string): Promise<void> {
   if (!projectId || projectSelectionPending.value || projectId === activeProjectId.value) return
   conversationEnterGeneration += 1
@@ -742,12 +748,14 @@ async function selectProject(projectId: string): Promise<void> {
   conversationEntry.value = null
   const selection = projectSelection.begin()
   reconcilePermissionQueue('', projectId)
+  let switched = false
   try {
     await workbench.selectProject(projectId)
     if (!projectSelection.isCurrent(selection) || activeProjectId.value !== projectId) {
       return
     }
     workspace.value = workbench.selectedProject.value?.canonicalRoot ?? ''
+    switched = true
   } catch (error) {
     if (!projectSelection.isCurrent(selection) || activeProjectId.value !== projectId) return
     projectSelection.commit(selection, () => {
@@ -755,6 +763,12 @@ async function selectProject(projectId: string): Promise<void> {
     })
   } finally {
     projectSelection.finish(selection)
+  }
+  if (switched && !activeExecution.value) {
+    await ensureProjectConnected(
+      projectId,
+      () => activeProjectId.value === projectId && !activeExecution.value
+    )
   }
 }
 
@@ -910,6 +924,12 @@ async function ensureProjectConnected(
     }
   })
   return connected
+}
+
+/** 页眉弱状态重试；有活动执行时不得为查看其它 Project 去抢执行槽。 */
+async function retryRuntimeConnect(): Promise<void> {
+  if (activeExecution.value || !activeProjectId.value) return
+  await ensureProjectConnected(activeProjectId.value)
 }
 
 /** 发送只针对当前选中 Task；单飞门禁避免重复提交双 Turn。 */
@@ -1105,7 +1125,7 @@ function handleAgentEvent(event: PublicAgentEvent): void {
     void taskHistory.refreshTasks()
   } else if (event.kind === 'error') {
     completeCurrentTurn(event.taskId)
-    appendMessage('error', event.message)
+    if (shouldMirrorLiveAgentErrorLocally()) appendMessage('error', event.message)
   }
 }
 
@@ -1383,6 +1403,7 @@ function scrollMessagesToBottom(): void {
           :facts="taskHeaderFacts"
           :load-error="workbenchLoadError"
           @retry-load="retryWorkbenchLoad"
+          @retry-connect="retryRuntimeConnect"
         />
 
         <TaskConversation

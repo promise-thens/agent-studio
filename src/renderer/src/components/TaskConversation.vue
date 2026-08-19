@@ -4,10 +4,11 @@ import type { TaskTimelineViewModel, TurnTimelineViewModel } from '../task-timel
 import {
   collectTurnAssistantTexts,
   collectTurnErrorMessages,
+  conversationFollowSignature,
   isActiveConversationTurn,
   isConversationPinnedToBottom,
   isTurnProcessExpandedByDefault,
-  latestActiveTurnId,
+  nextPinnedConversationScrollTop,
   timelineModelForTurn,
   turnHasCollapsibleProcess
 } from '../task-conversation-view'
@@ -45,6 +46,8 @@ const messageList = ref<HTMLElement | null>(null)
 const processOpenByTurn = ref<Record<string, boolean>>({})
 /** 用户离开底部后不再抢滚动；切 Task 时重新贴底。 */
 let pinnedToBottom = true
+/** 程序化贴底时忽略 scroll 事件，避免刚滚到底就被判定为上翻。 */
+let ignorePinSync = false
 
 function isProcessOpen(turn: Pick<TurnTimelineViewModel, 'turnId' | 'status'>): boolean {
   return processOpenByTurn.value[turn.turnId] ?? isTurnProcessExpandedByDefault(turn)
@@ -57,25 +60,22 @@ function rememberProcessOpen(turnId: string, event: Event): void {
 }
 
 function handleScroll(): void {
+  if (ignorePinSync) return
   const root = messageList.value
   if (!root) return
   pinnedToBottom = isConversationPinnedToBottom(root)
 }
 
 function scrollToLatestIfPinned(): void {
-  if (!pinnedToBottom) return
   const root = messageList.value
   if (!root) return
-  const turnId = props.model ? latestActiveTurnId(props.model.turns) : null
-  const target = turnId
-    ? root.querySelector<HTMLElement>(`[data-conversation-turn-id="${CSS.escape(turnId)}"]`)
-    : null
-  if (target) {
-    const top = Math.max(0, target.offsetTop - 12)
-    root.scrollTo({ top })
-    return
-  }
-  root.scrollTop = root.scrollHeight
+  const nextTop = nextPinnedConversationScrollTop(root, pinnedToBottom)
+  if (nextTop == null) return
+  ignorePinSync = true
+  root.scrollTop = nextTop
+  requestAnimationFrame(() => {
+    ignorePinSync = false
+  })
 }
 
 watch(
@@ -88,13 +88,7 @@ watch(
 )
 
 watch(
-  () => [
-    props.model?.taskId,
-    props.model?.turns.length,
-    props.model?.turns.at(-1)?.nodes.length,
-    props.model?.turns.at(-1)?.status,
-    props.localErrors.length
-  ],
+  () => conversationFollowSignature(props.model, props.localErrors),
   () => {
     void nextTick(scrollToLatestIfPinned)
   }

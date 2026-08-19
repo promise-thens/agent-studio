@@ -50,7 +50,10 @@ export interface TaskHeaderFactsInput {
   runtimeState?: string
   runtimeMessage?: string
   workbenchLoadMessage?: string
+  providerConfigured?: boolean
 }
+
+export type HeaderExecutionScope = 'none' | 'selected' | 'foreign'
 
 export interface TaskHeaderFacts {
   title: string
@@ -62,6 +65,9 @@ export interface TaskHeaderFacts {
   stateLabel: string
   createdAtLabel: string
   weakStatusLine: string
+  runtimeState: string
+  executionScope: HeaderExecutionScope
+  canRetryConnect: boolean
   viewingForeignExecution: boolean
   runningTaskId: string | null
   modelReadOnly: boolean
@@ -187,6 +193,17 @@ export function resolveTaskHeaderFacts(input: TaskHeaderFactsInput): TaskHeaderF
   const model = modelReadOnly ? input.activeExecution?.model : input.selectedModel
   const runningTaskId = input.activeExecution?.taskId ?? null
   const runningLabel = input.runningTaskTitle?.trim() || runningTaskId
+  const executionScope: HeaderExecutionScope = viewingForeignExecution
+    ? 'foreign'
+    : input.activeExecution
+      ? 'selected'
+      : 'none'
+  const runtimeState = input.runtimeState || 'idle'
+  const canRetryConnect = Boolean(
+    input.providerConfigured &&
+    !input.activeExecution &&
+    (runtimeState === 'idle' || runtimeState === 'error')
+  )
 
   return {
     title: selected ? input.selectedTitle?.trim() || '对话' : '选择一个对话',
@@ -197,7 +214,15 @@ export function resolveTaskHeaderFacts(input: TaskHeaderFactsInput): TaskHeaderF
     worktreeLabel: 'Worktree 尚未接入',
     stateLabel: selected ? input.selectedState || '' : '',
     createdAtLabel: selected ? formatTaskCreatedAt(input.createdAt) : '',
-    weakStatusLine: resolveHeaderWeakStatusLine(input, viewingForeignExecution, runningLabel),
+    weakStatusLine: resolveHeaderWeakStatusLine(
+      input,
+      viewingForeignExecution,
+      runningLabel,
+      executionScope
+    ),
+    runtimeState,
+    executionScope,
+    canRetryConnect,
     viewingForeignExecution,
     runningTaskId,
     modelReadOnly
@@ -207,7 +232,8 @@ export function resolveTaskHeaderFacts(input: TaskHeaderFactsInput): TaskHeaderF
 function resolveHeaderWeakStatusLine(
   input: TaskHeaderFactsInput,
   viewingForeignExecution: boolean,
-  runningLabel: string | null
+  runningLabel: string | null,
+  executionScope: HeaderExecutionScope
 ): string {
   if (input.workbenchLoadMessage?.trim()) return input.workbenchLoadMessage.trim()
   if (input.restore === 'connecting') {
@@ -222,6 +248,7 @@ function resolveHeaderWeakStatusLine(
   if (viewingForeignExecution && runningLabel) {
     return `后台正在运行 ${runningLabel}`
   }
+  if (executionScope === 'selected') return '执行中'
   if (input.runtimeState === 'connecting') return '正在连接 Runtime…'
   if (input.runtimeState === 'error') return input.runtimeMessage?.trim() || 'Runtime 连接异常'
   return ''

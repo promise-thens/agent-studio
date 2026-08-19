@@ -9,6 +9,8 @@ import {
   expectControlledMarker as expectMarker,
   launchControlledScenario as launchScenario,
   prepareControlledWorkbench as prepareWorkbench,
+  selectWorkbenchProject,
+  selectWorkbenchTaskById,
   startControlledPrompt as startScenarioPrompt,
   waitForExecutionTerminal,
   writeControlledBarrier,
@@ -173,15 +175,17 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
       )
 
       const projectId = await projectIdForTask(context.page, taskId)
-      await selectSidebarTaskById(context.page, projectId, taskId)
-      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(0)
+      await selectWorkbenchTaskById(context.page, projectId, taskId)
+      await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(
+        0
+      )
 
-      const timeline = context.page.getByRole('region', { name: '执行时间线' })
-      const turn = timeline
-        .locator('article.timeline-turn[data-status="completed"]')
-        .filter({ hasText: prompt })
+      const turn = context.page.locator('.conversation-turn').filter({ hasText: prompt })
       await expect(turn).toHaveCount(1)
-      await expect(turn.locator('.timeline-prompt')).toHaveText(prompt)
+      await expect(turn.locator('.conversation-user')).toContainText(prompt)
+      await turn.locator('.conversation-process summary').click()
+      const timeline = turn.getByRole('region', { name: '执行时间线' })
+      await expect(timeline).toBeVisible()
       await expect(turn.locator('.timeline-node[data-kind="tool"]')).toContainText('toolcall-A')
       await expect(turn.locator('.timeline-node[data-kind="tool"]')).toContainText('completed')
       await expect(turn.locator('.timeline-node[data-kind="permission-audit"]')).toHaveCount(2)
@@ -193,20 +197,13 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
       )
 
       // 切到没有 Task 的 Project 时，旧 Task 的 Timeline 与结果审阅不得继续显示。
-      const secondaryProject = context.page
-        .locator('section[aria-label="项目"]')
-        .getByTitle(context.layout.secondaryWorkspace, { exact: true })
-      await secondaryProject.click()
-      await expect(secondaryProject).toHaveClass(/active/)
+      await selectWorkbenchProject(context.page, context.layout.secondaryWorkspace)
       await expect(context.page.getByRole('region', { name: '执行时间线' })).toHaveCount(0)
       await expect(context.page.getByRole('region', { name: '结果审阅' })).toHaveCount(0)
 
-      const primaryProject = context.page
-        .locator('section[aria-label="项目"]')
-        .getByTitle(context.layout.workspace, { exact: true })
-      await primaryProject.click()
-      await expect(primaryProject).toHaveClass(/active/)
-      await selectSidebarTaskById(context.page, projectId, taskId)
+      await selectWorkbenchProject(context.page, context.layout.workspace)
+      await selectWorkbenchTaskById(context.page, projectId, taskId)
+      await context.page.locator('.conversation-process summary').first().click()
       await expect(context.page.getByRole('region', { name: '执行时间线' })).toBeVisible()
       await expect(context.page.getByRole('region', { name: '结果审阅' })).toBeVisible()
 
@@ -327,27 +324,6 @@ async function projectIdForTask(page: ScenarioContext['page'], taskId: string): 
   }, taskId)
   if (!projectId) throw new Error('未找到受控 Task 所属 Project。')
   return projectId
-}
-
-/** 使用持久化顺序定位当前 Task，避免随机 taskId 成为 DOM 选择器。 */
-async function selectSidebarTaskById(
-  page: ScenarioContext['page'],
-  projectId: string,
-  taskId: string
-): Promise<void> {
-  const index = await page.evaluate(
-    async ({ currentProjectId, currentTaskId }) => {
-      const result = await window.task.list(currentProjectId, undefined, 50)
-      if (!result.ok) return -1
-      return result.value.items.findIndex((task) => task.taskId === currentTaskId)
-    },
-    { currentProjectId: projectId, currentTaskId: taskId }
-  )
-  if (index < 0) throw new Error('侧栏中未找到受控 Task。')
-  const item = page.locator('section[aria-label="任务"] .session-item').nth(index)
-  await expect(item).toBeVisible()
-  await item.click()
-  await expect(item).toHaveClass(/active/)
 }
 
 async function capturePermissionRequests(page: ScenarioContext['page']): Promise<void> {

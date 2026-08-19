@@ -243,6 +243,8 @@ button:disabled {
 }
 
 .task-header-status {
+  display: block;
+  min-height: 16px;
   margin: 4px 0 0;
   color: var(--text-3);
   font-size: 11px;
@@ -395,7 +397,8 @@ button:disabled {
 /* 用户句和正式回复已在对话流展示，过程区只留思考/工具。 */
 .conversation-process .timeline-prompt,
 .conversation-process .timeline-turn-header,
-.conversation-process .timeline-node[data-kind='message'] {
+.conversation-process .timeline-node[data-kind='message'],
+.conversation-process .timeline-node[data-kind='error'] {
   display: none;
 }
 

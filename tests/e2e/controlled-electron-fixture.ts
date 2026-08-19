@@ -189,19 +189,90 @@ async function waitForMatchingExecutionSnapshot(
   return snapshot
 }
 
+export function runtimeStatusLocator(
+  page: Page,
+  runtimeState?: string
+): ReturnType<Page['locator']> {
+  return runtimeState
+    ? page.locator(`.task-header-status[data-runtime-state="${runtimeState}"]`)
+    : page.locator('.task-header-status')
+}
+
+export function executionStatusLocator(
+  page: Page,
+  scope: 'foreign' | 'selected' | 'none'
+): ReturnType<Page['locator']> {
+  return page.locator(`.task-header-status[data-execution="${scope}"]`)
+}
+
+/** 通过项目下拉选择查看身份；无活动执行时由应用后台接 Runtime，不再点「连接 Grok」。 */
+export async function selectWorkbenchProject(
+  page: Page,
+  workspace: string,
+  force = false
+): Promise<void> {
+  const current = page.locator('.project-current')
+  const name = basename(workspace)
+  const alreadySelected = (await current.locator('strong').textContent())?.trim() === name
+  if (!alreadySelected) {
+    await current.click()
+    const option = page.locator('.project-menu [role="option"]').filter({ hasText: name }).first()
+    await expect(option).toBeVisible()
+    if (force) await option.evaluate((element) => (element as HTMLButtonElement).click())
+    else await option.click()
+  }
+  await expect(current.locator('strong')).toHaveText(name)
+}
+
+export async function selectWorkbenchTaskByTitle(
+  page: Page,
+  title: string,
+  force = false
+): Promise<void> {
+  const row = page.locator('.task-row').filter({ hasText: title }).first()
+  const button = row.locator('.task-main')
+  await expect(button).toBeVisible()
+  if (force) await button.evaluate((element) => (element as HTMLButtonElement).click())
+  else await button.click()
+  await expect(row).toHaveClass(/selected/)
+}
+
+export async function selectWorkbenchTaskById(
+  page: Page,
+  projectId: string,
+  taskId: string,
+  force = false
+): Promise<void> {
+  const index = await page.evaluate(
+    async ({ currentProjectId, currentTaskId }) => {
+      const result = await window.task.list(currentProjectId, undefined, 50)
+      if (!result.ok) return -1
+      return result.value.items.findIndex((task) => task.taskId === currentTaskId)
+    },
+    { currentProjectId: projectId, currentTaskId: taskId }
+  )
+  if (index < 0) throw new Error('侧栏中未找到受控 Task。')
+  const row = page.locator('.task-row').nth(index)
+  const button = row.locator('.task-main')
+  await expect(button).toBeVisible()
+  if (force) await button.evaluate((element) => (element as HTMLButtonElement).click())
+  else await button.click()
+  await expect(row).toHaveClass(/selected/)
+}
+
 /** 等待启动探针与工作台连接完成，并确认受控 Provider 未收到 Authorization。 */
 export async function prepareControlledWorkbench(
   context: ControlledElectronScenarioContext
 ): Promise<void> {
   await expect.poll(() => context.provider.requestCount).toBe(1)
   expect(context.provider.authorizationHeaders).toEqual([undefined])
-  // 双 Project fixture 不依赖注册顺序；权限场景始终显式切回允许启动受控 Runtime 的主工作区。
-  await context.page
-    .getByRole('button', { name: basename(context.layout.workspace), exact: true })
-    .click()
-  // Project 切换现在只改变查看身份；测试需沿用正式交互显式连接主工作区 Runtime。
-  await context.page.getByRole('button', { name: '连接 Grok', exact: true }).click()
-  await expect(context.page.locator('.status-chip[data-state="ready"]')).toBeVisible()
+  await selectWorkbenchProject(context.page, context.layout.workspace)
+  const ready = runtimeStatusLocator(context.page, 'ready')
+  const retry = context.page.getByRole('button', { name: '重新连接 Runtime' })
+  if ((await ready.count()) === 0 && (await retry.count()) > 0) {
+    await retry.click()
+  }
+  await expect(ready).toBeVisible()
   await expect(context.page.getByPlaceholder('描述你想修改、排查或验证的内容…')).toBeEnabled()
 }
 
