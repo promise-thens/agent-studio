@@ -215,7 +215,9 @@ export async function selectWorkbenchProject(
   const name = basename(workspace)
   const alreadySelected = (await current.locator('strong').textContent())?.trim() === name
   if (!alreadySelected) {
-    await current.click()
+    // 审批弹窗的 modal-backdrop 会拦截普通 click；force 路径用 DOM click 绕过。
+    if (force) await current.evaluate((element) => (element as HTMLButtonElement).click())
+    else await current.click()
     const option = page.locator('.project-menu [role="option"]').filter({ hasText: name }).first()
     await expect(option).toBeVisible()
     if (force) await option.evaluate((element) => (element as HTMLButtonElement).click())
