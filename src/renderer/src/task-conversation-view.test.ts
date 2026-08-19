@@ -8,6 +8,7 @@ import {
   conversationFollowSignature,
   isConversationPinnedToBottom,
   isTurnProcessExpandedByDefault,
+  nextConversationPinnedState,
   nextPinnedConversationScrollTop,
   shouldMirrorLiveAgentErrorLocally,
   turnHasCollapsibleProcess
@@ -107,6 +108,55 @@ describe('对话滚动与折叠', () => {
         false
       )
     ).toBeNull()
+  })
+
+  it('用户上翻永远取消贴底，layout/程序化滚动不得吞掉这次意图', () => {
+    expect(
+      nextConversationPinnedState({
+        pinned: true,
+        source: 'user-input',
+        nearBottom: false
+      })
+    ).toBe(false)
+    expect(
+      nextConversationPinnedState({
+        pinned: true,
+        source: 'layout-scroll',
+        nearBottom: false
+      })
+    ).toBe(true)
+    expect(
+      nextConversationPinnedState({
+        pinned: false,
+        source: 'user-input',
+        nearBottom: true
+      })
+    ).toBe(true)
+  })
+
+  it('流式增高时用户上翻后，后续跟随不得再改 scrollTop', () => {
+    let pinned = true
+    const el = { scrollTop: 920, clientHeight: 80, scrollHeight: 1000 }
+    expect(nextPinnedConversationScrollTop(el, pinned)).toBe(920)
+
+    el.scrollHeight = 1400
+    pinned = nextConversationPinnedState({
+      pinned,
+      source: 'layout-scroll',
+      nearBottom: isConversationPinnedToBottom(el)
+    })
+    expect(pinned).toBe(true)
+    expect(nextPinnedConversationScrollTop(el, pinned)).toBe(1320)
+
+    el.scrollTop = 40
+    pinned = nextConversationPinnedState({
+      pinned,
+      source: 'user-input',
+      nearBottom: isConversationPinnedToBottom(el)
+    })
+    expect(pinned).toBe(false)
+    el.scrollHeight = 1800
+    expect(nextPinnedConversationScrollTop(el, pinned)).toBeNull()
   })
 
   it('流式同一节点变长时跟随签名变化', () => {

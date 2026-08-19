@@ -740,7 +740,7 @@ async function selectTask(taskId: string): Promise<void> {
   }
 }
 
-/** Project 选择只切换本地历史身份；无活动执行时才后台接 Runtime，避免打断外槽任务。 */
+/** Project 选择只切换本地历史身份；不重建 Runtime session。 */
 async function selectProject(projectId: string): Promise<void> {
   if (!projectId || projectSelectionPending.value || projectId === activeProjectId.value) return
   conversationEnterGeneration += 1
@@ -748,14 +748,12 @@ async function selectProject(projectId: string): Promise<void> {
   conversationEntry.value = null
   const selection = projectSelection.begin()
   reconcilePermissionQueue('', projectId)
-  let switched = false
   try {
     await workbench.selectProject(projectId)
     if (!projectSelection.isCurrent(selection) || activeProjectId.value !== projectId) {
       return
     }
     workspace.value = workbench.selectedProject.value?.canonicalRoot ?? ''
-    switched = true
   } catch (error) {
     if (!projectSelection.isCurrent(selection) || activeProjectId.value !== projectId) return
     projectSelection.commit(selection, () => {
@@ -763,12 +761,6 @@ async function selectProject(projectId: string): Promise<void> {
     })
   } finally {
     projectSelection.finish(selection)
-  }
-  if (switched && !activeExecution.value) {
-    await ensureProjectConnected(
-      projectId,
-      () => activeProjectId.value === projectId && !activeExecution.value
-    )
   }
 }
 

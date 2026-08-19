@@ -24,6 +24,21 @@ export function nextPinnedConversationScrollTop(
   return Math.max(0, element.scrollHeight - element.clientHeight)
 }
 
+export type ConversationPinSource = 'user-input' | 'layout-scroll'
+
+/**
+ * 用户滚轮/触控/拖条永远以当前位置为准。
+ * 内容增高或程序化贴底触发的 layout scroll 不得把贴底误判成上翻，也不得吞掉下一次用户滚动。
+ */
+export function nextConversationPinnedState(input: {
+  pinned: boolean
+  source: ConversationPinSource
+  nearBottom: boolean
+}): boolean {
+  if (input.source === 'user-input') return input.nearBottom
+  return input.pinned
+}
+
 function nodeFollowLength(node: TurnTimelineViewModel['nodes'][number]): number {
   if ('text' in node && typeof node.text === 'string') return node.text.length
   if ('message' in node && typeof node.message === 'string') return node.message.length

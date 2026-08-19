@@ -205,7 +205,7 @@ export function executionStatusLocator(
   return page.locator(`.task-header-status[data-execution="${scope}"]`)
 }
 
-/** 通过项目下拉选择查看身份；无活动执行时由应用后台接 Runtime，不再点「连接 Grok」。 */
+/** 通过项目下拉只切换查看身份与本地历史，不重建 Runtime；不再点「连接 Grok」。 */
 export async function selectWorkbenchProject(
   page: Page,
   workspace: string,

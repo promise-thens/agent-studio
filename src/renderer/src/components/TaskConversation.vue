@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { TaskTimelineViewModel, TurnTimelineViewModel } from '../task-timeline-reducer'
 import {
   collectTurnAssistantTexts,
@@ -8,6 +8,7 @@ import {
   isActiveConversationTurn,
   isConversationPinnedToBottom,
   isTurnProcessExpandedByDefault,
+  nextConversationPinnedState,
   nextPinnedConversationScrollTop,
   timelineModelForTurn,
   turnHasCollapsibleProcess
@@ -46,8 +47,8 @@ const messageList = ref<HTMLElement | null>(null)
 const processOpenByTurn = ref<Record<string, boolean>>({})
 /** 用户离开底部后不再抢滚动；切 Task 时重新贴底。 */
 let pinnedToBottom = true
-/** 程序化贴底时忽略 scroll 事件，避免刚滚到底就被判定为上翻。 */
-let ignorePinSync = false
+/** 指针按住时把随后的 scroll 当成用户拖条，而不是内容增高。 */
+let pointerTracking = false
 
 function isProcessOpen(turn: Pick<TurnTimelineViewModel, 'turnId' | 'status'>): boolean {
   return processOpenByTurn.value[turn.turnId] ?? isTurnProcessExpandedByDefault(turn)
@@ -59,11 +60,40 @@ function rememberProcessOpen(turnId: string, event: Event): void {
   processOpenByTurn.value = { ...processOpenByTurn.value, [turnId]: target.open }
 }
 
-function handleScroll(): void {
-  if (ignorePinSync) return
+function applyPinSource(source: 'user-input' | 'layout-scroll'): void {
   const root = messageList.value
   if (!root) return
-  pinnedToBottom = isConversationPinnedToBottom(root)
+  pinnedToBottom = nextConversationPinnedState({
+    pinned: pinnedToBottom,
+    source,
+    nearBottom: isConversationPinnedToBottom(root)
+  })
+}
+
+function handleUserScrollIntent(): void {
+  applyPinSource('user-input')
+}
+
+function handlePointerDown(): void {
+  pointerTracking = true
+}
+
+function handlePointerUp(): void {
+  pointerTracking = false
+}
+
+onMounted(() => {
+  window.addEventListener('pointerup', handlePointerUp)
+  window.addEventListener('pointercancel', handlePointerUp)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerup', handlePointerUp)
+  window.removeEventListener('pointercancel', handlePointerUp)
+})
+
+function handleScroll(): void {
+  applyPinSource(pointerTracking ? 'user-input' : 'layout-scroll')
 }
 
 function scrollToLatestIfPinned(): void {
@@ -71,11 +101,7 @@ function scrollToLatestIfPinned(): void {
   if (!root) return
   const nextTop = nextPinnedConversationScrollTop(root, pinnedToBottom)
   if (nextTop == null) return
-  ignorePinSync = true
   root.scrollTop = nextTop
-  requestAnimationFrame(() => {
-    ignorePinSync = false
-  })
 }
 
 watch(
@@ -100,6 +126,11 @@ watch(
     ref="messageList"
     class="message-list task-conversation"
     aria-live="polite"
+    @wheel.passive="handleUserScrollIntent"
+    @touchmove.passive="handleUserScrollIntent"
+    @pointerdown="handlePointerDown"
+    @pointerup="handlePointerUp"
+    @pointercancel="handlePointerUp"
     @scroll.passive="handleScroll"
   >
     <button
