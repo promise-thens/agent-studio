@@ -261,7 +261,7 @@ git diff --check
 - Grok ACP 加深：评估与分计划在 [docs/superpowers/plans/grokACP计划/README.md](docs/superpowers/plans/grokACP计划/README.md)。顺序为 GACP-01（已关闭）→ GACP-02 恢复契约 → P0-10 工作台；GACP-03 在 P0-11 后，GACP-04 在 P2 前，GACP-05 默认不进 P0-A
 - 兼容边界：首版仍只有一个执行槽；应用退出后不继续运行；受控 ACP fixture 不等价于真实 Grok 黑盒；`clientCapabilities: {}` 是诚实广告，未实现 fs/terminal 前不得打开；GACP-01 未见的 `load` / 子 Agent 父子字段不得写成已验证
 - 下一步：开发版走查注册项目、连续两轮、切换 Task、Inspector 标签与小窗；通过后关闭 P0-10 第 3 步走查。不要加回「继续任务」按钮
-- 最近验证：2026-08-19 P0-10 Task 4 单元测试、typecheck、build 已过；开发版手工与 lifecycle e2e 尚未在本任务实跑
+- 最近验证：2026-08-19 P0-10 单元测试 519 通过，typecheck/build 通过；受控 lifecycle e2e 5/5、permission e2e 5/5 通过。开发版真实 Grok GUI 走查未跑（本机 5173 已被既有 dev 占用）
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
