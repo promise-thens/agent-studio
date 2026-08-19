@@ -183,7 +183,10 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
       const turn = context.page.locator('.conversation-turn').filter({ hasText: prompt })
       await expect(turn).toHaveCount(1)
       await expect(turn.locator('.conversation-user')).toContainText(prompt)
-      await turn.locator('.conversation-process summary').click()
+      const process = turn.locator('.conversation-process')
+      await process.evaluate((element) => {
+        ;(element as HTMLDetailsElement).open = true
+      })
       const timeline = turn.getByRole('region', { name: '执行时间线' })
       await expect(timeline).toBeVisible()
       await expect(turn.locator('.timeline-node[data-kind="tool"]')).toContainText('toolcall-A')
