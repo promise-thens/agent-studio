@@ -1,6 +1,6 @@
 # Grok ACP 观察记录
 
-本目录只放脱敏后的真机观察。由 [GACP-01](../gacp-01-real-grok-protocol-verification.md) 创建和填写。
+本目录只放脱敏后的真机观察。由 [GACP-01](../gacp-01-real-grok-protocol-verification.md) 创建；该计划已于 2026-08-19 受限关闭。后续补记（例如子 Agent 字段）写回同一张表即可，不必重开 GACP-01。
 
 规则：
 

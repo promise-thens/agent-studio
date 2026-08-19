@@ -255,13 +255,13 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[GACP-01 真机 Grok ACP 协议观察与能力核实](docs/superpowers/plans/grokACP计划/gacp-01-real-grok-protocol-verification.md)
-- 状态：P0-09 真机验收已受限关闭；P0-08 核心实现与首批 lifecycle E2E 已完成，Windows/Linux 平台差异仍待补
-- 完成度：P0-01 至 P0-07 已完成；P0-08 单槽 TaskExecutor、恢复、后台权限和退出三选项已落地；P0-09 公开事件投影、Timeline 与真机多轮/权限/终态/退出三分支已收口
-- Grok ACP 加深：评估与分计划在 [docs/superpowers/plans/grokACP计划/README.md](docs/superpowers/plans/grokACP计划/README.md)。顺序为 GACP-01 真机观察 → GACP-02 恢复契约 → P0-10 工作台；GACP-03 在 P0-11 后，GACP-04 在 P2 前，GACP-05 默认不进 P0-A
-- 兼容边界：首版仍只有一个执行槽；应用退出后不继续运行；受控 ACP fixture 不等价于真实 Grok 黑盒；`clientCapabilities: {}` 是诚实广告，未实现 fs/terminal 前不得打开
-- 下一步：本机设置 `GACP01_REAL_GROK=1` 后跑 `pnpm test:gacp01:observe` 填 A–E；不要开始 GACP-02 或 P0-10 主体
-- 最近验证：2026-08-18 已增加正式产品路径的可选真机观察脚本；默认 Vitest 不连真实 Grok
+- 当前计划：[GACP-02 会话恢复能力产品契约](docs/superpowers/plans/grokACP计划/gacp-02-session-restore-capability-contract.md)
+- 状态：P0-09 真机验收已受限关闭；GACP-01 已于 2026-08-19 受限关闭；P0-08 核心实现与首批 lifecycle E2E 已完成，Windows/Linux 平台差异仍待补
+- 完成度：P0-01 至 P0-07 已完成；P0-08 单槽 TaskExecutor、恢复、后台权限和退出三选项已落地；P0-09 公开事件投影、Timeline 与真机多轮/权限/终态/退出三分支已收口；GACP-01 已冻结握手、`set_model`、A→B→A `resume` 与一次 `execute` 权限
+- Grok ACP 加深：评估与分计划在 [docs/superpowers/plans/grokACP计划/README.md](docs/superpowers/plans/grokACP计划/README.md)。顺序为 GACP-01（已关闭）→ GACP-02 恢复契约 → P0-10 工作台；GACP-03 在 P0-11 后，GACP-04 在 P2 前，GACP-05 默认不进 P0-A
+- 兼容边界：首版仍只有一个执行槽；应用退出后不继续运行；受控 ACP fixture 不等价于真实 Grok 黑盒；`clientCapabilities: {}` 是诚实广告，未实现 fs/terminal 前不得打开；GACP-01 未见的 `load` / 子 Agent 父子字段不得写成已验证
+- 下一步：开始 GACP-02（点进历史即可接着聊）。不要开始 P0-10 主体。GACP-01 遗留（load/close/退出协议路径/能力升 verified）不挡开工
+- 最近验证：2026-08-19 正式产品路径观察表已写入；默认 Vitest 不连真实 Grok
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

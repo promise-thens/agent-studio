@@ -2,9 +2,9 @@
 
 > **致执行者：** 产品已确认要做通用多 Agent 工作台。Grok Build 会分发子 Agent；界面不要把它们摊成一长串互不相关的工具卡，而要做成可折叠的嵌套任务，对标 Claude Code Desktop。
 >
-> **状态：** 待开始（前置：P0-09 测试门、GACP-01 观察里必须记清真实 Grok 怎么上报子 Agent）
+> **状态：** 待开始（前置：P0-10A 壳；GACP-01 已关闭且未见父子字段）
 >
-> **插入点：** P0-09 之后即可做展示骨架；有真实父子协议字段后才能嵌套，不能靠猜 title。
+> **插入点：** P0-10A 换皮之后再接分组。GACP-01 观察表 F 节全部 `not-observed`，因此本计划先保持扁平，有稳定父子字段后才能嵌套，不能靠猜 title。不要重开 GACP-01，也不要挡 GACP-02 / P0-10A。
 
 **优先级：** P0-A 增强 / 权重 3（不影响单 Agent 闭环，但决定「像不像 Codex / Claude Desktop」）
 
@@ -65,7 +65,8 @@ Grok ACP session/update（tool_call 或后续标准父子字段）
 **前置依赖：**
 
 - P0-09 测试门：同一套实时/历史 reducer。
-- GACP-01 专节「子 Agent」：记录有没有 parent id、独立 session、独立 permission。
+- P0-10A：主列对话壳和 `ToolRow` / `SubagentCard` 皮肤。没有壳时不要在旧 `TurnSummaryCard` 上做展示骨架。
+- 子 Agent 字段：GACP-01 已关闭，[观察表 F 节](observations/grok-acp-observation.md) 全是 `not-observed`。本计划任务 1 可以自己再观察一次并写回该表；**缺字段只禁止做成树，不推迟 GACP-02 / P0-10A。**
 
 **文件范围：**
 
@@ -126,9 +127,9 @@ Turn
 
 ## 任务 1: 先观察，再决定能不能嵌套
 
-- [ ] **第 1 步: GACP-01 补子 Agent 专表**
-      说明：真机让 Grok 分两个探查任务。记录 tool 标题、kind、是否有 parent、是否新 session、权限算谁的。
-      预期：有稳定字段才进入任务 2；否则只做「工具组」占位，不假装树。
+- [ ] **第 1 步: 补观察表 F 节（不必重开 GACP-01）**
+      说明：真机让 Grok 分两个探查任务。记录 tool 标题、kind、是否有 parent、是否新 session、权限算谁的。写回 `observations/grok-acp-observation.md` F 节即可。
+      预期：有稳定字段才进入任务 2；否则只做扁平工具行，不假装树，也不回头挡住 GACP-02。
 
 - [ ] **第 2 步: 公开事件加可选 parent**
       说明：仅映射观察白名单字段。Preload 丢弃未知键。

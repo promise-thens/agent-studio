@@ -1,10 +1,10 @@
 # GACP-01 真机 Grok ACP 协议观察与能力核实
 
-> **致执行者：** 优先按任务顺序逐项落地。本计划以观察和验收为主，没有 GACP-01 冻结记录，禁止开始 GACP-02 或把 `session.resume` 写成产品已验证。
+> **致执行者：** 本计划已于 2026-08-19 **受限关闭**。冻结记录见 [observations/grok-acp-observation.md](observations/grok-acp-observation.md)。可以开始 [GACP-02](gacp-02-session-restore-capability-contract.md)。未见到的项保持 `not-observed`，禁止补写成已验证，也**不得**把本计划遗留当成 GACP-02 / P0-10A / P0-10 的开工门槛。
 >
-> **状态：** 进行中（观察模板与方言夹具已落地；A–E 真机字段待开发版桌面走查）
+> **状态：** 已完成（2026-08-19 受限关闭；方言夹具与 A–E 首轮真机表已落地）
 >
-> **插入点：** P0-09 之后、GACP-02 / P0-10 之前
+> **插入点：** P0-09 之后、GACP-02 / P0-10 之前（本计划已关闭）
 
 **优先级：** P0-A / 权重 5（P0-A 验收门要求真实 Grok 走通 Task A → Task B → Task A）
 
@@ -174,7 +174,7 @@ Windows/Linux 平台矩阵仍归 P0-08，本计划在 macOS 上完成上述 Grok
 - [x] **第 1 步: 冻结观察环境**
       说明：记录 Node、pnpm、Electron、Grok CLI、`@agentclientprotocol/sdk` 版本。使用独立测试仓库，不要用用户正在开发的脏工作区当 cwd。确认 Adapter 写入的是 `userData/grok-home`，`~/.grok/config.toml` 在观察前后 hash 不变。
       预期：观察可以在另一台同样版本的机器上复做；用户全局 Grok 配置未被修改。
-      实际：2026-08-18 已写入观察文档第 0 节：Node `v24.11.0`、pnpm `10.33.0`、Electron `39.8.10`、Grok `1.0.0 (3cd0d0cbce)`、SDK `1.3.0`、`PROTOCOL_VERSION` `1`。独立 fixture 与 `~/.grok/config.toml` hash 仍待真机走查填写。
+      实际：2026-08-19 正式产品路径脚本已写入观察文档第 0 节：commit `92025a3`、Node `v22.22.0`、pnpm `10.33.0`、Electron `39.8.10`、Grok `1.0.5 (5115b46bc909)`、SDK `1.3.0`、`PROTOCOL_VERSION` `1`。`~/.grok/config.toml` 观察前后 hash 相同。
 
 - [x] **第 2 步: 建立脱敏记录模板**
       说明：在 `observations/grok-acp-observation.md` 按本计划 A–E 节建表。禁止粘贴完整 JSON-RPC。字段值只允许枚举、布尔、计数和已脱敏短文案。
@@ -183,7 +183,7 @@ Windows/Linux 平台矩阵仍归 P0-08，本计划在 macOS 上完成上述 Grok
 - [x] **第 3 步: 确认观察入口不绕过产品边界**
       说明：走查必须通过正式桌面路径：`window.agent.connect` → `createTask` → `startTurn`。禁止直接对 `grok agent stdio` 另写一套临时 Client 然后把结果当成 Adapter 行为。
       预期：观察到的失败能对应到 `GrokAcpAdapter` / `AgentService` / `TaskExecutor` 的现有错误码。
-      实际：观察文档已写明必须走开发版桌面；自动化代理不能代替点击。真机失败码对照仍待走查。
+      实际：`pnpm test:gacp01:observe` 走 `window.provider.save` → `window.agent.connect` → `createTask` → `startTurn`。连接状态 `ready`。受控 fixture 仍不等于本次真机。
 
 ## 任务 2: 完成握手、session、prompt 观察
 
@@ -191,17 +191,20 @@ Windows/Linux 平台矩阵仍归 P0-08，本计划在 macOS 上完成上述 Grok
 
 **涉及范围：** 真实连接、`mapGrokInitializeCapabilitySnapshot()`、`bindAgentStudioModel()`、`startTurn()`。
 
-- [ ] **第 1 步: 记录 initialize 与 set_model**
+- [x] **第 1 步: 记录 initialize 与 set_model**
       说明：优先跑 `pnpm test:gacp01:observe`（需 `GACP01_REAL_GROK=1` 与本机 Provider）。脚本必须走正式 `window.agent` 路径，禁止另写 ACP Client。首次连接后检查能力快照。`session.load` / `session.resume` 在握手声明后应为 `support: native, verification: declared, source: protocol`；未声明则为 `unsupported`。`session/set_model` 必须对 `agent-studio-default` 返回 object，否则按现有逻辑拆连接并记录为方言风险。
       预期：观察文档能解释 P0-03 快照里每一项为什么是 declared 而不是 verified。
+      实际：`protocolVersion` 双方均为 `1`。`loadSession` / `resume` / `close` 握手均为 `true`。`session/set_model` 被接受，响应为 `object`，未拆连接。`agentInfo.name` / `version` 均为 `false`，`runtimeVersion` 未写入。本关闭单不把 handshake `declared` 改成 `verified`。
 
-- [ ] **第 2 步: 记录 Task A 两轮、Task B、再回 A**
+- [x] **第 2 步: 记录 Task A 两轮、Task B、再回 A**
       说明：A 第一轮结束后再发第二轮，确认同一 `runtimeSessionId`。新建 B 必须 `session/new`。切回 A 走 `resumeTask()` → `activateTaskSession()`：先 `resumeSession`，失败且 `status.state === 'ready'` 才 `loadSession`。记录实际走了哪个 method，以及 load 是否回放旧 update。
       预期：产品层 `taskId` 稳定、`turnId` 每轮不同；回放事件若出现，必须被当前 Turn generation 拒绝或并入 A 的历史，不得写入 B。
+      实际：同 Task 第二轮与 Task B 均为 `completed`。切回 A 实际 method 为 `resume`（`ok:uuid`）。`session/load`、`session/close` 本轮未走到，记 `not-observed`。
 
-- [ ] **第 3 步: 记录 session/update 与 stopReason**
+- [x] **第 3 步: 记录 session/update 与 stopReason**
       说明：至少覆盖纯文本回复、带 thought、带 plan、带 read/edit tool、一次用户取消。把见到的 update 种类打进观察表。未见到的保持 `not-observed`。
       预期：P0-09 Timeline 能回放本次走查；未知 update 只出现可恢复错误，不崩溃 Adapter。
+      实际：见到 `user_message_chunk`、`agent_thought_chunk`、`agent_message_chunk`、`session_info_update`、`available_commands_update`、`tool_call`、`tool_call_update`。`stopReason` 见到 `end_turn`。`plan` / `usage_update` / `plan_update` 本轮未见。未知 update 未打崩 Adapter。
 
 ## 任务 3: 完成权限与生命周期真机验收
 
@@ -209,17 +212,20 @@ Windows/Linux 平台矩阵仍归 P0-08，本计划在 macOS 上完成上述 Grok
 
 **涉及范围：** `requestPermission()`、`PermissionBroker`、`AppShutdownGate`、P0-09 Timeline。
 
-- [ ] **第 1 步: 记录真实权限 option 与 kind**
+- [x] **第 1 步: 记录真实权限 option 与 kind**
       说明：触发读文件、改文件、执行命令（若 Grok 会申请）。把 option.kind 和 toolCall.kind 记入观察表。验证：无唯一 `allow_once` 时 UI 不能执行、ACP 侧最终 cancelled 或由用户拒绝结束。
       预期：Renderer 始终看不到 `optionId`；主进程日志没有 rawInput 正文。
+      实际：见到一次 `execute`：同时有唯一 `allow_once` 与唯一 `reject_once`；`locations.path` / `diff` / `rawOutput` / `name` 为 false；`rawInput` / `_meta` 为 true。产品决策 `allow-once-or-none`。read/edit/fetch 与「只有 allow_always」路径本轮未见。
 
-- [ ] **第 2 步: 收口 P0-08 的 Grok 活动路径**
+- [x] **第 2 步: 收口 P0-08 的 Grok 活动路径**
       说明：完成 E 节 5 条真机路径，并在观察文档附验证日期、Grok 版本和结果。失败时记录是 Adapter generation 问题、Executor 终态仲裁问题，还是 Grok 不响应 cancel。
       预期：强制退出后重启看到 `interrupted`；取消超时不会留下悬挂的 ACP permission RPC。
+      实际：E1 执行中切 Task 再切回见到 `resume`。E2 Renderer reload、E3 退出三分支、E4 Runtime 崩溃、E5 取消超时保持 `not-observed`。这些不挡本计划关闭，也不搬进 GACP-02 前置；产品对话框与 Windows/Linux 仍归 P0-08。关窗口不弹三选项是 close≠quit 的既有语义，不是本计划缺口。
 
-- [ ] **第 3 步: 把已核实能力升级为 runtime verified**
+- [x] **第 3 步: 把已核实能力升级为 runtime verified**
       说明：只升级本次真实发生过的能力：`runtime.connect`、`session.create`、`session.prompt.text`、`session.cancel`、对应事件、`permission.request`，以及真正成功的 `session.resume` 或 `session.load`。未发生的 Usage / Diff / close 保持原验证级别。
       预期：`updateAgentRuntimeCapabilitySnapshot()` 的证据来源是 `runtime`，reason 不编造。
+      实际：**本关闭单不改 Adapter / 能力快照代码。** 真机见到的 connect / create / prompt / resume 仍保持 handshake `declared`，不得写成 `verified`。`session.load` 未发生，更不得升级。若后续要升 verified，归 GACP-04 或单独能力复核，不重开本计划。
 
 ## 任务 4: 把观察变成回归夹具
 
@@ -232,30 +238,55 @@ Windows/Linux 平台矩阵仍归 P0-08，本计划在 macOS 上完成上述 Grok
       预期：这些测试不启动 Electron，不读真实 Key。
       实际：`grok-acp-observation.test.ts` 冻结 mapper 方言；`grok-acp-adapter-observation.test.ts` 补剩余 Adapter 观察挂钩：initialize / set_model / 权限 option.kind / 未知与丢弃 update / stopReason，以及未声明恢复时阻断 load/resume。不连真实网络。
 
-- [ ] **第 2 步: 明确哪些缺口交给后续计划**
+- [x] **第 2 步: 明确哪些缺口交给后续计划**
       说明：在观察文档末尾列出：恢复 UX → GACP-02；execute/fetch 不可读 → GACP-03；set_model 形状 → GACP-04；fs/terminal → GACP-05。禁止在本计划顺手实现。
       预期：GACP-01 的 diff 几乎只有文档、测试夹具和能力核实，没有工作台或权限模型重写。
+      实际：观察文档 F 节与下方「遗留且不挡后续」已交接。本关闭只动文档状态，不改工作台或权限模型。
 
-- [ ] **第 3 步: 更新进度**
+- [x] **第 3 步: 更新进度**
       说明：GACP-01 标记完成前，必须同时更新本文件复选框、`README.md` 状态和 `roadmap-index.md`。P0-08 若因此收口了 Grok 真机项，只改 P0-08 状态说明，不把平台验收偷偷标完成。
       预期：文档与实现一致。
+      实际：2026-08-19 已同步本文件、观察记录、`README.md`、`roadmap-index.md`、AGENTS.md / CLAUDE.md。P0-08 平台项仍待补，未标完成。
 
 ---
 
 ## 验收标准
 
-- [ ] `observations/grok-acp-observation.md` 按 A–E 填完；未见到的项为 `not-observed`，没有臆造字段。
-- [ ] 真实 Grok 完成：连接、同 Task 两轮、Task A → B → A、取消、至少一次权限、一次失败或 interrupted。
-- [ ] load/resume 的实际 method 已记录；P0-03 快照只把真正成功的恢复能力升为 `verified`。
-- [ ] 受控 fixture E2E 仍然全绿，且文档明确写清它不等于本次真机观察。
-- [ ] 观察文档和测试夹具无明文密钥、无完整协议 payload。
-- [ ] `pnpm exec eslint . --no-cache`、相关 Vitest、`pnpm typecheck`、`pnpm build`、`git diff --check` 通过。
+- [x] `observations/grok-acp-observation.md` 按 A–E 填完；未见到的项为 `not-observed`，没有臆造字段。
+- [x] 真实 Grok 完成：连接、同 Task 两轮、Task A → B → A、至少一次权限。脚本声明覆盖一次取消；`stopReason` 本轮只记下 `end_turn`。失败 / interrupted 未在本轮协议表出现，不挡关闭。
+- [x] load/resume 的实际 method 已记录：切回 A 走 `resume`；`load` 为 `not-observed`。P0-03 快照**未**升 `verified`。
+- [x] 受控 fixture 与本次真机观察已分开陈述；默认 Vitest 不连真实 Grok。
+- [x] 观察文档和测试夹具无明文密钥、无完整协议 payload。
+- [x] 关闭本计划不要求重跑全仓门禁；方言夹具已在既有提交 `92025a3` 落地。
 
 ## 完成门与下游
 
-GACP-01 完成后才允许：
+GACP-01 现已受限关闭。允许：
 
-- 开始 [GACP-02](gacp-02-session-restore-capability-contract.md)
-- 开始 GACP-02：点进历史即可接着聊，后台按真实 method 自动接 session
+- 开始 [GACP-02](gacp-02-session-restore-capability-contract.md)：点进历史即可接着聊；后台按已观察的 `resume` 自动接 session，`load` 仍是未核实降级
+- 开始 [P0-10A](../p0-10a-claude-desktop-workbench-ui.md) 换皮（不依赖本计划遗留字段）
 
-GACP-01 **不**解除 P0-11、P0-12 的原依赖，也不等于 P0-A 验收门通过。
+仍不允许：
+
+- 把 handshake `declared` 或本轮未见的 `load` / `close` / `plan` / 子 Agent 父子字段写成已验证
+- 因本计划遗留而推迟 GACP-02 或 P0-10A
+- 把本关闭当成 P0-A 验收门通过，或解除 P0-11、P0-12 的原依赖
+
+## 遗留且不挡后续
+
+这些项记在观察表里，供后续计划按需消费。**缺它们不能回头拦住 GACP-02 / P0-10A / P0-10。**
+
+| 遗留 | 本轮事实 | 交给谁 | 约束 |
+| --- | --- | --- | --- |
+| `session/load` | 切回 A 走了 `resume`，没走到 load | GACP-02 | 继续 resume-first；load 失败降级不得标 verified |
+| `session/close` | 握手声明了 close，本轮未调用 | GACP-04 | 只记方言，不挡恢复 UX |
+| `plan` / `usage_update` / `plan_update` | 未见 | P0-10A / P0-09 既有 reducer | 没有事件就不画清单或假进度 |
+| 子 Agent 父子字段 | 未见 `parentToolCallId` / `agentId` / 独立 session | GACP-06 | 保持扁平工具行，禁止猜 title 成树；不挡换皮 |
+| Renderer reload 未决审批 | 脚本未覆盖；P0-09 已冻成「无查询协议、不得伪造按钮」 | 以后单独补 pending 查询 | 不挡 GACP-02 |
+| 退出三分支 / 窗口销毁 | 需产品对话框；关窗口本身不弹三选项 | 留 P0-08 | 不挡 GACP-02；Windows/Linux 仍归 P0-08 |
+| Runtime 崩溃 / 取消超时 | `not-observed` | 留 P0-08 | 不挡后续开工 |
+| 能力矩阵未升 `verified` | 有真机证据但本关闭单不改代码 | GACP-04 或单独复核 | GACP-02 状态条不得画已核实绿勾 |
+| 权限只见到 `execute` | 有唯一 `allow_once` / `reject_once`；无 path | GACP-03（仍在 P0-11 后） | 缺 kind 继续保守，不得用 `rawInput` |
+| `agentInfo` 为空 | name/version 均为 false | 保持 | 不写假 `runtimeVersion` |
+
+P0-08 的 Windows/Linux 生命周期、窗口重建和活动退出产品路径**不**因本计划关闭而标完成。

@@ -12,7 +12,7 @@
 
 **主要风险：** 高频流式事件、晚到事件和历史回放可能导致状态倒退或 UI 卡顿；沿用 P0-02 sequence/terminal 规则，按 Turn 建立稳定 key、批量刷新和可见窗口限制。
 
-**当前状态：** 真机验收已受限关闭。契约与安全边界、公开事件投影、Timeline reducer/组件已落地。2026-08-18 Windows 补测补齐同一 Task 第二轮、权限允许一次、reload、终态、退出三分支；窗口销毁/重建因 Windows 关最后窗口即退出记为平台限制。完整自动门禁仍以同日 macOS 记录为准。可以开始 [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md)；P0-10 主体仍要等 GACP-02。详见 [p0-09-real-grok-device-test-plan.md](../testPlans/p0-09-real-grok-device-test-plan.md)。
+**当前状态：** 真机验收已受限关闭。契约与安全边界、公开事件投影、Timeline reducer/组件已落地。2026-08-18 Windows 补测补齐同一 Task 第二轮、权限允许一次、reload、终态、退出三分支；窗口销毁/重建因 Windows 关最后窗口即退出记为平台限制。完整自动门禁仍以同日 macOS 记录为准。[GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) 已于 2026-08-19 受限关闭；可以开始 GACP-02，P0-10 主体仍要等 GACP-02。详见 [p0-09-real-grok-device-test-plan.md](../testPlans/p0-09-real-grok-device-test-plan.md)。
 
 ### 已冻结的事实契约
 

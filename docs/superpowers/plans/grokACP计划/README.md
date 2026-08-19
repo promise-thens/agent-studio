@@ -1,6 +1,6 @@
 # Grok ACP 加深计划
 
-> 状态：已立项，P0-09 真机测试门已受限关闭，GACP-01 进行中（观察模板与方言夹具已落地）
+> 状态：已立项，P0-09 真机测试门已受限关闭，GACP-01 已于 2026-08-19 受限关闭，可以开始 GACP-02
 > 创建日期：2026-08-18
 > 定位：在现有 `GrokAcpAdapter` 最小闭环之上，按真实 Grok ACP 方言补齐验证、恢复、审批可解释性和 Client 能力广告
 > 产品愿景仍以 [product-vision.md](../../../product-vision.md) 为准；本目录不改 Runtime × Provider × Capability 分层
@@ -46,7 +46,7 @@ Agent Studio 是 ACP **Client**，Grok Build 是 ACP **Agent**。成熟度必须
 
 | 缺口 | 现在的代码事实 | 不能怎么补 |
 | --- | --- | --- |
-| 真机 Grok 黑盒未收口 | P0-07/P0-08 受控 fixture 不等于真实 Grok；P0-08 活动退出/窗口重建/重启 interrupted 待补 | 不能用 fixture 绿替代真机 |
+| 真机 Grok 黑盒未全部走完 | GACP-01 已冻结握手、`set_model`、A→B→A `resume`、一次 `execute` 权限；load/close/退出三分支/崩溃仍为 `not-observed` | 不能用 fixture 绿替代真机；也不得用这些遗留挡住 GACP-02 |
 | 点进历史还要再点「继续」 | 现有 `selectTask()` 只水合本地历史，发送被只读门禁拦住 | **已纠正：** 点进就是接着聊，恢复在后台自动做 |
 | 权限要一个个点 | 每个 path / 未知 execute 都可能弹卡；grant 指纹可能过细 | **已纠正：** 能过的自动过，第一次最多点一次「本任务允许」 |
 | Grok 方言没有版本契约 | `session/set_model` 是扩展方法；绑定失败会拆整条连接 | 不能猜响应形状，也不能改成宽松透传 |
@@ -84,17 +84,17 @@ P0-A 主表因此变成：
 | 开发顺序 | 计划 | 权重 | 能否开始 | 说明 |
 | ---: | --- | ---: | --- | --- |
 | 5 | P0-09 | 4 | 真机验收已受限关闭 | 本目录的前置观察面 |
-| 5a | [GACP-01](gacp-01-real-grok-protocol-verification.md) | 5 | 进行中 | 观察模板与方言夹具已落地；真机 A–E 待走查 |
-| 5b | [GACP-02](gacp-02-session-restore-capability-contract.md) | 5 | GACP-01 后 | 点进历史即可接着聊，无二次确认 |
+| 5a | [GACP-01](gacp-01-real-grok-protocol-verification.md) | 5 | 已完成（受限关闭） | 2026-08-19 冻结观察表；遗留见该计划「遗留且不挡后续」 |
+| 5b | [GACP-02](gacp-02-session-restore-capability-contract.md) | 5 | 可以开始 | 点进历史即可接着聊，无二次确认；load 仍按未核实降级 |
 | 6 | P0-10 | 5 | GACP-02 后 | 工作台按「点进去就能发」来做，禁止加回继续按钮 |
 | 7 | P0-11 | 5 | 仍按原依赖 | 命令证据事实源 |
 | 7a | [GACP-03](gacp-03-structured-permission-evidence.md) | 4 | P0-11 后 | 能过的自动过，不要一个个点 |
 | 8 | P0-12 | 5 | 原依赖不变 | Diff 审阅 |
 | 8a | [GACP-04](gacp-04-grok-acp-dialect-compat.md) | 4 | P0-10 后、P2 前 | 冻结 Grok 启动/握手/set_model |
-| 5c | [GACP-06](gacp-06-subagent-timeline.md) | 3 | P0-09 测试门后，可与 GACP-02 交错 | 子 Agent 嵌套卡片，对标 Claude Desktop |
+| 5c | [GACP-06](gacp-06-subagent-timeline.md) | 3 | P0-10A 后；无父子字段只做扁平 | 子 Agent 嵌套卡片；不挡 GACP-02 / 换皮 |
 | 晚 | [GACP-05](gacp-05-client-capability-advertisement.md) | 3 | P0-15 后且产品确认 | 未实现不得广告 |
 
-P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windows 夜间补测中见到产品终态；GACP-01 仍要补协议级字段观察。Windows/Linux 生命周期平台差异仍记在 P0-08，不搬进本目录。
+P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windows 夜间补测中见到产品终态。GACP-01 协议观察已受限关闭，不再回填 P0-08 的平台矩阵。Windows/Linux 生命周期平台差异仍记在 P0-08，不搬进本目录，也不挡 GACP-02。
 
 ### 3.2 明确不要提前做的事
 
@@ -120,7 +120,7 @@ P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windo
 
 | 文件 | 内容 |
 | --- | --- |
-| [gacp-01-real-grok-protocol-verification.md](gacp-01-real-grok-protocol-verification.md) | 真机协议观察、能力核实、P0-08 Grok 遗留验收 |
+| [gacp-01-real-grok-protocol-verification.md](gacp-01-real-grok-protocol-verification.md) | 真机协议观察（2026-08-19 受限关闭）；遗留不挡后续 |
 | [gacp-02-session-restore-capability-contract.md](gacp-02-session-restore-capability-contract.md) | 点进历史即可接着聊，后台自动恢复 |
 | [gacp-03-structured-permission-evidence.md](gacp-03-structured-permission-evidence.md) | 能过的自动过，第一次最多点一次 |
 | [gacp-04-grok-acp-dialect-compat.md](gacp-04-grok-acp-dialect-compat.md) | 启动参数、握手、set_model、环境白名单 |

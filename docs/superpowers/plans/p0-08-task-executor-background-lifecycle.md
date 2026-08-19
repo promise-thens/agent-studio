@@ -1,6 +1,6 @@
 # P0-08 Task Executor 与后台生命周期实施计划
 
-> **状态：** 核心实现、完整自动门禁和首批受控生命周期 Electron E2E 已完成；真实 Grok 活动窗口/退出三分支、窗口重建/重启恢复和 Windows/Linux 验证待补。真实 Grok 的协议与活动路径改由 [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) 在 P0-09 测试门后收口；Windows/Linux 平台差异仍留在本计划。
+> **状态：** 核心实现、完整自动门禁和首批受控生命周期 Electron E2E 已完成；真实 Grok 活动窗口/退出三分支、窗口重建/重启恢复和 Windows/Linux 验证仍待补。GACP-01 已于 2026-08-19 受限关闭，不再回填这些平台项，也不挡 GACP-02。Windows/Linux 与产品退出对话框仍留在本计划。
 
 **优先级：** P0-A / 权重 5（长任务不依赖当前 Renderer 视图）
 
