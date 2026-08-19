@@ -9,8 +9,10 @@ import {
   isConversationPinnedToBottom,
   isTurnProcessExpandedByDefault,
   nextConversationPinnedState,
+  nextConversationScrollIntent,
   nextPinnedConversationScrollTop,
   resolveConversationScrollSource,
+  shouldHoldPinnedFollow,
   shouldMirrorLiveAgentErrorLocally,
   turnHasCollapsibleProcess
 } from './task-conversation-view'
@@ -140,6 +142,76 @@ describe('对话滚动与折叠', () => {
       nearBottom: false
     })
     expect(pinned).toBe(false)
+  })
+
+  it('pointerdown 不得武装 pending，松手后仍可贴底跟随', () => {
+    const down = nextConversationScrollIntent(
+      { pendingUserScroll: false, pointerTracking: false },
+      'pointerdown'
+    )
+    expect(down.pendingUserScroll).toBe(false)
+    expect(down.pointerTracking).toBe(true)
+    expect(shouldHoldPinnedFollow(down)).toBe(true)
+
+    const up = nextConversationScrollIntent(down, 'pointerup')
+    expect(up.pendingUserScroll).toBe(false)
+    expect(up.pointerTracking).toBe(false)
+    expect(shouldHoldPinnedFollow(up)).toBe(false)
+    expect(
+      nextPinnedConversationScrollTop(
+        { scrollTop: 920, clientHeight: 80, scrollHeight: 1400 },
+        true
+      )
+    ).toBe(1320)
+  })
+
+  it('贴底向下滚轮若没有 scroll，idle 后必须解除 pending 以免冻住跟随', () => {
+    let intent = nextConversationScrollIntent(
+      { pendingUserScroll: false, pointerTracking: false },
+      'wheel'
+    )
+    expect(intent.pendingUserScroll).toBe(true)
+    expect(shouldHoldPinnedFollow(intent)).toBe(true)
+
+    intent = nextConversationScrollIntent(intent, 'pending-idle')
+    expect(intent.pendingUserScroll).toBe(false)
+    expect(shouldHoldPinnedFollow(intent)).toBe(false)
+
+    const stillPinned = nextConversationPinnedState({
+      pinned: true,
+      source: 'user-input',
+      nearBottom: true
+    })
+    expect(stillPinned).toBe(true)
+    expect(
+      nextPinnedConversationScrollTop(
+        { scrollTop: 920, clientHeight: 80, scrollHeight: 1400 },
+        stillPinned
+      )
+    ).toBe(1320)
+  })
+
+  it('真正上翻的 scroll 消费 pending 后取消贴底，后续增高不得拽回', () => {
+    let intent = nextConversationScrollIntent(
+      { pendingUserScroll: false, pointerTracking: false },
+      'wheel'
+    )
+    intent = nextConversationScrollIntent(intent, 'scroll')
+    expect(intent.pendingUserScroll).toBe(false)
+    expect(shouldHoldPinnedFollow(intent)).toBe(false)
+
+    const el = { scrollTop: 40, clientHeight: 80, scrollHeight: 1400 }
+    const pinned = nextConversationPinnedState({
+      pinned: true,
+      source: resolveConversationScrollSource({
+        pendingUserScroll: intent.pendingUserScroll,
+        programmaticFollow: false
+      }),
+      nearBottom: isConversationPinnedToBottom(el)
+    })
+    expect(pinned).toBe(false)
+    el.scrollHeight = 1800
+    expect(nextPinnedConversationScrollTop(el, pinned)).toBeNull()
   })
 
   it('未由程序化贴底触发的 scroll 都按用户输入评估，含键盘翻页', () => {

@@ -26,6 +26,14 @@ export function nextPinnedConversationScrollTop(
 
 export type ConversationPinSource = 'user-input' | 'layout-scroll'
 
+export type ConversationScrollInteraction =
+  'wheel' | 'touchmove' | 'pointerdown' | 'pointerup' | 'scroll' | 'pending-idle'
+
+export interface ConversationScrollIntent {
+  pendingUserScroll: boolean
+  pointerTracking: boolean
+}
+
 /**
  * 用户滚轮/触控/拖条永远以当前位置为准。
  * 内容增高或程序化贴底触发的 layout scroll 不得把贴底误判成上翻，也不得吞掉下一次用户滚动。
@@ -37,6 +45,33 @@ export function nextConversationPinnedState(input: {
 }): boolean {
   if (input.source === 'user-input') return input.nearBottom
   return input.pinned
+}
+
+/**
+ * wheel/touchmove 预告下一次 scroll；pointerdown 只跟踪拖条，避免 click/选中把 pending 卡住。
+ * 已预告但没有产生 scroll 时必须走 pending-idle 清掉，否则贴底跟随会提前 return 冻住。
+ */
+export function nextConversationScrollIntent(
+  intent: ConversationScrollIntent,
+  interaction: ConversationScrollInteraction
+): ConversationScrollIntent {
+  switch (interaction) {
+    case 'wheel':
+    case 'touchmove':
+      return { pendingUserScroll: true, pointerTracking: intent.pointerTracking }
+    case 'pointerdown':
+      return { pendingUserScroll: intent.pendingUserScroll, pointerTracking: true }
+    case 'pointerup':
+      return { pendingUserScroll: intent.pendingUserScroll, pointerTracking: false }
+    case 'scroll':
+    case 'pending-idle':
+      return { pendingUserScroll: false, pointerTracking: intent.pointerTracking }
+  }
+}
+
+/** 用户手势尚未落到 scroll，或拖条按住时，禁止程序化贴底抢位置。 */
+export function shouldHoldPinnedFollow(intent: ConversationScrollIntent): boolean {
+  return intent.pendingUserScroll || intent.pointerTracking
 }
 
 /**

@@ -9,10 +9,14 @@ import {
   isConversationPinnedToBottom,
   isTurnProcessExpandedByDefault,
   nextConversationPinnedState,
+  nextConversationScrollIntent,
   nextPinnedConversationScrollTop,
   resolveConversationScrollSource,
+  shouldHoldPinnedFollow,
   timelineModelForTurn,
-  turnHasCollapsibleProcess
+  turnHasCollapsibleProcess,
+  type ConversationScrollIntent,
+  type ConversationScrollInteraction
 } from '../task-conversation-view'
 import ExecutionTimeline from './ExecutionTimeline.vue'
 import TaskResultReview from './TaskResultReview.vue'
@@ -48,12 +52,15 @@ const messageList = ref<HTMLElement | null>(null)
 const processOpenByTurn = ref<Record<string, boolean>>({})
 /** 用户离开底部后不再抢滚动；切 Task 时重新贴底。 */
 let pinnedToBottom = true
-/** 指针按住时把随后的 scroll 当成用户拖条，而不是内容增高。 */
-let pointerTracking = false
-/** wheel/touchmove 只预告下一次 scroll 是用户输入；此时不得读 stale nearBottom。 */
-let pendingUserScroll = false
+/** wheel/touchmove 预告用户滚动；pointerdown 只跟踪拖条，不得武装 pending。 */
+let scrollIntent: ConversationScrollIntent = {
+  pendingUserScroll: false,
+  pointerTracking: false
+}
 /** 仅 scrollToLatestIfPinned 写入 scrollTop 时为 true，避免把跟随当成用户上翻。 */
 let programmaticFollow = false
+/** 已预告但未产生 scroll 时，用双 rAF 解除 pending，避免冻住贴底。 */
+let pendingUserScrollIdleId = 0
 
 function isProcessOpen(turn: Pick<TurnTimelineViewModel, 'turnId' | 'status'>): boolean {
   return processOpenByTurn.value[turn.turnId] ?? isTurnProcessExpandedByDefault(turn)
@@ -75,17 +82,42 @@ function applyPinSource(source: 'user-input' | 'layout-scroll'): void {
   })
 }
 
+function applyScrollIntent(interaction: ConversationScrollInteraction): ConversationScrollIntent {
+  scrollIntent = nextConversationScrollIntent(scrollIntent, interaction)
+  return scrollIntent
+}
+
+function cancelPendingUserScrollIdle(): void {
+  if (pendingUserScrollIdleId === 0) return
+  cancelAnimationFrame(pendingUserScrollIdleId)
+  pendingUserScrollIdleId = 0
+}
+
+/** 双 rAF：同步 overflow scroll 会先到 handleScroll；到第二帧仍无 scroll 则放行贴底。 */
+function schedulePendingUserScrollIdle(): void {
+  cancelPendingUserScrollIdle()
+  pendingUserScrollIdleId = requestAnimationFrame(() => {
+    pendingUserScrollIdleId = requestAnimationFrame(() => {
+      pendingUserScrollIdleId = 0
+      if (!scrollIntent.pendingUserScroll) return
+      applyScrollIntent('pending-idle')
+      applyPinSource('user-input')
+      scrollToLatestIfPinned()
+    })
+  })
+}
+
 function markNextScrollAsUserInput(): void {
-  pendingUserScroll = true
+  applyScrollIntent('wheel')
+  schedulePendingUserScrollIdle()
 }
 
 function handlePointerDown(): void {
-  pointerTracking = true
-  pendingUserScroll = true
+  applyScrollIntent('pointerdown')
 }
 
 function handlePointerUp(): void {
-  pointerTracking = false
+  applyScrollIntent('pointerup')
 }
 
 onMounted(() => {
@@ -94,16 +126,18 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  cancelPendingUserScrollIdle()
   window.removeEventListener('pointerup', handlePointerUp)
   window.removeEventListener('pointercancel', handlePointerUp)
 })
 
 function handleScroll(): void {
+  cancelPendingUserScrollIdle()
   const source = resolveConversationScrollSource({
-    pendingUserScroll: pendingUserScroll || pointerTracking,
+    pendingUserScroll: scrollIntent.pendingUserScroll || scrollIntent.pointerTracking,
     programmaticFollow
   })
-  pendingUserScroll = false
+  applyScrollIntent('scroll')
   programmaticFollow = false
   applyPinSource(source)
 }
@@ -111,7 +145,7 @@ function handleScroll(): void {
 function scrollToLatestIfPinned(): void {
   const root = messageList.value
   if (!root) return
-  if (pendingUserScroll || pointerTracking) return
+  if (shouldHoldPinnedFollow(scrollIntent)) return
   const nextTop = nextPinnedConversationScrollTop(root, pinnedToBottom)
   if (nextTop == null) return
   programmaticFollow = true
@@ -122,7 +156,8 @@ watch(
   () => props.conversationKey,
   () => {
     pinnedToBottom = true
-    pendingUserScroll = false
+    cancelPendingUserScrollIdle()
+    scrollIntent = { pendingUserScroll: false, pointerTracking: scrollIntent.pointerTracking }
     programmaticFollow = false
     processOpenByTurn.value = {}
     void nextTick(scrollToLatestIfPinned)
