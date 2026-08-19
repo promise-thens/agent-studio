@@ -140,7 +140,7 @@ describe('useTaskHistory', () => {
 
   it('初始化、Task 分页和 Turn/Event 分页追加时按身份去重', async () => {
     const history = useTaskHistory()
-    await history.initialize()
+    await history.selectProject(project.projectId)
     await history.loadMoreTasks()
     expect(history.tasks.value.map((item) => item.taskId)).toEqual(['task-1', 'task-2'])
 
@@ -162,7 +162,7 @@ describe('useTaskHistory', () => {
 
   it('删除 Task 后同步清理打开状态并刷新当前 Project 列表', async () => {
     const history = useTaskHistory()
-    await history.initialize()
+    await history.selectProject(project.projectId)
     await history.openTask('task-1')
     const preview = await history.previewTaskDeletion('task-1')
     await history.deleteTask('task-1', preview.token)
@@ -275,7 +275,7 @@ describe('useTaskHistory', () => {
   it('Project 列表加载期间同步隐藏旧 Task，避免旧入口继续被操作', async () => {
     const projectPage = deferred<Awaited<ReturnType<typeof window.task.list>>>()
     const history = useTaskHistory()
-    await history.initialize()
+    await history.selectProject(project.projectId)
     vi.mocked(window.task.list).mockImplementationOnce(() => projectPage.promise)
 
     const switching = history.selectProject('project-b')
@@ -289,7 +289,7 @@ describe('useTaskHistory', () => {
 
   it('外部代次失效后不再让旧 Project 请求改写当前状态', async () => {
     const history = useTaskHistory()
-    await history.initialize()
+    await history.selectProject(project.projectId)
     let current = true
 
     current = false

@@ -27,7 +27,6 @@ import type {
   ProviderModelOption,
   ProviderTestResult
 } from '../../shared/provider'
-import type { TaskExecutionSnapshot } from '../../shared/task-execution'
 import type {
   ConversationEntryState,
   DeletionPreview,
@@ -46,9 +45,8 @@ import WorkspaceSidebar, { type SidebarProjectItem } from './components/Workspac
 import ExecutionTimeline from './components/ExecutionTimeline.vue'
 import TaskResultReview from './components/TaskResultReview.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
-import { useTaskHistory } from './composables/useTaskHistory'
 import { useTaskTimeline } from './composables/useTaskTimeline'
-import { createTaskExecutionConsumer } from './task-execution-consumer'
+import { useTaskWorkbench } from './composables/useTaskWorkbench'
 import { projectTaskHistory } from './task-history-projector'
 import {
   clearRespondingPermission,
@@ -127,30 +125,17 @@ const status = ref<AgentRuntimeStatus>({
   state: 'idle',
   message: '尚未连接 Grok Build'
 })
-const executionSnapshot = ref<TaskExecutionSnapshot>({
-  executorEpoch: 'renderer-initial',
-  executionRevision: 0,
-  execution: null
-})
-/** execution 身份独立于当前查看的 Project/Task；终态快照只作历史展示，不继续占用交互门禁。 */
-const activeExecution = computed(() => {
-  const execution = executionSnapshot.value.execution
-  return execution && !TERMINAL_EXECUTION_STATES.has(execution.state) ? execution : null
-})
-const executionConsumer = createTaskExecutionConsumer({
-  getSnapshot: async () => unwrapDesktopIpcResult(await window.agent.getExecutionSnapshot()),
-  subscribe: (listener) => window.agent.onExecutionUpdate(listener),
-  onSnapshot: (snapshot) => {
-    executionSnapshot.value = snapshot
-    taskTimeline.acceptExecutionSnapshot(snapshot)
-  }
-})
+const workbench = useTaskWorkbench()
+const taskHistory = workbench.history
+const taskTimeline = useTaskTimeline({ manageSubscriptions: false })
+const executionSnapshot = workbench.executionSnapshot
+/** 选中身份来自 workbench；模板可继续用 activeTaskId 别名减少改动。 */
+const activeTaskId = workbench.selectedTaskId
+const activeExecution = workbench.activeExecution
 const providerSummary = ref<ProviderConfigSummary | null>(null)
 const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
 const showProviderSettings = ref(false)
 const workspace = ref('')
-const taskHistory = useTaskHistory()
-const taskTimeline = useTaskTimeline({ manageSubscriptions: false })
 type HistoryConfirmationKind = 'task-delete' | 'project-remove' | 'project-history-delete'
 const historyConfirmation = ref<{
   kind: HistoryConfirmationKind
@@ -199,10 +184,7 @@ let ignoreAnchorScrollSync = false
 let ignoreAnchorScrollTimer: ReturnType<typeof setTimeout> | null = null
 const taskViews = ref<Record<string, TaskViewState>>({})
 const taskOrder = ref<string[]>([])
-let taskSelectionRequestId = 0
-/** 当前激活的产品 Task；Runtime session 始终只留在主进程。 */
-const activeTaskId = ref('')
-/** 以 App 的查看身份驱动 Timeline；保留后台 facts，但绝不将旧 Task 展示到新 Project。 */
+/** 以 workbench 的查看身份驱动 Timeline；保留后台 facts，但绝不将旧 Task 展示到新 Project。 */
 watch(activeTaskId, (taskId) => taskTimeline.setActiveTask(taskId), { flush: 'sync' })
 /** 尚未建立 Task 时只承接真实错误消息，不伪造 Runtime 欢迎回复。 */
 const welcomeMessages = ref<ChatMessage[]>([])
@@ -541,7 +523,7 @@ function beginCurrentTurn(taskId = activeTaskId.value): void {
 }
 
 const isConnected = computed(() =>
-  isRuntimeConnectedToProject(status.value, taskHistory.activeProject.value?.canonicalRoot ?? '')
+  isRuntimeConnectedToProject(status.value, workbench.selectedProject.value?.canonicalRoot ?? '')
 )
 const isBusy = computed(
   () =>
@@ -594,11 +576,11 @@ const promptCapabilityMessage = computed(
 )
 const activeProjectExecutable = computed(
   () =>
-    taskHistory.activeProject.value?.status === 'active' &&
-    taskHistory.activeProject.value.availability.state === 'available'
+    workbench.selectedProject.value?.status === 'active' &&
+    workbench.selectedProject.value.availability.state === 'available'
 )
 const activeProjectExecutionReason = computed(() => {
-  const project = taskHistory.activeProject.value
+  const project = workbench.selectedProject.value
   if (!project) return '请先选择 Project。'
   if (project.status !== 'active') return '该 Project 已从列表移除，仅保留历史。'
   return project.availability.state === 'available' ? '' : project.availability.message
@@ -660,7 +642,7 @@ const sidebarProjects = computed<SidebarProjectItem[]>(() => {
     state: task.state
   }))
 
-  return taskHistory.projects.value
+  return workbench.projects.value
     .filter((project) => project.status === 'active')
     .map((project) => ({
       id: project.projectId,
@@ -668,10 +650,10 @@ const sidebarProjects = computed<SidebarProjectItem[]>(() => {
       path: project.canonicalRoot,
       status: project.status,
       availability: project.availability.state,
-      tasks: project.projectId === taskHistory.activeProjectId.value ? activeProjectTasks : []
+      tasks: project.projectId === workbench.selectedProjectId.value ? activeProjectTasks : []
     }))
 })
-const activeProjectId = computed(() => taskHistory.activeProjectId.value)
+const activeProjectId = computed(() => workbench.selectedProjectId.value)
 const currentModel = computed<ProviderModelOption | null>(() => {
   const summary = providerSummary.value
   if (!summary?.modelId) return null
@@ -683,7 +665,7 @@ const currentModel = computed<ProviderModelOption | null>(() => {
 const showProviderScreen = computed(
   () =>
     showProviderSettings.value ||
-    (providerBootState.value !== 'ready' && taskHistory.projects.value.length === 0)
+    (providerBootState.value !== 'ready' && workbench.projects.value.length === 0)
 )
 const statusLabel = computed(() => {
   if (activeExecution.value) {
@@ -729,6 +711,10 @@ watch([hasStreamingMessage, isTurnTiming, activeTaskId, () => status.value.state
   syncDurationTimer()
 })
 
+watch(executionSnapshot, (snapshot) => {
+  taskTimeline.acceptExecutionSnapshot(snapshot)
+})
+
 watch(
   () => executionSnapshot.value.execution,
   (execution) => {
@@ -772,8 +758,8 @@ onMounted(async () => {
   }
 
   try {
-    await taskHistory.initialize()
-    workspace.value = taskHistory.activeProject.value?.canonicalRoot ?? workspace.value
+    await workbench.initialize()
+    workspace.value = workbench.selectedProject.value?.canonicalRoot ?? workspace.value
     const initialTask = taskHistory.tasks.value[0]
     if (initialTask && !activeTaskId.value) {
       await selectTask(initialTask.taskId)
@@ -783,8 +769,9 @@ onMounted(async () => {
   }
 
   try {
-    await executionConsumer.start()
+    await workbench.start()
     await taskTimeline.start()
+    taskTimeline.acceptExecutionSnapshot(executionSnapshot.value)
     status.value = unwrapDesktopIpcResult(await window.agent.getStatus())
     syncWorkspaceDisplay(status.value.workspace)
     if (activeProjectId.value) await ensureProjectConnected(activeProjectId.value)
@@ -794,7 +781,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  executionConsumer.dispose()
+  workbench.dispose()
   taskTimeline.dispose()
   cleanupListeners.forEach((cleanup) => cleanup())
   if (permissionExpiryTimer) {
@@ -853,7 +840,7 @@ function activateTaskView(task: AgentTaskRuntimeState, mode: 'live' | 'history' 
     existing.mode = mode
   }
 
-  activeTaskId.value = task.taskId
+  workbench.selectedTaskId.value = task.taskId
   conversationEntry.value = {
     taskId: task.taskId,
     historyReady: true,
@@ -881,10 +868,9 @@ async function ensureActiveTask(): Promise<string> {
   return task.taskId
 }
 
-/** 点选即进入对话；本地历史先画出来，Runtime 恢复在后台自动发生。 */
+/** 点选即进入对话；选中身份由 workbench revision 保护，Runtime 恢复仍留在 App。 */
 async function selectTask(taskId: string): Promise<void> {
   if (!taskId || projectSelectionPending.value) return
-  const selectionRequestId = ++taskSelectionRequestId
   const enterGeneration = ++conversationEnterGeneration
   conversationEnterPromise = null
   conversationEntry.value = {
@@ -896,8 +882,8 @@ async function selectTask(taskId: string): Promise<void> {
   }
 
   try {
-    if (!(await taskHistory.openTask(taskId))) return
-    if (selectionRequestId !== taskSelectionRequestId) return
+    await workbench.selectTask(taskId)
+    if (activeTaskId.value !== taskId) return
     const detail = taskHistory.openedTask.value
     if (!detail || detail.taskId !== taskId) return
     const projection = projectTaskHistory(
@@ -922,7 +908,6 @@ async function selectTask(taskId: string): Promise<void> {
       taskHistory.eventsByTurn.value,
       taskHistory.permissionAudits.value
     )
-    activeTaskId.value = taskId
     reconcilePermissionQueue(taskId, detail.projectId)
     conversationEntry.value = {
       taskId,
@@ -931,7 +916,7 @@ async function selectTask(taskId: string): Promise<void> {
       verification: 'unverified',
       reason: '正在接回上次上下文…'
     }
-    if (selectionRequestId !== taskSelectionRequestId || activeTaskId.value !== taskId) return
+    if (activeTaskId.value !== taskId) return
     const pendingEnter = window.agent
       .enterTask(taskId)
       .then((result) => unwrapDesktopIpcResult(result))
@@ -940,7 +925,7 @@ async function selectTask(taskId: string): Promise<void> {
     if (enterGeneration !== conversationEnterGeneration || activeTaskId.value !== taskId) return
     conversationEntry.value = entry
   } catch (error) {
-    if (selectionRequestId !== taskSelectionRequestId) return
+    if (activeTaskId.value !== taskId) return
     if (enterGeneration === conversationEnterGeneration) {
       conversationEntry.value = {
         taskId,
@@ -957,19 +942,17 @@ async function selectTask(taskId: string): Promise<void> {
 /** Project 选择只切换本地历史身份；点进 Task 后由 enterTask 自动接回 Runtime。 */
 async function selectProject(projectId: string): Promise<void> {
   if (!projectId || projectSelectionPending.value || projectId === activeProjectId.value) return
-  taskSelectionRequestId += 1
   conversationEnterGeneration += 1
   conversationEnterPromise = null
   conversationEntry.value = null
   const selection = projectSelection.begin()
-  activeTaskId.value = ''
   reconcilePermissionQueue('', projectId)
   try {
-    await taskHistory.selectProject(projectId, () => projectSelection.isCurrent(selection))
+    await workbench.selectProject(projectId)
     if (!projectSelection.isCurrent(selection) || activeProjectId.value !== projectId) {
       return
     }
-    workspace.value = taskHistory.activeProject.value?.canonicalRoot ?? ''
+    workspace.value = workbench.selectedProject.value?.canonicalRoot ?? ''
   } catch (error) {
     if (!projectSelection.isCurrent(selection) || activeProjectId.value !== projectId) return
     projectSelection.commit(selection, () => {
@@ -981,12 +964,11 @@ async function selectProject(projectId: string): Promise<void> {
 }
 
 function syncWorkspaceDisplay(runtimeWorkspace?: string): void {
-  workspace.value = taskHistory.activeProject.value?.canonicalRoot ?? runtimeWorkspace ?? ''
+  workspace.value = workbench.selectedProject.value?.canonicalRoot ?? runtimeWorkspace ?? ''
 }
 
 async function chooseWorkspace(): Promise<void> {
   if (isBusy.value || projectSelectionPending.value) return
-  taskSelectionRequestId += 1
   conversationEnterGeneration += 1
   conversationEnterPromise = null
   conversationEntry.value = null
@@ -995,13 +977,19 @@ async function chooseWorkspace(): Promise<void> {
   const previousTaskId = activeTaskId.value
   activeTaskId.value = ''
   try {
-    const selected = await taskHistory.chooseProject(() => projectSelection.isCurrent(selection))
+    const selected = await workbench.registry.chooseProject(() =>
+      projectSelection.isCurrent(selection)
+    )
     if (!selected) {
       projectSelection.commit(selection, () => {
         if (activeProjectId.value === previousProjectId) activeTaskId.value = previousTaskId
       })
       return
     }
+    if (!projectSelection.isCurrent(selection) || activeProjectId.value !== selected.projectId) {
+      return
+    }
+    await workbench.selectProject(selected.projectId)
     if (!projectSelection.isCurrent(selection) || activeProjectId.value !== selected.projectId) {
       return
     }
@@ -1061,7 +1049,6 @@ function closeProviderSettings(): void {
 }
 
 async function clearProvider(): Promise<void> {
-  taskSelectionRequestId += 1
   conversationEnterGeneration += 1
   conversationEnterPromise = null
   conversationEntry.value = null
@@ -1082,7 +1069,7 @@ async function ensureProjectConnected(
   projectId: string,
   isCurrent: () => boolean = () => true
 ): Promise<boolean> {
-  const project = taskHistory.projects.value.find((item) => item.projectId === projectId)
+  const project = workbench.projects.value.find((item) => item.projectId === projectId)
   if (!project) return false
 
   const executable = project.status === 'active' && project.availability.state === 'available'
@@ -1164,7 +1151,7 @@ async function sendPrompt(): Promise<void> {
       composer.value?.focus()
       const admitted = unwrapDesktopIpcResult(await window.agent.startTurn(taskId, text))
       // admission 也必须经过 epoch/revision watermark，不能覆盖已经先到的较新 Push。
-      executionConsumer.accept(admitted)
+      workbench.acceptExecutionSnapshot(admitted)
       // 实时 Timeline 只靠 AgentEvent 看不到用户 Prompt；admission 成功后立刻写入同一投影。
       const execution = admitted.execution
       if (execution) {
@@ -1395,7 +1382,7 @@ async function requestTaskDeletion(taskId: string): Promise<void> {
 }
 
 function requestProjectRemoval(projectId: string): void {
-  const project = taskHistory.projects.value.find((item) => item.projectId === projectId)
+  const project = workbench.projects.value.find((item) => item.projectId === projectId)
   if (!project) return
   historyConfirmation.value = {
     kind: 'project-remove',
@@ -1405,9 +1392,9 @@ function requestProjectRemoval(projectId: string): void {
 }
 
 async function requestProjectHistoryDeletion(projectId: string): Promise<void> {
-  const project = taskHistory.projects.value.find((item) => item.projectId === projectId)
+  const project = workbench.projects.value.find((item) => item.projectId === projectId)
   if (!project) return
-  const preview = await taskHistory.previewProjectDeletion(projectId)
+  const preview = await workbench.registry.previewProjectDeletion(projectId)
   historyConfirmation.value = {
     kind: 'project-history-delete',
     targetId: projectId,
@@ -1430,17 +1417,24 @@ async function confirmHistoryAction(): Promise<void> {
         reconcilePermissionQueue('', activeProjectId.value)
       }
     } else if (confirmation.kind === 'project-remove') {
-      await taskHistory.removeProject(confirmation.targetId)
+      await workbench.registry.removeProject(confirmation.targetId)
       activeTaskId.value = ''
+      if (workbench.selectedProjectId.value) {
+        await workbench.retryTaskList()
+      }
       reconcilePermissionQueue('', activeProjectId.value)
       syncWorkspaceDisplay()
     } else if (confirmation.preview) {
-      await taskHistory.deleteProjectHistory(confirmation.targetId, confirmation.preview.token)
+      await workbench.registry.deleteProjectHistory(
+        confirmation.targetId,
+        confirmation.preview.token
+      )
       for (const [taskId, view] of Object.entries(taskViews.value)) {
         if (view.projectId === confirmation.targetId) delete taskViews.value[taskId]
       }
-      if (taskHistory.activeProjectId.value === confirmation.targetId) {
+      if (workbench.selectedProjectId.value === confirmation.targetId) {
         activeTaskId.value = ''
+        await workbench.retryTaskList()
         reconcilePermissionQueue('', activeProjectId.value)
       }
     }

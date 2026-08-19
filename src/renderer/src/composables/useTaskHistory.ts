@@ -1,8 +1,7 @@
-import { computed, ref, type ComputedRef, type Ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import type {
   DeletionPreview,
   PermissionAuditRecord,
-  ProjectSummary,
   RuntimeResumeSummary,
   TaskHistoryDetail,
   TaskHistorySummary,
@@ -11,11 +10,9 @@ import type {
 import type { PublicAgentEvent } from '../../../shared/agent-event'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 
-interface TaskHistoryState {
-  projects: Ref<ProjectSummary[]>
+export interface TaskHistoryState {
   tasks: Ref<TaskHistorySummary[]>
   activeProjectId: Ref<string>
-  activeProject: ComputedRef<ProjectSummary | null>
   openedTask: Ref<TaskHistoryDetail | null>
   openedTurns: Ref<TurnHistoryRecord[]>
   eventsByTurn: Ref<Record<string, PublicAgentEvent[]>>
@@ -32,8 +29,6 @@ interface TaskHistoryState {
   loadingMoreTurns: Ref<boolean>
   loadingEventTurnIds: Ref<string[]>
   loadingMorePermissionAudits: Ref<boolean>
-  initialize(): Promise<void>
-  chooseProject(isCurrent?: () => boolean): Promise<ProjectSummary | null>
   selectProject(projectId: string, isCurrent?: () => boolean): Promise<void>
   refreshTasks(): Promise<void>
   loadMoreTasks(): Promise<void>
@@ -45,14 +40,10 @@ interface TaskHistoryState {
   resumeOpenedTask(): Promise<RuntimeResumeSummary>
   previewTaskDeletion(taskId: string): Promise<DeletionPreview>
   deleteTask(taskId: string, token: string): Promise<void>
-  removeProject(projectId: string): Promise<void>
-  previewProjectDeletion(projectId: string): Promise<DeletionPreview>
-  deleteProjectHistory(projectId: string, token: string): Promise<void>
 }
 
-/** 管理 Project/Task 历史查询，不把分页与删除事务继续堆入 App.vue。 */
+/** 管理 Task/Turn/Event 历史查询；Project 列表身份已迁到 useProjectRegistry。 */
 export function useTaskHistory(): TaskHistoryState {
-  const projects = ref<ProjectSummary[]>([])
   const tasks = ref<TaskHistorySummary[]>([])
   const activeProjectId = ref('')
   const openedTask = ref<TaskHistoryDetail | null>(null)
@@ -73,28 +64,6 @@ export function useTaskHistory(): TaskHistoryState {
   const loadingMorePermissionAudits = ref(false)
   let projectRequestId = 0
   let taskRequestId = 0
-  const activeProject = computed(
-    () => projects.value.find((project) => project.projectId === activeProjectId.value) ?? null
-  )
-
-  async function initialize(): Promise<void> {
-    projects.value = unwrapDesktopIpcResult(await window.app.listProjects())
-    const preferred = projects.value.find((project) => project.status === 'active')
-    if (preferred) await selectProject(preferred.projectId)
-  }
-
-  async function chooseProject(
-    isCurrent: () => boolean = () => true
-  ): Promise<ProjectSummary | null> {
-    const project = unwrapDesktopIpcResult(await window.app.chooseProject())
-    if (!project || !isCurrent()) return null
-    projects.value = [
-      project,
-      ...projects.value.filter((item) => item.projectId !== project.projectId)
-    ]
-    await selectProject(project.projectId, isCurrent)
-    return isCurrent() ? project : null
-  }
 
   async function selectProject(
     projectId: string,
@@ -297,34 +266,6 @@ export function useTaskHistory(): TaskHistoryState {
     await refreshTasks()
   }
 
-  async function removeProject(projectId: string): Promise<void> {
-    unwrapDesktopIpcResult(await window.app.removeProject(projectId))
-    projects.value = unwrapDesktopIpcResult(await window.app.listProjects())
-    if (activeProjectId.value === projectId) {
-      const fallback = projects.value.find((project) => project.status === 'active')
-      if (fallback) await selectProject(fallback.projectId)
-      else clearProjectSelection()
-    }
-  }
-
-  async function previewProjectDeletion(projectId: string): Promise<DeletionPreview> {
-    const preview = unwrapDesktopIpcResult(
-      await window.app.previewProjectHistoryDeletion(projectId)
-    )
-    deletionPreview.value = preview
-    return preview
-  }
-
-  async function deleteProjectHistory(projectId: string, token: string): Promise<void> {
-    unwrapDesktopIpcResult(await window.app.deleteProjectHistory(projectId, token))
-    if (activeProjectId.value === projectId) {
-      tasks.value = []
-      taskCursor.value = null
-      clearOpenedTaskState()
-    }
-    deletionPreview.value = null
-  }
-
   /** 先在局部变量读取完整首屏，只有最新 openTask 请求才一次性提交响应式状态。 */
   async function readEventPages(
     taskId: string,
@@ -351,13 +292,6 @@ export function useTaskHistory(): TaskHistoryState {
       ),
       watermarks: Object.fromEntries(entries.map(([turnId, page]) => [turnId, page.watermark]))
     }
-  }
-
-  function clearProjectSelection(): void {
-    activeProjectId.value = ''
-    tasks.value = []
-    taskCursor.value = null
-    clearOpenedTaskState()
   }
 
   /** 让旧 Task 请求全部失效，并同步复位只属于该请求代际的加载状态。 */
@@ -389,10 +323,8 @@ export function useTaskHistory(): TaskHistoryState {
   }
 
   return {
-    projects,
     tasks,
     activeProjectId,
-    activeProject,
     openedTask,
     openedTurns,
     eventsByTurn,
@@ -409,8 +341,6 @@ export function useTaskHistory(): TaskHistoryState {
     loadingMoreTurns,
     loadingEventTurnIds,
     loadingMorePermissionAudits,
-    initialize,
-    chooseProject,
     selectProject,
     refreshTasks,
     loadMoreTasks,
@@ -421,10 +351,7 @@ export function useTaskHistory(): TaskHistoryState {
     hasMoreEvents,
     resumeOpenedTask,
     previewTaskDeletion,
-    deleteTask,
-    removeProject,
-    previewProjectDeletion,
-    deleteProjectHistory
+    deleteTask
   }
 }
 
