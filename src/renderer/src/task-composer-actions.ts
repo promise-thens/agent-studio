@@ -254,8 +254,8 @@ function resolveHeaderWeakStatusLine(
   if (input.restore === 'degraded') {
     return input.restoreReason?.trim() || '已用新上下文接着聊'
   }
-  if (viewingForeignExecution && runningLabel) {
-    return `后台正在运行 ${runningLabel}`
+  if (viewingForeignExecution) {
+    return runningLabel ? `后台正在运行 ${runningLabel}` : '后台任务执行中'
   }
   if (executionScope === 'selected') return '执行中'
   if (input.runtimeState === 'connecting') return '正在连接 Runtime…'

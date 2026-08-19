@@ -161,6 +161,18 @@ describe('Task 页眉事实', () => {
     expect(viewingA.weakStatusLine).toBe('正在接回上次上下文…')
   })
 
+  it('切到无选中 Task 的 Project 时仍标记 foreign 并保留后台状态文案', () => {
+    const viewingNone = resolveTaskHeaderFacts({
+      selectedTaskId: '',
+      selectedProjectName: 'other',
+      activeExecution: runningExecution
+    })
+
+    expect(viewingNone.executionScope).toBe('foreign')
+    expect(viewingNone.viewingForeignExecution).toBe(true)
+    expect(viewingNone.weakStatusLine).toMatch(/后台/)
+  })
+
   it('无活动执行时页眉提供弱状态连接钩子，而不是主按钮文案', () => {
     const idle = resolveTaskHeaderFacts({
       selectedTaskId: 'task-b',

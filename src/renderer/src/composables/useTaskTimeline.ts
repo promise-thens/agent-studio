@@ -130,7 +130,8 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
   }
 
   function acceptExecutionSnapshot(snapshot: TaskExecutionSnapshot): void {
-    if (!disposed) executionSnapshot.value = structuredClone(snapshot)
+    // 执行快照常从 Vue ref 流入，必须先 toRaw，否则 structuredClone 会抛 DataCloneError。
+    if (!disposed) executionSnapshot.value = structuredClone(toRaw(snapshot))
   }
 
   function hydrateHistory(
