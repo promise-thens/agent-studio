@@ -143,7 +143,7 @@ textarea {
 }
 
 .inspector-heading,
-.chat-header,
+.task-header,
 .composer-footer {
   display: flex;
   align-items: center;
@@ -203,7 +203,7 @@ button:disabled {
   opacity: 0.42;
 }
 
-/* 主聊天区明确分配三行，避免输入区在无历史横幅时落入弹性消息行。 */
+/* 主聊天区明确分配三行，输入框始终贴底。 */
 .chat-panel {
   display: grid;
   grid-template-areas:
@@ -217,46 +217,68 @@ button:disabled {
   background: color-mix(in srgb, var(--surface-1) 88%, #0b1016);
 }
 
-.chat-panel:has(> .history-readonly-banner),
-.chat-panel:has(> .conversation-entry-banner) {
-  grid-template-areas:
-    'header'
-    'history'
-    'messages'
-    'composer';
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-}
-
-.chat-header {
+.task-header {
   grid-area: header;
+  flex-wrap: wrap;
   justify-content: space-between;
-  min-height: 66px;
-  padding: 12px 18px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  gap: 8px 16px;
+  min-height: 0;
+  padding: 10px 18px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 56%, transparent);
 }
 
-.chat-header h1 {
+.task-header-copy {
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.task-header h1 {
   margin: 0;
+  overflow: hidden;
+  color: var(--text-1);
   font-size: 14px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-header-status {
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.task-header-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  min-width: 0;
+  margin: 0;
+}
+
+.task-header-facts > div {
+  min-width: 0;
+}
+
+.task-header-facts dt {
+  color: var(--text-3);
+  font-size: 10px;
   font-weight: 650;
 }
 
-.chat-header p {
-  margin: 4px 0 0;
+.task-header-facts dd {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-header-worktree {
+  margin-left: 6px;
   color: var(--text-3);
-  font-size: 10px;
-}
-
-.chat-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.chat-actions .secondary-button,
-.chat-actions .primary-button {
-  width: auto;
-  padding: 0 11px;
 }
 
 .status-chip {
@@ -284,124 +306,116 @@ button:disabled {
   color: var(--danger);
 }
 
-/* 消息舞台：左侧固定锚点轨 + 右侧可滚动对话 */
-.message-stage {
+/* 对话列是唯一纵向滚动容器；不再用轮次锚点轨做默认导航。 */
+.task-conversation,
+.message-list {
   grid-area: messages;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-}
-
-/* 有用户轮次时才腾出左侧固定锚点列，避免欢迎页留白 */
-.message-stage.has-anchors {
-  grid-template-columns: 28px minmax(0, 1fr);
-}
-
-/* 固定锚点轨：不在 message-list 内，因此不会跟随消息滚动 */
-.turn-anchor-rail {
   position: relative;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  min-height: 0;
-  height: 100%;
-  padding: 28px 0 24px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: none;
-}
-
-.turn-anchor-rail::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}
-
-.turn-anchor-track {
-  position: absolute;
-  top: 36px;
-  bottom: 32px;
-  left: 50%;
-  width: 1px;
-  transform: translateX(-50%);
-  background: color-mix(in srgb, var(--border) 78%, transparent);
-  pointer-events: none;
-}
-
-.turn-anchor-dot {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 82%, transparent);
-  border-radius: 999px;
-  color: transparent;
-  background: color-mix(in srgb, var(--surface-2) 88%, #0b1016);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--surface-1) 88%, transparent);
-  cursor: pointer;
-  transition:
-    transform 140ms ease,
-    border-color 140ms ease,
-    background-color 140ms ease,
-    color 140ms ease,
-    box-shadow 140ms ease;
-}
-
-.turn-anchor-dot:hover,
-.turn-anchor-dot:focus-visible {
-  transform: scale(1.12);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-strong));
-  color: var(--text-2);
-  outline: none;
-}
-
-.turn-anchor-dot.active {
-  width: 18px;
-  height: 18px;
-  border-color: color-mix(in srgb, var(--accent) 72%, white);
-  color: var(--accent-ink);
-  background: color-mix(in srgb, var(--accent) 88%, white);
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--surface-1) 88%, transparent),
-    0 0 0 6px color-mix(in srgb, var(--accent) 18%, transparent);
-}
-
-.turn-anchor-dot.live:not(.active) {
-  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--surface-1) 88%, transparent),
-    0 0 0 5px color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
-.turn-anchor-index {
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-  letter-spacing: 0;
-}
-
-.turn-anchor-dot:not(.active) .turn-anchor-index {
-  display: none;
-}
-
-/* 消息列表：唯一纵向滚动容器，锚点轨不在这里面 */
-.message-list {
-  position: relative;
+  gap: 22px;
   min-width: 0;
   min-height: 0;
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
-  scroll-behavior: smooth;
-  padding: 18px 0 10px;
+  padding: 18px 0 16px;
+}
+
+.conversation-empty {
+  width: min(100%, 760px);
+  margin: 36px auto 0;
+  padding: 0 24px;
+  color: var(--text-3);
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.conversation-turn {
+  display: grid;
+  gap: 10px;
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.conversation-user,
+.conversation-assistant,
+.conversation-error {
+  min-width: 0;
+}
+
+.conversation-user p,
+.conversation-assistant p,
+.conversation-error {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.conversation-user p {
+  width: fit-content;
+  max-width: 100%;
+  padding: 10px 12px;
+  border-radius: 14px 14px 6px 14px;
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--surface-3) 78%, transparent);
+}
+
+.conversation-assistant p {
+  color: var(--text-1);
+}
+
+.conversation-error {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.conversation-process {
+  border-top: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+  color: var(--text-3);
+}
+
+.conversation-process summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.conversation-process .execution-timeline {
+  width: 100%;
+  padding: 8px 0 4px;
+}
+
+/* 用户句和正式回复已在对话流展示，过程区只留思考/工具。 */
+.conversation-process .timeline-prompt,
+.conversation-process .timeline-turn-header,
+.conversation-process .timeline-node[data-kind='message'] {
+  display: none;
+}
+
+.conversation-process .timeline-turn {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.conversation-process .timeline-node[data-kind='tool'] > strong,
+.conversation-process .timeline-node[data-kind='plan'] > strong,
+.conversation-process .timeline-node[data-kind='permission-audit'] > strong {
+  display: none;
+}
+
+.conversation-turn .task-result-review {
+  width: 100%;
+  margin: 4px 0 0;
 }
 
 .history-readonly-banner,
@@ -475,11 +489,11 @@ button:disabled {
   cursor: wait;
 }
 
-/* P0-09 时间线沿用旧消息舞台的列宽与深色层级，长历史只在中栏纵向滚动。 */
+/* P0-09 时间线嵌在对话流里，阅读宽与正文对齐。 */
 .execution-timeline {
   display: grid;
   gap: 14px;
-  width: min(100%, 820px);
+  width: min(100%, 760px);
   margin: 0 auto;
   padding: 8px 28px 24px;
 }
@@ -637,7 +651,7 @@ button:disabled {
 .task-result-review {
   display: grid;
   gap: 14px;
-  width: min(100%, 820px);
+  width: min(100%, 760px);
   margin: 0 auto 24px;
   padding: 16px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
@@ -983,7 +997,7 @@ button:disabled {
 }
 
 .capability-message {
-  max-width: 820px;
+  max-width: 760px;
   margin: 8px auto 0;
   padding: 0 4px;
   color: var(--text-3);
@@ -992,7 +1006,7 @@ button:disabled {
 }
 
 .composer {
-  max-width: 820px;
+  max-width: 760px;
   margin: 0 auto;
   padding: 14px 14px 12px;
   border: 1px solid var(--border-strong);

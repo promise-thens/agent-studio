@@ -256,12 +256,12 @@ git diff --check
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
 - 当前计划：[P0-10 单 Runtime 任务工作台](docs/superpowers/plans/p0-10-single-runtime-task-workbench.md)
-- 状态：Task 2 侧栏导航已落地（ProjectSidebar + TaskList，rename/archive IPC，无「继续任务」按钮）；待开发版手工验收
-- 完成度：P0-01 至 P0-09、GACP-01/02 如前；P0-10 Task 1 选中/执行分离与 Task 2 持久 Project/Task 导航已合入功能分支
+- 状态：Task 3 多轮详情与 Composer 已落地（TaskHeader + TaskConversation + TaskComposer，无「连接 Grok」主按钮、无轮次锚点轨、无「继续任务」）；待开发版手工验收
+- 完成度：P0-01 至 P0-09、GACP-01/02 如前；P0-10 Task 1–3 已合入功能分支
 - Grok ACP 加深：评估与分计划在 [docs/superpowers/plans/grokACP计划/README.md](docs/superpowers/plans/grokACP计划/README.md)。顺序为 GACP-01（已关闭）→ GACP-02 恢复契约 → P0-10 工作台；GACP-03 在 P0-11 后，GACP-04 在 P2 前，GACP-05 默认不进 P0-A
 - 兼容边界：首版仍只有一个执行槽；应用退出后不继续运行；受控 ACP fixture 不等价于真实 Grok 黑盒；`clientCapabilities: {}` 是诚实广告，未实现 fs/terminal 前不得打开；GACP-01 未见的 `load` / 子 Agent 父子字段不得写成已验证
-- 下一步：开发版走注册项目 / 新对话 / 点进历史 / 重命名归档删除 / 后台运行徽标；通过后开始 P0-10 任务 3。不要加回「继续任务」按钮
-- 最近验证：2026-08-19 P0-10 Task 2 单元测试、typecheck 已过；开发版手工与 lifecycle e2e 尚未在本任务实跑
+- 下一步：开发版走连续两轮、查看其它 Task 时停止后台 Task、接回中直接发送；通过后开始 P0-10 任务 4。不要加回「继续任务」按钮
+- 最近验证：2026-08-19 P0-10 Task 3 单元测试、typecheck、build 已过；开发版手工与 lifecycle e2e 尚未在本任务实跑
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

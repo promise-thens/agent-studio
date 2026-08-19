@@ -1,14 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
-  PhArrowClockwise as ArrowClockwise,
   PhCheckCircle as CheckCircle,
   PhCircleNotch as CircleNotch,
-  PhPaperPlaneTilt as PaperPlaneTilt,
   PhRobot as Robot,
   PhShieldCheck as ShieldCheck,
   PhSidebarSimple as SidebarSimple,
-  PhStop as Stop,
   PhTerminalWindow as TerminalWindow,
   PhWarningCircle as WarningCircle
 } from '@phosphor-icons/vue'
@@ -38,15 +35,24 @@ import {
   createAgentToolKey
 } from './agent-event-consumer'
 import { unwrapDesktopIpcResult } from './desktop-ipc-result'
-import ModelSelector from './components/ModelSelector.vue'
 import PermissionPrompt from './components/PermissionPrompt.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
-import ExecutionTimeline from './components/ExecutionTimeline.vue'
-import TaskResultReview from './components/TaskResultReview.vue'
+import TaskComposer from './components/TaskComposer.vue'
+import TaskConversation from './components/TaskConversation.vue'
+import TaskHeader from './components/TaskHeader.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
 import { useTaskTimeline } from './composables/useTaskTimeline'
 import { useTaskWorkbench } from './composables/useTaskWorkbench'
+import {
+  evaluateTaskComposerSend,
+  isForeignExecutionBlockingSend,
+  resolveCancelTurnRequest,
+  resolveComposerAction,
+  resolveStopButtonTitle,
+  resolveTaskHeaderFacts,
+  restoreComposerPromptAfterFailure
+} from './task-composer-actions'
 import { projectTaskHistory } from './task-history-projector'
 import { createAndSelectTask } from './task-navigation'
 import {
@@ -78,28 +84,6 @@ interface ChatMessage {
    * 一条用户指令只保留一个总时长，不按中间思考/片段拆分计时。
    */
   turnDurationMs?: number
-}
-
-/**
- * 会话时间线中的“一轮对话”：
- * 一条用户指令 + 本轮全部思考 + 正式回复 + 错误，聚合为同一组，
- * 用来消除思考/回复碎片各自成卡的割裂感。
- */
-interface ConversationTurn {
-  id: string
-  turnId?: string
-  user?: ChatMessage
-  thoughts: ChatMessage[]
-  answers: ChatMessage[]
-  errors: ChatMessage[]
-  /** 本轮冻结总耗时；运行中为空，改读实时计时。 */
-  durationMs?: number
-  /** 本轮是否仍有流式输出。 */
-  streaming: boolean
-  /** 是否属于当前正在执行的这一轮。 */
-  active: boolean
-  /** 是否展示处理区（思考、占位或已有耗时）。 */
-  showProcess: boolean
 }
 
 interface ToolActivity {
@@ -149,6 +133,7 @@ const conversationEntry = ref<ConversationEntryState | null>(null)
 let conversationEnterGeneration = 0
 let conversationEnterPromise: Promise<ConversationEntryState | null> | null = null
 const prompt = ref('')
+const taskComposer = ref<{ focus: () => void } | null>(null)
 const promptSubmissionPending = ref(false)
 const projectConnectionPending = ref(false)
 const projectSelectionPending = ref(false)
@@ -176,13 +161,6 @@ const permissionResponsePending = computed(() =>
 )
 let permissionExpiryTimer: ReturnType<typeof setTimeout> | null = null
 const showInspector = ref(true)
-const composer = ref<HTMLTextAreaElement | null>(null)
-const messageList = ref<HTMLElement | null>(null)
-/** 当前消息列表滚动位置对应的轮次锚点，驱动左侧导航高亮。 */
-const activeTurnAnchorId = ref<string | null>(null)
-/** 程序化滚动时暂时忽略滚动监听，避免锚点高亮来回跳。 */
-let ignoreAnchorScrollSync = false
-let ignoreAnchorScrollTimer: ReturnType<typeof setTimeout> | null = null
 const taskViews = ref<Record<string, TaskViewState>>({})
 const taskOrder = ref<string[]>([])
 /** 以 workbench 的查看身份驱动 Timeline；保留后台 facts，但绝不将旧 Task 展示到新 Project。 */
@@ -269,177 +247,6 @@ const isTurnTiming = computed(
     turnStartedAt.value != null &&
     turnEndedAt.value == null
 )
-/** 已进入执行态，但还没有任何流式消息时，展示占位提示。 */
-const showExecutionPlaceholder = computed(
-  () =>
-    activeTaskView.value?.mode === 'live' &&
-    activeExecution.value?.taskId === activeTaskId.value &&
-    !hasStreamingMessage.value &&
-    isTurnTiming.value
-)
-
-/**
- * 把毫秒格式化成用户可读耗时。
- * 小于 1 分钟显示秒，超过后显示分秒，方便判断是否还在执行。
- */
-/** 当前这一轮的总耗时文案；运行中实时跳，结束后读冻结值。 */
-/**
- * 从思考正文提取一行短摘要，让用户先看到“正在想什么”，
- * 而不是只面对大段原始思维文本。
- */
-/**
- * 把扁平消息流归并为 Codex 风格的“一轮一组”。
- * 规则：遇到 user 开启新轮；其后的 thought/assistant/error 都归入同一轮，
- * 直到下一条 user。欢迎语这类无用户消息的助手气泡单独成组。
- */
-const timelineTurns = computed<ConversationTurn[]>(() => {
-  const turns: ConversationTurn[] = []
-  let current: ConversationTurn | null = null
-
-  const pushTurn = (turn: ConversationTurn): void => {
-    turns.push(turn)
-  }
-
-  const ensureTurn = (seedId: string, turnId?: string): ConversationTurn => {
-    if (current) return current
-    current = {
-      id: seedId,
-      ...(turnId ? { turnId } : {}),
-      thoughts: [],
-      answers: [],
-      errors: [],
-      streaming: false,
-      active: false,
-      showProcess: false
-    }
-    return current
-  }
-
-  for (const message of messages.value) {
-    if (message.role === 'user') {
-      if (current) pushTurn(current)
-      current = {
-        id: message.id,
-        turnId: message.turnId,
-        user: message,
-        thoughts: [],
-        answers: [],
-        errors: [],
-        streaming: false,
-        active: false,
-        showProcess: false
-      }
-      continue
-    }
-
-    const turn = ensureTurn(message.id, message.turnId)
-    if (message.role === 'thought') turn.thoughts.push(message)
-    else if (message.role === 'assistant') turn.answers.push(message)
-    else turn.errors.push(message)
-
-    if (message.streaming) turn.streaming = true
-    if (message.turnDurationMs != null) turn.durationMs = message.turnDurationMs
-  }
-
-  if (current) pushTurn(current)
-
-  // 标记当前执行轮：优先最后一轮带用户指令的分组。
-  if (turns.length > 0 && (isTurnTiming.value || showExecutionPlaceholder.value)) {
-    const activeTurn = [...turns].reverse().find((item) => item.user) ?? turns.at(-1)
-    if (activeTurn) activeTurn.active = true
-  }
-
-  for (const turn of turns) {
-    // 处理区只在“有思考或仍在执行”时出现；无思考的历史轮直接展示正式回复。
-    turn.showProcess = Boolean(
-      turn.user && (turn.thoughts.length > 0 || turn.active || turn.streaming)
-    )
-  }
-
-  return turns
-})
-
-/**
- * 左侧锚点只对应“有用户指令”的轮次。
- * 欢迎语等无用户消息的气泡不占锚点，避免导航被系统提示污染。
- */
-const turnAnchors = computed(() =>
-  timelineTurns.value
-    .filter((turn) => Boolean(turn.user))
-    .map((turn, index) => {
-      const raw = turn.user?.text.replace(/\s+/g, ' ').trim() ?? ''
-      const label = raw
-        ? raw.length > 24
-          ? `${raw.slice(0, 24)}…`
-          : raw
-        : `第 ${index + 1} 轮对话`
-      return {
-        id: turn.id,
-        index: index + 1,
-        label,
-        active: turn.active || turn.streaming
-      }
-    })
-)
-
-/** 生成稳定的 DOM 锚点 id，供滚动定位与左侧固定导航共用。 */
-function turnAnchorDomId(turnId: string): string {
-  return `turn-anchor-${turnId}`
-}
-
-/** 根据当前滚动位置，同步左侧锚点高亮到最近的一轮对话。 */
-function syncActiveTurnAnchor(): void {
-  if (ignoreAnchorScrollSync) return
-  const root = messageList.value
-  if (!root) return
-
-  const anchors = turnAnchors.value
-  if (!anchors.length) {
-    activeTurnAnchorId.value = null
-    return
-  }
-
-  const rootRect = root.getBoundingClientRect()
-  // 以视口上方 28% 作为“当前阅读线”，更接近用户实际注视位置。
-  const focusY = rootRect.top + root.clientHeight * 0.28
-  let currentId = anchors[0]?.id ?? null
-
-  for (const anchor of anchors) {
-    const el = root.querySelector<HTMLElement>(`#${CSS.escape(turnAnchorDomId(anchor.id))}`)
-    if (!el) continue
-    const top = el.getBoundingClientRect().top
-    if (top <= focusY) currentId = anchor.id
-    else break
-  }
-
-  // 滚到接近底部时，直接点亮最后一轮，避免最后一轮很难被激活。
-  if (root.scrollTop + root.clientHeight >= root.scrollHeight - 24) {
-    currentId = anchors.at(-1)?.id ?? currentId
-  }
-
-  activeTurnAnchorId.value = currentId
-}
-
-/** 点击左侧锚点后，平滑滚到对应轮次顶部。 */
-function scrollToTurnAnchor(turnId: string): void {
-  const root = messageList.value
-  if (!root) return
-  const target = root.querySelector<HTMLElement>(`#${CSS.escape(turnAnchorDomId(turnId))}`)
-  if (!target) return
-
-  ignoreAnchorScrollSync = true
-  if (ignoreAnchorScrollTimer) clearTimeout(ignoreAnchorScrollTimer)
-  activeTurnAnchorId.value = turnId
-
-  const top = Math.max(0, target.offsetTop - 18)
-  root.scrollTo({ top, behavior: 'smooth' })
-
-  ignoreAnchorScrollTimer = setTimeout(() => {
-    ignoreAnchorScrollSync = false
-    syncActiveTurnAnchor()
-  }, 360)
-}
-
 /** 启动/停止整轮耗时刷新定时器。 */
 function syncDurationTimer(): void {
   if (isTurnTiming.value || hasStreamingMessage.value) {
@@ -545,33 +352,6 @@ const planCapability = computed(() => resolveCapability('event.plan', '展示执
 const toolCapability = computed(() => resolveCapability('event.tool', '展示工具活动'))
 const createSessionCapability = computed(() => resolveCapability('session.create', '创建新对话'))
 const connectCapability = computed(() => resolveCapability('runtime.connect', '连接 Runtime'))
-const foreignExecutionBlockingSend = computed(() => {
-  const execution = activeExecution.value
-  return Boolean(
-    execution &&
-    execution.taskId !== activeTaskId.value &&
-    !TERMINAL_EXECUTION_STATES.has(execution.state)
-  )
-})
-const canSendWhileRestoring = computed(
-  () =>
-    conversationEntry.value?.restore === 'connecting' ||
-    conversationEntry.value?.restore === 'degraded' ||
-    conversationEntry.value?.restore === 'ready' ||
-    conversationEntry.value?.restore === 'idle'
-)
-const canSend = computed(
-  () =>
-    !projectSelectionPending.value &&
-    conversationEntry.value?.restore !== 'unavailable' &&
-    Boolean(providerSummary.value?.configured) &&
-    !foreignExecutionBlockingSend.value &&
-    !isTurnTiming.value &&
-    !promptSubmissionPending.value &&
-    Boolean(prompt.value.trim()) &&
-    promptCapability.value.available &&
-    (isConnected.value || canSendWhileRestoring.value)
-)
 const promptCapabilityMessage = computed(
   () => promptCapability.value.reason ?? promptCapability.value.notice
 )
@@ -586,20 +366,52 @@ const activeProjectExecutionReason = computed(() => {
   if (project.status !== 'active') return '该 Project 已从列表移除，仅保留历史。'
   return project.availability.state === 'available' ? '' : project.availability.message
 })
-const composerDisabledMessage = computed(() => {
-  if (projectSelectionPending.value) return '正在切换 Project，请稍候。'
-  if (conversationEntry.value?.restore === 'unavailable') {
-    return conversationEntry.value.reason || activeProjectExecutionReason.value
-  }
-  if (foreignExecutionBlockingSend.value) return '先停掉当前任务。'
-  if (!providerSummary.value?.configured) return '请先配置 Provider。'
-  if (!activeProjectExecutable.value) return activeProjectExecutionReason.value
-  if (conversationEntry.value?.restore === 'connecting') return '正在接回上次上下文…'
-  if (!isConnected.value && conversationEntry.value?.restore !== 'degraded') {
-    return '当前查看的 Project 尚未连接 Runtime。'
-  }
-  return promptCapabilityMessage.value
+const runningTaskTitle = computed(() => {
+  const execution = activeExecution.value
+  if (!execution) return ''
+  return (
+    taskViews.value[execution.taskId]?.title ||
+    taskHistory.tasks.value.find((task) => task.taskId === execution.taskId)?.title ||
+    ''
+  )
 })
+const composerSend = computed(() =>
+  evaluateTaskComposerSend({
+    prompt: prompt.value,
+    selectedTaskId: activeTaskId.value,
+    activeExecution: activeExecution.value,
+    restore: conversationEntry.value?.restore,
+    restoreReason: conversationEntry.value?.reason,
+    providerConfigured: Boolean(providerSummary.value?.configured),
+    projectSelectionPending: projectSelectionPending.value,
+    turnTiming: isTurnTiming.value,
+    promptSubmissionPending: promptSubmissionPending.value,
+    promptCapabilityAvailable: promptCapability.value.available,
+    promptCapabilityMessage: promptCapabilityMessage.value,
+    runtimeConnected: isConnected.value,
+    projectExecutable: activeProjectExecutable.value,
+    projectExecutionReason: activeProjectExecutionReason.value
+  })
+)
+const canSend = computed(() => composerSend.value.canSend)
+const composerDisabledMessage = computed(() => composerSend.value.reason)
+const composerAction = computed(() => resolveComposerAction(activeExecution.value))
+const stopButtonTitle = computed(() =>
+  resolveStopButtonTitle(activeExecution.value, runningTaskTitle.value)
+)
+const localErrorMessages = computed(() =>
+  messages.value
+    .filter((item) => item.role === 'error')
+    .map((item) => item.text)
+    .slice(-3)
+)
+const composerTextareaDisabled = computed(
+  () =>
+    projectSelectionPending.value ||
+    conversationEntry.value?.restore === 'unavailable' ||
+    !promptCapability.value.available ||
+    !providerSummary.value?.configured
+)
 const planEmptyMessage = computed(
   () =>
     planCapability.value.reason ??
@@ -629,11 +441,6 @@ const newChatDisabledReason = computed(() => {
   if (status.value.state !== 'ready') return '请先连接 Runtime，再创建新对话。'
   return connectCapability.value.reason ?? createSessionCapability.value.reason ?? ''
 })
-const workspaceName = computed(() => {
-  // Windows 与 POSIX 路径都按最后一级目录名展示，避免侧栏出现完整盘符路径。
-  const segments = workspace.value.split(/[\\/]/).filter(Boolean)
-  return segments.at(-1) ?? '未选择目录'
-})
 const activeProjectId = computed(() => workbench.selectedProjectId.value)
 const currentModel = computed<ProviderModelOption | null>(() => {
   const summary = providerSummary.value
@@ -660,34 +467,31 @@ const workbenchLoadMessage = computed(() => {
   }
   return ''
 })
-const statusLabel = computed(() => {
-  if (activeExecution.value) {
-    return activeExecution.value.projectId === activeProjectId.value ? '执行中' : '后台执行中'
-  }
-  const labels: Record<AgentRuntimeStatus['state'], string> = {
-    idle: '未连接',
-    connecting: '连接中',
-    ready: '已连接',
-    busy: '执行中',
-    error: '连接异常'
-  }
-  return labels[status.value.state]
+const taskHeaderFacts = computed(() => {
+  const detail = taskHistory.openedTask.value
+  const lastTurn = taskTimeline.activeTimeline.value?.turns.at(-1)
+  return resolveTaskHeaderFacts({
+    selectedTaskId: activeTaskId.value,
+    selectedTitle: activeTaskView.value?.title ?? detail?.title,
+    selectedProjectName: workbench.selectedProject.value?.displayName,
+    selectedRuntimeId: detail?.runtimeId ?? 'grok',
+    selectedState: detail?.state,
+    createdAt: detail?.createdAt,
+    selectedModel: lastTurn?.model ?? currentModel.value,
+    activeExecution: activeExecution.value,
+    runningTaskTitle: runningTaskTitle.value,
+    restore: conversationEntry.value?.restore,
+    restoreReason: conversationEntry.value?.reason,
+    runtimeState: status.value.state,
+    runtimeMessage: status.value.message,
+    workbenchLoadMessage: workbenchLoadMessage.value
+  })
 })
-
-// 轮次增减时校正锚点高亮，避免指向已消失的历史 id。
-watch(
-  turnAnchors,
-  (anchors) => {
-    if (!anchors.length) {
-      activeTurnAnchorId.value = null
-      return
-    }
-    if (!anchors.some((item) => item.id === activeTurnAnchorId.value)) {
-      activeTurnAnchorId.value = anchors.at(-1)?.id ?? null
-    }
-    void nextTick(() => syncActiveTurnAnchor())
-  },
-  { deep: true }
+const workbenchLoadError = computed(
+  () =>
+    workbench.projectLoadState.value.status === 'error' ||
+    workbench.taskListLoadState.value.status === 'error' ||
+    workbench.taskDetailLoadState.value.status === 'error'
 )
 
 // 查看身份变化只切换计时可见性；execution 终态按其真实 taskId 收束，不能误写当前历史 B。
@@ -785,10 +589,6 @@ onBeforeUnmount(() => {
     clearInterval(durationTimer)
     durationTimer = null
   }
-  if (ignoreAnchorScrollTimer) {
-    clearTimeout(ignoreAnchorScrollTimer)
-    ignoreAnchorScrollTimer = null
-  }
 })
 
 /** 从用户首条消息生成侧栏最近项标题，超长时截断保持列表清爽。 */
@@ -849,8 +649,6 @@ function activateTaskView(task: AgentTaskRuntimeState, mode: 'live' | 'history' 
     12
   )
   reconcilePermissionQueue(task.taskId, activeProjectId.value)
-  activeTurnAnchorId.value = null
-  void nextTick(() => syncActiveTurnAnchor())
 }
 
 /** 首次发送时懒创建 Task；后续 Turn 始终复用当前稳定 taskId。 */
@@ -1114,24 +912,7 @@ async function ensureProjectConnected(
   return connected
 }
 
-async function connectAgent(): Promise<void> {
-  if (!activeProjectId.value) {
-    await chooseWorkspace()
-    return
-  }
-  await ensureProjectConnected(activeProjectId.value)
-}
-
-async function disconnectAgent(): Promise<void> {
-  if (activeExecution.value || !isConnected.value) return
-  try {
-    unwrapDesktopIpcResult(await window.agent.disconnect())
-    clearPermissionQueue()
-  } catch (error) {
-    appendMessage('error', error instanceof Error ? error.message : String(error))
-  }
-}
-
+/** 发送只针对当前选中 Task；单飞门禁避免重复提交双 Turn。 */
 async function sendPrompt(): Promise<void> {
   const text = prompt.value.trim()
   if (!text || !canSend.value) return
@@ -1146,7 +927,7 @@ async function sendPrompt(): Promise<void> {
       if (conversationEnterPromise && conversationEntry.value?.taskId === taskId) {
         await conversationEnterPromise.catch(() => undefined)
       }
-      if (foreignExecutionBlockingSend.value) {
+      if (isForeignExecutionBlockingSend(activeExecution.value, taskId)) {
         throw new Error('先停掉当前任务。')
       }
       prompt.value = ''
@@ -1162,7 +943,7 @@ async function sendPrompt(): Promise<void> {
 
       appendMessage('user', text)
       await nextTick()
-      composer.value?.focus()
+      taskComposer.value?.focus()
       const admitted = unwrapDesktopIpcResult(await window.agent.startTurn(taskId, text))
       // admission 也必须经过 epoch/revision watermark，不能覆盖已经先到的较新 Push。
       workbench.acceptExecutionSnapshot(admitted)
@@ -1192,6 +973,7 @@ async function sendPrompt(): Promise<void> {
     } catch (error) {
       // 只收束本次已经启动的 Turn，创建 Task 失败不能误结束其他计时。
       if (turnStarted) completeCurrentTurn(submittedTaskId)
+      prompt.value = restoreComposerPromptAfterFailure(prompt.value, text)
       appendMessage('error', error instanceof Error ? error.message : String(error))
       await taskHistory.refreshTasks().catch(() => undefined)
     }
@@ -1199,17 +981,12 @@ async function sendPrompt(): Promise<void> {
 }
 
 async function cancelTurn(): Promise<void> {
-  const execution = activeExecution.value
-  if (!execution) return
+  // 停止只认 activeExecution，即使当前选中的是另一个 Task。
+  const request = resolveCancelTurnRequest(activeExecution.value, activeTaskId.value)
+  if (!request) return
 
   try {
-    unwrapDesktopIpcResult(
-      await window.agent.cancelTurn({
-        executionId: execution.executionId,
-        taskId: execution.taskId,
-        turnId: execution.turnId
-      })
-    )
+    unwrapDesktopIpcResult(await window.agent.cancelTurn(request))
     // 接受取消只表示请求已发出；等待真实 turn-complete 再收束计时与流式状态。
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
@@ -1305,15 +1082,6 @@ function permissionAuditInitiatorLabel(audit: PermissionAuditRecord): string {
   return audit.appService ? labels[audit.appService] : 'Agent Studio'
 }
 
-/** 输入法正在确认候选词时保留 Enter，等待 compositionend 完成 v-model 更新。 */
-function handleComposerKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Enter' || event.shiftKey) return
-  if (event.isComposing || event.keyCode === 229) return
-
-  event.preventDefault()
-  void sendPrompt()
-}
-
 function handleAgentEvent(event: PublicAgentEvent): void {
   if (!acceptAgentEvent(event)) return
   taskTimeline.acceptLiveEvent(event)
@@ -1339,21 +1107,6 @@ function handleAgentEvent(event: PublicAgentEvent): void {
     completeCurrentTurn(event.taskId)
     appendMessage('error', event.message)
   }
-}
-
-function conversationEntryTitle(entry: ConversationEntryState): string {
-  if (entry.restore === 'connecting') return '正在接回上次上下文'
-  if (entry.restore === 'degraded') return '已用新上下文接着聊'
-  if (entry.restore === 'unavailable') return '当前只能查看历史'
-  return '对话状态'
-}
-
-function conversationEntryDescription(entry: ConversationEntryState): string {
-  if (entry.reason) return entry.reason
-  if (entry.restore === 'connecting') return '正在接回上次上下文…'
-  if (entry.method === 'load') return '可能回放旧输出，上下文完整性未核实。'
-  if (entry.method === 'new-session') return '已用新上下文接着聊。'
-  return ''
 }
 
 function refreshOpenedHistoryProjection(): void {
@@ -1550,12 +1303,7 @@ function upsertToolActivity(event: PublicAgentToolEvent): void {
 }
 
 function scrollMessagesToBottom(): void {
-  void nextTick(() => {
-    if (!messageList.value) return
-    messageList.value.scrollTop = messageList.value.scrollHeight
-    // 新消息到来后同步锚点高亮，保证最新一轮始终可被点亮。
-    syncActiveTurnAnchor()
-  })
+  // 对话滚动由 TaskConversation 在用户贴底时自行跟随，避免抢阅读位置。
 }
 </script>
 
@@ -1631,189 +1379,48 @@ function scrollMessagesToBottom(): void {
       />
 
       <main class="chat-panel">
-        <header class="chat-header">
-          <div>
-            <h1>{{ workspaceName }}</h1>
-            <p>{{ status.message }}</p>
-            <p v-if="workbenchLoadMessage" class="capability-message" role="status">
-              {{ workbenchLoadMessage }}
-              <button class="history-load-more" type="button" @click="retryWorkbenchLoad">
-                重试
-              </button>
-            </p>
-          </div>
-          <div class="chat-actions">
-            <span class="status-chip" :data-state="status.state">
-              <CircleNotch v-if="isBusy" :size="14" class="spin" />
-              <CheckCircle v-else-if="status.state === 'ready'" :size="14" weight="fill" />
-              <WarningCircle v-else-if="status.state === 'error'" :size="14" weight="fill" />
-              <span>{{ statusLabel }}</span>
-            </span>
-            <button v-if="activeExecution" class="secondary-button" type="button" disabled>
-              {{ activeExecution.projectId === activeProjectId ? '任务执行中' : '后台任务执行中' }}
-            </button>
-            <button v-else-if="isConnected" class="secondary-button" @click="disconnectAgent">
-              断开
-            </button>
-            <button
-              v-else
-              class="primary-button"
-              :disabled="projectInteractionBlocked"
-              @click="connectAgent"
-            >
-              <ArrowClockwise :size="15" />
-              连接 Grok
-            </button>
-          </div>
-        </header>
+        <TaskHeader
+          :facts="taskHeaderFacts"
+          :load-error="workbenchLoadError"
+          @retry-load="retryWorkbenchLoad"
+        />
 
-        <section
-          v-if="
-            conversationEntry &&
-            conversationEntry.taskId === activeTaskId &&
-            (conversationEntry.restore === 'connecting' ||
-              conversationEntry.restore === 'degraded' ||
-              conversationEntry.restore === 'unavailable')
+        <TaskConversation
+          :conversation-key="activeTaskId"
+          :model="taskTimeline.activeTimeline.value"
+          :loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
+          :has-more-turns="
+            Boolean(activeTaskView?.mode === 'history' && taskHistory.turnCursor.value)
           "
-          class="conversation-entry-banner"
-          :data-restore="conversationEntry.restore"
-          aria-labelledby="conversation-entry-title"
-          aria-describedby="conversation-entry-description"
-        >
-          <div>
-            <strong id="conversation-entry-title">
-              {{ conversationEntryTitle(conversationEntry) }}
-            </strong>
-            <p id="conversation-entry-description" role="status">
-              <CircleNotch
-                v-if="conversationEntry.restore === 'connecting'"
-                :size="12"
-                class="spin"
-              />
-              {{ conversationEntryDescription(conversationEntry) }}
-            </p>
-          </div>
-        </section>
+          :loading-more-turns="taskHistory.loadingMoreTurns.value"
+          :event-after-sequence-by-turn="taskHistory.eventAfterSequenceByTurn.value"
+          :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
+          :local-errors="localErrorMessages"
+          :can-create-task="!newChatDisabled"
+          @load-more-turns="loadMoreHistoryTurns"
+          @load-more-events="loadMoreHistoryEvents"
+          @create-task="startNewChat"
+        />
 
-        <!-- 消息舞台：左侧固定锚点轨，右侧才是会滚动的对话列表 -->
-        <div class="message-stage" :class="{ 'has-anchors': turnAnchors.length > 0 }">
-          <nav v-if="turnAnchors.length" class="turn-anchor-rail" aria-label="对话轮次锚点">
-            <div class="turn-anchor-track" aria-hidden="true" />
-            <button
-              v-for="anchor in turnAnchors"
-              :key="anchor.id"
-              type="button"
-              class="turn-anchor-dot"
-              :class="{
-                active: activeTurnAnchorId === anchor.id,
-                live: anchor.active
-              }"
-              :title="`第 ${anchor.index} 轮：${anchor.label}`"
-              :aria-label="`跳转到第 ${anchor.index} 轮对话`"
-              :aria-current="activeTurnAnchorId === anchor.id ? 'true' : undefined"
-              @click="scrollToTurnAnchor(anchor.id)"
-            >
-              <span class="turn-anchor-index">{{ anchor.index }}</span>
-            </button>
-          </nav>
-
-          <section
-            ref="messageList"
-            class="message-list"
-            aria-live="polite"
-            @scroll.passive="syncActiveTurnAnchor"
-          >
-            <button
-              v-if="activeTaskView?.mode === 'history' && taskHistory.turnCursor.value"
-              class="history-load-more"
-              type="button"
-              :disabled="taskHistory.loadingMoreTurns.value"
-              :aria-busy="taskHistory.loadingMoreTurns.value"
-              @click="loadMoreHistoryTurns"
-            >
-              {{ taskHistory.loadingMoreTurns.value ? '正在加载…' : '加载更早轮次' }}
-            </button>
-            <ExecutionTimeline
-              v-if="taskTimeline.activeTimeline.value"
-              :model="taskTimeline.activeTimeline.value"
-              :loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
-              :event-after-sequence-by-turn="taskHistory.eventAfterSequenceByTurn.value"
-              :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
-              @load-more-events="loadMoreHistoryEvents"
-            />
-            <TaskResultReview
-              v-if="taskTimeline.activeTimeline.value?.turns.length"
-              :model="taskTimeline.activeTimeline.value.resultReview"
-              :can-resume="false"
-              :can-create-task="!newChatDisabled"
-              @create-task="startNewChat"
-            />
-          </section>
-        </div>
-
-        <footer class="composer-wrap">
-          <div class="composer" :class="{ disabled: !isConnected }">
-            <textarea
-              ref="composer"
-              v-model="prompt"
-              :disabled="
-                projectSelectionPending ||
-                conversationEntry?.restore === 'unavailable' ||
-                !promptCapability.available ||
-                !providerSummary?.configured
-              "
-              :aria-describedby="composerDisabledMessage ? 'prompt-capability-message' : undefined"
-              rows="1"
-              placeholder="描述你想修改、排查或验证的内容…"
-              @keydown="handleComposerKeydown"
-            />
-            <div class="composer-footer">
-              <div class="composer-context">
-                <ModelSelector
-                  :model="currentModel"
-                  :load-models="loadSavedModels"
-                  :select-model="selectProviderModel"
-                  :busy="projectInteractionBlocked"
-                  :disabled="!providerSummary?.configured"
-                  @changed="handleModelChanged"
-                  @error="handleModelError"
-                />
-                <span class="composer-shortcuts">
-                  <kbd>Enter</kbd> 发送，<kbd>Shift Enter</kbd> 换行
-                </span>
-              </div>
-              <button
-                v-if="activeExecution"
-                class="stop-button"
-                type="button"
-                :title="`停止 Task ${activeExecution.taskId}`"
-                @click="cancelTurn"
-              >
-                <Stop :size="15" weight="fill" />停止
-              </button>
-              <button
-                v-else
-                class="send-button"
-                :disabled="!canSend"
-                :title="composerDisabledMessage || '发送'"
-                :aria-describedby="
-                  composerDisabledMessage ? 'prompt-capability-message' : undefined
-                "
-                @click="sendPrompt"
-              >
-                <PaperPlaneTilt :size="17" weight="fill" />
-              </button>
-            </div>
-          </div>
-          <p
-            v-if="composerDisabledMessage"
-            id="prompt-capability-message"
-            class="capability-message"
-            role="status"
-          >
-            {{ composerDisabledMessage }}
-          </p>
-        </footer>
+        <TaskComposer
+          ref="taskComposer"
+          :prompt="prompt"
+          :can-send="canSend"
+          :action="composerAction"
+          :stop-title="stopButtonTitle"
+          :disabled-message="composerDisabledMessage"
+          :textarea-disabled="composerTextareaDisabled"
+          :model="currentModel"
+          :load-models="loadSavedModels"
+          :select-model="selectProviderModel"
+          :model-busy="Boolean(activeExecution) || projectInteractionBlocked"
+          :model-disabled="!providerSummary?.configured"
+          @update:prompt="prompt = $event"
+          @send="sendPrompt"
+          @stop="cancelTurn"
+          @model-changed="handleModelChanged"
+          @model-error="handleModelError"
+        />
       </main>
 
       <aside v-if="showInspector" class="inspector-panel">

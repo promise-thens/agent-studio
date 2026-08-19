@@ -1,0 +1,159 @@
+import { describe, expect, it } from 'vitest'
+import {
+  canSendWhileConversationRestoring,
+  evaluateTaskComposerSend,
+  isForeignExecutionBlockingSend,
+  resolveCancelTurnRequest,
+  resolveComposerAction,
+  resolveProviderModelLabel,
+  resolveStopButtonTitle,
+  restoreComposerPromptAfterFailure,
+  resolveTaskHeaderFacts
+} from './task-composer-actions'
+
+const runningExecution = {
+  executionId: 'exec-a',
+  taskId: 'task-a',
+  turnId: 'turn-a',
+  state: 'running' as const,
+  model: { modelId: 'grok-code', displayName: '  Code Fast  ' }
+}
+
+describe('模型标签', () => {
+  it('只使用真实 displayName 或原样 modelId，不加 Grok · 前缀', () => {
+    expect(resolveProviderModelLabel({ modelId: 'grok-code', displayName: '  Code Fast  ' })).toBe(
+      'Code Fast'
+    )
+    expect(resolveProviderModelLabel({ modelId: 'grok-code', displayName: '   ' })).toBe(
+      'grok-code'
+    )
+    expect(resolveProviderModelLabel({ modelId: 'grok-code' })).toBe('grok-code')
+    expect(resolveProviderModelLabel({ modelId: 'grok-code', displayName: 'Grok · Code' })).toBe(
+      'Grok · Code'
+    )
+    expect(resolveProviderModelLabel({ modelId: 'grok-code' })).not.toMatch(/^Grok ·/)
+    expect(resolveProviderModelLabel(null)).toBe('')
+  })
+})
+
+describe('发送与停止身份', () => {
+  it('停止始终打到 activeExecution，即使 selectedTaskId 是另一个 Task', () => {
+    const request = resolveCancelTurnRequest(runningExecution, 'task-b')
+    expect(request).toEqual({
+      executionId: 'exec-a',
+      taskId: 'task-a',
+      turnId: 'turn-a'
+    })
+    expect(request?.taskId).not.toBe('task-b')
+    expect(resolveComposerAction(runningExecution)).toBe('stop')
+    expect(resolveStopButtonTitle(runningExecution, '后台调研')).toBe('停止 后台调研')
+    expect(resolveStopButtonTitle(runningExecution, undefined)).toBe('停止 Task task-a')
+  })
+
+  it('外槽执行占用单执行槽时禁止向当前选中 Task 发送', () => {
+    expect(isForeignExecutionBlockingSend(runningExecution, 'task-b')).toBe(true)
+    expect(isForeignExecutionBlockingSend(runningExecution, 'task-a')).toBe(false)
+    expect(
+      isForeignExecutionBlockingSend({ ...runningExecution, state: 'completed' }, 'task-b')
+    ).toBe(false)
+
+    const blocked = evaluateTaskComposerSend({
+      prompt: '继续改登录',
+      selectedTaskId: 'task-b',
+      activeExecution: runningExecution,
+      restore: 'ready',
+      providerConfigured: true,
+      projectSelectionPending: false,
+      turnTiming: false,
+      promptSubmissionPending: false,
+      promptCapabilityAvailable: true,
+      runtimeConnected: true
+    })
+    expect(blocked.canSend).toBe(false)
+    expect(blocked.reason).toBe('先停掉当前任务。')
+  })
+
+  it('GACP-02：restore 为 connecting/degraded/ready/idle 时 Composer 仍可发送', () => {
+    for (const restore of ['connecting', 'degraded', 'ready', 'idle'] as const) {
+      expect(canSendWhileConversationRestoring(restore)).toBe(true)
+      const result = evaluateTaskComposerSend({
+        prompt: '补一个测试',
+        selectedTaskId: 'task-b',
+        activeExecution: null,
+        restore,
+        providerConfigured: true,
+        projectSelectionPending: false,
+        turnTiming: false,
+        promptSubmissionPending: false,
+        promptCapabilityAvailable: true,
+        runtimeConnected: false
+      })
+      expect(result.canSend).toBe(true)
+    }
+
+    expect(canSendWhileConversationRestoring('unavailable')).toBe(false)
+    expect(
+      evaluateTaskComposerSend({
+        prompt: '补一个测试',
+        selectedTaskId: 'task-b',
+        activeExecution: null,
+        restore: 'unavailable',
+        providerConfigured: true,
+        projectSelectionPending: false,
+        turnTiming: false,
+        promptSubmissionPending: false,
+        promptCapabilityAvailable: true,
+        runtimeConnected: true
+      }).canSend
+    ).toBe(false)
+  })
+
+  it('发送失败后恢复已清空的草稿，不覆盖用户新输入', () => {
+    expect(restoreComposerPromptAfterFailure('', '原来的草稿')).toBe('原来的草稿')
+    expect(restoreComposerPromptAfterFailure('用户又打了字', '原来的草稿')).toBe('用户又打了字')
+  })
+})
+
+describe('Task 页眉事实', () => {
+  it('运行中展示执行快照模型，并区分选中 Task 与后台运行 Task', () => {
+    const viewingB = resolveTaskHeaderFacts({
+      selectedTaskId: 'task-b',
+      selectedTitle: '改登录',
+      selectedProjectName: 'studio',
+      selectedRuntimeId: 'grok',
+      selectedState: 'completed',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      selectedModel: { modelId: 'other-model', displayName: 'Other' },
+      activeExecution: runningExecution,
+      runningTaskTitle: '后台调研',
+      restore: 'ready'
+    })
+
+    expect(viewingB.runtimeLabel).toBe('Grok Build')
+    expect(viewingB.modelLabel).toBe('Other')
+    expect(viewingB.modelLabel).not.toMatch(/^Grok ·/)
+    expect(viewingB.environmentLabel).toBe('Local')
+    expect(viewingB.worktreeLabel).toContain('尚未接入')
+    expect(viewingB.viewingForeignExecution).toBe(true)
+    expect(viewingB.modelReadOnly).toBe(false)
+    expect(viewingB.weakStatusLine).toContain('后台调研')
+
+    const viewingA = resolveTaskHeaderFacts({
+      selectedTaskId: 'task-a',
+      selectedTitle: '后台调研',
+      selectedProjectName: 'studio',
+      selectedRuntimeId: 'grok',
+      selectedState: 'running',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      selectedModel: { modelId: 'other-model', displayName: 'Other' },
+      activeExecution: runningExecution,
+      runningTaskTitle: '后台调研',
+      restore: 'connecting',
+      restoreReason: '正在接回上次上下文…'
+    })
+    expect(viewingA.modelLabel).toBe('Code Fast')
+    expect(viewingA.modelReadOnly).toBe(true)
+    expect(viewingA.viewingForeignExecution).toBe(false)
+    expect(viewingA.weakStatusLine).toBe('正在接回上次上下文…')
+  })
+})
