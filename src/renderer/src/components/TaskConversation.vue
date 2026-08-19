@@ -10,6 +10,7 @@ import {
   isTurnProcessExpandedByDefault,
   nextConversationPinnedState,
   nextPinnedConversationScrollTop,
+  resolveConversationScrollSource,
   timelineModelForTurn,
   turnHasCollapsibleProcess
 } from '../task-conversation-view'
@@ -49,6 +50,10 @@ const processOpenByTurn = ref<Record<string, boolean>>({})
 let pinnedToBottom = true
 /** 指针按住时把随后的 scroll 当成用户拖条，而不是内容增高。 */
 let pointerTracking = false
+/** wheel/touchmove 只预告下一次 scroll 是用户输入；此时不得读 stale nearBottom。 */
+let pendingUserScroll = false
+/** 仅 scrollToLatestIfPinned 写入 scrollTop 时为 true，避免把跟随当成用户上翻。 */
+let programmaticFollow = false
 
 function isProcessOpen(turn: Pick<TurnTimelineViewModel, 'turnId' | 'status'>): boolean {
   return processOpenByTurn.value[turn.turnId] ?? isTurnProcessExpandedByDefault(turn)
@@ -70,12 +75,13 @@ function applyPinSource(source: 'user-input' | 'layout-scroll'): void {
   })
 }
 
-function handleUserScrollIntent(): void {
-  applyPinSource('user-input')
+function markNextScrollAsUserInput(): void {
+  pendingUserScroll = true
 }
 
 function handlePointerDown(): void {
   pointerTracking = true
+  pendingUserScroll = true
 }
 
 function handlePointerUp(): void {
@@ -93,14 +99,22 @@ onBeforeUnmount(() => {
 })
 
 function handleScroll(): void {
-  applyPinSource(pointerTracking ? 'user-input' : 'layout-scroll')
+  const source = resolveConversationScrollSource({
+    pendingUserScroll: pendingUserScroll || pointerTracking,
+    programmaticFollow
+  })
+  pendingUserScroll = false
+  programmaticFollow = false
+  applyPinSource(source)
 }
 
 function scrollToLatestIfPinned(): void {
   const root = messageList.value
   if (!root) return
+  if (pendingUserScroll || pointerTracking) return
   const nextTop = nextPinnedConversationScrollTop(root, pinnedToBottom)
   if (nextTop == null) return
+  programmaticFollow = true
   root.scrollTop = nextTop
 }
 
@@ -108,6 +122,8 @@ watch(
   () => props.conversationKey,
   () => {
     pinnedToBottom = true
+    pendingUserScroll = false
+    programmaticFollow = false
     processOpenByTurn.value = {}
     void nextTick(scrollToLatestIfPinned)
   }
@@ -126,8 +142,8 @@ watch(
     ref="messageList"
     class="message-list task-conversation"
     aria-live="polite"
-    @wheel.passive="handleUserScrollIntent"
-    @touchmove.passive="handleUserScrollIntent"
+    @wheel.passive="markNextScrollAsUserInput"
+    @touchmove.passive="markNextScrollAsUserInput"
     @pointerdown="handlePointerDown"
     @pointerup="handlePointerUp"
     @pointercancel="handlePointerUp"

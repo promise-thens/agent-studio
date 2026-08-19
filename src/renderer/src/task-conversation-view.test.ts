@@ -10,6 +10,7 @@ import {
   isTurnProcessExpandedByDefault,
   nextConversationPinnedState,
   nextPinnedConversationScrollTop,
+  resolveConversationScrollSource,
   shouldMirrorLiveAgentErrorLocally,
   turnHasCollapsibleProcess
 } from './task-conversation-view'
@@ -108,6 +109,58 @@ describe('对话滚动与折叠', () => {
         false
       )
     ).toBeNull()
+  })
+
+  it('wheel 时 stale nearBottom 不得锁死 pin，随后离开底部的 scroll 才取消贴底', () => {
+    let pinned = true
+    const staleNearBottomAtWheel = true
+    expect(
+      nextConversationPinnedState({
+        pinned,
+        source: 'user-input',
+        nearBottom: staleNearBottomAtWheel
+      })
+    ).toBe(true)
+
+    pinned = nextConversationPinnedState({
+      pinned,
+      source: 'layout-scroll',
+      nearBottom: staleNearBottomAtWheel
+    })
+    expect(pinned).toBe(true)
+
+    const source = resolveConversationScrollSource({
+      pendingUserScroll: true,
+      programmaticFollow: false
+    })
+    expect(source).toBe('user-input')
+    pinned = nextConversationPinnedState({
+      pinned,
+      source,
+      nearBottom: false
+    })
+    expect(pinned).toBe(false)
+  })
+
+  it('未由程序化贴底触发的 scroll 都按用户输入评估，含键盘翻页', () => {
+    expect(
+      resolveConversationScrollSource({
+        pendingUserScroll: false,
+        programmaticFollow: false
+      })
+    ).toBe('user-input')
+    expect(
+      resolveConversationScrollSource({
+        pendingUserScroll: false,
+        programmaticFollow: true
+      })
+    ).toBe('layout-scroll')
+    expect(
+      resolveConversationScrollSource({
+        pendingUserScroll: true,
+        programmaticFollow: true
+      })
+    ).toBe('user-input')
   })
 
   it('用户上翻永远取消贴底，layout/程序化滚动不得吞掉这次意图', () => {

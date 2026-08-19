@@ -39,6 +39,19 @@ export function nextConversationPinnedState(input: {
   return input.pinned
 }
 
+/**
+ * wheel/touchmove 时 scrollTop 往往还没变，只能把下一次 scroll 标成用户输入。
+ * 程序化贴底触发的 scroll 才是 layout；键盘翻页没有前置 pointer，也按用户输入。
+ */
+export function resolveConversationScrollSource(input: {
+  pendingUserScroll: boolean
+  programmaticFollow: boolean
+}): ConversationPinSource {
+  if (input.pendingUserScroll) return 'user-input'
+  if (input.programmaticFollow) return 'layout-scroll'
+  return 'user-input'
+}
+
 function nodeFollowLength(node: TurnTimelineViewModel['nodes'][number]): number {
   if ('text' in node && typeof node.text === 'string') return node.text.length
   if ('message' in node && typeof node.message === 'string') return node.message.length
