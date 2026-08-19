@@ -667,6 +667,18 @@ const showProviderScreen = computed(
     showProviderSettings.value ||
     (providerBootState.value !== 'ready' && workbench.projects.value.length === 0)
 )
+const workbenchLoadMessage = computed(() => {
+  if (workbench.projectLoadState.value.status === 'error') {
+    return workbench.projectLoadState.value.errorMessage || 'Project 列表加载失败。'
+  }
+  if (workbench.taskListLoadState.value.status === 'error') {
+    return workbench.taskListLoadState.value.errorMessage || 'Task 列表加载失败。'
+  }
+  if (workbench.taskDetailLoadState.value.status === 'error') {
+    return workbench.taskDetailLoadState.value.errorMessage || 'Task 详情加载失败。'
+  }
+  return ''
+})
 const statusLabel = computed(() => {
   if (activeExecution.value) {
     return activeExecution.value.projectId === activeProjectId.value ? '执行中' : '后台执行中'
@@ -965,6 +977,23 @@ async function selectProject(projectId: string): Promise<void> {
 
 function syncWorkspaceDisplay(runtimeWorkspace?: string): void {
   workspace.value = workbench.selectedProject.value?.canonicalRoot ?? runtimeWorkspace ?? ''
+}
+
+/** 局部 loadState 失败后从当前错误边界重试，不把失败伪装成空列表成功。 */
+function retryWorkbenchLoad(): void {
+  if (workbench.projectLoadState.value.status === 'error') {
+    void workbench.retryProjects()
+    return
+  }
+  if (workbench.taskListLoadState.value.status === 'error') {
+    void workbench.retryTaskList()
+    return
+  }
+  if (workbench.taskDetailLoadState.value.status === 'error') {
+    void workbench.retryTaskDetail().catch((error) => {
+      appendMessage('error', error instanceof Error ? error.message : String(error))
+    })
+  }
 }
 
 async function chooseWorkspace(): Promise<void> {
@@ -1588,6 +1617,12 @@ function scrollMessagesToBottom(): void {
           <div>
             <h1>{{ workspaceName }}</h1>
             <p>{{ status.message }}</p>
+            <p v-if="workbenchLoadMessage" class="capability-message" role="status">
+              {{ workbenchLoadMessage }}
+              <button class="history-load-more" type="button" @click="retryWorkbenchLoad">
+                重试
+              </button>
+            </p>
           </div>
           <div class="chat-actions">
             <span class="status-chip" :data-state="status.state">

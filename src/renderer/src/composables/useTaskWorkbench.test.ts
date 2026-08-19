@@ -161,6 +161,28 @@ describe('useTaskWorkbench', () => {
     expect(workbench.executionSnapshot.value.execution?.taskId).toBe('task-a')
   })
 
+  it('切换 Project 的同一同步回合内必须清掉旧 Task 列表', async () => {
+    const workbench = useTaskWorkbench()
+    await workbench.initialize()
+    expect(workbench.history.tasks.value.map((item) => item.taskId)).toEqual(['task-a'])
+
+    const listB = deferred<Awaited<ReturnType<typeof window.task.list>>>()
+    vi.mocked(window.task.list).mockImplementation((projectId: string) => {
+      if (projectId === 'p-b') return listB.promise
+      return Promise.resolve(ok({ items: [taskSummary('task-a', 'p-a')] }))
+    })
+
+    const switching = workbench.selectProject('p-b')
+
+    expect(workbench.selectedProjectId.value).toBe('p-b')
+    expect(workbench.history.tasks.value).toEqual([])
+    expect(workbench.history.tasks.value.some((item) => item.projectId === 'p-a')).toBe(false)
+
+    listB.resolve(ok({ items: [taskSummary('task-b', 'p-b')] }))
+    await switching
+    expect(workbench.history.tasks.value.map((item) => item.taskId)).toEqual(['task-b'])
+  })
+
   it('快速 selectProject 后到达的旧 task.list 不得写入当前列表', async () => {
     const workbench = useTaskWorkbench()
     await workbench.initialize()
@@ -270,6 +292,47 @@ describe('useTaskWorkbench', () => {
     expect(workbench.activeExecution.value).toBeNull()
     expect(workbench.executionSnapshot.value.execution?.state).toBe('completed')
     expect(workbench.executionSnapshot.value.execution?.taskId).toBe('task-a')
+  })
+
+  it('retryTaskList 同项目重试失败时保留旧列表和已打开详情', async () => {
+    const workbench = useTaskWorkbench()
+    await workbench.initialize()
+    await workbench.selectTask('task-a')
+    expect(workbench.history.openedTask.value?.taskId).toBe('task-a')
+    expect(workbench.taskDetailLoadState.value.status).toBe('ready')
+    expect(workbench.history.tasks.value.map((item) => item.taskId)).toEqual(['task-a'])
+
+    vi.mocked(window.task.list).mockResolvedValueOnce(fail('列表重试失败'))
+    await workbench.retryTaskList()
+
+    expect(workbench.taskListLoadState.value.status).toBe('error')
+    expect(workbench.taskListLoadState.value.errorMessage).toBe('列表重试失败')
+    expect(workbench.history.tasks.value.map((item) => item.taskId)).toEqual(['task-a'])
+    expect(workbench.history.openedTask.value?.taskId).toBe('task-a')
+    expect(workbench.taskDetailLoadState.value.status).toBe('ready')
+  })
+
+  it('retryTaskList 不得打断进行中的 selectTask，也不能让详情卡在 loading', async () => {
+    const workbench = useTaskWorkbench()
+    await workbench.initialize()
+    const detailA = deferred<Awaited<ReturnType<typeof window.task.get>>>()
+    vi.mocked(window.task.get).mockImplementationOnce(() => detailA.promise)
+
+    const opening = workbench.selectTask('task-a')
+    expect(workbench.taskDetailLoadState.value.status).toBe('loading')
+
+    await workbench.retryTaskList()
+    detailA.resolve(
+      ok({
+        ...taskSummary('task-a', 'p-a'),
+        environment: { kind: 'local', projectId: 'p-a' },
+        permissionPolicy: { kind: 'legacy-runtime' }
+      })
+    )
+    await opening
+
+    expect(workbench.taskDetailLoadState.value.status).toBe('ready')
+    expect(workbench.history.openedTask.value?.taskId).toBe('task-a')
   })
 
   it('retryTaskList 失败后再成功时只写入当前 selectedProjectId 的列表', async () => {

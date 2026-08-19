@@ -1,4 +1,4 @@
-import { computed, ref, type ComputedRef, type Ref } from 'vue'
+import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import type { TaskExecutionDto, TaskExecutionSnapshot } from '../../../shared/task-execution'
 import type { ProjectSummary } from '../../../shared/task-history'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
@@ -58,7 +58,7 @@ function readErrorMessage(error: unknown): string {
  */
 export function useTaskWorkbench(): TaskWorkbenchController {
   const registry = useProjectRegistry()
-  const history = useTaskHistory()
+  const history = useTaskHistory({ activeProjectId: registry.selectedProjectId })
   const selectedTaskId = ref('')
   const executionSnapshot = ref<TaskExecutionSnapshot>({
     executorEpoch: 'renderer-initial',
@@ -84,12 +84,27 @@ export function useTaskWorkbench(): TaskWorkbenchController {
     }
   })
 
-  /** 按当前 selectedProjectId 拉 Task 列表；过期响应只丢掉，不清空 Project 列表。 */
+  /**
+   * selectedProjectId 一变就必须同步丢掉旧 Task 入口。
+   * 不能先 await 再清列表，否则 Vue 会把新项目和旧 Task 画在一起。
+   */
+  const stopSelectedProjectWatch = watch(
+    registry.selectedProjectId,
+    (projectId, previousId) => {
+      if (projectId === previousId) return
+      selectedTaskId.value = ''
+      taskDetailLoadState.value = createWorkbenchLoadState(taskDetailRevision, 'idle')
+      history.invalidateProjectTasks()
+    },
+    { flush: 'sync' }
+  )
+
+  /** 只刷新当前 Project 的 Task 列表，不改选中身份、不拆已打开详情。 */
   async function loadTaskList(projectId: string): Promise<void> {
     const revision = ++taskListRevision
     taskListLoadState.value = createWorkbenchLoadState(revision, 'loading')
     try {
-      await history.selectProject(projectId)
+      await history.refreshTasks()
       if (revision !== taskListRevision || registry.selectedProjectId.value !== projectId) return
       taskListLoadState.value = createWorkbenchLoadState(revision, 'ready')
     } catch (error) {
@@ -108,7 +123,8 @@ export function useTaskWorkbench(): TaskWorkbenchController {
     if (!projectId) return
     selectedTaskId.value = ''
     taskDetailLoadState.value = createWorkbenchLoadState(taskDetailRevision, 'idle')
-    await registry.selectProject(projectId)
+    // registry.selectProject 没有真实异步；禁止 await，以免在清列表前先交出微任务。
+    void registry.selectProject(projectId)
     await loadTaskList(projectId)
   }
 
@@ -143,7 +159,11 @@ export function useTaskWorkbench(): TaskWorkbenchController {
 
   async function retryTaskList(): Promise<void> {
     const projectId = registry.selectedProjectId.value
-    if (projectId) await loadTaskList(projectId)
+    if (!projectId) return
+    if (history.activeProjectId.value !== projectId) {
+      void registry.selectProject(projectId)
+    }
+    await loadTaskList(projectId)
   }
 
   async function retryTaskDetail(): Promise<void> {
@@ -167,6 +187,7 @@ export function useTaskWorkbench(): TaskWorkbenchController {
   }
 
   function dispose(): void {
+    stopSelectedProjectWatch()
     executionConsumer.dispose()
   }
 

@@ -30,6 +30,8 @@ export interface TaskHistoryState {
   loadingEventTurnIds: Ref<string[]>
   loadingMorePermissionAudits: Ref<boolean>
   selectProject(projectId: string, isCurrent?: () => boolean): Promise<void>
+  /** 同步丢掉当前 Project 的 Task 列表与打开态，供选中身份刚变化时使用。 */
+  invalidateProjectTasks(): void
   refreshTasks(): Promise<void>
   loadMoreTasks(): Promise<void>
   openTask(taskId: string): Promise<boolean>
@@ -42,10 +44,15 @@ export interface TaskHistoryState {
   deleteTask(taskId: string, token: string): Promise<void>
 }
 
+export interface UseTaskHistoryOptions {
+  /** 与 Project registry 共用选中身份，避免两侧 projectId 在 await 之间分叉。 */
+  activeProjectId?: Ref<string>
+}
+
 /** 管理 Task/Turn/Event 历史查询；Project 列表身份已迁到 useProjectRegistry。 */
-export function useTaskHistory(): TaskHistoryState {
+export function useTaskHistory(options: UseTaskHistoryOptions = {}): TaskHistoryState {
   const tasks = ref<TaskHistorySummary[]>([])
-  const activeProjectId = ref('')
+  const activeProjectId = options.activeProjectId ?? ref('')
   const openedTask = ref<TaskHistoryDetail | null>(null)
   const openedTurns = ref<TurnHistoryRecord[]>([])
   const eventsByTurn = ref<Record<string, PublicAgentEvent[]>>({})
@@ -70,12 +77,9 @@ export function useTaskHistory(): TaskHistoryState {
     isCurrent: () => boolean = () => true
   ): Promise<void> {
     if (!isCurrent()) return
-    const requestId = ++projectRequestId
     activeProjectId.value = projectId
-    // Project 身份一变化就移除旧最近 Task，过渡期间不能让用户误操作上一 Project 的入口。
-    tasks.value = []
-    taskCursor.value = null
-    clearOpenedTaskState()
+    invalidateProjectTasks()
+    const requestId = projectRequestId
     const page = unwrapDesktopIpcResult(await window.task.list(projectId, undefined, 50))
     if (!isCurrent() || requestId !== projectRequestId || activeProjectId.value !== projectId) {
       return
@@ -84,6 +88,15 @@ export function useTaskHistory(): TaskHistoryState {
     taskCursor.value = page.nextCursor ?? null
   }
 
+  /** 身份已变时必须同步清空列表；同项目 refresh 不得走这条路径。 */
+  function invalidateProjectTasks(): void {
+    projectRequestId += 1
+    tasks.value = []
+    taskCursor.value = null
+    clearOpenedTaskState()
+  }
+
+  /** 同项目重拉列表：成功才替换；失败抛出并保留旧 items，也不拆已打开的详情。 */
   async function refreshTasks(): Promise<void> {
     const projectId = activeProjectId.value
     if (!projectId) {
@@ -342,6 +355,7 @@ export function useTaskHistory(): TaskHistoryState {
     loadingEventTurnIds,
     loadingMorePermissionAudits,
     selectProject,
+    invalidateProjectTasks,
     refreshTasks,
     loadMoreTasks,
     openTask,
