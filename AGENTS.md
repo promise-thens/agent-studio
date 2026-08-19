@@ -255,13 +255,13 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[GACP-02 会话恢复能力产品契约](docs/superpowers/plans/grokACP计划/gacp-02-session-restore-capability-contract.md)
-- 状态：GACP-02 核心实现已落地（点进历史自动 enterTask，无「继续任务」按钮）；待开发版手工验收与受控 lifecycle e2e 回归
-- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 主进程 enter/同 Task 降级/单飞、激活短路修复、Composer 去门禁与状态条已合入功能分支
+- 当前计划：[P0-10 单 Runtime 任务工作台](docs/superpowers/plans/p0-10-single-runtime-task-workbench.md)
+- 状态：Task 2 侧栏导航已落地（ProjectSidebar + TaskList，rename/archive IPC，无「继续任务」按钮）；待开发版手工验收
+- 完成度：P0-01 至 P0-09、GACP-01/02 如前；P0-10 Task 1 选中/执行分离与 Task 2 持久 Project/Task 导航已合入功能分支
 - Grok ACP 加深：评估与分计划在 [docs/superpowers/plans/grokACP计划/README.md](docs/superpowers/plans/grokACP计划/README.md)。顺序为 GACP-01（已关闭）→ GACP-02 恢复契约 → P0-10 工作台；GACP-03 在 P0-11 后，GACP-04 在 P2 前，GACP-05 默认不进 P0-A
 - 兼容边界：首版仍只有一个执行槽；应用退出后不继续运行；受控 ACP fixture 不等价于真实 Grok 黑盒；`clientCapabilities: {}` 是诚实广告，未实现 fs/terminal 前不得打开；GACP-01 未见的 `load` / 子 Agent 父子字段不得写成已验证
-- 下一步：在开发版手工走点选/连点/外槽/目录不可用；通过后可开始 P0-10 主体。不要加回「继续任务」按钮
-- 最近验证：2026-08-19 GACP-02 单元测试、typecheck、build 已过；默认 Vitest 不连真实 Grok；lifecycle e2e 尚未在本分支实跑
+- 下一步：开发版走注册项目 / 新对话 / 点进历史 / 重命名归档删除 / 后台运行徽标；通过后开始 P0-10 任务 3。不要加回「继续任务」按钮
+- 最近验证：2026-08-19 P0-10 Task 2 单元测试、typecheck 已过；开发版手工与 lifecycle e2e 尚未在本任务实跑
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

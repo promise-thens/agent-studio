@@ -131,7 +131,9 @@ describe('useTaskWorkbench', () => {
           listPermissionAudits: vi.fn(async () => ok({ items: [] })),
           resume: vi.fn(),
           previewDelete: vi.fn(),
-          delete: vi.fn()
+          delete: vi.fn(),
+          rename: vi.fn(),
+          archive: vi.fn()
         },
         agent: {
           getExecutionSnapshot: vi.fn(async () => ok(currentSnapshot)),
@@ -159,6 +161,7 @@ describe('useTaskWorkbench', () => {
     expect(workbench.activeExecution.value?.state).toBe('running')
     expect(workbench.executionSnapshot.value).toEqual(before)
     expect(workbench.executionSnapshot.value.execution?.taskId).toBe('task-a')
+    expect(workbench.runningTaskCountByProjectId.value['p-a']).toBe(1)
   })
 
   it('切换 Project 的同一同步回合内必须清掉旧 Task 列表', async () => {

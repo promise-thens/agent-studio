@@ -41,13 +41,14 @@ import { unwrapDesktopIpcResult } from './desktop-ipc-result'
 import ModelSelector from './components/ModelSelector.vue'
 import PermissionPrompt from './components/PermissionPrompt.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
-import WorkspaceSidebar, { type SidebarProjectItem } from './components/WorkspaceSidebar.vue'
+import ProjectSidebar from './components/ProjectSidebar.vue'
 import ExecutionTimeline from './components/ExecutionTimeline.vue'
 import TaskResultReview from './components/TaskResultReview.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
 import { useTaskTimeline } from './composables/useTaskTimeline'
 import { useTaskWorkbench } from './composables/useTaskWorkbench'
 import { projectTaskHistory } from './task-history-projector'
+import { createAndSelectTask } from './task-navigation'
 import {
   clearRespondingPermission,
   clearPermissionQueueState,
@@ -633,26 +634,6 @@ const workspaceName = computed(() => {
   const segments = workspace.value.split(/[\\/]/).filter(Boolean)
   return segments.at(-1) ?? '未选择目录'
 })
-/** 侧栏 Project 直接映射持久化 Registry。 */
-const sidebarProjects = computed<SidebarProjectItem[]>(() => {
-  // 任务缓存只属于当前活动 Project，不能错误投影到其它项目。
-  const activeProjectTasks = taskHistory.tasks.value.map((task) => ({
-    id: task.taskId,
-    title: task.title,
-    state: task.state
-  }))
-
-  return workbench.projects.value
-    .filter((project) => project.status === 'active')
-    .map((project) => ({
-      id: project.projectId,
-      name: project.displayName,
-      path: project.canonicalRoot,
-      status: project.status,
-      availability: project.availability.state,
-      tasks: project.projectId === workbench.selectedProjectId.value ? activeProjectTasks : []
-    }))
-})
 const activeProjectId = computed(() => workbench.selectedProjectId.value)
 const currentModel = computed<ProviderModelOption | null>(() => {
   const summary = providerSummary.value
@@ -817,14 +798,18 @@ function deriveSessionTitle(text: string): string {
   return compact.length > 28 ? `${compact.slice(0, 28)}…` : compact
 }
 
-/** 只有主进程确认创建 Task 后才建立本地视图，避免 UI 伪造不存在的会话。 */
+/** 新对话先 createTask，再走同一条 selectTask / enterTask，不再另开只读入口。 */
 async function startNewChat(): Promise<void> {
-  if (newChatDisabled.value || projectSelectionPending.value) return
+  if (newChatDisabled.value || projectSelectionPending.value || !activeProjectId.value) return
 
   try {
-    const task = unwrapDesktopIpcResult(await window.agent.createTask(activeProjectId.value))
-    activateTaskView(task)
-    await taskHistory.refreshTasks()
+    await createAndSelectTask({
+      projectId: activeProjectId.value,
+      createTask: async (projectId) =>
+        unwrapDesktopIpcResult(await window.agent.createTask(projectId)),
+      selectTask,
+      refreshTasks: () => taskHistory.refreshTasks()
+    })
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
@@ -1403,6 +1388,31 @@ async function loadMoreHistoryEvents(turnId: string): Promise<void> {
   refreshOpenedHistoryProjection()
 }
 
+async function renameOpenedTask(taskId: string, title: string): Promise<void> {
+  try {
+    await taskHistory.renameTask(taskId, title)
+    const view = taskViews.value[taskId]
+    if (view) view.title = title
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
+}
+
+async function archiveOpenedTask(taskId: string): Promise<void> {
+  try {
+    await taskHistory.archiveTask(taskId)
+    delete taskViews.value[taskId]
+    taskOrder.value = taskOrder.value.filter((id) => id !== taskId)
+    if (activeTaskId.value === taskId) {
+      activeTaskId.value = ''
+      conversationEntry.value = null
+      reconcilePermissionQueue('', activeProjectId.value)
+    }
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  }
+}
+
 async function requestTaskDeletion(taskId: string): Promise<void> {
   const task = taskHistory.tasks.value.find((item) => item.taskId === taskId)
   if (!task) return
@@ -1587,12 +1597,15 @@ function scrollMessagesToBottom(): void {
     </div>
 
     <div v-else class="workspace-layout" :class="{ 'inspector-hidden': !showInspector }">
-      <WorkspaceSidebar
-        :projects="sidebarProjects"
-        :workspace-path="workspace"
-        :workspace-name="workspaceName"
-        :active-task-id="activeSidebarTaskId"
-        :active-project-id="activeProjectId"
+      <ProjectSidebar
+        :projects="workbench.projects.value"
+        :selected-project-id="activeProjectId"
+        :running-task-count-by-project-id="workbench.runningTaskCountByProjectId.value"
+        :project-load-state="workbench.projectLoadState.value"
+        :tasks="taskHistory.tasks.value"
+        :selected-task-id="activeSidebarTaskId"
+        :active-execution="activeExecution"
+        :task-list-load-state="workbench.taskListLoadState.value"
         :new-chat-disabled="newChatDisabled"
         :new-chat-disabled-reason="newChatDisabledReason"
         :history-navigation-disabled="historyNavigationBlocked"
@@ -1602,14 +1615,19 @@ function scrollMessagesToBottom(): void {
         :has-more-tasks="Boolean(taskHistory.taskCursor.value)"
         :loading-more-tasks="taskHistory.loadingMoreTasks.value"
         @new-chat="startNewChat"
-        @open-project="chooseWorkspace"
         @open-settings="openProviderSettings"
-        @select-task="selectTask"
         @select-project="selectProject"
-        @delete-task="requestTaskDeletion"
+        @choose-project="chooseWorkspace"
+        @retry-access="(projectId) => workbench.registry.retryAccess(projectId)"
         @remove-project="requestProjectRemoval"
         @delete-project-history="requestProjectHistoryDeletion"
+        @retry-projects="workbench.retryProjects"
+        @select-task="selectTask"
+        @rename-task="renameOpenedTask"
+        @archive-task="archiveOpenedTask"
+        @delete-task="requestTaskDeletion"
         @load-more-tasks="taskHistory.loadMoreTasks"
+        @retry-task-list="workbench.retryTaskList"
       />
 
       <main class="chat-panel">

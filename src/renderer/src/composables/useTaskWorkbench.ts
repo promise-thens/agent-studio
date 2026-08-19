@@ -3,6 +3,7 @@ import type { TaskExecutionDto, TaskExecutionSnapshot } from '../../../shared/ta
 import type { ProjectSummary } from '../../../shared/task-history'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import { createTaskExecutionConsumer } from '../task-execution-consumer'
+import { countProjectLiveTasks } from '../task-navigation'
 import {
   createWorkbenchLoadState,
   useProjectRegistry,
@@ -32,6 +33,7 @@ export interface TaskWorkbenchState {
   executionLoadState: Ref<WorkbenchLoadState>
   projects: Ref<ProjectSummary[]>
   selectedProject: ComputedRef<ProjectSummary | null>
+  runningTaskCountByProjectId: ComputedRef<Record<string, number>>
   initialize(): Promise<void>
   selectProject(projectId: string): Promise<void>
   selectTask(taskId: string): Promise<void>
@@ -74,6 +76,19 @@ export function useTaskWorkbench(): TaskWorkbenchController {
   const activeExecution = computed(() => {
     const execution = executionSnapshot.value.execution
     return execution && ACTIVE_EXECUTION_STATES.has(execution.state) ? execution : null
+  })
+
+  const runningTaskCountByProjectId = computed(() => {
+    const counts: Record<string, number> = {}
+    for (const project of registry.projects.value) {
+      counts[project.projectId] = countProjectLiveTasks(
+        project.projectId,
+        history.tasks.value,
+        registry.selectedProjectId.value,
+        activeExecution.value
+      )
+    }
+    return counts
   })
 
   const executionConsumer = createTaskExecutionConsumer({
@@ -206,6 +221,7 @@ export function useTaskWorkbench(): TaskWorkbenchController {
     executionLoadState,
     projects: registry.projects,
     selectedProject: registry.selectedProject,
+    runningTaskCountByProjectId,
     initialize,
     selectProject,
     selectTask,
