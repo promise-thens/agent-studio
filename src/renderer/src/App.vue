@@ -1,12 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
-  PhCheckCircle as CheckCircle,
   PhCircleNotch as CircleNotch,
   PhRobot as Robot,
-  PhShieldCheck as ShieldCheck,
   PhSidebarSimple as SidebarSimple,
-  PhTerminalWindow as TerminalWindow,
   PhWarningCircle as WarningCircle
 } from '@phosphor-icons/vue'
 import type {
@@ -24,11 +21,7 @@ import type {
   ProviderModelOption,
   ProviderTestResult
 } from '../../shared/provider'
-import type {
-  ConversationEntryState,
-  DeletionPreview,
-  PermissionAuditRecord
-} from '../../shared/task-history'
+import type { ConversationEntryState, DeletionPreview } from '../../shared/task-history'
 import {
   createAgentEventGuard,
   createAgentMessageKey,
@@ -41,6 +34,7 @@ import ProjectSidebar from './components/ProjectSidebar.vue'
 import TaskComposer from './components/TaskComposer.vue'
 import TaskConversation from './components/TaskConversation.vue'
 import TaskHeader from './components/TaskHeader.vue'
+import TaskInspector from './components/TaskInspector.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
 import { useTaskTimeline } from './composables/useTaskTimeline'
 import { useTaskWorkbench } from './composables/useTaskWorkbench'
@@ -59,6 +53,13 @@ import {
   shouldMirrorLiveAgentErrorLocally
 } from './task-conversation-view'
 import { projectTaskHistory } from './task-history-projector'
+import {
+  INSPECTOR_DEFAULT_OPEN,
+  INSPECTOR_DEFAULT_TAB,
+  inspectorToggleLabel,
+  toggleInspectorOpen,
+  type InspectorTab
+} from './task-inspector'
 import { createAndSelectTask } from './task-navigation'
 import {
   clearRespondingPermission,
@@ -165,7 +166,10 @@ const permissionResponsePending = computed(() =>
   isPermissionResponsePending(permission.value, respondingPermission.value)
 )
 let permissionExpiryTimer: ReturnType<typeof setTimeout> | null = null
-const showInspector = ref(true)
+/** 检查器默认关上，从标题栏抽屉盖住右侧，不占第三列。 */
+const showInspector = ref(INSPECTOR_DEFAULT_OPEN)
+const inspectorTab = ref<InspectorTab>(INSPECTOR_DEFAULT_TAB)
+const inspectorToggleTitle = computed(() => inspectorToggleLabel(showInspector.value))
 const taskViews = ref<Record<string, TaskViewState>>({})
 const taskOrder = ref<string[]>([])
 /** 以 workbench 的查看身份驱动 Timeline；保留后台 facts，但绝不将旧 Task 展示到新 Project。 */
@@ -185,18 +189,6 @@ const permissionTaskTitle = computed(() => {
     request.taskId
   )
 })
-
-const permissionAuditReasonLabels: Record<PermissionAuditRecord['reason'], string> = {
-  'auto-allowed': '策略自动允许',
-  'grant-reused': '复用当前 Task 授权',
-  'user-allowed': '用户允许',
-  'user-denied': '用户拒绝',
-  cancelled: '请求已取消',
-  expired: '审批已过期',
-  'invalid-target': '目标无效',
-  unsupported: '能力不支持',
-  'internal-error': '内部执行失败'
-}
 
 /** 当前 Task 的消息、计划和工具状态通过计算属性切换，A/B 视图不会串台。 */
 const messages = computed<ChatMessage[]>({
@@ -353,8 +345,6 @@ const projectInteractionBlocked = computed(() => isBusy.value || projectSelectio
 const historyNavigationBlocked = computed(() => projectSelectionPending.value)
 const { resolveCapability, isAvailable } = useRuntimeCapabilities(status)
 const promptCapability = computed(() => resolveCapability('session.prompt.text', '发送文本 Prompt'))
-const planCapability = computed(() => resolveCapability('event.plan', '展示执行计划'))
-const toolCapability = computed(() => resolveCapability('event.tool', '展示工具活动'))
 const createSessionCapability = computed(() => resolveCapability('session.create', '创建新对话'))
 const connectCapability = computed(() => resolveCapability('runtime.connect', '连接 Runtime'))
 const promptCapabilityMessage = computed(
@@ -416,18 +406,6 @@ const composerTextareaDisabled = computed(
     conversationEntry.value?.restore === 'unavailable' ||
     !promptCapability.value.available ||
     !providerSummary.value?.configured
-)
-const planEmptyMessage = computed(
-  () =>
-    planCapability.value.reason ??
-    planCapability.value.notice ??
-    'Runtime 返回执行计划后会显示在这里。'
-)
-const toolEmptyMessage = computed(
-  () =>
-    toolCapability.value.reason ??
-    toolCapability.value.notice ??
-    'Runtime 返回工具活动后会显示在这里。'
 )
 const newChatDisabled = computed(
   () =>
@@ -1073,25 +1051,8 @@ function schedulePermissionExpiry(): void {
   )
 }
 
-function permissionAuditScopeLabel(scope: PermissionAuditRecord['scope']): string {
-  if (scope === 'task') return '当前 Task'
-  if (scope === 'once') return '仅本次'
-  return '未授予范围'
-}
-
-function permissionAuditInitiatorLabel(audit: PermissionAuditRecord): string {
-  if (audit.initiator === 'runtime') {
-    if (audit.runtimeId === 'grok') return 'Grok Build'
-    if (audit.runtimeId === 'codex') return 'Codex'
-    return 'Agent Runtime'
-  }
-  const labels: Record<NonNullable<PermissionAuditRecord['appService']>, string> = {
-    'command-runner': 'Command Runner',
-    git: 'Git',
-    worktree: 'Worktree',
-    other: 'Agent Studio'
-  }
-  return audit.appService ? labels[audit.appService] : 'Agent Studio'
+function toggleInspector(): void {
+  showInspector.value = toggleInspectorOpen(showInspector.value)
 }
 
 function handleAgentEvent(event: PublicAgentEvent): void {
@@ -1330,10 +1291,12 @@ function scrollMessagesToBottom(): void {
       <button
         v-if="!showProviderScreen"
         class="icon-button no-drag"
-        title="切换检查器"
-        aria-label="切换检查器"
+        type="button"
+        data-inspector-toggle
+        :title="inspectorToggleTitle"
+        :aria-label="inspectorToggleTitle"
         :aria-pressed="showInspector"
-        @click="showInspector = !showInspector"
+        @click="toggleInspector"
       >
         <SidebarSimple :size="17" />
       </button>
@@ -1356,7 +1319,7 @@ function scrollMessagesToBottom(): void {
       />
     </div>
 
-    <div v-else class="workspace-layout" :class="{ 'inspector-hidden': !showInspector }">
+    <div v-else class="workspace-layout">
       <ProjectSidebar
         :projects="workbench.projects.value"
         :selected-project-id="activeProjectId"
@@ -1436,97 +1399,22 @@ function scrollMessagesToBottom(): void {
         />
       </main>
 
-      <aside v-if="showInspector" class="inspector-panel">
-        <section class="inspector-section">
-          <div class="inspector-heading">
-            <strong>执行计划</strong>
-            <span>{{ planEntries.length }}</span>
-          </div>
-          <div v-if="planEntries.length" class="plan-list">
-            <div
-              v-for="entry in planEntries"
-              :key="entry.content"
-              class="plan-item"
-              :data-status="entry.status"
-            >
-              <CheckCircle v-if="entry.status === 'completed'" :size="16" weight="fill" />
-              <CircleNotch v-else-if="entry.status === 'in_progress'" :size="16" class="spin" />
-              <span v-else class="pending-ring" />
-              <p>{{ entry.content }}</p>
-            </div>
-          </div>
-          <div v-else class="empty-state" role="status" aria-live="polite">
-            <ShieldCheck :size="24" />
-            <p>{{ planEmptyMessage }}</p>
-          </div>
-        </section>
-
-        <section class="inspector-section activity-section">
-          <div class="inspector-heading">
-            <strong>工具活动</strong>
-            <span>{{ toolActivities.length }}</span>
-          </div>
-          <div v-if="toolActivities.length" class="tool-list">
-            <div v-for="tool in toolActivities" :key="tool.id" class="tool-item">
-              <TerminalWindow :size="16" />
-              <div>
-                <strong>{{ tool.title }}</strong>
-                <small>{{ tool.status }}</small>
-              </div>
-            </div>
-          </div>
-          <div v-else class="empty-state compact" role="status" aria-live="polite">
-            <TerminalWindow :size="22" />
-            <p>{{ toolEmptyMessage }}</p>
-          </div>
-        </section>
-
-        <section v-if="activeTaskView?.mode === 'history'" class="inspector-section audit-section">
-          <div class="inspector-heading">
-            <strong>权限审计</strong>
-            <span>{{ taskHistory.permissionAudits.value.length }}</span>
-          </div>
-          <div v-if="taskHistory.permissionAudits.value.length" class="permission-audit-list">
-            <article
-              v-for="audit in taskHistory.permissionAudits.value"
-              :key="audit.auditId"
-              class="permission-audit-item"
-              :data-risk="audit.risk"
-            >
-              <div>
-                <strong>{{ audit.title }}</strong>
-                <span>
-                  {{ audit.risk }} · {{ audit.operationType }} ·
-                  {{ permissionAuditInitiatorLabel(audit) }}
-                </span>
-              </div>
-              <p>{{ audit.impact }}</p>
-              <ul class="permission-audit-targets">
-                <li v-for="target in audit.targetSummaries" :key="target">{{ target }}</li>
-              </ul>
-              <p v-if="audit.detail" class="permission-audit-detail">{{ audit.detail }}</p>
-              <small>
-                {{ permissionAuditReasonLabels[audit.reason] }} ·
-                {{ permissionAuditScopeLabel(audit.scope) }} ·
-                {{ new Date(audit.createdAt).toLocaleString() }}
-                <template v-if="audit.truncated"> · 摘要已截断</template>
-              </small>
-            </article>
-            <button
-              v-if="taskHistory.permissionAuditCursor.value"
-              class="history-load-more"
-              :disabled="taskHistory.loadingMorePermissionAudits.value"
-              @click="taskHistory.loadMorePermissionAudits"
-            >
-              {{ taskHistory.loadingMorePermissionAudits.value ? '正在加载…' : '加载更多审计' }}
-            </button>
-          </div>
-          <div v-else class="empty-state compact" role="status" aria-live="polite">
-            <ShieldCheck :size="22" />
-            <p>当前 Task 暂无权限决策记录。</p>
-          </div>
-        </section>
-      </aside>
+      <TaskInspector
+        :open="showInspector"
+        :active-tab="inspectorTab"
+        :timeline="taskTimeline.activeTimeline.value"
+        :timeline-loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
+        :event-after-sequence-by-turn="taskHistory.eventAfterSequenceByTurn.value"
+        :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
+        :permission-audits="taskHistory.permissionAudits.value"
+        :permission-audit-cursor="taskHistory.permissionAuditCursor.value"
+        :loading-more-permission-audits="taskHistory.loadingMorePermissionAudits.value"
+        :show-permission-audits="activeTaskView?.mode === 'history'"
+        @close="showInspector = false"
+        @update:active-tab="inspectorTab = $event"
+        @load-more-events="loadMoreHistoryEvents"
+        @load-more-permission-audits="taskHistory.loadMorePermissionAudits"
+      />
     </div>
 
     <PermissionPrompt

@@ -61,17 +61,14 @@ textarea {
 }
 
 .workspace-layout {
+  position: relative;
   display: grid;
-  grid-template-columns: 220px minmax(420px, 1fr) 310px;
+  grid-template-columns: 220px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: 0;
   height: calc(100% - var(--titlebar-height));
   padding: 0;
   background: var(--app-bg);
-}
-
-.workspace-layout.inspector-hidden {
-  grid-template-columns: 220px minmax(420px, 1fr);
 }
 
 .workspace-layout > .project-sidebar {
@@ -82,9 +79,8 @@ textarea {
   background: var(--app-bg);
 }
 
-/* 主对话与检查器不再用重阴影卡片当英雄块，只保留 1px 分割。 */
-.workspace-layout > .chat-panel,
-.workspace-layout > .inspector-panel {
+/* 主对话不再被第三列挤窄；检查器以抽屉盖住右侧。 */
+.workspace-layout > .chat-panel {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -92,10 +88,6 @@ textarea {
   border-radius: 0;
   background: var(--app-bg);
   box-shadow: none;
-}
-
-.workspace-layout > .inspector-panel {
-  border-left: 1px solid var(--border);
 }
 
 .provider-screen,
@@ -137,9 +129,10 @@ textarea {
   background: var(--surface-3);
 }
 
-.inspector-panel {
+.inspector-panel,
+.task-inspector {
   min-width: 0;
-  background: color-mix(in srgb, var(--surface-1) 92%, #0a0d12);
+  background: color-mix(in srgb, var(--surface-1) 94%, #0a0d12);
 }
 
 .inspector-heading,
@@ -992,7 +985,8 @@ button:disabled {
 .composer-wrap {
   grid-area: composer;
   position: relative;
-  z-index: 2;
+  /* 高于右侧检查器，避免抽屉挡住模型选择和发送/停止。 */
+  z-index: 9;
   padding: 12px 18px 18px;
   border-top: 1px solid color-mix(in srgb, var(--border) 56%, transparent);
   background: color-mix(in srgb, var(--surface-1) 96%, #0b1016);
@@ -1091,23 +1085,116 @@ kbd {
   background: color-mix(in srgb, var(--danger) 12%, var(--surface-2));
 }
 
-/* 检查器只承担纵向滚动，业务模块各自呈现为独立浮动面板。 */
-.workspace-layout > .inspector-panel {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: max-content;
-  align-content: start;
-  gap: 10px;
-  padding: 1px 3px 8px 1px;
+/* 检查器从右侧盖住对话，不改两栏栅格。 */
+.workspace-layout > .task-inspector {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 8;
+  display: flex;
+  width: min(360px, 46%);
+  min-width: 280px;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-1) 96%, #0a0d12);
+  box-shadow: -16px 0 36px rgb(2 5 9 / 28%);
+  animation: inspector-slide-in 180ms ease;
+}
+
+.inspector-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 8px 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.inspector-tabs {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+  overflow-x: auto;
+}
+
+.inspector-tab {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-3);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.inspector-tab[aria-selected='true'] {
+  border-bottom-color: var(--accent);
+  color: var(--text-1);
+}
+
+.inspector-close {
+  width: 28px;
+  height: 28px;
+}
+
+.inspector-body {
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
+  padding: 8px 8px 16px;
   scrollbar-color: color-mix(in srgb, var(--border-strong) 72%, transparent) transparent;
   scrollbar-width: thin;
+}
+
+.inspector-body > .execution-timeline {
+  width: 100%;
+  margin: 0;
+  padding: 4px 4px 16px;
+}
+
+.inspector-placeholder {
+  display: grid;
+  gap: 8px;
+  margin: 18px 8px;
+  padding: 16px;
+  border: 1px dashed color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: var(--radius-soft);
+  color: var(--text-3);
+  background: color-mix(in srgb, var(--surface-2) 54%, transparent);
+}
+
+.inspector-placeholder strong {
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.inspector-placeholder p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+@keyframes inspector-slide-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0.4;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 /* 模块使用 Claude Code Desktop 式独立面板层级，同时沿用工作台深色变量。 */
@@ -1524,12 +1611,17 @@ kbd {
 
 @media (max-width: 1180px) {
   .workspace-layout {
-    grid-template-columns: 220px minmax(420px, 1fr);
-    gap: 0;
-    padding: 0;
+    grid-template-columns: 220px minmax(0, 1fr);
   }
 
-  .inspector-panel {
+  .workspace-layout > .task-inspector {
+    width: min(340px, 52%);
+    min-width: 260px;
+  }
+
+  /* 小窗藏次要事实和快捷键，保留任务切换、运行状态、输入和发送/停止。 */
+  .task-header-facts,
+  .composer-shortcuts {
     display: none;
   }
 

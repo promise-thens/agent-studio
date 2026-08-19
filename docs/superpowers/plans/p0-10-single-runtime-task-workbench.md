@@ -118,11 +118,11 @@
 **前置依赖：**
 - 依赖任务 1 至任务 3。
 
-- [ ] **第 1 步: 建立 Inspector 标签**
+- [x] **第 1 步: 建立 Inspector 标签**
 说明：首期提供 Timeline、Changes、Terminal、Artifacts 标签；只有 Timeline 可完整使用，其它标签依据能力返回显示“尚未实现”。Terminal 明确标注为 P0+ 用户交互增强，不把命令证据缺失伪装成终端尚未接入。
 预期：P0-12 Git Review、P0-13 Artifact 和 P0-15 Terminal 可直接接入，不需要再次改造顶层导航。
 
-- [ ] **第 2 步: 完成窗口与可访问性适配**
+- [x] **第 2 步: 完成窗口与可访问性适配**
 说明：小窗口保留 Task 列表切换、Composer、发送/停止和运行状态；Titlebar 控件设 `no-drag`，交互控件保留 focus-visible。
 预期：键盘可完成项目、Task、Composer 和 Inspector 的主要操作。
 
