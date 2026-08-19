@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,6 +19,7 @@ afterEach(async () => {
 describe('resolveGacp01ObserveBootstrap', () => {
   it('只接受开发态下预先创建的私有临时目录，不接收 Provider Key', async () => {
     const userDataPath = await createObserveRoot()
+    const canonicalRoot = realpathSync(userDataPath)
 
     const result = resolveGacp01ObserveBootstrap({
       argv: [`--agent-studio-gacp01-observe-user-data=${userDataPath}`],
@@ -27,10 +29,10 @@ describe('resolveGacp01ObserveBootstrap', () => {
     })
 
     expect(result).toMatchObject({
-      userDataPath,
-      workspacePath: join(userDataPath, GACP01_OBSERVE_DIRECTORIES.workspace),
+      userDataPath: canonicalRoot,
+      workspacePath: join(canonicalRoot, GACP01_OBSERVE_DIRECTORIES.workspace),
       observationFilePath: join(
-        userDataPath,
+        canonicalRoot,
         GACP01_OBSERVE_DIRECTORIES.observation,
         GACP01_OBSERVE_PROTOCOL_FILE
       )
