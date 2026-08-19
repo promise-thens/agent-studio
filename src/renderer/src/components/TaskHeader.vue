@@ -13,7 +13,7 @@ defineEmits<{
 </script>
 
 <template>
-  <header class="task-header">
+  <header class="task-header" :data-execution="facts.executionScope">
     <div class="task-header-copy">
       <h1 :title="facts.title">{{ facts.title }}</h1>
       <p

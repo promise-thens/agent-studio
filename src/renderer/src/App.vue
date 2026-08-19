@@ -698,6 +698,16 @@ async function selectTask(taskId: string): Promise<void> {
       reason: '正在接回上次上下文…'
     }
     if (activeTaskId.value !== taskId) return
+    if (activeExecution.value && activeExecution.value.taskId !== taskId) {
+      conversationEntry.value = {
+        taskId,
+        historyReady: true,
+        restore: 'idle',
+        verification: 'unverified',
+        reason: '先停掉当前任务。'
+      }
+      return
+    }
     const pendingEnter = window.agent
       .enterTask(taskId)
       .then((result) => unwrapDesktopIpcResult(result))
@@ -867,6 +877,8 @@ async function ensureProjectConnected(
   projectId: string,
   isCurrent: () => boolean = () => true
 ): Promise<boolean> {
+  // 活动执行占用唯一槽位时禁止重连，避免切视图时拆掉后台 Task。
+  if (activeExecution.value) return false
   const project = workbench.projects.value.find((item) => item.projectId === projectId)
   if (!project) return false
 
