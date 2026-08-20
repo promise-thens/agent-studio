@@ -646,10 +646,50 @@ button:disabled {
   font-size: 12px;
 }
 
-.permission-inline-card.permission-dialog {
+.permission-inline-card {
   width: 100%;
-  max-height: none;
-  box-shadow: none;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+}
+
+.permission-inline-title {
+  margin: 0;
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.permission-inline-meta,
+.permission-inline-impact,
+.permission-inline-warning {
+  margin: 4px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.permission-inline-warning {
+  color: var(--danger);
+}
+
+.permission-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.permission-inline-actions .primary-button,
+.permission-inline-actions .secondary-button {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 11px;
 }
 
 .conversation-process {

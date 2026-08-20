@@ -123,7 +123,7 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
       />
 
       <details v-else-if="block.kind === 'usage'" class="conversation-usage" data-kind="usage">
-        <summary>用量</summary>
+        <summary>{{ block.summary }}</summary>
       </details>
 
       <p

@@ -55,7 +55,7 @@ function onDocumentKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Escape') return
   if (
     event.target instanceof Element &&
-    event.target.closest('.modal-backdrop, .permission-dialog')
+    event.target.closest('.modal-backdrop, .permission-dialog, .permission-inline-card')
   ) {
     return
   }

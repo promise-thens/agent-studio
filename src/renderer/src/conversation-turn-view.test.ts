@@ -4,7 +4,9 @@ import type { TimelineToolNode, TurnTimelineViewModel } from './task-timeline-re
 import {
   PERMISSION_ALLOW_TASK_LABEL,
   formatMergedReadLabel,
+  hasConversationUsageData,
   projectConversationTurn,
+  resolvePermissionCardPresentation,
   resolvePermissionPrimaryAction
 } from './conversation-turn-view'
 
@@ -175,5 +177,100 @@ describe('权限卡主按钮', () => {
       decision: 'allow-task',
       label: '本任务允许'
     })
+  })
+
+  it('流内权限是小卡：非 dialog、不自动抢焦点，并插在计划后面', () => {
+    const presentation = resolvePermissionCardPresentation()
+    expect(presentation).toMatchObject({
+      variant: 'inline',
+      role: 'region',
+      autofocus: false,
+      density: 'compact'
+    })
+    expect(presentation.role).not.toBe('dialog')
+    expect(presentation.variant).not.toBe('modal')
+
+    const request: AgentPermissionRequest = {
+      approvalId: 'approval-1',
+      initiator: 'runtime',
+      runtimeId: 'grok',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      projectId: 'project-1',
+      environmentId: 'local:test',
+      operationType: 'write-file',
+      risk: 'L1',
+      title: '修改文件',
+      impact: '写入 Project 文件。',
+      targets: ['path: src/auth.ts'],
+      allowedScopes: ['once', 'task'],
+      expiresAt: '2099-01-01T00:00:00.000Z'
+    }
+    const blocks = projectConversationTurn(
+      turn('waiting-permission', [
+        {
+          nodeId: 'task-1:turn-1:plan',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'plan',
+          entries: [{ content: '改登录表单', priority: 'medium', status: 'in_progress' }]
+        },
+        {
+          nodeId: 'task-1:turn-1:agent-message:id:',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'message',
+          text: '正在改登录'
+        }
+      ]),
+      { pendingPermission: request }
+    )
+    const kinds = blocks.map((block) => block.kind)
+    expect(kinds).toEqual(['user', 'plan', 'permission', 'message'])
+    expect(blocks.find((block) => block.kind === 'permission')).toMatchObject({
+      kind: 'permission',
+      primaryLabel: '本任务允许'
+    })
+  })
+})
+
+describe('用量块', () => {
+  it('有 usage 数据时投影为默认折叠块，没数据才省略', () => {
+    expect(
+      hasConversationUsageData({
+        scope: 'turn',
+        inputTokens: 1,
+        outputTokens: 2,
+        totalTokens: 3
+      })
+    ).toBe(true)
+
+    const withUsage = projectConversationTurn(
+      turn('completed', [
+        {
+          nodeId: 'task-1:turn-1:usage:4',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'usage',
+          usage: { scope: 'turn', inputTokens: 1, outputTokens: 2, totalTokens: 3 }
+        }
+      ])
+    )
+    expect(withUsage.find((block) => block.kind === 'usage')).toMatchObject({
+      kind: 'usage',
+      defaultCollapsed: true,
+      summary: '用量 · 3 tokens'
+    })
+    expect(JSON.stringify(withUsage)).not.toContain('turn-complete')
+    expect(JSON.stringify(withUsage)).not.toContain('permission-audit')
+
+    const withoutUsage = projectConversationTurn(turn('completed', []))
+    expect(withoutUsage.some((block) => block.kind === 'usage')).toBe(false)
+    expect(
+      hasConversationUsageData({ scope: 'context', usedTokens: Number.NaN, limitTokens: 0 })
+    ).toBe(false)
   })
 })

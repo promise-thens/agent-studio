@@ -1,8 +1,10 @@
 import type {
+  AgentContextUsage,
   AgentPermissionDecision,
   AgentPermissionRequest,
   AgentPlanEntry,
-  AgentToolStatus
+  AgentToolStatus,
+  AgentTurnUsage
 } from '../../shared/agent'
 import { isActiveConversationTurn } from './task-conversation-view'
 import type {
@@ -79,6 +81,14 @@ export interface ConversationUsageBlock {
   kind: 'usage'
   nodeId: string
   defaultCollapsed: true
+  summary: string
+}
+
+export interface PermissionCardPresentation {
+  variant: 'inline'
+  role: 'region'
+  autofocus: false
+  density: 'compact'
 }
 
 export interface ConversationAvailabilityBlock {
@@ -112,6 +122,31 @@ export function resolvePermissionPrimaryAction(
     return { decision: 'allow-task', label: PERMISSION_ALLOW_TASK_LABEL }
   }
   return { decision: 'allow-once', label: '仅允许这一次' }
+}
+
+/**
+ * 流内权限必须是阅读列小卡：非 dialog、不挂载抢焦点，避免把计划和对话顶走。
+ */
+export function resolvePermissionCardPresentation(): PermissionCardPresentation {
+  return {
+    variant: 'inline',
+    role: 'region',
+    autofocus: false,
+    density: 'compact'
+  }
+}
+
+/** 有可展示的 token 数字才算有数据；NaN / 缺字段不画空壳。 */
+export function hasConversationUsageData(usage: AgentContextUsage | AgentTurnUsage): boolean {
+  if (usage.scope === 'context') {
+    return Number.isFinite(usage.usedTokens) && Number.isFinite(usage.limitTokens)
+  }
+  return Number.isFinite(usage.totalTokens)
+}
+
+export function formatUsageSummary(usage: AgentContextUsage | AgentTurnUsage): string {
+  if (usage.scope === 'context') return `用量 · 上下文 ${usage.usedTokens}/${usage.limitTokens}`
+  return `用量 · ${usage.totalTokens} tokens`
 }
 
 /** 连续同类读取才合并；禁止用标题里的 subagent 字符串编造分组。 */
@@ -193,6 +228,13 @@ export function projectConversationTurn(
         message: node.message,
         recoverable: node.recoverable
       })
+    } else if (node.kind === 'usage' && hasConversationUsageData(node.usage)) {
+      blocks.push({
+        kind: 'usage',
+        nodeId: node.nodeId,
+        defaultCollapsed: true,
+        summary: formatUsageSummary(node.usage)
+      })
     } else if (node.kind === 'availability') {
       blocks.push({
         kind: 'availability',
@@ -205,7 +247,7 @@ export function projectConversationTurn(
 
   const pending = options?.pendingPermission
   if (pending && pending.taskId === turn.taskId && pending.turnId === turn.turnId) {
-    blocks.push({
+    insertPermissionAfterProcess(blocks, {
       kind: 'permission',
       nodeId: `${pending.taskId}:${pending.turnId}:permission:${pending.approvalId}`,
       request: pending,
@@ -214,6 +256,27 @@ export function projectConversationTurn(
   }
 
   return blocks
+}
+
+/** 审批卡贴在计划/工具后面，不要排到长回复之后把当前步顶出视口。 */
+function insertPermissionAfterProcess(
+  blocks: ConversationBlock[],
+  permission: ConversationPermissionBlock
+): void {
+  const fromEnd = [...blocks]
+    .reverse()
+    .findIndex(
+      (block) =>
+        block.kind === 'plan' ||
+        block.kind === 'tool' ||
+        block.kind === 'thought' ||
+        block.kind === 'subagent'
+    )
+  if (fromEnd < 0) {
+    blocks.push(permission)
+    return
+  }
+  blocks.splice(blocks.length - fromEnd, 0, permission)
 }
 
 function toPlanBlock(
