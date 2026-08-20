@@ -25,7 +25,7 @@ describe('应用外观契约', () => {
     expect(appearanceWindowBackground('dark')).toBe(APP_APPEARANCE_BACKGROUNDS.dark)
     expect(appearanceWindowBackground('light')).toBe(APP_APPEARANCE_BACKGROUNDS.light)
     expect(APP_APPEARANCE_BACKGROUNDS.dark).toBe('#0d1117')
-    expect(APP_APPEARANCE_BACKGROUNDS.light).toBe('#f4efe6')
+    expect(APP_APPEARANCE_BACKGROUNDS.light).toBe('#f7f7f8')
   })
 
   it('外观状态解析拒绝多余字段和非法 resolved', () => {

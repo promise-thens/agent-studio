@@ -13,7 +13,7 @@ export const DEFAULT_APP_APPEARANCE_MODE: AppAppearanceMode = 'dark'
 /** 窗口背景必须和 CSS --app-bg 同步，避免主题切换时闪一帧错误底色。 */
 export const APP_APPEARANCE_BACKGROUNDS: Record<AppResolvedAppearance, string> = {
   dark: '#0d1117',
-  light: '#f4efe6'
+  light: '#f7f7f8'
 }
 
 export function isAppAppearanceMode(value: unknown): value is AppAppearanceMode {

@@ -16,6 +16,7 @@
   --danger: #dc6b6b;
   --success: #62b886;
   --hover-fill: color-mix(in srgb, var(--text-1) 6%, transparent);
+  --selected-fill: color-mix(in srgb, var(--text-1) 11%, transparent);
   --radius-panel: 18px;
   --radius-control: 12px;
   --radius-chip: 999px;
@@ -69,45 +70,47 @@ button:active:not(:disabled) {
   transform: translateY(1px);
 }
 
-/* 米白主题：同一套 token 换值，不另起组件颜色。跟随系统时靠 prefers-color-scheme 避免首帧闪深色。 */
+/* 米白：冷灰白工作台底，强调色仍用产品橙。跟随系统时靠 prefers-color-scheme 避免首帧闪深色。 */
 html[data-theme='light'] {
   color-scheme: light;
-  --app-bg: #f4efe6;
-  --surface-0: #e8dfd0;
-  --surface-1: #f7f3eb;
-  --surface-2: #efe8db;
-  --surface-3: #e6dccb;
-  --border: #d9cdb8;
-  --border-strong: #c4b59a;
-  --text-1: #2c261f;
-  --text-2: #5c5348;
-  --text-3: #8a7f70;
+  --app-bg: #f7f7f8;
+  --surface-0: #ececee;
+  --surface-1: #f3f3f4;
+  --surface-2: #ffffff;
+  --surface-3: #e8e8ea;
+  --border: #e5e5e7;
+  --border-strong: #d2d2d6;
+  --text-1: #1c1c1e;
+  --text-2: #6e6e73;
+  --text-3: #8e8e93;
   --accent: #d98252;
   --accent-hover: #c56b35;
-  --accent-ink: #fff8ef;
+  --accent-ink: #fffdfb;
   --danger: #c45c5c;
   --success: #3d8a62;
-  --hover-fill: color-mix(in srgb, var(--text-1) 7%, transparent);
+  --hover-fill: color-mix(in srgb, var(--text-1) 6%, transparent);
+  --selected-fill: color-mix(in srgb, var(--text-1) 9%, transparent);
 }
 
 @media (prefers-color-scheme: light) {
   html:not([data-theme='dark']) {
     color-scheme: light;
-    --app-bg: #f4efe6;
-    --surface-0: #e8dfd0;
-    --surface-1: #f7f3eb;
-    --surface-2: #efe8db;
-    --surface-3: #e6dccb;
-    --border: #d9cdb8;
-    --border-strong: #c4b59a;
-    --text-1: #2c261f;
-    --text-2: #5c5348;
-    --text-3: #8a7f70;
+    --app-bg: #f7f7f8;
+    --surface-0: #ececee;
+    --surface-1: #f3f3f4;
+    --surface-2: #ffffff;
+    --surface-3: #e8e8ea;
+    --border: #e5e5e7;
+    --border-strong: #d2d2d6;
+    --text-1: #1c1c1e;
+    --text-2: #6e6e73;
+    --text-3: #8e8e93;
     --accent: #d98252;
     --accent-hover: #c56b35;
-    --accent-ink: #fff8ef;
+    --accent-ink: #fffdfb;
     --danger: #c45c5c;
     --success: #3d8a62;
-    --hover-fill: color-mix(in srgb, var(--text-1) 7%, transparent);
+    --hover-fill: color-mix(in srgb, var(--text-1) 6%, transparent);
+    --selected-fill: color-mix(in srgb, var(--text-1) 9%, transparent);
   }
 }

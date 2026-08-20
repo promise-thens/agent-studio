@@ -32,7 +32,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = [
 
 export const APPEARANCE_OPTIONS: readonly AppearanceOption[] = [
   { mode: 'dark', label: '深色', description: '当前工作台默认外观。' },
-  { mode: 'light', label: '米白', description: '暖色浅底，适合白天阅读。' },
+  { mode: 'light', label: '米白', description: '浅灰白底，适合白天阅读。' },
   { mode: 'system', label: '跟随系统', description: '系统浅色用米白，系统深色用现有深色。' }
 ]
 

@@ -91,16 +91,16 @@
 
 Esc、点遮罩、右上角关闭。保存供应商成功不强制关弹窗。清除配置后关闭弹窗。
 
-米白 token（约值，可微调对比度，不可改成冷灰 GitHub Light）：
+米白 token（冷灰白工作台底，强调色仍用产品橙）：
 
 | token | 米白 |
 | --- | --- |
-| `--app-bg` | `#f4efe6` |
-| `--surface-1` | `#f7f3eb` |
-| `--surface-2` | `#efe8db` |
-| `--surface-3` | `#e6dccb` |
-| `--border` | `#d9cdb8` |
-| `--text-1` | `#2c261f` |
+| `--app-bg` | `#f7f7f8` |
+| `--surface-1` | `#f3f3f4` |
+| `--surface-2` | `#ffffff` |
+| `--surface-3` | `#e8e8ea` |
+| `--border` | `#e5e5e7` |
+| `--text-1` | `#1c1c1e` |
 | `--accent` | 仍用 `#d98252` |
 
 ---
@@ -125,7 +125,7 @@ export interface AppAppearanceState {
 export const DEFAULT_APP_APPEARANCE_MODE: AppAppearanceMode = 'dark'
 export const APP_APPEARANCE_BACKGROUNDS: Record<AppResolvedAppearance, string> = {
   dark: '#0d1117',
-  light: '#f4efe6'
+  light: '#f7f7f8'
 }
 export function isAppAppearanceMode(value: unknown): value is AppAppearanceMode
 export function resolveAppearance(

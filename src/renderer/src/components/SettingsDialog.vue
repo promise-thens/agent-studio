@@ -287,10 +287,10 @@ function sectionIcon(id: SettingsSection): typeof Palette {
 }
 
 .appearance-swatch[data-mode='light'] {
-  background: #f4efe6;
+  background: #f7f7f8;
 }
 
 .appearance-swatch[data-mode='system'] {
-  background: linear-gradient(90deg, #0d1117 50%, #f4efe6 50%);
+  background: linear-gradient(90deg, #0d1117 50%, #f7f7f8 50%);
 }
 </style>
