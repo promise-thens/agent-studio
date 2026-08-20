@@ -64,6 +64,12 @@ import {
   type InspectorTab
 } from './task-inspector'
 import {
+  isFocusInsideInspector,
+  overlayConsumesEscape,
+  resolveEscapeWorkbenchTarget,
+  shouldIgnoreWorkbenchEscape
+} from './workbench-keyboard'
+import {
   createAndSelectTask,
   deriveSessionTitle,
   isUntitledTaskTitle,
@@ -147,7 +153,7 @@ const conversationEntry = ref<ConversationEntryState | null>(null)
 let conversationEnterGeneration = 0
 let conversationEnterPromise: Promise<ConversationEntryState | null> | null = null
 const prompt = ref('')
-const taskComposer = ref<{ focus: () => void } | null>(null)
+const taskComposer = ref<{ focus: () => void; focusStop?: () => void } | null>(null)
 const promptSubmissionPending = ref(false)
 const projectConnectionPending = ref(false)
 const projectSelectionPending = ref(false)
@@ -544,6 +550,8 @@ watch(
 )
 
 onMounted(async () => {
+  window.addEventListener('keydown', onWorkbenchKeydown)
+  cleanupListeners.push(() => window.removeEventListener('keydown', onWorkbenchKeydown))
   cleanupListeners.push(
     window.agent.onStatus((nextStatus) => {
       status.value = nextStatus
@@ -1088,6 +1096,37 @@ function schedulePermissionExpiry(): void {
 
 function toggleInspector(): void {
   showInspector.value = toggleInspectorOpen(showInspector.value)
+}
+
+/**
+ * 全局 Esc：执行中优先把焦点放到停止按钮；
+ * 焦点已在检查器内或空闲时才关抽屉。权限卡/确认框自己处理 Esc。
+ */
+function onWorkbenchKeydown(event: KeyboardEvent): void {
+  if (
+    shouldIgnoreWorkbenchEscape({
+      key: event.key,
+      isComposing: event.isComposing,
+      keyCode: event.keyCode,
+      defaultPrevented: event.defaultPrevented,
+      overlayConsumesEscape: overlayConsumesEscape(event.target)
+    })
+  ) {
+    return
+  }
+  if (historyConfirmation.value) return
+  const target = resolveEscapeWorkbenchTarget({
+    turnExecuting: composerAction.value === 'stop',
+    inspectorOpen: showInspector.value,
+    focusInsideInspector: isFocusInsideInspector(event.target)
+  })
+  if (target === 'none') return
+  event.preventDefault()
+  if (target === 'stop-button') {
+    taskComposer.value?.focusStop?.()
+    return
+  }
+  showInspector.value = false
 }
 
 function handleAgentEvent(event: PublicAgentEvent): void {

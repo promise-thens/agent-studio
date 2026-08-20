@@ -21,6 +21,13 @@ import {
 
 const rawInputSentinel = 'E2E_RAW_INPUT_MUST_NOT_DISPLAY'
 
+/** 流内权限是 region 小卡，不再用 dialog「需要你的确认」。 */
+function permissionCard(
+  page: ScenarioContext['page']
+): ReturnType<ScenarioContext['page']['locator']> {
+  return page.locator('.permission-inline-card')
+}
+
 type CapturedPermission = {
   approvalId: string
   taskId: string
@@ -40,12 +47,12 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
       )
       await waitForAdapterEvents(context.layout, ['fifo-A', 'fifo-B'], 'adapter-permission-pending')
 
-      const dialog = context.page.getByRole('dialog', { name: '需要你的确认' })
-      await expect(dialog).toContainText('写入受控 marker A')
-      await dialog.getByRole('button', { name: '仅允许这一次' }).click()
-      await expect(dialog).toContainText('写入受控 marker B')
-      await dialog.getByRole('button', { name: '拒绝', exact: true }).click()
-      await expect(dialog).toHaveCount(0)
+      const card = permissionCard(context.page)
+      await expect(card).toContainText('写入受控 marker A')
+      await card.getByRole('button', { name: '仅允许这一次' }).click()
+      await expect(card).toContainText('写入受控 marker B')
+      await card.getByRole('button', { name: '拒绝', exact: true }).click()
+      await expect(card).toHaveCount(0)
 
       await waitForFixtureEvents(context.layout, (records) =>
         hasFixtureEvents(records, [
@@ -93,22 +100,22 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
         'adapter-permission-pending'
       )
       const requestA = await waitForCapturedPermission(context.page, '写入受控 marker A')
-      const dialog = context.page.getByRole('dialog', { name: '需要你的确认' })
-      await expect(dialog).toContainText('写入受控 marker A')
+      const card = permissionCard(context.page)
+      await expect(card).toContainText('写入受控 marker A')
 
       // 仅向隔离的 fixture barrier 写入固定文件，不解析或执行任何用户输入。
       await writeControlledBarrier(context.layout, 'toolcall-cancel-A')
       await waitForAdapterEvents(context.layout, ['toolcall-A'], 'adapter-permission-cancelled')
-      await expect(dialog).toContainText('写入受控 marker B')
+      await expect(card).toContainText('写入受控 marker B')
 
       const lateResponse = await context.page.evaluate(
         async (request) => window.agent.respondPermission({ ...request, decision: 'allow-once' }),
         requestA
       )
       expect(lateResponse).toEqual({ ok: true, value: null })
-      await expect(dialog).toContainText('写入受控 marker B')
-      await dialog.getByRole('button', { name: '仅允许这一次' }).click()
-      await expect(dialog).toHaveCount(0)
+      await expect(card).toContainText('写入受控 marker B')
+      await card.getByRole('button', { name: '仅允许这一次' }).click()
+      await expect(card).toHaveCount(0)
 
       await waitForFixtureEvents(context.layout, (records) =>
         hasFixtureEvents(records, [
@@ -147,12 +154,12 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
         ['toolcall-A', 'toolcall-B'],
         'adapter-permission-pending'
       )
-      const dialog = context.page.getByRole('dialog', { name: '需要你的确认' })
-      await expect(dialog).toContainText('写入受控 marker A')
+      const card = permissionCard(context.page)
+      await expect(card).toContainText('写入受控 marker A')
       await writeControlledBarrier(context.layout, 'toolcall-cancel-A')
       await waitForAdapterEvents(context.layout, ['toolcall-A'], 'adapter-permission-cancelled')
-      await expect(dialog).toContainText('写入受控 marker B')
-      await dialog.getByRole('button', { name: '仅允许这一次' }).click()
+      await expect(card).toContainText('写入受控 marker B')
+      await card.getByRole('button', { name: '仅允许这一次' }).click()
 
       await waitForFixtureEvents(context.layout, (records) =>
         hasFixtureEvents(records, [
@@ -183,34 +190,29 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
       const turn = context.page.locator('.conversation-turn').filter({ hasText: prompt })
       await expect(turn).toHaveCount(1)
       await expect(turn.locator('.conversation-user')).toContainText(prompt)
-      const process = turn.locator('.conversation-process')
-      await process.evaluate((element) => {
-        ;(element as HTMLDetailsElement).open = true
-      })
-      const timeline = turn.getByRole('region', { name: '执行时间线' })
-      await expect(timeline).toBeVisible()
-      await expect(turn.locator('.timeline-node[data-kind="tool"]')).toContainText('toolcall-A')
-      await expect(turn.locator('.timeline-node[data-kind="tool"]')).toContainText('completed')
-      await expect(turn.locator('.timeline-node[data-kind="permission-audit"]')).toHaveCount(2)
-      await expect(turn.locator('.timeline-node[data-kind="turn-complete"]')).toContainText(
-        'completed'
-      )
+      await expect(turn.locator('.conversation-process')).toHaveCount(0)
+      await expect(turn.locator('.timeline-node')).toHaveCount(0)
+      await expect(turn.locator('.tool-row')).toContainText('toolcall-A')
+      await expect(context.page.getByRole('region', { name: '执行时间线' })).toHaveCount(0)
       await expect(context.page.getByRole('region', { name: '结果审阅' })).toContainText(
         'completed'
       )
 
-      // 切到没有 Task 的 Project 时，旧 Task 的 Timeline 与结果审阅不得继续显示。
+      // 切到没有 Task 的 Project 时，旧对话与结果审阅不得继续显示。
       await selectWorkbenchProject(context.page, context.layout.secondaryWorkspace)
-      await expect(context.page.getByRole('region', { name: '执行时间线' })).toHaveCount(0)
+      await expect(
+        context.page.locator('.conversation-turn').filter({ hasText: prompt })
+      ).toHaveCount(0)
       await expect(context.page.getByRole('region', { name: '结果审阅' })).toHaveCount(0)
 
       await selectWorkbenchProject(context.page, context.layout.workspace)
       await selectWorkbenchTaskById(context.page, projectId, taskId)
-      await context.page.locator('.conversation-process summary').first().click()
-      await expect(context.page.getByRole('region', { name: '执行时间线' })).toBeVisible()
+      await expect(
+        context.page.locator('.conversation-turn').filter({ hasText: prompt }).locator('.tool-row')
+      ).toContainText('toolcall-A')
       await expect(context.page.getByRole('region', { name: '结果审阅' })).toBeVisible()
 
-      // 新 Task 没有 Timeline facts，不能沿用刚才历史 Task 的可见内容。
+      // 新 Task 没有刚才历史 Task 的可见内容。
       await context.page.getByRole('button', { name: '创建新 Task', exact: true }).click()
       await expect(context.page.getByRole('region', { name: '执行时间线' })).toHaveCount(0)
       await expect(context.page.getByRole('region', { name: '结果审阅' })).toHaveCount(0)
@@ -232,9 +234,9 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
         ['turn-cancel-execute'],
         'adapter-permission-pending'
       )
-      const dialog = context.page.getByRole('dialog', { name: '需要你的确认' })
-      await expect(dialog).toContainText('执行命令')
-      await dialog.getByRole('button', { name: '停止', exact: true }).click()
+      const card = permissionCard(context.page)
+      await expect(card).toContainText('执行命令')
+      await card.getByRole('button', { name: '停止', exact: true }).click()
 
       await waitForFixtureEvents(context.layout, (records) =>
         records.some(
@@ -242,7 +244,7 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
             record.event === 'session-cancelled' && record.sessionId === 'controlled-acp-session'
         )
       )
-      await expect(dialog).toHaveCount(0)
+      await expect(card).toHaveCount(0)
       await expectMarker(context.layout, 'unchanged\n')
 
       const taskId = await waitForTaskId(context.page)
@@ -272,14 +274,14 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
       await capturePermissionRequests(context.page)
       await startScenarioPrompt(context.page, '受控 execute 与 unsupported 场景')
 
-      const dialog = context.page.getByRole('dialog', { name: '需要你的确认' })
-      await expect(dialog).toContainText('执行命令')
-      await expect(dialog).toContainText('L3 高风险')
-      await expect(dialog).toContainText('只能允许本次')
-      await expect(dialog).not.toContainText(rawInputSentinel)
-      await expect(dialog.getByRole('button', { name: '允许当前 Task' })).toHaveCount(0)
-      await dialog.getByRole('button', { name: '仅允许这一次' }).click()
-      await expect(dialog).toHaveCount(0)
+      const card = permissionCard(context.page)
+      await expect(card).toContainText('执行命令')
+      await expect(card).toContainText('L3 高风险')
+      await expect(card).toContainText('只能允许本次')
+      await expect(card).not.toContainText(rawInputSentinel)
+      await expect(card.getByRole('button', { name: '允许当前 Task' })).toHaveCount(0)
+      await card.getByRole('button', { name: '仅允许这一次' }).click()
+      await expect(card).toHaveCount(0)
 
       await waitForFixtureEvents(context.layout, (records) =>
         hasFixtureEvents(records, [
@@ -288,7 +290,7 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
           'permission-resolved:duplicate-allow-once:cancelled'
         ])
       )
-      await expect(context.page.getByRole('dialog', { name: '需要你的确认' })).toHaveCount(0)
+      await expect(permissionCard(context.page)).toHaveCount(0)
       expect(await capturedPermissionTitles(context.page)).toEqual(['执行受控命令'])
       await expectMarker(context.layout, 'unchanged\n')
 

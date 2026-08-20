@@ -576,10 +576,12 @@ button:disabled {
   background: color-mix(in srgb, var(--surface-2) 72%, transparent);
   color: var(--text-3);
   font-size: 12px;
+  line-height: 1.5;
 }
 
 .subagent-card[data-status='failed'] {
   border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+  border-left-color: var(--danger);
 }
 
 .subagent-card[data-status='failed'] .subagent-dot {
@@ -588,7 +590,12 @@ button:disabled {
 
 .subagent-card summary {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  gap: 2px;
+}
+
+.subagent-heading {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
 }
@@ -606,6 +613,19 @@ button:disabled {
   color: var(--text-2);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.subagent-status {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.subagent-count {
+  padding-left: 18px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .subagent-tools {
@@ -1879,13 +1899,34 @@ button:disabled {
   }
 }
 
+/* 减少动画：检查器滑入、折叠展开、spinner 都必须 duration 0，不能只写 1ms。 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     scroll-behavior: auto !important;
-    animation-duration: 1ms !important;
+    animation-duration: 0s !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 1ms !important;
+    transition-duration: 0s !important;
+  }
+
+  .workspace-layout > .task-inspector {
+    animation: none;
+    animation-duration: 0s;
+    transition-duration: 0s;
+  }
+
+  .conversation-thought,
+  .conversation-plan,
+  .conversation-usage,
+  .tool-row-details,
+  .subagent-card {
+    transition-duration: 0s;
+  }
+
+  .conversation-spinner,
+  .plan-check-mark[data-status='in_progress'] {
+    animation: none;
+    animation-duration: 0s;
   }
 }

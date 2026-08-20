@@ -352,17 +352,38 @@ Tool    读取 package.json · in_progress
 
 ## 任务 4: 套上子 Agent 皮肤并走查便捷
 
-- [ ] **第 1 步: 按 GACP-06 做 `SubagentCard.vue`**
+- [x] **第 1 步: 按 GACP-06 做 `SubagentCard.vue`**
       说明：只用本计划第 7 节皮肤。无父子字段时不渲染该组件。
       预期：和 ToolRow 间距、字号、颜色一致。
 
-- [ ] **第 2 步: 键盘和减少动画**
+- [x] **第 2 步: 键盘和减少动画**
       说明：Enter 发送、Esc 聚焦停止、`prefers-reduced-motion` 关掉展开动画。
       预期：不看鼠标也能发、停、切上一条对话（可选 j/k 以后再做，本任务不强制）。
 
-- [ ] **第 3 步: 对照走查**
+- [x] **第 3 步: 对照走查**
       说明：同一条真实或夹具 Turn，截「大修前/后」：页眉高度、主列宽度、工具是否还像日志。清单：点进历史能打字、执行中能停、审批不挡对话、两个子 Agent 不串。
       预期：走查记录写进本计划，不把「换了圆角」当成完成。
+
+### 任务 4 第 3 步走查记录（2026-08-20）
+
+**怎么走查：** 夹具 + 纯 TS helper（`collectWorkbenchWalkthroughFacts` / `projectConversationTurn` / `evaluateTaskComposerSend`），对照当前 CSS 与组件源码。本机 `127.0.0.1:5173` 已被既有 node 占用，**未开本 worktree 的 Electron 开发版，未跑真实 Grok GUI，未截桌面像素图。** 不把「换了圆角」当成完成。
+
+| 项 | 大修前（对照代码/计划表） | 大修后（本分支夹具） |
+| --- | --- | --- |
+| 页眉高度 | `.chat-header` 约 66px + 运维芯片 /「连接 Grok」 | `--titlebar-height: 46px`；主列 `.task-header` 只留标题+弱状态，`min-height: 0` |
+| 主列宽度 | 左 272 + 中 + 右 310 三块投影卡片 | `.workspace-layout: 220px 1fr`；对话 `width: min(100%, 760px)` 居中；检查器 overlay 不占第三列 |
+| 工具像不像日志 | `Tool    读取 package.json · in_progress` / `.timeline-node` / `.conversation-process` | `▸ 读了 package.json`（连续读取合成一块）；主列不再挂 `timeline-node` |
+| 子 Agent | 无独立卡，或靠标题猜组 | 第 7 节两行卡（名字+状态 / `已运行 N 个工具 · 点开查看`），12px 缩进 ToolRow；**无 parent 字段时投影不产出 `subagent`，主列不挂空壳** |
+| 点进历史能打字 | 「只读历史 + 继续任务」横幅 | GACP-02：`restore: ready` 时 Composer `canSend`；源码无「继续任务」 |
+| 执行中能停 | 页眉停止 / 检查器 Esc 可能抢走 | 输入框内 `stop-button`；Esc 执行中聚焦停止，焦点已在检查器内才关抽屉 |
+| 审批不挡对话 | 全屏 `dialog`「需要你的确认」 | 流内 `region` 小卡，`autofocus: false`；主按钮仍是「本任务允许」，次按钮「仅允许这一次」 |
+| 两个子 Agent 不串 | 无分组 | 夹具两张卡各自 `nodeId`，工具 nodeId 不相交；真实 Runtime 仍无父子字段，故主列目前是扁平行 |
+
+**键盘 / 动画：** Enter 发送保留 IME `isComposing` / `keyCode === 229`。j/k 切对话本任务不做。`prefers-reduced-motion` 把检查器 slide、details/子 Agent 展开、spinner 的 duration 设为 `0s`（不再用 1ms 充数）。
+
+**受控 e2e：** 选择器改为 `.permission-inline-card` / `.tool-row`，不再找 `dialog` / `.conversation-process` / `.timeline-node`。**未跑 Playwright**（无桌面 GUI）。权限决策仍点「仅允许这一次」，没有把主路径改成 GACP-03 以外的政策。
+
+**未验证：** 真实 Grok 分两个子 Agent、流式半截 Markdown、980 小窗手工、检查器开合手感。这些留给开发版有空闲端口后再走。
 
 ---
 

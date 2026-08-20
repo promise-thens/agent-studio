@@ -36,6 +36,7 @@ const emit = defineEmits<{
 }>()
 
 const textarea = ref<HTMLTextAreaElement | null>(null)
+const stopButton = ref<HTMLButtonElement | null>(null)
 
 /** 输入法确认候选词时保留 Enter，避免未上屏就发送。 */
 function handleComposerKeydown(event: KeyboardEvent): void {
@@ -50,7 +51,12 @@ function focus(): void {
   textarea.value?.focus()
 }
 
-defineExpose({ focus })
+/** Esc 工作台快捷键把焦点放到停止，而不是先关检查器。 */
+function focusStop(): void {
+  stopButton.value?.focus()
+}
+
+defineExpose({ focus, focusStop })
 </script>
 
 <template>
@@ -83,8 +89,10 @@ defineExpose({ focus })
         </div>
         <button
           v-if="action === 'stop'"
+          ref="stopButton"
           class="stop-button"
           type="button"
+          data-composer-stop
           :title="stopTitle"
           :aria-label="stopAriaLabel || stopTitle"
           @click="emit('stop')"

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, watch } from 'vue'
+import { computed, nextTick } from 'vue'
 import { PhX as X } from '@phosphor-icons/vue'
 import type { PermissionAuditRecord } from '../../../shared/task-history'
 import type { TaskTimelineViewModel } from '../task-timeline-reducer'
@@ -46,20 +46,7 @@ const placeholder = computed(() =>
   currentTab.value === 'timeline' ? null : inspectorPlaceholderCopy(currentTab.value)
 )
 const timelineSummary = computed(() => projectInspectorTimelineSummary(props.timeline))
-
-/** Esc 关闭抽屉；不拦截侧栏/Composer 点击，方便边审阅边发送或切 Task。 */
-function onDocumentKeydown(event: KeyboardEvent): void {
-  if (!props.open) return
-  if (event.key !== 'Escape') return
-  if (
-    event.target instanceof Element &&
-    event.target.closest('.modal-backdrop, .permission-dialog, .permission-inline-card')
-  ) {
-    return
-  }
-  event.preventDefault()
-  emit('close')
-}
+// Esc 由 App 裁定：执行中先聚焦停止，只有焦点已在抽屉内才关检查器。
 
 function selectTab(tab: InspectorTab, focus = false): void {
   const next = resolveInspectorTab(tab)
@@ -91,22 +78,6 @@ function onTabListKeydown(event: KeyboardEvent): void {
     selectTab('artifacts', true)
   }
 }
-
-watch(
-  () => props.open,
-  (open) => {
-    if (open) {
-      window.addEventListener('keydown', onDocumentKeydown)
-      return
-    }
-    window.removeEventListener('keydown', onDocumentKeydown)
-  },
-  { immediate: true }
-)
-
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onDocumentKeydown)
-})
 </script>
 
 <template>
