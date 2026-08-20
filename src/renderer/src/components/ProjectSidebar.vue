@@ -6,7 +6,8 @@ import {
   PhFolder as Folder,
   PhFolderOpen as FolderOpen,
   PhGearSix as GearSix,
-  PhNotePencil as NotePencil
+  PhNotePencil as NotePencil,
+  PhPuzzlePiece as PuzzlePiece
 } from '@phosphor-icons/vue'
 import type { ProjectSummary, TaskHistorySummary } from '../../../shared/task-history'
 import type { TaskExecutionDto } from '../../../shared/task-execution'
@@ -15,6 +16,7 @@ import {
   type WorkbenchLoadState
 } from '../composables/useProjectRegistry'
 import { resolveProjectAccordionToggle, tasksForExpandedProject } from '../task-navigation'
+import type { WorkbenchPrimaryView } from '../workbench-primary-view'
 import TaskList from './TaskList.vue'
 
 const props = withDefaults(
@@ -40,6 +42,7 @@ const props = withDefaults(
     browseLoadState?: WorkbenchLoadState
     browseHasMore?: boolean
     browseLoadingMore?: boolean
+    primaryView?: WorkbenchPrimaryView
   }>(),
   {
     newChatDisabled: false,
@@ -54,7 +57,8 @@ const props = withDefaults(
     browseTasks: () => [],
     browseLoadState: () => createWorkbenchLoadState(),
     browseHasMore: false,
-    browseLoadingMore: false
+    browseLoadingMore: false,
+    primaryView: 'conversation'
   }
 )
 
@@ -77,6 +81,7 @@ const emit = defineEmits<{
   browseProject: [projectId: string]
   loadMoreBrowseTasks: []
   retryBrowseTasks: []
+  openPlugins: []
 }>()
 
 const expandedProjectId = ref(props.selectedProjectId)
@@ -236,6 +241,18 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
       {{ historyNavigationDisabledReason }}
     </p>
 
+    <button
+      class="plugins-nav"
+      type="button"
+      title="插件"
+      aria-label="插件"
+      :aria-current="primaryView === 'plugins' ? 'page' : undefined"
+      @click="emit('openPlugins')"
+    >
+      <PuzzlePiece :size="14" />
+      <span>插件</span>
+    </button>
+
     <div class="project-tree">
       <section
         v-for="project in visibleProjects"
@@ -376,6 +393,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
 }
 
 .new-project,
+.plugins-nav,
 .project-header,
 .icon-button,
 .project-actions button,
@@ -410,7 +428,28 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   color: var(--text-3);
 }
 
+.plugins-nav {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  margin: 2px 8px 6px;
+  padding: 0 10px;
+  border-radius: var(--radius-soft);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.plugins-nav[aria-current='page'] {
+  color: var(--text-1);
+  background: var(--selected-fill);
+}
+
 .new-project:not(:disabled):hover,
+.plugins-nav:hover,
 .icon-button:hover,
 .project-header:not(:disabled):hover,
 .project-actions button:not(:disabled):hover,

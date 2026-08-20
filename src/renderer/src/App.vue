@@ -32,6 +32,8 @@ import { unwrapDesktopIpcResult, type RendererDesktopIpcError } from './desktop-
 import { describeProjectFolderRevealFailure } from './project-folder-reveal'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import ExecutionSurfaceBanner from './components/ExecutionSurfaceBanner.vue'
+import PluginsPage from './components/PluginsPage.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import TaskComposer from './components/TaskComposer.vue'
 import TaskConversation from './components/TaskConversation.vue'
@@ -77,6 +79,7 @@ import {
   resolveEscapeWorkbenchTarget,
   shouldIgnoreWorkbenchEscape
 } from './workbench-keyboard'
+import { resolveExecutionSurfaceBanner } from './workbench-primary-view'
 import {
   createAndSelectTask,
   deriveSessionTitle,
@@ -513,6 +516,14 @@ const workbenchLoadError = computed(
     workbench.projectLoadState.value.status === 'error' ||
     workbench.taskListLoadState.value.status === 'error' ||
     workbench.taskDetailLoadState.value.status === 'error'
+)
+const executionSurfaceBanner = computed(() =>
+  resolveExecutionSurfaceBanner({
+    primaryView: workbench.primaryView.value,
+    activeExecution: activeExecution.value
+      ? { taskId: activeExecution.value.taskId, state: activeExecution.value.state }
+      : null
+  })
 )
 /** 连接失败进对话流短错误+重试；页眉只留弱状态，避免两个主按钮。 */
 const conversationConnectFailure = computed(() =>
@@ -1493,8 +1504,10 @@ function scrollMessagesToBottom(): void {
         :browse-load-state="workbench.browseLoadState.value"
         :browse-has-more="workbench.browseHasMore.value"
         :browse-loading-more="workbench.browseLoadingMore.value"
+        :primary-view="workbench.primaryView.value"
         @new-chat="startNewChat"
         @open-settings="openSettingsDialog"
+        @open-plugins="workbench.openPlugins"
         @select-project="selectProject"
         @choose-project="chooseWorkspace"
         @retry-access="(projectId) => workbench.registry.retryAccess(projectId)"
@@ -1513,58 +1526,70 @@ function scrollMessagesToBottom(): void {
         @retry-browse-tasks="workbench.retryBrowseTasks"
       />
 
-      <main class="chat-panel">
-        <TaskHeader
-          :facts="taskHeaderFacts"
-          :load-error="workbenchLoadError"
-          @retry-load="retryWorkbenchLoad"
-        />
+      <main class="chat-panel" :class="{ 'is-plugins': workbench.primaryView.value === 'plugins' }">
+        <!-- 插件页只换主列：不卸载 workbench 状态，也不停后台 Turn。 -->
+        <template v-if="workbench.primaryView.value === 'plugins'">
+          <ExecutionSurfaceBanner
+            v-if="executionSurfaceBanner.kind !== 'none'"
+            :primary-view="workbench.primaryView.value"
+            :active-execution="activeExecution"
+            @return-to-conversation="workbench.returnToConversation"
+          />
+          <PluginsPage />
+        </template>
+        <template v-else>
+          <TaskHeader
+            :facts="taskHeaderFacts"
+            :load-error="workbenchLoadError"
+            @retry-load="retryWorkbenchLoad"
+          />
 
-        <TaskConversation
-          :conversation-key="activeTaskId"
-          :model="taskTimeline.activeTimeline.value"
-          :loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
-          :has-more-turns="
-            Boolean(activeTaskView?.mode === 'history' && taskHistory.turnCursor.value)
-          "
-          :loading-more-turns="taskHistory.loadingMoreTurns.value"
-          :event-after-sequence-by-turn="taskHistory.eventAfterSequenceByTurn.value"
-          :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
-          :local-errors="localErrorMessages"
-          :can-create-task="!newChatDisabled"
-          :connect-failure="conversationConnectFailure"
-          :permission="permission"
-          :permission-pending="permissionResponsePending"
-          :permission-task-title="permissionTaskTitle"
-          @load-more-turns="loadMoreHistoryTurns"
-          @load-more-events="loadMoreHistoryEvents"
-          @create-task="startNewChat"
-          @retry-connect="retryRuntimeConnect"
-          @respond-permission="respondPermission"
-          @cancel-turn="cancelTurn"
-        />
+          <TaskConversation
+            :conversation-key="activeTaskId"
+            :model="taskTimeline.activeTimeline.value"
+            :loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
+            :has-more-turns="
+              Boolean(activeTaskView?.mode === 'history' && taskHistory.turnCursor.value)
+            "
+            :loading-more-turns="taskHistory.loadingMoreTurns.value"
+            :event-after-sequence-by-turn="taskHistory.eventAfterSequenceByTurn.value"
+            :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
+            :local-errors="localErrorMessages"
+            :can-create-task="!newChatDisabled"
+            :connect-failure="conversationConnectFailure"
+            :permission="permission"
+            :permission-pending="permissionResponsePending"
+            :permission-task-title="permissionTaskTitle"
+            @load-more-turns="loadMoreHistoryTurns"
+            @load-more-events="loadMoreHistoryEvents"
+            @create-task="startNewChat"
+            @retry-connect="retryRuntimeConnect"
+            @respond-permission="respondPermission"
+            @cancel-turn="cancelTurn"
+          />
 
-        <TaskComposer
-          ref="taskComposer"
-          :prompt="prompt"
-          :can-send="canSend"
-          :action="composerAction"
-          :stop-title="stopButtonTitle"
-          :stop-aria-label="stopButtonAriaLabel"
-          :disabled-message="composerDisabledMessage"
-          :textarea-disabled="composerTextareaDisabled"
-          :model="currentModel"
-          :load-models="loadSavedModels"
-          :select-model="selectProviderModel"
-          :model-busy="composerChrome.modelBusy"
-          :model-disabled="!providerSummary?.configured"
-          :context-usage="composerContextUsage"
-          @update:prompt="prompt = $event"
-          @send="sendPrompt"
-          @stop="cancelTurn"
-          @model-changed="handleModelChanged"
-          @model-error="handleModelError"
-        />
+          <TaskComposer
+            ref="taskComposer"
+            :prompt="prompt"
+            :can-send="canSend"
+            :action="composerAction"
+            :stop-title="stopButtonTitle"
+            :stop-aria-label="stopButtonAriaLabel"
+            :disabled-message="composerDisabledMessage"
+            :textarea-disabled="composerTextareaDisabled"
+            :model="currentModel"
+            :load-models="loadSavedModels"
+            :select-model="selectProviderModel"
+            :model-busy="composerChrome.modelBusy"
+            :model-disabled="!providerSummary?.configured"
+            :context-usage="composerContextUsage"
+            @update:prompt="prompt = $event"
+            @send="sendPrompt"
+            @stop="cancelTurn"
+            @model-changed="handleModelChanged"
+            @model-error="handleModelError"
+          />
+        </template>
       </main>
 
       <TaskInspector

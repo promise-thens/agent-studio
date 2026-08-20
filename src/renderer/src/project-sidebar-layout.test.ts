@@ -24,6 +24,21 @@ describe('侧栏项目平铺', () => {
     expect(sidebarSource).not.toContain('选择目录')
   })
 
+  it('插件入口在项目树上方，运行点仍画在任务行', () => {
+    const pluginsIndex = sidebarSource.indexOf('aria-label="插件"')
+    const treeIndex = sidebarSource.indexOf('class="project-tree"')
+    expect(pluginsIndex).toBeGreaterThan(0)
+    expect(treeIndex).toBeGreaterThan(pluginsIndex)
+    expect(sidebarSource).toContain('title="插件"')
+    expect(sidebarSource).toContain(
+      `:aria-current="primaryView === 'plugins' ? 'page' : undefined"`
+    )
+    expect(sidebarSource).toContain("emit('openPlugins')")
+    const pluginsButton = sidebarSource.match(/class="plugins-nav"[\s\S]*?<\/button>/)?.[0] ?? ''
+    expect(pluginsButton).toContain('aria-label="插件"')
+    expect(pluginsButton).not.toContain('run-count')
+  })
+
   it('新对话仍是可点按钮，当前项目头保留 project-current 给 e2e', () => {
     expect(sidebarSource).toContain('aria-label="新对话"')
     expect(sidebarSource).toContain("'project-current'")

@@ -382,6 +382,52 @@ describe('useTaskWorkbench', () => {
     expect(workbench.browseTasks.value.map((item) => item.taskId)).toEqual(['task-b'])
     expect(workbench.browseLoadState.value.status).toBe('ready')
   })
+
+  it('运行中打开插件页不取消执行、不清 selectedTaskId', async () => {
+    const workbench = useTaskWorkbench()
+    await workbench.initialize()
+    await workbench.start()
+    await workbench.selectTask('task-a')
+    const beforeSnapshot = workbench.executionSnapshot.value
+    const taskGetCalls = vi.mocked(window.task.get).mock.calls.length
+
+    workbench.openPlugins()
+
+    expect(workbench.primaryView.value).toBe('plugins')
+    expect(workbench.selectedTaskId.value).toBe('task-a')
+    expect(workbench.activeExecution.value?.taskId).toBe('task-a')
+    expect(workbench.activeExecution.value?.state).toBe('running')
+    expect(workbench.executionSnapshot.value).toEqual(beforeSnapshot)
+    expect(vi.mocked(window.task.get).mock.calls.length).toBe(taskGetCalls)
+    expect(window.app).not.toHaveProperty('listPlugins')
+  })
+
+  it('selectTask 后 primaryView 回到 conversation', async () => {
+    const workbench = useTaskWorkbench()
+    await workbench.initialize()
+    workbench.openPlugins()
+    expect(workbench.primaryView.value).toBe('plugins')
+
+    await workbench.selectTask('task-a')
+
+    expect(workbench.primaryView.value).toBe('conversation')
+    expect(workbench.selectedTaskId.value).toBe('task-a')
+  })
+
+  it('返回对话只改主列，不清 selectedTaskId', async () => {
+    const workbench = useTaskWorkbench()
+    await workbench.initialize()
+    await workbench.start()
+    await workbench.selectTask('task-a')
+    workbench.openPlugins()
+
+    workbench.returnToConversation()
+
+    expect(workbench.primaryView.value).toBe('conversation')
+    expect(workbench.selectedTaskId.value).toBe('task-a')
+    expect(workbench.activeExecution.value?.taskId).toBe('task-a')
+    expect(workbench.activeExecution.value?.state).toBe('running')
+  })
 })
 
 function deferred<T>(): {

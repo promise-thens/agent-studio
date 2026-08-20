@@ -5,6 +5,11 @@ import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import { createTaskExecutionConsumer } from '../task-execution-consumer'
 import { countProjectLiveTasks } from '../task-navigation'
 import {
+  applyOpenPlugins,
+  DEFAULT_WORKBENCH_PRIMARY_VIEW,
+  type WorkbenchPrimaryView
+} from '../workbench-primary-view'
+import {
   createWorkbenchLoadState,
   useProjectRegistry,
   type ProjectRegistryState,
@@ -24,6 +29,8 @@ const ACTIVE_EXECUTION_STATES = new Set<TaskExecution['state']>([
 export interface TaskWorkbenchState {
   selectedProjectId: Ref<string>
   selectedTaskId: Ref<string>
+  /** 主列页；与 selectedTaskId / activeExecution 独立，切页不得停 Task。 */
+  primaryView: Ref<WorkbenchPrimaryView>
   /** 非终态执行；与 selectedTaskId 独立。终态不得占用此字段。 */
   activeExecution: ComputedRef<TaskExecution | null>
   executionSnapshot: Ref<TaskExecutionSnapshot>
@@ -43,6 +50,8 @@ export interface TaskWorkbenchState {
   initialize(): Promise<void>
   selectProject(projectId: string): Promise<void>
   selectTask(taskId: string): Promise<void>
+  openPlugins(): void
+  returnToConversation(): void
   browseProject(projectId: string): Promise<void>
   loadMoreBrowseTasks(): Promise<void>
   retryBrowseTasks(): Promise<void>
@@ -71,6 +80,7 @@ export function useTaskWorkbench(): TaskWorkbenchController {
   const registry = useProjectRegistry()
   const history = useTaskHistory({ activeProjectId: registry.selectedProjectId })
   const selectedTaskId = ref('')
+  const primaryView = ref<WorkbenchPrimaryView>(DEFAULT_WORKBENCH_PRIMARY_VIEW)
   const executionSnapshot = ref<TaskExecutionSnapshot>({
     executorEpoch: 'renderer-initial',
     executionRevision: 0,
@@ -223,10 +233,12 @@ export function useTaskWorkbench(): TaskWorkbenchController {
   /**
    * 立即写入 selectedTaskId，并用独立 revision 保护详情；
    * 不得触碰 executionSnapshot，也不得把运行中的 Task A 清空。
+   * 点任务必须回到对话主列，避免新选中的 Task 藏在插件页后面。
    */
   async function selectTask(taskId: string): Promise<void> {
     if (!taskId) return
     selectedTaskId.value = taskId
+    primaryView.value = 'conversation'
     const revision = ++taskDetailRevision
     taskDetailLoadState.value = createWorkbenchLoadState(revision, 'loading')
     try {
@@ -243,6 +255,26 @@ export function useTaskWorkbench(): TaskWorkbenchController {
       )
       throw error
     }
+  }
+
+  /**
+   * 切到插件页只换主列。
+   * 不得 cancelTurn、disconnect 或 selectTask('')，后台 Turn 继续跑。
+   */
+  function openPlugins(): void {
+    const next = applyOpenPlugins({
+      selectedTaskId: selectedTaskId.value,
+      activeExecutionTaskId: activeExecution.value?.taskId ?? null
+    })
+    primaryView.value = next.primaryView
+  }
+
+  /**
+   * 从插件页回到对话只改主列。
+   * 不得取消 Turn，也不得清空 selectedTaskId。
+   */
+  function returnToConversation(): void {
+    primaryView.value = 'conversation'
   }
 
   async function retryProjects(): Promise<void> {
@@ -290,6 +322,7 @@ export function useTaskWorkbench(): TaskWorkbenchController {
   return {
     selectedProjectId: registry.selectedProjectId,
     selectedTaskId,
+    primaryView,
     activeExecution,
     executionSnapshot,
     projectLoadState: registry.loadState,
@@ -307,6 +340,8 @@ export function useTaskWorkbench(): TaskWorkbenchController {
     initialize,
     selectProject,
     selectTask,
+    openPlugins,
+    returnToConversation,
     browseProject,
     loadMoreBrowseTasks,
     retryBrowseTasks,

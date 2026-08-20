@@ -210,6 +210,25 @@ button:disabled {
   background: var(--app-bg);
 }
 
+/* 插件页卸下对话和输入框，执行条只占顶上一行。 */
+.chat-panel.is-plugins {
+  grid-template-areas:
+    'banner'
+    'plugins';
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.chat-panel.is-plugins .execution-surface-banner {
+  grid-area: banner;
+}
+
+.chat-panel.is-plugins .plugins-page {
+  grid-area: plugins;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .task-header {
   grid-area: header;
   flex-wrap: nowrap;
