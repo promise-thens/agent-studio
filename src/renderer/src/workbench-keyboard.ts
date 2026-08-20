@@ -14,7 +14,7 @@ export function resolveEscapeWorkbenchTarget(input: {
   return 'none'
 }
 
-/** 输入法、已处理按键、权限卡/确认框自己要吃掉 Esc 时，工作台不要再抢。 */
+/** 输入法、已处理按键、权限卡/确认框/斜杠命令板自己要吃掉 Esc 时，工作台不要再抢。 */
 export function shouldIgnoreWorkbenchEscape(input: {
   key: string
   isComposing?: boolean
@@ -28,10 +28,15 @@ export function shouldIgnoreWorkbenchEscape(input: {
   return Boolean(input.overlayConsumesEscape)
 }
 
+/** 斜杠命令板和权限 overlay 先吃 Esc，避免误停 Task 或关掉检查器。 */
 export function overlayConsumesEscape(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
-    Boolean(target.closest('.modal-backdrop, .permission-dialog, .permission-inline-card'))
+    Boolean(
+      target.closest(
+        '.modal-backdrop, .permission-dialog, .permission-inline-card, .slash-command-palette'
+      )
+    )
   )
 }
 

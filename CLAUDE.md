@@ -255,13 +255,13 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[P0-10C Grok 宿主工作台表面](docs/superpowers/plans/p0-10c-grok-host-surfaces.md)、[P0-10D 记忆与 MCP 设置](docs/superpowers/plans/p0-10d-grok-memory-and-mcp.md)（计划已立项，代码未开工）；P0-10B 已落地代码
+- 当前计划：[P0-10D 记忆与 MCP 设置](docs/superpowers/plans/p0-10d-grok-memory-and-mcp.md)（计划已立项，代码未开工）；P0-10C 代码已落地（自动门禁）
 - 状态：桌面定位为 Grok Build ACP Client，不自己当 Agent。设置现为供应商 / 外观；记忆与 MCP 将进设置，插件为侧栏整页且不得打断运行中 Task。Inspector 仍是 Timeline/Changes/Terminal/Artifacts。P2 Codex 暂缓
-- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C/D 仅文档
-- Grok ACP 加深：顺序仍为 GACP-01 → GACP-02 → P0-10 → P0-10C/D → P0-11 → GACP-03。`available_commands_update` 将由 P0-10C 作 session 快照，不进 Timeline
+- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C 代码已落地（自动验证已过，开发版 GUI 未跑）；P0-10D 仅文档
+- Grok ACP 加深：顺序仍为 GACP-01 → GACP-02 → P0-10 → P0-10C/D → P0-11 → GACP-03。`available_commands_update` 现为 session 快照，不进 Timeline
 - 兼容边界：首版仍只有一个执行槽；不修改用户 `~/.grok`；`clientCapabilities: {}`；不把桌面做成 MCP Host
-- 下一步：先评审 P0-10C/D 计划再开工。开发版走查 P0-10B 外观仍待做。不要加回「继续任务」按钮
-- 最近验证：2026-08-20 P0-10B 后单元测试 570 通过，typecheck/build 通过。受控 e2e 未重跑。开发版真实 GUI 走查未跑
+- 下一步：P0-10D。开发版走查 P0-10B 外观与 P0-10C GUI 仍待做。不要加回「继续任务」按钮
+- 最近验证：2026-08-20 P0-10C 后自动门禁通过（eslint / test / typecheck / build）。受控 e2e 未重跑。开发版真实 GUI 走查未跑
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

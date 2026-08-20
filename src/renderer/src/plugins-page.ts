@@ -11,7 +11,20 @@ export function pluginDisplayLabel(
   return plugin.displayName.trim() || plugin.pluginId
 }
 
-/** 选中已变时丢掉迟到的 getPlugin，避免列表亮 B、详情却是 A。 */
+/**
+ * 选中已变时丢掉迟到的 getPlugin，避免列表亮 B、详情却是 A。
+ * 失败路径单独重载：没有 detail 时不要把 T 推断成 unknown。
+ */
+export function applyPluginDetailIfCurrent(input: {
+  selectedPluginId: string
+  requestedPluginId: string
+  incoming: { ok: false; errorMessage: string }
+}): { apply: false } | { apply: true; detail: null; detailState: 'error'; detailError: string }
+export function applyPluginDetailIfCurrent<T>(input: {
+  selectedPluginId: string
+  requestedPluginId: string
+  incoming: { ok: true; detail: T }
+}): { apply: false } | { apply: true; detail: T; detailState: 'ready'; detailError: '' }
 export function applyPluginDetailIfCurrent<T>(input: {
   selectedPluginId: string
   requestedPluginId: string

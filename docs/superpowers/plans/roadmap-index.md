@@ -1,6 +1,6 @@
 # Agent Studio 分阶段功能路线索引
 
-> 状态：P0-01 至 P0-07 已完成代码、自动验证与 Electron 验收；P0-08 核心实现、完整自动门禁和首批受控 lifecycle Electron E2E 已完成，真机与跨平台验收待补；P0-09 真机验收已受限关闭；GACP-01 已于 2026-08-19 受限关闭；GACP-02 核心已落地；P0-10B 代码已落地。下一步工作台表面见 P0-10C / P0-10D。Grok ACP 加深计划见 [grokACP计划](grokACP计划/README.md)
+> 状态：P0-01 至 P0-07 已完成代码、自动验证与 Electron 验收；P0-08 核心实现、完整自动门禁和首批受控 lifecycle Electron E2E 已完成，真机与跨平台验收待补；P0-09 真机验收已受限关闭；GACP-01 已于 2026-08-19 受限关闭；GACP-02 核心已落地；P0-10B 代码已落地。P0-10C 代码已落地、自动验证已过（GUI 未跑）。下一步见 P0-10D。Grok ACP 加深计划见 [grokACP计划](grokACP计划/README.md)
 >
 > 本索引只负责开发顺序、权重、依赖和进度导航；每一个实际功能只在对应独立 Markdown 中定义任务。产品愿景仍以 [product-vision.md](../../product-vision.md) 为唯一愿景来源。
 >
@@ -12,7 +12,7 @@
 - **权重 5：** 阻塞性基础能力或安全边界；权重 4：核心闭环；权重 3：增强能力；权重 2：有足够真实数据后再做的优化。
 - **三个验收层：** P0-A 是本地可用闭环；P0-B 是隔离交付闭环；P0+ 是不阻塞第一可用版本的增强能力。后续计划应依赖明确验收层或具体计划，不再使用含义模糊的“依赖整个 P0”。
 - **安全不是过度安全：** 只读项目元信息允许任务范围授权；写文件/执行命令展示影响；删除、外发数据、登录态、屏幕和剪贴板始终明确确认。不会做自研加密、逐文件弹窗、默认全盘扫描或未有生态就先做插件市场。
-- **状态说明：** P0-01 至 P0-07 已完成代码、自动验证和 Electron 验收；P0-06 已通过真实 Provider 调用、多轮、重启恢复成功/失败、不可用 Project、异常中断、取消、损坏隔离和物理删除走查。P0-07 已通过完整自动门禁、主要真实 Grok 权限路径与受控 ACP Runtime Electron E2E；后者使用固定本地 fixture 验证完整 Electron/stdio ACP 管线，不等价于真实 Grok 黑盒触发，也不把 Broker 描述为 Runtime 进程沙箱。P0-08 已完成核心实现、Permission E2E 和首批 lifecycle E2E，Windows/Linux 生命周期平台差异仍待验收；真实 Grok 活动退出与重启 interrupted 已由 2026-08-18 Windows 夜间补测在 Grok 路径上收口。P0-09 真机验收已受限关闭：同一 Task 两轮实时/历史一致，权限允许/拒绝、终态、退出三分支已有结论；Windows 窗口销毁/重建与历史截断保持限制。GACP-01 已于 2026-08-19 受限关闭（握手、`set_model`、A→B→A `resume`、一次 `execute` 权限已冻结；load/close/子 Agent/退出协议路径保持 `not-observed`，不挡后续开工）。GACP-02 核心已落地。P0-10 Task 1–4 与 P0-10B 已有代码。下一步按 P0-10C → P0-10D 做 Grok 宿主可视化。P1 前五项已有实现提交 `fe2a81a`，但仍列为“实现待复核”。
+- **状态说明：** P0-01 至 P0-07 已完成代码、自动验证和 Electron 验收；P0-06 已通过真实 Provider 调用、多轮、重启恢复成功/失败、不可用 Project、异常中断、取消、损坏隔离和物理删除走查。P0-07 已通过完整自动门禁、主要真实 Grok 权限路径与受控 ACP Runtime Electron E2E；后者使用固定本地 fixture 验证完整 Electron/stdio ACP 管线，不等价于真实 Grok 黑盒触发，也不把 Broker 描述为 Runtime 进程沙箱。P0-08 已完成核心实现、Permission E2E 和首批 lifecycle E2E，Windows/Linux 生命周期平台差异仍待验收；真实 Grok 活动退出与重启 interrupted 已由 2026-08-18 Windows 夜间补测在 Grok 路径上收口。P0-09 真机验收已受限关闭：同一 Task 两轮实时/历史一致，权限允许/拒绝、终态、退出三分支已有结论；Windows 窗口销毁/重建与历史截断保持限制。GACP-01 已于 2026-08-19 受限关闭（握手、`set_model`、A→B→A `resume`、一次 `execute` 权限已冻结；load/close/子 Agent/退出协议路径保持 `not-observed`，不挡后续开工）。GACP-02 核心已落地。P0-10 Task 1–4 与 P0-10B 已有代码。P0-10C 代码已落地、自动验证已过（GUI 未跑）。下一步 P0-10D。P1 前五项已有实现提交 `fe2a81a`，但仍列为“实现待复核”。
 - **产品主线：** 先把 Grok Build 打磨成可日常使用的单 Runtime 工作台（宿主可视化：斜杠命令、记忆、MCP、插件），再扩展 Provider 宽度。Codex Runtime 与多大脑协作暂缓。HTML 预览是 Artifact 的隔离扩展，不是产品本体。
 
 ## P0：统一核心骨架与 Codex-style 单 Runtime 工作台
@@ -41,7 +41,7 @@
 |       5b | GACP-02 |    5 | [会话恢复能力产品契约](grokACP计划/gacp-02-session-restore-capability-contract.md)           | 核心已落地，待手工/e2e 收口        | GACP-01                                  |
 |       5c | P0-10A  |    5 | [Claude Desktop 风格工作台大修](p0-10a-claude-desktop-workbench-ui.md)                       | 助手 Markdown 已接入；换皮待开始   | P0-09 测试门；与 GACP-02/06 对齐皮肤     |
 |       5d | P0-10B  |    3 | [设置弹窗与外观](p0-10b-settings-dialog-and-appearance.md)                                   | 代码已落地；开发版走查待做         | P0-10A 视觉 token；与 P1-04 设置入口衔接 |
-|       5e | P0-10C  |    4 | [Grok 宿主工作台表面](p0-10c-grok-host-surfaces.md)                                         | 待开始                             | P0-10B；P0-10 工作台壳                   |
+|       5e | P0-10C  |    4 | [Grok 宿主工作台表面](p0-10c-grok-host-surfaces.md)                                         | 代码已落地；自动验证已过（GUI 未跑） | P0-10B；P0-10 工作台壳                   |
 |       5f | P0-10D  |    4 | [Grok 记忆与 MCP 设置](p0-10d-grok-memory-and-mcp.md)                                       | 待开始                             | P0-10C                                   |
 |        6 | P0-10   |    5 | [单 Runtime 任务工作台](p0-10-single-runtime-task-workbench.md)                              | Task 1–4 已合入功能分支；开发版手工与 lifecycle e2e 未在本分支实跑 | P0-06、P0-08、P0-09、P0-10A、GACP-02     |
 |        7 | P0-11   |    5 | [Command Runner 与执行证据](p0-11-command-execution-evidence.md)                             | 待开始                             | P0-06、P0-07、P0-08、P0-10               |

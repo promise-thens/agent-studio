@@ -1,6 +1,6 @@
 # P0-10C Grok 宿主工作台表面 实施计划
 
-> **状态：** 待开始（2026-08-20 产品确认：桌面是 Grok Build 的 ACP Client，不自己当大脑；先写计划，不开工）
+> **状态：** 代码已落地（自动门禁）；开发版 GUI 走查未跑。
 >
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 按任务落地。步骤使用复选框 (`- [ ]`) 跟踪。
 >
@@ -458,9 +458,9 @@ Composer：`isSlashComposerDraft` 为真时展示面板；无 runtime 命令且 
 
 命令板打开时 Esc 先关面板，不停止 Task、不关检查器。`overlayConsumesEscape` 增加 `.slash-command-palette`。
 
-- [ ] 目标文件 ESLint、`pnpm test`、`pnpm typecheck`、`pnpm build`、`git diff --check`
+- [x] 目标文件 ESLint、`pnpm test`、`pnpm typecheck`、`pnpm build`、`git diff --check`
 - [ ] 开发版手工（不替代自动门）：Task 运行中点「插件」→ 任务徽标仍在、Grok 继续；返回对话时间线续上；`/` 能看到 Grok 广告项（若本机会话有广告）。
-- [ ] 受控 ACP e2e **本计划不强制重跑**；若改 Adapter sessionUpdate 分支，补一条 fixture：无 Turn 下发 `available_commands_update` 不崩。
+- [x] 受控 ACP e2e **本计划不强制重跑**；Task 4 已有无 Turn `available_commands_update` 单测，本任务未改 Adapter sessionUpdate。
 
 ## 验收标准
 
