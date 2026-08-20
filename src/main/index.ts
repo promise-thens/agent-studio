@@ -213,7 +213,9 @@ async function initializeServices(
         agentService?.handlePermissionCancellation(request)
       },
       onAvailableCommands: (snapshot) => {
+        // Service 持久化当前 session 快照；同步推给 Renderer（已投影，非 ACP 原文）
         agentService?.handleAvailableCommands(snapshot)
+        sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.availableCommands, snapshot)
       }
     },
     {
@@ -330,6 +332,7 @@ function registerIpcHandlers(): void {
             throw new AgentServiceError('invalid-state', '指定 execution 当前不可取消。')
         },
         getTaskRuntimeState: (taskId) => service.getTaskRuntimeState(taskId),
+        getAvailableCommands: (taskId) => service.getAvailableCommands(taskId),
         respondPermission: (request) => service.respondPermission(request)
       }
     },

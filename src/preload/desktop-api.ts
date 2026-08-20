@@ -5,6 +5,10 @@ import {
   type AgentRuntimeStatus,
   type AgentTaskRuntimeState
 } from '../shared/agent'
+import {
+  parseAvailableCommandSnapshot,
+  type AgentAvailableCommandSnapshot
+} from '../shared/agent-available-command'
 import type {
   PublicAgentDiffReviewReference,
   PublicAgentEvent,
@@ -542,6 +546,10 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId }) as Promise<
         DesktopIpcResult<AgentTaskRuntimeState>
       >,
+    getAvailableCommands: (taskId) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getAvailableCommands, { taskId }) as Promise<
+        DesktopIpcResult<AgentAvailableCommandSnapshot>
+      >,
     respondPermission: (request) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.respondPermission, {
         approvalId: request.approvalId,
@@ -573,6 +581,14 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
         AGENT_PUSH_CHANNELS.permissionCancelled,
         listener,
         parsePermissionCancellation
+      ),
+    // Preload 再 parse 一次：主进程可信但跨进程载荷仍可能被篡改或残缺，失败则静默丢弃
+    onAvailableCommands: (listener) =>
+      subscribe<AgentAvailableCommandSnapshot>(
+        ipcRenderer,
+        AGENT_PUSH_CHANNELS.availableCommands,
+        listener,
+        parseAvailableCommandSnapshot
       )
   }
 }

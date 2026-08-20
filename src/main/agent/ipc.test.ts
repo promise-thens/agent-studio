@@ -69,6 +69,11 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
     startTurn: vi.fn(async () => turn),
     cancelTurn: vi.fn(async () => undefined),
     getTaskRuntimeState: vi.fn(() => task),
+    getAvailableCommands: vi.fn(() => ({
+      taskId: 'task-1',
+      revision: 0,
+      commands: []
+    })),
     respondPermission: vi.fn(async () => undefined)
   }
   const assertTrustedSender = vi.fn()
@@ -97,7 +102,7 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
 }
 
 describe('Agent IPC Handler', () => {
-  it('只注册固定的八个 Agent invoke channel', () => {
+  it('只注册固定的 Agent invoke channel', () => {
     const fixture = createFixture()
     expect([...fixture.handlers.keys()]).toEqual(Object.values(AGENT_INVOKE_CHANNELS))
   })
@@ -445,6 +450,51 @@ describe('Agent IPC Handler', () => {
       ok: false,
       error: { code: 'task-not-found', message: '未找到指定 Task。' }
     })
+  })
+
+  it('命令快照读取委托 Service，并原样返回已投影快照', async () => {
+    const fixture = createFixture()
+    const snapshot = {
+      taskId: 'task-1',
+      revision: 2,
+      commands: [{ name: 'compact', description: '压缩上下文', inputHint: '可选主题' }]
+    }
+    vi.mocked(fixture.runtime.getAvailableCommands).mockReturnValue(snapshot)
+
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.getAvailableCommands, { taskId: 'task-1' })
+    ).toEqual({ ok: true, value: snapshot })
+    expect(fixture.runtime.getAvailableCommands).toHaveBeenCalledWith('task-1')
+  })
+
+  it('命令快照未知 Task 对外映射为 invalid-input，不泄露 task-not-found', async () => {
+    const fixture = createFixture()
+    vi.mocked(fixture.runtime.getAvailableCommands).mockImplementation(() => {
+      throw new AgentServiceError('task-not-found', '未找到指定 Task。')
+    })
+
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.getAvailableCommands, { taskId: 'missing-task' })
+    ).toEqual({
+      ok: false,
+      error: { code: 'invalid-input', message: '未找到指定 Task。' }
+    })
+  })
+
+  it('命令快照请求参数畸形时在 Service 调用前拒绝', async () => {
+    const fixture = createFixture()
+
+    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.getAvailableCommands)).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-input' }
+    })
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.getAvailableCommands, { taskId: '' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.getAvailableCommands, { taskId: 'task\0-1' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.runtime.getAvailableCommands).not.toHaveBeenCalled()
   })
 
   it('未知异常只返回脱敏后的 operation-failed', async () => {

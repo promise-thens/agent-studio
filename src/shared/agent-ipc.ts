@@ -4,6 +4,7 @@ import type {
   AgentRuntimeStatus,
   AgentTaskRuntimeState
 } from './agent'
+import type { AgentAvailableCommandSnapshot } from './agent-available-command'
 import type { PublicAgentEvent } from './agent-event'
 import type {
   AgentStartTurnAdmissionResult,
@@ -23,7 +24,8 @@ export const AGENT_INVOKE_CHANNELS = {
   startTurn: 'agent:start-turn',
   cancelTurn: 'agent:cancel-turn',
   getTaskRuntimeState: 'agent:get-task-runtime-state',
-  respondPermission: 'agent:respond-permission'
+  respondPermission: 'agent:respond-permission',
+  getAvailableCommands: 'agent:get-available-commands'
 } as const
 
 export const AGENT_PUSH_CHANNELS = {
@@ -31,7 +33,8 @@ export const AGENT_PUSH_CHANNELS = {
   executionUpdate: 'agent:execution-update',
   event: 'agent:event',
   permission: 'agent:permission',
-  permissionCancelled: 'agent:permission-cancelled'
+  permissionCancelled: 'agent:permission-cancelled',
+  availableCommands: 'agent:available-commands'
 } as const
 
 export interface AgentConnectRequest {
@@ -54,6 +57,11 @@ export interface AgentStartTurnRequest {
 export type AgentCancelTurnRequest = TaskExecutionCancellationRequest
 
 export interface AgentGetTaskRuntimeStateRequest {
+  taskId: string
+}
+
+/** 读取某 Task 当前 session 级斜杠命令快照；未知 taskId 由主进程映射为 invalid-input。 */
+export interface AgentGetAvailableCommandsRequest {
   taskId: string
 }
 
@@ -86,10 +94,17 @@ export interface AgentDesktopApi {
   ) => Promise<DesktopIpcResult<AgentStartTurnAdmissionResult>>
   cancelTurn: (request: AgentCancelTurnRequest) => Promise<DesktopIpcResult<null>>
   getTaskRuntimeState: (taskId: string) => Promise<DesktopIpcResult<AgentTaskRuntimeState>>
+  /**
+   * 拉取指定 Task 的可用斜杠命令快照。
+   * 执行命令仍走 startTurn 文本，不另开 execute-command IPC。
+   */
+  getAvailableCommands: (taskId: string) => Promise<DesktopIpcResult<AgentAvailableCommandSnapshot>>
   respondPermission: (request: AgentRespondPermissionRequest) => Promise<DesktopIpcResult<null>>
   onStatus: (listener: (status: AgentRuntimeStatus) => void) => () => void
   onExecutionUpdate: (listener: (snapshot: TaskExecutionSnapshot) => void) => () => void
   onEvent: (listener: (event: PublicAgentEvent) => void) => () => void
   onPermission: (listener: (request: AgentPermissionRequest) => void) => () => void
   onPermissionCancelled: (listener: (request: AgentPermissionCancellation) => void) => () => void
+  /** Session 级命令快照推送；Preload 侧 parse 失败则丢弃，不进 Timeline。 */
+  onAvailableCommands: (listener: (snapshot: AgentAvailableCommandSnapshot) => void) => () => void
 }

@@ -42,6 +42,7 @@ describe('窄 Preload API', () => {
       turnId: 'turn-1'
     })
     await agent.getTaskRuntimeState('task-1')
+    await agent.getAvailableCommands('task-1')
     await agent.respondPermission({
       approvalId: 'request-1',
       taskId: 'task-1',
@@ -70,6 +71,7 @@ describe('窄 Preload API', () => {
         { executionId: 'execution-1', taskId: 'task-1', turnId: 'turn-1' }
       ],
       [AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId: 'task-1' }],
+      [AGENT_INVOKE_CHANNELS.getAvailableCommands, { taskId: 'task-1' }],
       [
         AGENT_INVOKE_CHANNELS.respondPermission,
         {
@@ -113,7 +115,7 @@ describe('窄 Preload API', () => {
     )
   })
 
-  it('四种推送各自绑定唯一固定 channel', () => {
+  it('五种推送各自绑定唯一固定 channel', () => {
     const ipcRenderer = createIpcRenderer()
     const agent = createAgentDesktopApi(ipcRenderer)
 
@@ -121,13 +123,45 @@ describe('窄 Preload API', () => {
     agent.onEvent(vi.fn())
     agent.onPermission(vi.fn())
     agent.onPermissionCancelled(vi.fn())
+    agent.onAvailableCommands(vi.fn())
 
     expect(ipcRenderer.on.mock.calls.map(([channel]) => channel)).toEqual([
       AGENT_PUSH_CHANNELS.status,
       AGENT_PUSH_CHANNELS.event,
       AGENT_PUSH_CHANNELS.permission,
-      AGENT_PUSH_CHANNELS.permissionCancelled
+      AGENT_PUSH_CHANNELS.permissionCancelled,
+      AGENT_PUSH_CHANNELS.availableCommands
     ])
+  })
+
+  it('命令快照推送经白名单解析，失败不回调且丢弃 runtimeSessionId', () => {
+    const ipcRenderer = createIpcRenderer()
+    const agent = createAgentDesktopApi(ipcRenderer)
+    const listener = vi.fn()
+    agent.onAvailableCommands(listener)
+    const handler = ipcRenderer.on.mock.calls[0]?.[1]
+
+    handler?.(
+      { hidden: 'electron-event' },
+      {
+        taskId: 'task-1',
+        revision: 2,
+        commands: [{ name: 'compact', description: '压缩', inputHint: '主题' }],
+        runtimeSessionId: 'runtime-session-private'
+      }
+    )
+    handler?.({}, null)
+    handler?.({}, { taskId: '', revision: 1, commands: [] })
+    handler?.({}, { taskId: 'task-1', revision: Number.NaN, commands: [] })
+    handler?.({}, { revision: 1, commands: [] })
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      revision: 2,
+      commands: [{ name: 'compact', description: '压缩', inputHint: '主题' }]
+    })
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('runtime-session-private')
   })
 
   it('Agent 事件推送只转发公开 DTO，丢弃 Runtime 私有字段和 Diff 正文', () => {

@@ -1,4 +1,5 @@
 import type { AgentRuntimeStatus, AgentTaskRuntimeState } from '../../shared/agent'
+import type { AgentAvailableCommandSnapshot } from '../../shared/agent-available-command'
 import type { ConversationEntryState } from '../../shared/task-history'
 import {
   AGENT_INVOKE_CHANNELS,
@@ -44,6 +45,7 @@ export interface AgentIpcRuntime {
   >
   cancelTurn: (request: AgentCancelTurnRequest | string) => Promise<void>
   getTaskRuntimeState: (taskId: string) => AgentTaskRuntimeState
+  getAvailableCommands: (taskId: string) => AgentAvailableCommandSnapshot
   respondPermission: (request: AgentRespondPermissionRequest) => Promise<void>
 }
 
@@ -270,5 +272,22 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
     const request = readPermissionRequest(args)
     await requireAgent(dependencies.getAgent).respondPermission(request)
     return null
+  })
+
+  /**
+   * 读取 session 级斜杠命令快照。
+   * 未知 Task 统一映射为 invalid-input，避免对外暴露独立的「命令快照 Task 查找」语义；
+   * 命令执行仍走 startTurn 文本，故意不提供 execute-command IPC。
+   */
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.getAvailableCommands, (args) => {
+    const request = readTaskRequest(args)
+    try {
+      return requireAgent(dependencies.getAgent).getAvailableCommands(request.taskId)
+    } catch (error) {
+      if (error instanceof AgentServiceError && error.code === 'task-not-found') {
+        throw new DesktopIpcFailure('invalid-input', error.message)
+      }
+      throw error
+    }
   })
 }
