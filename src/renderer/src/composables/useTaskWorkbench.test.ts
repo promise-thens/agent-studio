@@ -364,6 +364,24 @@ describe('useTaskWorkbench', () => {
     expect(workbench.history.tasks.value.map((item) => item.taskId)).toEqual(['task-b-retry'])
     expect(workbench.taskListLoadState.value.status).toBe('ready')
   })
+
+  it('浏览其它 Project 的对话列表不得清掉当前 Task', async () => {
+    const workbench = useTaskWorkbench()
+    await workbench.initialize()
+    await workbench.selectTask('task-a')
+    expect(workbench.selectedTaskId.value).toBe('task-a')
+    expect(workbench.history.openedTask.value?.taskId).toBe('task-a')
+
+    await workbench.browseProject('p-b')
+
+    expect(workbench.selectedProjectId.value).toBe('p-a')
+    expect(workbench.selectedTaskId.value).toBe('task-a')
+    expect(workbench.history.openedTask.value?.taskId).toBe('task-a')
+    expect(workbench.history.tasks.value.map((item) => item.taskId)).toEqual(['task-a'])
+    expect(workbench.browseProjectId.value).toBe('p-b')
+    expect(workbench.browseTasks.value.map((item) => item.taskId)).toEqual(['task-b'])
+    expect(workbench.browseLoadState.value.status).toBe('ready')
+  })
 })
 
 function deferred<T>(): {

@@ -49,6 +49,7 @@ describe('窄 Preload API', () => {
       decision: 'deny'
     })
     await app.chooseProject()
+    await app.revealProject('project-1')
     await task.list('project-1')
     await task.listEvents('task-1', 'turn-1', 42, 200)
     await task.listPermissionAudits('task-1')
@@ -79,6 +80,7 @@ describe('窄 Preload API', () => {
         }
       ],
       [APP_INVOKE_CHANNELS.chooseProject],
+      [APP_INVOKE_CHANNELS.revealProject, { projectId: 'project-1' }],
       [TASK_INVOKE_CHANNELS.list, { projectId: 'project-1' }],
       [
         TASK_INVOKE_CHANNELS.listEvents,

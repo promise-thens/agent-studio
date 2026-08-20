@@ -6,6 +6,9 @@ import {
   deriveSessionTitle,
   isUntitledTaskTitle,
   resolvePermissionTaskTitle,
+  resolveProjectAccordionToggle,
+  resolveSidebarTaskSelection,
+  tasksForExpandedProject,
   toProjectSwitcherRow,
   toTaskListItemView
 } from './task-navigation'
@@ -181,6 +184,83 @@ describe('Task 导航展示', () => {
         taskId: 'task-a'
       })
     ).toBe('生命周期审批任务 A')
+  })
+
+  it('侧栏项目手风琴：点目录只展开或收起，不切走当前对话', () => {
+    expect(
+      resolveProjectAccordionToggle({
+        expandedProjectId: 'p-a',
+        selectedProjectId: 'p-a',
+        clickedProjectId: 'p-a'
+      })
+    ).toEqual({ expandedProjectId: '', shouldSelect: false, shouldBrowse: false })
+    expect(
+      resolveProjectAccordionToggle({
+        expandedProjectId: 'p-a',
+        selectedProjectId: 'p-a',
+        clickedProjectId: 'p-b'
+      })
+    ).toEqual({ expandedProjectId: 'p-b', shouldSelect: false, shouldBrowse: true })
+    expect(
+      resolveProjectAccordionToggle({
+        expandedProjectId: '',
+        selectedProjectId: 'p-a',
+        clickedProjectId: 'p-a'
+      })
+    ).toEqual({ expandedProjectId: 'p-a', shouldSelect: false, shouldBrowse: false })
+  })
+
+  it('展开非当前项目时用浏览列表，当前项目仍用已选中列表', () => {
+    const selected = [task('task-a', 'completed', 'p-a')]
+    const browse = [task('task-b', 'completed', 'p-b')]
+    expect(
+      tasksForExpandedProject({
+        expandedProjectId: 'p-a',
+        selectedProjectId: 'p-a',
+        selectedTasks: selected,
+        browseProjectId: 'p-b',
+        browseTasks: browse
+      })
+    ).toEqual(selected)
+    expect(
+      tasksForExpandedProject({
+        expandedProjectId: 'p-b',
+        selectedProjectId: 'p-a',
+        selectedTasks: selected,
+        browseProjectId: 'p-b',
+        browseTasks: browse
+      })
+    ).toEqual(browse)
+    expect(
+      tasksForExpandedProject({
+        expandedProjectId: 'p-c',
+        selectedProjectId: 'p-a',
+        selectedTasks: selected,
+        browseProjectId: 'p-b',
+        browseTasks: browse
+      })
+    ).toEqual([])
+  })
+
+  it('点浏览列表里的对话才切项目；点当前项目的对话不切', () => {
+    const selected = [task('task-a', 'completed', 'p-a')]
+    const browse = [task('task-b', 'completed', 'p-b')]
+    expect(
+      resolveSidebarTaskSelection({
+        taskId: 'task-b',
+        selectedProjectId: 'p-a',
+        selectedTasks: selected,
+        browseTasks: browse
+      })
+    ).toEqual({ projectId: 'p-b', shouldSwitchProject: true })
+    expect(
+      resolveSidebarTaskSelection({
+        taskId: 'task-a',
+        selectedProjectId: 'p-a',
+        selectedTasks: selected,
+        browseTasks: browse
+      })
+    ).toEqual({ projectId: 'p-a', shouldSwitchProject: false })
   })
 
   it('新对话先 createTask 再 selectTask', async () => {

@@ -211,19 +211,17 @@ export async function selectWorkbenchProject(
   workspace: string,
   force = false
 ): Promise<void> {
-  const current = page.locator('.project-current')
   const name = basename(workspace)
+  const current = page.locator('.project-current')
   const alreadySelected = (await current.locator('strong').textContent())?.trim() === name
   if (!alreadySelected) {
+    const header = page.locator('.project-header').filter({ hasText: name }).first()
+    await expect(header).toBeVisible()
     // 审批弹窗的 modal-backdrop 会拦截普通 click；force 路径用 DOM click 绕过。
-    if (force) await current.evaluate((element) => (element as HTMLButtonElement).click())
-    else await current.click()
-    const option = page.locator('.project-menu [role="option"]').filter({ hasText: name }).first()
-    await expect(option).toBeVisible()
-    if (force) await option.evaluate((element) => (element as HTMLButtonElement).click())
-    else await option.click()
+    if (force) await header.evaluate((element) => (element as HTMLButtonElement).click())
+    else await header.click()
   }
-  await expect(current.locator('strong')).toHaveText(name)
+  await expect(page.locator('.project-current strong')).toHaveText(name)
 }
 
 export async function selectWorkbenchTaskByTitle(

@@ -588,6 +588,10 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
       ipcRenderer.invoke(APP_INVOKE_CHANNELS.listProjects) as ReturnType<
         AppDesktopApi['listProjects']
       >,
+    revealProject: (projectId) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.revealProject, { projectId }) as ReturnType<
+        AppDesktopApi['revealProject']
+      >,
     removeProject: (projectId) =>
       ipcRenderer.invoke(APP_INVOKE_CHANNELS.removeProject, { projectId }) as ReturnType<
         AppDesktopApi['removeProject']

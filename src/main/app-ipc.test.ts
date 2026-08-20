@@ -23,12 +23,14 @@ const appearanceState = { mode: 'dark' as const, resolved: 'dark' as const }
 function createFixture(): {
   handlers: Map<string, DesktopIpcHandler>
   chooseProject: ReturnType<typeof vi.fn>
+  revealProject: ReturnType<typeof vi.fn>
   assertTrustedSender: ReturnType<typeof vi.fn>
   setAppearance: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<DesktopIpcResult<T>>
 } {
   const handlers = new Map<string, DesktopIpcHandler>()
   const chooseProject = vi.fn(async () => project as ProjectSummary | null)
+  const revealProject = vi.fn(async () => undefined)
   const assertTrustedSender = vi.fn()
   const listProjects = vi.fn(async () => [project])
   const removeProject = vi.fn(async () => undefined)
@@ -54,6 +56,7 @@ function createFixture(): {
     assertTrustedSender,
     chooseProject,
     listProjects,
+    revealProject,
     removeProject,
     previewProjectHistoryDeletion,
     deleteProjectHistory,
@@ -66,7 +69,7 @@ function createFixture(): {
     if (!handler) throw new Error(`缺少 Handler: ${channel}`)
     return (await handler(event, ...args)) as DesktopIpcResult<T>
   }
-  return { handlers, chooseProject, assertTrustedSender, setAppearance, invoke }
+  return { handlers, chooseProject, revealProject, assertTrustedSender, setAppearance, invoke }
 }
 
 describe('App IPC Handler', () => {
@@ -81,6 +84,34 @@ describe('App IPC Handler', () => {
     expect(await fixture.invoke(APP_INVOKE_CHANNELS.chooseProject)).toEqual({
       ok: true,
       value: null
+    })
+  })
+
+  it('打开项目目录只接受 projectId，不把路径交给 Renderer', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.revealProject, { projectId: 'project-1' })
+    ).toEqual({ ok: true, value: null })
+    expect(fixture.revealProject).toHaveBeenCalledWith('project-1')
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.revealProject, {
+        projectId: 'project-1',
+        path: '/tmp/project'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.revealProject).toHaveBeenCalledTimes(1)
+  })
+
+  it('目录不可用时把 project-unavailable 回给 Renderer', async () => {
+    const fixture = createFixture()
+    fixture.revealProject.mockRejectedValueOnce(
+      new DesktopIpcFailure('project-unavailable', '该项目目录已删除或无法访问。')
+    )
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.revealProject, { projectId: 'project-1' })
+    ).toEqual({
+      ok: false,
+      error: { code: 'project-unavailable', message: '该项目目录已删除或无法访问。' }
     })
   })
 

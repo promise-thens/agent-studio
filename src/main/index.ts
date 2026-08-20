@@ -37,7 +37,7 @@ import { createGrokAcpFileObserver } from './runtime/grok/grok-acp-protocol-obse
 import type { DesktopIpcMain } from './ipc-types'
 import { ProviderConfigStore, type ProviderRuntimeConfig } from './provider/provider-config-store'
 import { ProviderConnectionTester } from './provider/provider-connection-tester'
-import { ProjectRegistry } from './project/project-registry'
+import { ProjectRegistry, ProjectRegistryError } from './project/project-registry'
 import { clearGrokProviderConfig } from './provider/grok-provider-config'
 import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
@@ -47,6 +47,7 @@ import { PermissionBroker } from './security/permission-broker'
 import { createLocalEnvironmentId } from './security/permission-policy'
 import {
   assertTrustedIpcSender,
+  DesktopIpcFailure,
   sendToTrustedRenderer,
   toDesktopIpcError,
   type RendererTrustOptions
@@ -337,6 +338,22 @@ function registerIpcHandlers(): void {
     assertTrustedSender,
     chooseProject: chooseProject,
     listProjects: () => requireProjectRegistry().list(),
+    revealProject: async (projectId) => {
+      // 只打开 Registry 里的 canonicalRoot，拒绝 Renderer 自带路径。
+      try {
+        const root = await requireProjectRegistry().resolveAvailableRoot(projectId)
+        const failure = await shell.openPath(root)
+        if (failure.trim()) {
+          throw new DesktopIpcFailure('project-unavailable', '该项目目录已删除或无法访问。')
+        }
+      } catch (error) {
+        if (error instanceof DesktopIpcFailure) throw error
+        if (error instanceof ProjectRegistryError && error.code === 'project-unavailable') {
+          throw new DesktopIpcFailure('project-unavailable', '该项目目录已删除或无法访问。')
+        }
+        throw error
+      }
+    },
     removeProject: async (projectId) => {
       const deletionLease = await requirePermissionBroker().beginProjectDeletion(projectId)
       try {

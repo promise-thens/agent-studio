@@ -28,7 +28,8 @@ import {
   createAgentMessageKey,
   createAgentToolKey
 } from './agent-event-consumer'
-import { unwrapDesktopIpcResult } from './desktop-ipc-result'
+import { unwrapDesktopIpcResult, type RendererDesktopIpcError } from './desktop-ipc-result'
+import { describeProjectFolderRevealFailure } from './project-folder-reveal'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
@@ -80,7 +81,8 @@ import {
   createAndSelectTask,
   deriveSessionTitle,
   isUntitledTaskTitle,
-  resolvePermissionTaskTitle
+  resolvePermissionTaskTitle,
+  resolveSidebarTaskSelection
 } from './task-navigation'
 import {
   clearRespondingPermission,
@@ -159,6 +161,7 @@ const historyConfirmation = ref<{
   preview?: DeletionPreview
 } | null>(null)
 const historyConfirmationPending = ref(false)
+const folderNotice = ref<{ title: string; description: string } | null>(null)
 const conversationEntry = ref<ConversationEntryState | null>(null)
 let conversationEnterGeneration = 0
 let conversationEnterPromise: Promise<ConversationEntryState | null> | null = null
@@ -629,20 +632,40 @@ onBeforeUnmount(() => {
 })
 
 /** 新对话先 createTask，再走同一条 selectTask / enterTask，不再另开只读入口。 */
-async function startNewChat(): Promise<void> {
-  if (newChatDisabled.value || projectSelectionPending.value || !activeProjectId.value) return
+async function startNewChat(projectId?: string): Promise<void> {
+  const targetProjectId =
+    typeof projectId === 'string' && projectId ? projectId : activeProjectId.value
+  if (newChatDisabled.value || projectSelectionPending.value || !targetProjectId) return
 
   try {
+    if (targetProjectId !== activeProjectId.value) {
+      await selectProject(targetProjectId)
+      if (activeProjectId.value !== targetProjectId) return
+    }
     await createAndSelectTask({
-      projectId: activeProjectId.value,
-      createTask: async (projectId) =>
-        unwrapDesktopIpcResult(await window.agent.createTask(projectId)),
+      projectId: targetProjectId,
+      createTask: async (id) => unwrapDesktopIpcResult(await window.agent.createTask(id)),
       selectTask,
       refreshTasks: () => taskHistory.refreshTasks()
     })
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
+}
+
+/** 点具体对话才切项目；点目录展开不会走这里。 */
+async function selectTaskFromSidebar(taskId: string): Promise<void> {
+  const next = resolveSidebarTaskSelection({
+    taskId,
+    selectedProjectId: activeProjectId.value,
+    selectedTasks: taskHistory.tasks.value,
+    browseTasks: workbench.browseTasks.value
+  })
+  if (next.shouldSwitchProject) {
+    await selectProject(next.projectId)
+    if (activeProjectId.value !== next.projectId) return
+  }
+  await selectTask(taskId)
 }
 
 /** 建立或切换本地 Task 视图；每个 Task 持有独立消息、计划与工具活动数组。 */
@@ -859,6 +882,27 @@ async function chooseWorkspace(): Promise<void> {
     })
   } finally {
     projectSelection.finish(selection)
+  }
+}
+
+/** 目录不可用时弹提示，不把失败写进对话。 */
+async function revealProjectFolder(projectId: string): Promise<void> {
+  const project = workbench.projects.value.find((item) => item.projectId === projectId)
+  const displayName = project?.displayName?.trim() || '该项目'
+  if (project && project.availability.state !== 'available') {
+    folderNotice.value = describeProjectFolderRevealFailure({
+      displayName,
+      availabilityState: project.availability.state
+    })
+    return
+  }
+  try {
+    unwrapDesktopIpcResult(await window.app.revealProject(projectId))
+  } catch (error) {
+    folderNotice.value = describeProjectFolderRevealFailure({
+      displayName,
+      errorCode: (error as RendererDesktopIpcError).code
+    })
   }
 }
 
@@ -1444,20 +1488,29 @@ function scrollMessagesToBottom(): void {
         mutation-actions-disabled-reason="任务执行或主进程操作期间，只读历史仍可查看，修改入口暂不可用。"
         :has-more-tasks="Boolean(taskHistory.taskCursor.value)"
         :loading-more-tasks="taskHistory.loadingMoreTasks.value"
+        :browse-project-id="workbench.browseProjectId.value"
+        :browse-tasks="workbench.browseTasks.value"
+        :browse-load-state="workbench.browseLoadState.value"
+        :browse-has-more="workbench.browseHasMore.value"
+        :browse-loading-more="workbench.browseLoadingMore.value"
         @new-chat="startNewChat"
         @open-settings="openSettingsDialog"
         @select-project="selectProject"
         @choose-project="chooseWorkspace"
         @retry-access="(projectId) => workbench.registry.retryAccess(projectId)"
+        @open-project-folder="revealProjectFolder"
         @remove-project="requestProjectRemoval"
         @delete-project-history="requestProjectHistoryDeletion"
         @retry-projects="workbench.retryProjects"
-        @select-task="selectTask"
+        @select-task="selectTaskFromSidebar"
         @rename-task="renameOpenedTask"
         @archive-task="archiveOpenedTask"
         @delete-task="requestTaskDeletion"
         @load-more-tasks="taskHistory.loadMoreTasks"
         @retry-task-list="workbench.retryTaskList"
+        @browse-project="(projectId) => void workbench.browseProject(projectId)"
+        @load-more-browse-tasks="workbench.loadMoreBrowseTasks"
+        @retry-browse-tasks="workbench.retryBrowseTasks"
       />
 
       <main class="chat-panel">
@@ -1601,6 +1654,28 @@ function scrollMessagesToBottom(): void {
           >
             {{ historyConfirmationPending ? '正在处理…' : '确认' }}
           </button>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="folderNotice" class="modal-backdrop" @click.self="folderNotice = null">
+      <section
+        class="permission-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="folder-notice-title"
+        aria-describedby="folder-notice-description"
+        @keydown.esc="folderNotice = null"
+      >
+        <header>
+          <div class="permission-icon"><WarningCircle :size="22" weight="fill" /></div>
+          <div>
+            <h2 id="folder-notice-title">{{ folderNotice.title }}</h2>
+            <p id="folder-notice-description">{{ folderNotice.description }}</p>
+          </div>
+        </header>
+        <div class="permission-options">
+          <button class="primary-button" type="button" @click="folderNotice = null">知道了</button>
         </div>
       </section>
     </div>

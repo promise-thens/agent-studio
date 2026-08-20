@@ -99,6 +99,60 @@ export function toTaskListItemView(
   }
 }
 
+/**
+ * 侧栏项目手风琴：点标题只展开或收起。
+ * 展开其它项目时只拉浏览列表，不得 selectProject，否则当前对话会被清掉。
+ */
+export function resolveProjectAccordionToggle(input: {
+  expandedProjectId: string
+  selectedProjectId: string
+  clickedProjectId: string
+}): { expandedProjectId: string; shouldSelect: boolean; shouldBrowse: boolean } {
+  if (input.expandedProjectId === input.clickedProjectId) {
+    return { expandedProjectId: '', shouldSelect: false, shouldBrowse: false }
+  }
+  return {
+    expandedProjectId: input.clickedProjectId,
+    shouldSelect: false,
+    shouldBrowse: input.clickedProjectId !== input.selectedProjectId
+  }
+}
+
+export interface ExpandedProjectTaskLists<T> {
+  expandedProjectId: string
+  selectedProjectId: string
+  selectedTasks: T[]
+  browseProjectId: string
+  browseTasks: T[]
+}
+
+/** 展开块要画哪份对话列表：当前项目用已选中列表，其它项目用浏览列表。 */
+export function tasksForExpandedProject<T>(input: ExpandedProjectTaskLists<T>): T[] {
+  if (!input.expandedProjectId) return []
+  if (input.expandedProjectId === input.selectedProjectId) return input.selectedTasks
+  if (input.expandedProjectId === input.browseProjectId) return input.browseTasks
+  return []
+}
+
+/** 点具体对话才决定要不要切项目；点目录本身不走这条。 */
+export function resolveSidebarTaskSelection(input: {
+  taskId: string
+  selectedProjectId: string
+  selectedTasks: readonly Pick<TaskHistorySummary, 'taskId' | 'projectId'>[]
+  browseTasks: readonly Pick<TaskHistorySummary, 'taskId' | 'projectId'>[]
+}): { projectId: string; shouldSwitchProject: boolean } {
+  const match = [...input.selectedTasks, ...input.browseTasks].find(
+    (task) => task.taskId === input.taskId
+  )
+  if (!match) {
+    return { projectId: input.selectedProjectId, shouldSwitchProject: false }
+  }
+  return {
+    projectId: match.projectId,
+    shouldSwitchProject: match.projectId !== input.selectedProjectId
+  }
+}
+
 /** 项目切换收成一行标签；完整路径只进 title，避免侧栏堆路径卡。 */
 export function toProjectSwitcherRow(input: {
   displayName?: string | null

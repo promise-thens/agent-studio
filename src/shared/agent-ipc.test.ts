@@ -32,6 +32,7 @@ describe('桌面 IPC 静态契约', () => {
       'agent:permission-cancelled',
       'app:choose-project',
       'app:list-projects',
+      'app:reveal-project',
       'app:remove-project',
       'app:preview-project-history-deletion',
       'app:delete-project-history',

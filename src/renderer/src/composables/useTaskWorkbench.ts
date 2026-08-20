@@ -1,6 +1,6 @@
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
 import type { TaskExecutionDto, TaskExecutionSnapshot } from '../../../shared/task-execution'
-import type { ProjectSummary } from '../../../shared/task-history'
+import type { ProjectSummary, TaskHistorySummary } from '../../../shared/task-history'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import { createTaskExecutionConsumer } from '../task-execution-consumer'
 import { countProjectLiveTasks } from '../task-navigation'
@@ -31,12 +31,21 @@ export interface TaskWorkbenchState {
   taskListLoadState: Ref<WorkbenchLoadState>
   taskDetailLoadState: Ref<WorkbenchLoadState>
   executionLoadState: Ref<WorkbenchLoadState>
+  /** 展开其它项目时的浏览列表；不改 selectedProjectId / selectedTaskId。 */
+  browseProjectId: Ref<string>
+  browseTasks: Ref<TaskHistorySummary[]>
+  browseLoadState: Ref<WorkbenchLoadState>
+  browseHasMore: ComputedRef<boolean>
+  browseLoadingMore: Ref<boolean>
   projects: Ref<ProjectSummary[]>
   selectedProject: ComputedRef<ProjectSummary | null>
   runningTaskCountByProjectId: ComputedRef<Record<string, number>>
   initialize(): Promise<void>
   selectProject(projectId: string): Promise<void>
   selectTask(taskId: string): Promise<void>
+  browseProject(projectId: string): Promise<void>
+  loadMoreBrowseTasks(): Promise<void>
+  retryBrowseTasks(): Promise<void>
   retryProjects(): Promise<void>
   retryTaskList(): Promise<void>
   retryTaskDetail(): Promise<void>
@@ -70,8 +79,15 @@ export function useTaskWorkbench(): TaskWorkbenchController {
   const taskListLoadState = ref<WorkbenchLoadState>(createWorkbenchLoadState())
   const taskDetailLoadState = ref<WorkbenchLoadState>(createWorkbenchLoadState())
   const executionLoadState = ref<WorkbenchLoadState>(createWorkbenchLoadState())
+  const browseProjectId = ref('')
+  const browseTasks = ref<TaskHistorySummary[]>([])
+  const browseLoadState = ref<WorkbenchLoadState>(createWorkbenchLoadState())
+  const browseCursor = ref<string | null>(null)
+  const browseLoadingMore = ref(false)
+  const browseHasMore = computed(() => Boolean(browseCursor.value))
   let taskListRevision = 0
   let taskDetailRevision = 0
+  let browseRevision = 0
 
   const activeExecution = computed(() => {
     const execution = executionSnapshot.value.execution
@@ -110,9 +126,20 @@ export function useTaskWorkbench(): TaskWorkbenchController {
       selectedTaskId.value = ''
       taskDetailLoadState.value = createWorkbenchLoadState(taskDetailRevision, 'idle')
       history.invalidateProjectTasks()
+      clearBrowseTasks()
     },
     { flush: 'sync' }
   )
+
+  /** 丢掉浏览列表，不影响当前对话身份。 */
+  function clearBrowseTasks(): void {
+    browseRevision += 1
+    browseProjectId.value = ''
+    browseTasks.value = []
+    browseCursor.value = null
+    browseLoadingMore.value = false
+    browseLoadState.value = createWorkbenchLoadState(browseRevision, 'idle')
+  }
 
   /** 只刷新当前 Project 的 Task 列表，不改选中身份、不拆已打开详情。 */
   async function loadTaskList(projectId: string): Promise<void> {
@@ -141,6 +168,56 @@ export function useTaskWorkbench(): TaskWorkbenchController {
     // registry.selectProject 没有真实异步；禁止 await，以免在清列表前先交出微任务。
     void registry.selectProject(projectId)
     await loadTaskList(projectId)
+  }
+
+  /**
+   * 展开其它项目时只拉对话列表，不改 selectedProjectId / selectedTaskId。
+   * 点目录不得走 selectProject，否则当前回话会被同步清掉。
+   */
+  async function browseProject(projectId: string): Promise<void> {
+    if (!projectId || projectId === registry.selectedProjectId.value) {
+      clearBrowseTasks()
+      return
+    }
+    const revision = ++browseRevision
+    browseProjectId.value = projectId
+    browseTasks.value = []
+    browseCursor.value = null
+    browseLoadState.value = createWorkbenchLoadState(revision, 'loading')
+    try {
+      const page = unwrapDesktopIpcResult(await window.task.list(projectId, undefined, 50))
+      if (revision !== browseRevision || browseProjectId.value !== projectId) return
+      browseTasks.value = page.items
+      browseCursor.value = page.nextCursor ?? null
+      browseLoadState.value = createWorkbenchLoadState(revision, 'ready')
+    } catch (error) {
+      if (revision !== browseRevision || browseProjectId.value !== projectId) return
+      browseLoadState.value = createWorkbenchLoadState(revision, 'error', readErrorMessage(error))
+    }
+  }
+
+  async function loadMoreBrowseTasks(): Promise<void> {
+    const projectId = browseProjectId.value
+    const cursor = browseCursor.value
+    if (!projectId || !cursor || browseLoadingMore.value) return
+    browseLoadingMore.value = true
+    try {
+      const page = unwrapDesktopIpcResult(await window.task.list(projectId, cursor, 50))
+      if (browseProjectId.value !== projectId) return
+      const seen = new Set(browseTasks.value.map((task) => task.taskId))
+      browseTasks.value = [
+        ...browseTasks.value,
+        ...page.items.filter((task) => !seen.has(task.taskId))
+      ]
+      browseCursor.value = page.nextCursor ?? null
+    } finally {
+      browseLoadingMore.value = false
+    }
+  }
+
+  async function retryBrowseTasks(): Promise<void> {
+    const projectId = browseProjectId.value
+    if (projectId) await browseProject(projectId)
   }
 
   /**
@@ -219,12 +296,20 @@ export function useTaskWorkbench(): TaskWorkbenchController {
     taskListLoadState,
     taskDetailLoadState,
     executionLoadState,
+    browseProjectId,
+    browseTasks,
+    browseLoadState,
+    browseHasMore,
+    browseLoadingMore,
     projects: registry.projects,
     selectedProject: registry.selectedProject,
     runningTaskCountByProjectId,
     initialize,
     selectProject,
     selectTask,
+    browseProject,
+    loadMoreBrowseTasks,
+    retryBrowseTasks,
     retryProjects,
     retryTaskList,
     retryTaskDetail,

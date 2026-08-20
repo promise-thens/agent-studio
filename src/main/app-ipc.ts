@@ -14,6 +14,7 @@ export interface AppIpcDependencies {
   assertTrustedSender: (event: TrustedIpcInvokeEvent) => void
   chooseProject: () => Promise<ProjectSummary | null>
   listProjects: () => Promise<ProjectSummary[]>
+  revealProject: (projectId: string) => Promise<void>
   removeProject: (projectId: string) => Promise<void>
   previewProjectHistoryDeletion: (projectId: string) => Promise<DeletionPreview>
   deleteProjectHistory: (projectId: string, token: string) => Promise<void>
@@ -66,6 +67,11 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
   register(APP_INVOKE_CHANNELS.listProjects, (args) => {
     if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
     return dependencies.listProjects()
+  })
+  register(APP_INVOKE_CHANNELS.revealProject, async (args) => {
+    const request = readRequest(args, ['projectId'])
+    await dependencies.revealProject(readText(request, 'projectId'))
+    return null
   })
   register(APP_INVOKE_CHANNELS.removeProject, async (args) => {
     const request = readRequest(args, ['projectId'])
