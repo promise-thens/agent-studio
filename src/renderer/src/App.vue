@@ -13,6 +13,7 @@ import type {
   AgentRuntimeStatus,
   AgentTaskRuntimeState
 } from '../../shared/agent'
+import type { AgentAvailableCommand } from '../../shared/agent-available-command'
 import type { PublicAgentEvent, PublicAgentToolEvent } from '../../shared/agent-event'
 import type { AppAppearanceMode, AppAppearanceState } from '../../shared/app-appearance'
 import type {
@@ -80,6 +81,11 @@ import {
   shouldIgnoreWorkbenchEscape
 } from './workbench-keyboard'
 import { resolveExecutionSurfaceBanner } from './workbench-primary-view'
+import {
+  applyAvailableCommandFetchIfCurrent,
+  applyAvailableCommandSnapshotIfCurrent,
+  matchProductSlashSubmit
+} from './slash-command-palette'
 import {
   createAndSelectTask,
   deriveSessionTitle,
@@ -169,6 +175,7 @@ const conversationEntry = ref<ConversationEntryState | null>(null)
 let conversationEnterGeneration = 0
 let conversationEnterPromise: Promise<ConversationEntryState | null> | null = null
 const prompt = ref('')
+const runtimeSlashCommands = ref<AgentAvailableCommand[]>([])
 const taskComposer = ref<{ focus: () => void; focusStop?: () => void } | null>(null)
 const promptSubmissionPending = ref(false)
 const projectConnectionPending = ref(false)
@@ -589,7 +596,10 @@ onMounted(async () => {
       removePermission(request)
       respondingPermission.value = clearRespondingPermission(respondingPermission.value, request)
     }),
-    window.app.onAppearanceChanged(applyAppearanceState)
+    window.app.onAppearanceChanged(applyAppearanceState),
+    window.agent.onAvailableCommands((snapshot) => {
+      applySlashCommandSnapshot(snapshot)
+    })
   )
 
   try {
@@ -955,6 +965,56 @@ function closeSettingsDialog(): void {
   showSettingsDialog.value = false
 }
 
+/**
+ * 产品别名只做桌面导航，必须清空草稿，避免下次 Enter 把 /plugins 发给 Runtime。
+ */
+function handleProductSlashAction(action: 'open-plugins' | 'open-settings'): void {
+  prompt.value = ''
+  if (action === 'open-plugins') workbench.openPlugins()
+  else openSettingsDialog()
+}
+
+/** 丢弃 taskId 对不上的推送，避免切 Task 后命令板闪到上一份 Grok 广告。 */
+function applySlashCommandSnapshot(snapshot: {
+  taskId: string
+  commands: AgentAvailableCommand[]
+}): void {
+  const applied = applyAvailableCommandSnapshotIfCurrent({
+    selectedTaskId: activeTaskId.value,
+    snapshot
+  })
+  if (!applied.apply) return
+  runtimeSlashCommands.value = applied.commands
+}
+
+/**
+ * 切 Task 后重拉快照；只在 selectedTaskId 仍是这次请求的目标时写入。
+ * IPC 失败不崩 UI，保持空列表，产品别名仍可从 merge 出现。
+ */
+async function loadAvailableCommands(taskId: string): Promise<void> {
+  if (!taskId) return
+  try {
+    const snapshot = unwrapDesktopIpcResult(await window.agent.getAvailableCommands(taskId))
+    const applied = applyAvailableCommandFetchIfCurrent({
+      selectedTaskId: activeTaskId.value,
+      requestedTaskId: taskId,
+      incoming: { ok: true, commands: snapshot.commands }
+    })
+    if (applied.apply) runtimeSlashCommands.value = applied.commands
+  } catch {
+    applyAvailableCommandFetchIfCurrent({
+      selectedTaskId: activeTaskId.value,
+      requestedTaskId: taskId,
+      incoming: { ok: false }
+    })
+  }
+}
+
+watch(activeTaskId, (taskId) => {
+  runtimeSlashCommands.value = []
+  void loadAvailableCommands(taskId)
+})
+
 function applyAppearanceState(state: AppAppearanceState): void {
   appearance.value = state
   applyResolvedAppearance(state.resolved)
@@ -1033,6 +1093,12 @@ async function retryRuntimeConnect(): Promise<void> {
 
 /** 发送只针对当前选中 Task；单飞门禁避免重复提交双 Turn。 */
 async function sendPrompt(): Promise<void> {
+  const productAction = matchProductSlashSubmit(prompt.value)
+  if (productAction) {
+    handleProductSlashAction(productAction)
+    return
+  }
+
   const text = prompt.value.trim()
   if (!text || !canSend.value) return
 
@@ -1583,9 +1649,12 @@ function scrollMessagesToBottom(): void {
             :model-busy="composerChrome.modelBusy"
             :model-disabled="!providerSummary?.configured"
             :context-usage="composerContextUsage"
+            :runtime-commands="runtimeSlashCommands"
             @update:prompt="prompt = $event"
             @send="sendPrompt"
             @stop="cancelTurn"
+            @open-plugins="handleProductSlashAction('open-plugins')"
+            @open-settings="handleProductSlashAction('open-settings')"
             @model-changed="handleModelChanged"
             @model-error="handleModelError"
           />

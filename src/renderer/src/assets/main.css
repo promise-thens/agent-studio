@@ -1301,6 +1301,7 @@ button:disabled {
 }
 
 .composer {
+  position: relative;
   max-width: 760px;
   margin: 0 auto;
   padding: 14px 14px 12px;
