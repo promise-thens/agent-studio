@@ -1,5 +1,7 @@
 import type { AppAppearanceMode, AppAppearanceState } from './app-appearance'
 import type { DesktopIpcResult } from './ipc-result'
+import type { GrokMemoryDocument, GrokMemoryEnabledState, GrokMemorySummary } from './grok-memory'
+import type { McpServerInput, McpServerSummary } from './mcp-server-config'
 import type { RuntimePluginDetail, RuntimePluginSummary } from './runtime-plugin'
 import type { DeletionPreview, ProjectSummary } from './task-history'
 
@@ -13,7 +15,19 @@ export const APP_INVOKE_CHANNELS = {
   getAppearance: 'app:get-appearance',
   setAppearance: 'app:set-appearance',
   listPlugins: 'app:list-plugins',
-  getPlugin: 'app:get-plugin'
+  getPlugin: 'app:get-plugin',
+  setPluginEnabled: 'app:set-plugin-enabled',
+  getGrokConfig: 'app:get-grok-config',
+  saveGrokConfig: 'app:save-grok-config',
+  listMemories: 'app:list-memories',
+  getMemory: 'app:get-memory',
+  saveMemory: 'app:save-memory',
+  deleteMemory: 'app:delete-memory',
+  getMemoryEnabled: 'app:get-memory-enabled',
+  setMemoryEnabled: 'app:set-memory-enabled',
+  listMcpServers: 'app:list-mcp-servers',
+  upsertMcpServer: 'app:upsert-mcp-server',
+  deleteMcpServer: 'app:delete-mcp-server'
 } as const
 
 export const APP_PUSH_CHANNELS = {
@@ -26,6 +40,50 @@ export interface AppSetAppearanceRequest {
 
 export interface AppGetPluginRequest {
   pluginId: string
+}
+
+export interface AppSetPluginEnabledRequest {
+  pluginId: string
+  enabled: boolean
+}
+
+export interface AppSaveGrokConfigRequest {
+  text: string
+}
+
+export interface AppGrokConfigDocument {
+  text: string
+  seeded?: true
+}
+
+export interface AppListMemoriesRequest {
+  projectHint?: string
+}
+
+export interface AppGetMemoryRequest {
+  memoryId: string
+}
+
+export interface AppSaveMemoryRequest {
+  memoryId: string
+  markdown: string
+}
+
+export interface AppSetMemoryEnabledRequest {
+  enabled: boolean
+}
+
+export interface AppListMcpServersRequest {
+  projectId?: string
+}
+
+export interface AppDeleteMcpServerRequest {
+  name: string
+}
+
+export interface AppPluginEnabledState {
+  pluginId: string
+  enabled: boolean
 }
 
 /** Renderer 只能通过 App 域注册 Project、读写外观偏好与插件摘要，不能自行提交执行路径。 */
@@ -43,5 +101,20 @@ export interface AppDesktopApi {
   listPlugins: () => Promise<DesktopIpcResult<RuntimePluginSummary[]>>
   /** 读取单个插件详情；pluginId 非法 → invalid-input，缺失 → not-found。 */
   getPlugin: (pluginId: string) => Promise<DesktopIpcResult<RuntimePluginDetail>>
+  setPluginEnabled: (
+    pluginId: string,
+    enabled: boolean
+  ) => Promise<DesktopIpcResult<AppPluginEnabledState>>
+  getGrokConfig: () => Promise<DesktopIpcResult<AppGrokConfigDocument>>
+  saveGrokConfig: (text: string) => Promise<DesktopIpcResult<null>>
+  listMemories: (projectHint?: string) => Promise<DesktopIpcResult<GrokMemorySummary[]>>
+  getMemory: (memoryId: string) => Promise<DesktopIpcResult<GrokMemoryDocument>>
+  saveMemory: (memoryId: string, markdown: string) => Promise<DesktopIpcResult<GrokMemoryDocument>>
+  deleteMemory: (memoryId: string) => Promise<DesktopIpcResult<null>>
+  getMemoryEnabled: () => Promise<DesktopIpcResult<GrokMemoryEnabledState>>
+  setMemoryEnabled: (enabled: boolean) => Promise<DesktopIpcResult<GrokMemoryEnabledState>>
+  listMcpServers: (projectId?: string) => Promise<DesktopIpcResult<McpServerSummary[]>>
+  upsertMcpServer: (input: McpServerInput) => Promise<DesktopIpcResult<McpServerSummary>>
+  deleteMcpServer: (name: string) => Promise<DesktopIpcResult<null>>
   onAppearanceChanged: (listener: (state: AppAppearanceState) => void) => () => void
 }

@@ -38,7 +38,20 @@ import type { DesktopIpcMain } from './ipc-types'
 import { ProviderConfigStore, type ProviderRuntimeConfig } from './provider/provider-config-store'
 import { ProviderConnectionTester } from './provider/provider-connection-tester'
 import { ProjectRegistry, ProjectRegistryError } from './project/project-registry'
-import { clearGrokProviderConfig } from './provider/grok-provider-config'
+import { GROK_CONFIG_STARTER_TOML } from '../shared/grok-config-hints'
+import { isRuntimePluginId, type RuntimePluginStatus } from '../shared/runtime-plugin'
+import { clearGrokProviderConfig, getManagedGrokHome } from './provider/grok-provider-config'
+import { GrokHomeConfigController } from './runtime/grok/grok-home-config-controller'
+import { GrokMemoryStore } from './runtime/grok/grok-memory-store'
+import { McpServerStore } from './mcp/mcp-server-store'
+import { toAgentRuntimeMcpServers } from './mcp/mcp-server-to-acp'
+import {
+  getUserGrokConfigPath,
+  listProjectMcpServers,
+  removeUserMcpServer,
+  syncUserMcpFromHome,
+  writeUserMcpServer
+} from './mcp/grok-user-mcp-sync'
 import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
 import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
@@ -67,6 +80,9 @@ let taskStore: TaskStore | null = null
 let permissionAuditStore: PermissionAuditStore | null = null
 let permissionBroker: PermissionBroker | null = null
 let appearanceController: AppearanceController | null = null
+let grokHomeConfig: GrokHomeConfigController | null = null
+let grokMemoryStore: GrokMemoryStore | null = null
+let mcpServerStore: McpServerStore | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -193,6 +209,28 @@ async function initializeServices(
     redactText: redactProviderText
   })
 
+  const grokHome = getManagedGrokHome(app.getPath('userData'))
+  grokHomeConfig = new GrokHomeConfigController(grokHome)
+  grokMemoryStore = new GrokMemoryStore(grokHome)
+  await grokMemoryStore.ensureShare().catch(() => undefined)
+  mcpServerStore = new McpServerStore({
+    userDataPath: app.getPath('userData'),
+    grokHome,
+    safeStorage: {
+      isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
+      encryptString: (plainText) => safeStorage.encryptString(plainText),
+      decryptString: (encryptedValue) => safeStorage.decryptString(encryptedValue),
+      getSelectedStorageBackend: () => safeStorage.getSelectedStorageBackend()
+    },
+    platform: process.platform,
+    config: grokHomeConfig
+  })
+  await mcpServerStore.initialize()
+  await syncUserMcpFromHome({
+    userConfigPath: getUserGrokConfigPath(),
+    store: mcpServerStore
+  }).catch(() => undefined)
+
   const rendererTrust = createRendererTrustOptions()
   const adapter = new GrokAcpAdapter(
     {
@@ -223,6 +261,9 @@ async function initializeServices(
       userDataPath: app.getPath('userData'),
       getProviderConfig: () => requireProviderStore().getRuntimeConfig(),
       redactText: redactProviderText,
+      getMcpServers: async () =>
+        toAgentRuntimeMcpServers(await requireMcpServerStore().listEnabledResolved()),
+      isMemoryEnabled: async () => (await requireGrokMemoryStore().getEnabledState()).enabled,
       ...(controlledE2e ? { controlledFixture: controlledE2e.fixture } : {}),
       ...(gacp01Observe
         ? { protocolObserver: createGrokAcpFileObserver(gacp01Observe.observationFilePath) }
@@ -261,6 +302,8 @@ async function initializeServices(
     permissionBroker: requirePermissionBroker(),
     taskExecutor,
     operationGate,
+    getSessionMcpServers: async () =>
+      toAgentRuntimeMcpServers(await requireMcpServerStore().listEnabledResolved()),
     onEvent: (event) =>
       sendToTrustedRenderer(
         rendererTrust,
@@ -377,8 +420,96 @@ function registerIpcHandlers(): void {
     getAppearance: () => requireAppearanceController().getState(),
     setAppearance: (mode) => requireAppearanceController().setMode(mode),
     // 插件扫描牢笼绑在 userData，不把绝对路径经 IPC 回传
-    listPlugins: () => listGrokPlugins(app.getPath('userData')),
-    getPlugin: (pluginId) => getGrokPlugin(app.getPath('userData'), pluginId),
+    listPlugins: async () => {
+      const plugins = await listGrokPlugins(app.getPath('userData'))
+      const enablement = await requireGrokHomeConfig().readPluginEnablement()
+      return plugins.map((plugin) => applyPluginEnablement(plugin, enablement))
+    },
+    getPlugin: async (pluginId) => {
+      const detail = await getGrokPlugin(app.getPath('userData'), pluginId)
+      if (!detail) return null
+      const enablement = await requireGrokHomeConfig().readPluginEnablement()
+      return applyPluginEnablement(detail, enablement)
+    },
+    setPluginEnabled: async (pluginId, enabled) => {
+      if (!isRuntimePluginId(pluginId)) {
+        throw new DesktopIpcFailure('invalid-input', '插件标识无效。')
+      }
+      const controller = requireGrokHomeConfig()
+      const enablement = await controller.readPluginEnablement()
+      const enabledList = new Set(enablement.enabled ?? [])
+      const disabledList = new Set(enablement.disabled ?? [])
+      if (enabled) {
+        disabledList.delete(pluginId)
+        enabledList.add(pluginId)
+      } else {
+        enabledList.delete(pluginId)
+        disabledList.add(pluginId)
+      }
+      await controller.apply({
+        pluginsEnabled: [...enabledList],
+        pluginsDisabled: [...disabledList]
+      })
+      return { pluginId, enabled }
+    },
+    getGrokConfig: async () => {
+      const text = await requireGrokHomeConfig().read()
+      if (!text.trim()) return { text: GROK_CONFIG_STARTER_TOML, seeded: true as const }
+      return { text }
+    },
+    saveGrokConfig: async (text) => {
+      try {
+        await requireGrokHomeConfig().writeText(text)
+      } catch (error) {
+        if (error instanceof Error && error.name === 'GrokConfigTextError') {
+          throw new DesktopIpcFailure('invalid-input', error.message)
+        }
+        throw error
+      }
+    },
+    listMemories: (projectHint) => requireGrokMemoryStore().list(projectHint),
+    getMemory: (memoryId) => requireGrokMemoryStore().get(memoryId),
+    saveMemory: (memoryId, markdown) => requireGrokMemoryStore().save(memoryId, markdown),
+    deleteMemory: (memoryId) => requireGrokMemoryStore().delete(memoryId),
+    getMemoryEnabled: () => requireGrokMemoryStore().getEnabledState(),
+    setMemoryEnabled: (enabled) => requireGrokMemoryStore().setEnabled(enabled),
+    listMcpServers: async (projectId) => {
+      const projectServers = projectId
+        ? await listProjectMcpServers(
+            await requireProjectRegistry().resolveAvailableRoot(projectId)
+          ).catch(() => [])
+        : []
+      return requireMcpServerStore().list(projectServers)
+    },
+    upsertMcpServer: async (input) => {
+      const store = requireMcpServerStore()
+      const summary = await store.upsert(input)
+      const record = store.getRecord(input.name)
+      if (record) {
+        const resolved = store.resolveRecord(record)
+        await writeUserMcpServer({
+          userConfigPath: getUserGrokConfigPath(),
+          server: {
+            name: resolved.name,
+            enabled: resolved.enabled,
+            transport: resolved.transport,
+            ...(resolved.command ? { command: resolved.command } : {}),
+            ...(resolved.args ? { args: resolved.args } : {}),
+            ...(resolved.url ? { url: resolved.url } : {}),
+            ...(resolved.env ? { env: resolved.env } : {}),
+            ...(resolved.headers ? { headers: resolved.headers } : {})
+          }
+        })
+      }
+      return summary
+    },
+    deleteMcpServer: async (name) => {
+      await requireMcpServerStore().delete(name)
+      await removeUserMcpServer({
+        userConfigPath: getUserGrokConfigPath(),
+        name
+      })
+    },
     deleteProjectHistory: async (projectId, token) => {
       const preparation = requireTaskStore().prepareProjectHistoryDeletion(projectId, token)
       let deletionLease: Awaited<ReturnType<PermissionBroker['beginProjectDeletion']>>
@@ -680,7 +811,38 @@ function redactProviderText(text: string): string {
 
 function getKnownSecrets(): string[] {
   const apiKey = providerStore?.getRuntimeConfig()?.apiKey
-  return apiKey ? [apiKey] : []
+  const mcpSecrets = mcpServerStore?.listKnownSecrets() ?? []
+  return [...(apiKey ? [apiKey] : []), ...mcpSecrets]
+}
+
+function requireGrokHomeConfig(): GrokHomeConfigController {
+  if (!grokHomeConfig) throw new Error('Grok 配置控制器尚未初始化。')
+  return grokHomeConfig
+}
+
+function requireGrokMemoryStore(): GrokMemoryStore {
+  if (!grokMemoryStore) throw new Error('记忆存储尚未初始化。')
+  return grokMemoryStore
+}
+
+function requireMcpServerStore(): McpServerStore {
+  if (!mcpServerStore) throw new Error('MCP 存储尚未初始化。')
+  return mcpServerStore
+}
+
+function applyPluginEnablement<T extends { pluginId: string; status: RuntimePluginStatus }>(
+  plugin: T,
+  enablement: { enabled?: string[]; disabled?: string[] }
+): T {
+  if (plugin.status === 'invalid') return plugin
+  const disabled = enablement.disabled?.includes(plugin.pluginId)
+  const enabledList = enablement.enabled
+  let status: RuntimePluginStatus = 'enabled'
+  if (disabled) status = 'disabled'
+  else if (enabledList && enabledList.length > 0 && !enabledList.includes(plugin.pluginId)) {
+    status = 'disabled'
+  }
+  return { ...plugin, status }
 }
 
 function requireRuntimeAdapter(): GrokAcpAdapter {

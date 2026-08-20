@@ -100,7 +100,7 @@ describe('插件页列表过滤', () => {
 })
 
 describe('插件主列表面', () => {
-  it('空状态文案固定，启停开关先禁用占位', () => {
+  it('空状态文案固定，启停开关调用 IPC 且失败不得乐观打勾', () => {
     expect(PLUGIN_EMPTY_COPY).toBe(
       '还没有已安装的插件。插件由 Grok Build 加载，本页只展示已安装项。'
     )
@@ -108,10 +108,10 @@ describe('插件主列表面', () => {
     expect(pluginsPageSource).toContain('window.app.listPlugins()')
     expect(pluginsPageSource).toContain('window.app.getPlugin')
     expect(pluginsPageSource).toContain('applyPluginDetailIfCurrent')
-    expect(pluginsPageSource).toContain(`title="${PLUGIN_ENABLE_TOGGLE_HINT}"`)
-    expect(pluginsPageSource).toContain(`aria-label="${PLUGIN_ENABLE_TOGGLE_HINT}"`)
-    expect(pluginsPageSource).toContain('disabled')
-    expect(pluginsPageSource).not.toMatch(/\bsetPluginEnabled\s*\(/)
+    expect(pluginsPageSource).toContain('window.app.setPluginEnabled')
+    expect(pluginsPageSource).toContain('togglePlugin')
+    expect(pluginsPageSource).toContain('PLUGIN_ENABLE_TOGGLE_HINT')
+    expect(PLUGIN_ENABLE_TOGGLE_HINT).toContain('下一 session')
     expect(pluginsPageSource).not.toContain('absolutePath')
     expect(pluginsPageSource).not.toContain('Grok ·')
   })

@@ -73,6 +73,41 @@ function createFixture(): {
   }))
   const listPlugins = vi.fn(async () => [pluginSummary])
   const getPlugin = vi.fn(async () => pluginDetail as RuntimePluginDetail | null)
+  const setPluginEnabled = vi.fn(async (pluginId: string, enabled: boolean) => ({
+    pluginId,
+    enabled
+  }))
+  const getGrokConfig = vi.fn(async () => ({ text: '[memory]\nenabled = true\n' }))
+  const saveGrokConfig = vi.fn(async () => undefined)
+  const listMemories = vi.fn(async () => [])
+  const getMemory = vi.fn(async () => ({
+    memoryId: 'global/MEMORY.md',
+    scope: 'global' as const,
+    title: '全局',
+    markdown: 'hello'
+  }))
+  const saveMemory = vi.fn(async () => ({
+    memoryId: 'global/MEMORY.md',
+    scope: 'global' as const,
+    title: '全局',
+    markdown: 'hello'
+  }))
+  const deleteMemory = vi.fn(async () => undefined)
+  const getMemoryEnabled = vi.fn(async () => ({ enabled: true, shareStatus: 'linked' as const }))
+  const setMemoryEnabled = vi.fn(async (enabled: boolean) => ({
+    enabled,
+    shareStatus: 'linked' as const
+  }))
+  const listMcpServers = vi.fn(async () => [])
+  const upsertMcpServer = vi.fn(async () => ({
+    name: 'docs',
+    enabled: true,
+    transport: 'http' as const,
+    origin: 'user' as const,
+    hasSecret: false,
+    url: 'https://example.com/mcp'
+  }))
+  const deleteMcpServer = vi.fn(async () => undefined)
   registerAppIpcHandlers({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     assertTrustedSender,
@@ -86,6 +121,18 @@ function createFixture(): {
     setAppearance,
     listPlugins,
     getPlugin,
+    setPluginEnabled,
+    getGrokConfig,
+    saveGrokConfig,
+    listMemories,
+    getMemory,
+    saveMemory,
+    deleteMemory,
+    getMemoryEnabled,
+    setMemoryEnabled,
+    listMcpServers,
+    upsertMcpServer,
+    deleteMcpServer,
     sanitizeError: (error) => (error instanceof Error ? error.message : String(error))
   })
   const invoke = async <T>(channel: string, ...args: unknown[]): Promise<DesktopIpcResult<T>> => {
@@ -247,5 +294,21 @@ describe('App IPC Handler', () => {
       error: { code: 'not-found', message: '未找到指定插件。' }
     })
     expect(fixture.getPlugin).toHaveBeenCalledWith('missing-plugin')
+  })
+
+  it('启停插件拒绝含路径的 pluginId', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setPluginEnabled, {
+        pluginId: '../escape',
+        enabled: true
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setPluginEnabled, {
+        pluginId: 'demo-plugin',
+        enabled: false
+      })
+    ).toEqual({ ok: true, value: { pluginId: 'demo-plugin', enabled: false } })
   })
 })

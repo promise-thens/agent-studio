@@ -4,6 +4,7 @@ import { PhCircleNotch as CircleNotch, PhPuzzlePiece as PuzzlePiece } from '@pho
 import type { RuntimePluginDetail, RuntimePluginSummary } from '../../../shared/runtime-plugin'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import {
+  PLUGIN_ENABLE_TOGGLE_HINT,
   applyPluginDetailIfCurrent,
   filterInstalledPlugins,
   pluginDisplayLabel
@@ -17,10 +18,12 @@ const selectedPluginId = ref('')
 const detail = ref<RuntimePluginDetail | null>(null)
 const detailState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const detailError = ref('')
+const togglingId = ref('')
+const toggleError = ref('')
 
 const filteredPlugins = computed(() => filterInstalledPlugins(plugins.value, query.value))
 
-/** 只拉已安装摘要；启停要等设置写入 Grok 配置，本页只做禁用占位。 */
+/** 只拉已安装摘要；启停写入 App grok-home config.toml，失败不得本地乐观打勾。 */
 async function loadPlugins(): Promise<void> {
   loadState.value = 'loading'
   errorMessage.value = ''
@@ -62,6 +65,23 @@ async function openPlugin(pluginId: string): Promise<void> {
     detail.value = applied.detail
     detailState.value = applied.detailState
     detailError.value = applied.detailError
+  }
+}
+
+async function togglePlugin(plugin: RuntimePluginSummary, enabled: boolean): Promise<void> {
+  if (plugin.status === 'invalid' || togglingId.value) return
+  togglingId.value = plugin.pluginId
+  toggleError.value = ''
+  try {
+    unwrapDesktopIpcResult(await window.app.setPluginEnabled(plugin.pluginId, enabled))
+    await loadPlugins()
+    if (selectedPluginId.value === plugin.pluginId) {
+      await openPlugin(plugin.pluginId)
+    }
+  } catch (error) {
+    toggleError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    togglingId.value = ''
   }
 }
 
@@ -129,14 +149,24 @@ onMounted(() => {
           <input
             type="checkbox"
             class="plugin-enable"
-            disabled
             :checked="plugin.status === 'enabled'"
-            title="将在设置写入 Grok 配置后可用"
-            aria-label="将在设置写入 Grok 配置后可用"
+            :disabled="plugin.status === 'invalid' || togglingId === plugin.pluginId"
+            :title="
+              plugin.status === 'enabled'
+                ? `停用插件。${PLUGIN_ENABLE_TOGGLE_HINT}`
+                : `启用插件。${PLUGIN_ENABLE_TOGGLE_HINT}`
+            "
+            :aria-label="
+              plugin.status === 'enabled'
+                ? `停用插件。${PLUGIN_ENABLE_TOGGLE_HINT}`
+                : `启用插件。${PLUGIN_ENABLE_TOGGLE_HINT}`
+            "
+            @change="togglePlugin(plugin, ($event.target as HTMLInputElement).checked)"
           />
         </li>
       </ul>
 
+      <p v-if="toggleError" class="plugins-state" role="alert">{{ toggleError }}</p>
       <section class="plugin-detail" aria-live="polite">
         <p v-if="detailState === 'idle'" class="plugins-state">
           选择一个插件查看 Skill、MCP 与 Hooks 摘要。

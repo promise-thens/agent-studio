@@ -1,6 +1,8 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type { ProviderRuntimeConfig } from './provider-config-store'
+import { GrokHomeConfigController, hasTomlTable } from '../runtime/grok/grok-home-config-controller'
+import { ensureSharedGrokMemory, getUserGrokMemoryDir } from '../runtime/grok/grok-shared-memory'
 
 export const AGENT_STUDIO_MODEL_ALIAS = 'agent-studio-default'
 export const AGENT_STUDIO_MODEL_API_KEY_ENV = 'AGENT_STUDIO_MODEL_API_KEY'
@@ -39,31 +41,26 @@ export function buildGrokProviderConfig(config: ProviderRuntimeConfig): string {
   return lines.join('\n')
 }
 
-/** 原子写入 App 专属 config.toml，并尽量收紧目录和文件权限。 */
+/** 合并写入 App 专属 config.toml，并连接共享记忆目录。不得整文件覆盖。 */
 export async function writeGrokProviderConfig(
   userDataPath: string,
-  config: ProviderRuntimeConfig
+  config: ProviderRuntimeConfig,
+  options: { userMemoryDir?: string } = {}
 ): Promise<string> {
   const grokHome = getManagedGrokHome(userDataPath)
-  const configPath = join(grokHome, 'config.toml')
-  const temporaryPath = join(grokHome, `config.toml.tmp-${process.pid}-${Date.now()}`)
-
   await fs.mkdir(grokHome, { recursive: true, mode: 0o700 })
   await chmodBestEffort(grokHome, 0o700)
+  await ensureSharedGrokMemory({
+    grokHome,
+    userMemoryDir: options.userMemoryDir ?? getUserGrokMemoryDir()
+  })
 
-  try {
-    await fs.writeFile(temporaryPath, buildGrokProviderConfig(config), {
-      encoding: 'utf8',
-      mode: 0o600,
-      flag: 'wx'
-    })
-    await fs.rename(temporaryPath, configPath)
-    await chmodBestEffort(configPath, 0o600)
-  } catch (error) {
-    await fs.rm(temporaryPath, { force: true }).catch(() => undefined)
-    throw error
-  }
-
+  const controller = new GrokHomeConfigController(grokHome)
+  const existing = await controller.read()
+  await controller.apply({
+    modelBlock: buildGrokProviderConfig(config),
+    ...(!hasTomlTable(existing, 'memory') ? { memoryEnabled: true } : {})
+  })
   return grokHome
 }
 

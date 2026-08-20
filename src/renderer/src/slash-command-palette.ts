@@ -12,7 +12,12 @@ export interface SlashCommandItem {
   inputHint?: string
   source: SlashCommandSource
   // product 只允许导航，不得 startTurn。
-  productAction?: 'open-plugins' | 'open-settings'
+  productAction?:
+    | 'open-plugins'
+    | 'open-settings'
+    | 'open-settings-memory'
+    | 'open-settings-mcp'
+    | 'open-settings-grok-config'
 }
 
 export const SLASH_RUNTIME_WAITING_COPY = '等待 Grok 提供命令'
@@ -32,6 +37,34 @@ export const PRODUCT_SLASH_COMMANDS: SlashCommandItem[] = [
     description: '打开设置',
     source: 'product',
     productAction: 'open-settings'
+  },
+  {
+    id: 'product:memory',
+    name: 'memory',
+    description: '打开记忆设置',
+    source: 'product',
+    productAction: 'open-settings-memory'
+  },
+  {
+    id: 'product:mcps',
+    name: 'mcps',
+    description: '打开 MCP 设置',
+    source: 'product',
+    productAction: 'open-settings-mcp'
+  },
+  {
+    id: 'product:mcp',
+    name: 'mcp',
+    description: '打开 MCP 设置',
+    source: 'product',
+    productAction: 'open-settings-mcp'
+  },
+  {
+    id: 'product:config',
+    name: 'config',
+    description: '打开 Grok 配置',
+    source: 'product',
+    productAction: 'open-settings-grok-config'
   }
 ]
 

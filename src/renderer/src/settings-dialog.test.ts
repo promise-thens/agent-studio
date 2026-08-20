@@ -17,6 +17,9 @@ const settingsSource = readFileSync(join(rendererDir, 'components/SettingsDialog
 describe('设置弹窗与外观应用', () => {
   it('非法栏目回到供应商', () => {
     expect(resolveSettingsSection('appearance')).toBe('appearance')
+    expect(resolveSettingsSection('grok-config')).toBe('grok-config')
+    expect(resolveSettingsSection('memory')).toBe('memory')
+    expect(resolveSettingsSection('mcp')).toBe('mcp')
     expect(resolveSettingsSection('fonts')).toBe(DEFAULT_SETTINGS_SECTION)
   })
 

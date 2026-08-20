@@ -36,6 +36,17 @@ export interface AgentRuntimeSessionRef {
   workspace: string
 }
 
+/** 中性 MCP 描述；Adapter 内再转成 ACP，避免 SDK 类型漏进 Agent 层。 */
+export interface AgentRuntimeMcpServer {
+  name: string
+  transport: 'stdio' | 'http'
+  command?: string
+  args?: string[]
+  env?: { name: string; value: string }[]
+  url?: string
+  headers?: { name: string; value: string }[]
+}
+
 /**
  * 创建 Runtime session 所需的最小上下文。
  * taskId 是产品身份，必须在 newSession 前交给 Adapter，
@@ -44,6 +55,7 @@ export interface AgentRuntimeSessionRef {
 export interface AgentRuntimeSessionContext {
   workspace: string
   taskId: string
+  mcpServers?: AgentRuntimeMcpServer[]
 }
 
 /** 活动 Turn 的稳定身份；取消只能作用于当前完全匹配的引用。 */
@@ -121,8 +133,16 @@ export interface AgentRuntimeAdapter {
   connect(workspace: string): Promise<AgentRuntimeStatus>
   disconnect(): Promise<AgentRuntimeStatus>
   createSession(context: AgentRuntimeSessionContext): Promise<AgentRuntimeSessionRef>
-  loadSession(session: AgentRuntimeSessionRef, taskId: string): Promise<void>
-  resumeSession(session: AgentRuntimeSessionRef, taskId: string): Promise<void>
+  loadSession(
+    session: AgentRuntimeSessionRef,
+    taskId: string,
+    mcpServers?: AgentRuntimeMcpServer[]
+  ): Promise<void>
+  resumeSession(
+    session: AgentRuntimeSessionRef,
+    taskId: string,
+    mcpServers?: AgentRuntimeMcpServer[]
+  ): Promise<void>
   closeSession(session: AgentRuntimeSessionRef): Promise<void>
   startTurn(context: AgentRuntimeTurnContext): Promise<AgentRuntimeTurnResult>
   cancelTurn(turn: AgentRuntimeTurnRef): Promise<void>

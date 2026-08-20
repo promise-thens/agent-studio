@@ -21,7 +21,18 @@ import {
   type AgentPermissionCancellation
 } from '../shared/agent-ipc'
 import { parseAppAppearanceState } from '../shared/app-appearance'
-import { APP_INVOKE_CHANNELS, APP_PUSH_CHANNELS, type AppDesktopApi } from '../shared/app-ipc'
+import {
+  APP_INVOKE_CHANNELS,
+  APP_PUSH_CHANNELS,
+  type AppDesktopApi,
+  type AppGrokConfigDocument
+} from '../shared/app-ipc'
+import {
+  parseGrokMemoryDocument,
+  parseGrokMemoryEnabledState,
+  parseGrokMemorySummary
+} from '../shared/grok-memory'
+import { parseMcpServerSummary } from '../shared/mcp-server-config'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import {
   parseRuntimePluginDetail,
@@ -680,9 +691,131 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
       }
       return { ok: true, value: detail }
     },
+    setPluginEnabled: (pluginId, enabled) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.setPluginEnabled, {
+        pluginId,
+        enabled
+      }) as ReturnType<AppDesktopApi['setPluginEnabled']>,
+    getGrokConfig: async () => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.getGrokConfig
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const document = parseGrokConfigDocument(result.value)
+      if (!document) {
+        return { ok: false, error: { code: 'operation-failed', message: 'Grok 配置无效。' } }
+      }
+      return { ok: true, value: document }
+    },
+    saveGrokConfig: (text) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.saveGrokConfig, { text }) as ReturnType<
+        AppDesktopApi['saveGrokConfig']
+      >,
+    listMemories: async (projectHint) => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.listMemories,
+        projectHint ? { projectHint } : {}
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      if (!Array.isArray(result.value)) {
+        return { ok: false, error: { code: 'operation-failed', message: '记忆列表无效。' } }
+      }
+      const memories = result.value
+        .map((item) => parseGrokMemorySummary(item))
+        .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      return { ok: true, value: memories }
+    },
+    getMemory: async (memoryId) => {
+      const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.getMemory, {
+        memoryId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const document = parseGrokMemoryDocument(result.value)
+      if (!document) {
+        return { ok: false, error: { code: 'operation-failed', message: '记忆内容无效。' } }
+      }
+      return { ok: true, value: document }
+    },
+    saveMemory: async (memoryId, markdown) => {
+      const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.saveMemory, {
+        memoryId,
+        markdown
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const document = parseGrokMemoryDocument(result.value)
+      if (!document) {
+        return { ok: false, error: { code: 'operation-failed', message: '记忆内容无效。' } }
+      }
+      return { ok: true, value: document }
+    },
+    deleteMemory: (memoryId) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.deleteMemory, { memoryId }) as ReturnType<
+        AppDesktopApi['deleteMemory']
+      >,
+    getMemoryEnabled: async () => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.getMemoryEnabled
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const state = parseGrokMemoryEnabledState(result.value)
+      if (!state) {
+        return { ok: false, error: { code: 'operation-failed', message: '记忆开关状态无效。' } }
+      }
+      return { ok: true, value: state }
+    },
+    setMemoryEnabled: async (enabled) => {
+      const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.setMemoryEnabled, {
+        enabled
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const state = parseGrokMemoryEnabledState(result.value)
+      if (!state) {
+        return { ok: false, error: { code: 'operation-failed', message: '记忆开关状态无效。' } }
+      }
+      return { ok: true, value: state }
+    },
+    listMcpServers: async (projectId) => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.listMcpServers,
+        projectId ? { projectId } : {}
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      if (!Array.isArray(result.value)) {
+        return { ok: false, error: { code: 'operation-failed', message: 'MCP 列表无效。' } }
+      }
+      const servers = result.value
+        .map((item) => parseMcpServerSummary(item))
+        .filter((item): item is NonNullable<typeof item> => Boolean(item))
+      return { ok: true, value: servers }
+    },
+    upsertMcpServer: async (input) => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.upsertMcpServer,
+        input
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const summary = parseMcpServerSummary(result.value)
+      if (!summary) {
+        return { ok: false, error: { code: 'operation-failed', message: 'MCP 配置无效。' } }
+      }
+      return { ok: true, value: summary }
+    },
+    deleteMcpServer: (name) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.deleteMcpServer, { name }) as ReturnType<
+        AppDesktopApi['deleteMcpServer']
+      >,
     onAppearanceChanged: (listener) =>
       subscribe(ipcRenderer, APP_PUSH_CHANNELS.appearance, listener, parseAppAppearanceState)
   }
+}
+
+function parseGrokConfigDocument(value: unknown): AppGrokConfigDocument | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  if (typeof record.text !== 'string' || record.text.includes('\0')) return null
+  const document: AppGrokConfigDocument = { text: record.text }
+  if (record.seeded === true) document.seeded = true
+  return document
 }
 
 /** 创建不暴露存储路径的 Task 历史 API。 */

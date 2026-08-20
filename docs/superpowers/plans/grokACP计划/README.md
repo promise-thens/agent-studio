@@ -1,6 +1,6 @@
 # Grok ACP 加深计划
 
-> 状态：已立项，P0-09 真机测试门已受限关闭，GACP-01 已于 2026-08-19 受限关闭，GACP-02 核心已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）。`available_commands_update` 现为 session 快照，不进 Timeline。
+> 状态：已立项，P0-09 真机测试门已受限关闭，GACP-01 已于 2026-08-19 受限关闭，GACP-02 核心已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；P0-10D 代码已落地（相关自动测试已过，GUI / TUI 对读未跑）。`available_commands_update` 现为 session 快照，不进 Timeline。
 > 创建日期：2026-08-18
 > 定位：在现有 `GrokAcpAdapter` 最小闭环之上，按真实 Grok ACP 方言补齐验证、恢复、审批可解释性和 Client 能力广告
 > 产品愿景仍以 [product-vision.md](../../../product-vision.md) 为准；本目录不改 Runtime × Provider × Capability 分层
@@ -73,6 +73,7 @@ P0-09 测试门关闭
   → P0-10 单 Runtime 工作台
   → P0-10C 宿主表面（命令板 / 插件整页）
   → P0-10D 记忆与 MCP 设置（mcpServers 注入，不是 MCP Host）
+  → P0-10E 插件安装与信任（grok plugin CLI，不读 ~/.grok）
   → P0-11 Command Evidence
   → GACP-03 结构化权限证据（只消费 P0-11 与 GACP-01 已冻结字段）
   → P0-12 Git Review
@@ -91,6 +92,7 @@ P0-A 主表因此变成：
 | 6 | P0-10 | 5 | GACP-02 后 | 工作台按「点进去就能发」来做，禁止加回继续按钮 |
 | 6b | [P0-10C](../p0-10c-grok-host-surfaces.md) | 4 | 代码已落地（自动验证已过，GUI 未跑） | 命令板 + 插件整页；`available_commands_update` 为 session 快照，不进 Timeline |
 | 6c | [P0-10D](../p0-10d-grok-memory-and-mcp.md) | 4 | P0-10C 后 | 设置记忆/MCP；Grok 执行 |
+| 6d | [P0-10E](../p0-10e-grok-plugin-install-and-trust.md) | 4 | P0-10D 后 | 市场安装/信任；不读 ~/.grok |
 | 7 | P0-11 | 5 | 仍按原依赖 | 命令证据事实源 |
 | 7a | [GACP-03](gacp-03-structured-permission-evidence.md) | 4 | P0-11 后 | 能过的自动过，不要一个个点 |
 | 8 | P0-12 | 5 | 原依赖不变 | Diff 审阅 |

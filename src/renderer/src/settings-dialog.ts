@@ -1,6 +1,6 @@
 import type { AppAppearanceMode, AppResolvedAppearance } from '../../shared/app-appearance'
 
-export type SettingsSection = 'provider' | 'appearance'
+export type SettingsSection = 'provider' | 'appearance' | 'memory' | 'mcp' | 'grok-config'
 
 export interface SettingsSectionDefinition {
   id: SettingsSection
@@ -27,7 +27,10 @@ export const DEFAULT_SETTINGS_SECTION: SettingsSection = 'provider'
 
 export const SETTINGS_SECTIONS: readonly SettingsSectionDefinition[] = [
   { id: 'provider', label: '供应商' },
-  { id: 'appearance', label: '外观' }
+  { id: 'appearance', label: '外观' },
+  { id: 'memory', label: '记忆' },
+  { id: 'mcp', label: 'MCP' },
+  { id: 'grok-config', label: 'Grok 配置' }
 ]
 
 export const APPEARANCE_OPTIONS: readonly AppearanceOption[] = [

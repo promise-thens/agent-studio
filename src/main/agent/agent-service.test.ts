@@ -60,7 +60,8 @@ describe('AgentService Task / Turn 编排', () => {
         runtimeSessionId: 'runtime-session-1',
         workspace: WORKSPACE
       },
-      'task-a'
+      'task-a',
+      []
     )
     expect(adapter.loadSession).not.toHaveBeenCalled()
     expect(adapter.startTurn.mock.calls.map(([context]) => context)).toMatchObject([
@@ -83,7 +84,8 @@ describe('AgentService Task / Turn 编排', () => {
     })
     expect(loadAdapter.loadSession).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeSessionId: 'runtime-session-1' }),
-      'task-a'
+      'task-a',
+      []
     )
 
     const fallbackAdapter = new FakeRuntimeAdapter({ resume: true, load: true })
@@ -97,7 +99,8 @@ describe('AgentService Task / Turn 编排', () => {
     expect(fallbackAdapter.resumeSession).toHaveBeenCalledTimes(1)
     expect(fallbackAdapter.loadSession).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeSessionId: 'runtime-session-1' }),
-      'task-a'
+      'task-a',
+      []
     )
 
     const blockedAdapter = new FakeRuntimeAdapter({ resume: false, load: false })
@@ -173,11 +176,13 @@ describe('AgentService Task / Turn 编排', () => {
       expect(adapter.connect).toHaveBeenCalledWith(project.canonicalRoot)
       expect(adapter.resumeSession).toHaveBeenCalledWith(
         expect.objectContaining({ runtimeSessionId: 'persisted-session' }),
-        'task-1'
+        'task-1',
+        []
       )
       expect(adapter.loadSession).toHaveBeenCalledWith(
         expect.objectContaining({ runtimeSessionId: 'persisted-session' }),
-        'task-1'
+        'task-1',
+        []
       )
     } finally {
       await rm(userDataPath, { recursive: true, force: true })
@@ -240,7 +245,8 @@ describe('AgentService Task / Turn 编排', () => {
 
     expect(adapter.resumeSession).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeSessionId: 'runtime-session-1' }),
-      'task-a'
+      'task-a',
+      []
     )
   })
 
@@ -895,7 +901,8 @@ describe('AgentService Task / Turn 编排', () => {
       expect(fixture.adapter.connect).toHaveBeenCalledWith(fixture.project.canonicalRoot)
       expect(fixture.adapter.resumeSession).toHaveBeenCalledWith(
         expect.objectContaining({ runtimeSessionId: 'runtime-session-1' }),
-        task.taskId
+        task.taskId,
+        []
       )
     } finally {
       await fixture.dispose()

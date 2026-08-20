@@ -966,6 +966,11 @@ function openSettingsDialog(): void {
   showSettingsDialog.value = true
 }
 
+function openSettingsSection(section: SettingsSection): void {
+  settingsSection.value = section
+  showSettingsDialog.value = true
+}
+
 function closeSettingsDialog(): void {
   showSettingsDialog.value = false
 }
@@ -973,10 +978,25 @@ function closeSettingsDialog(): void {
 /**
  * 产品别名只做桌面导航，必须清空草稿，避免下次 Enter 把 /plugins 发给 Runtime。
  */
-function handleProductSlashAction(action: 'open-plugins' | 'open-settings'): void {
+function handleProductSlashAction(
+  action:
+    | 'open-plugins'
+    | 'open-settings'
+    | 'open-settings-memory'
+    | 'open-settings-mcp'
+    | 'open-settings-grok-config'
+): void {
   prompt.value = ''
   if (action === 'open-plugins') workbench.openPlugins()
+  else if (action === 'open-settings-memory') openSettingsSection('memory')
+  else if (action === 'open-settings-mcp') openSettingsSection('mcp')
+  else if (action === 'open-settings-grok-config') openSettingsSection('grok-config')
   else openSettingsDialog()
+}
+
+async function startSettingsGrokAction(command: string): Promise<void> {
+  prompt.value = command
+  await sendPrompt()
 }
 
 /** 丢弃 taskId 对不上或 revision 不新的推送，避免切 Task 后命令板闪到上一份 Grok 广告。 */
@@ -1665,6 +1685,9 @@ function scrollMessagesToBottom(): void {
             @stop="cancelTurn"
             @open-plugins="handleProductSlashAction('open-plugins')"
             @open-settings="handleProductSlashAction('open-settings')"
+            @open-settings-memory="handleProductSlashAction('open-settings-memory')"
+            @open-settings-mcp="handleProductSlashAction('open-settings-mcp')"
+            @open-settings-grok-config="handleProductSlashAction('open-settings-grok-config')"
             @model-changed="handleModelChanged"
             @model-error="handleModelError"
           />
@@ -1695,10 +1718,17 @@ function scrollMessagesToBottom(): void {
       :list-models="listProviderModels"
       :save-provider="saveProvider"
       :clear-provider="providerSummary?.configured ? clearProvider : undefined"
+      :selected-task-id="activeTaskId"
+      :grok-actions-available="
+        Boolean(activeTaskId) && status.state === 'ready' && !activeExecution
+      "
+      :project-hint="workbench.selectedProject.value?.displayName"
+      :project-id="workbench.selectedProjectId.value"
       @close="closeSettingsDialog"
       @update:section="settingsSection = $event"
       @change-appearance="changeAppearance"
       @saved="handleProviderSaved"
+      @start-turn="startSettingsGrokAction"
     />
 
     <div

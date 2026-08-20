@@ -22,6 +22,7 @@ import {
   AgentRuntimeAdapterError,
   type AgentRuntimeAdapter,
   type AgentRuntimeAdapterErrorCode,
+  type AgentRuntimeMcpServer,
   type AgentRuntimePermissionCancellation,
   type AgentRuntimePermissionRequest,
   type AgentRuntimeSessionRef,
@@ -84,6 +85,8 @@ export interface AgentServiceOptions {
   taskExecutor?: TaskExecutor
   operationGate?: OperationGate
   onEvent?: (event: AgentEvent) => void
+  /** 创建 / 恢复 session 时注入已校验的 MCP 描述；缺省为空。 */
+  getSessionMcpServers?: () => Promise<AgentRuntimeMcpServer[]> | AgentRuntimeMcpServer[]
 }
 
 interface AgentTaskRecord extends AgentTaskRuntimeState {
@@ -157,6 +160,7 @@ export class AgentService {
   private readonly taskExecutor?: TaskExecutor
   private readonly operationGate?: OperationGate
   private readonly onEvent: (event: AgentEvent) => void
+  private readonly getSessionMcpServers?: AgentServiceOptions['getSessionMcpServers']
   private readonly historyWrites = new Map<string, Promise<void>>()
   private readonly runtimePermissionRequests = new Map<string, AgentRuntimePermissionRequest>()
 
@@ -175,6 +179,7 @@ export class AgentService {
     this.taskExecutor = options.taskExecutor
     this.operationGate = options.operationGate
     this.onEvent = options.onEvent ?? (() => undefined)
+    this.getSessionMcpServers = options.getSessionMcpServers
     for (const persistedTask of this.taskStore?.listTaskRecords() ?? []) {
       const task = restoreRuntimeTask(persistedTask)
       this.tasks.set(task.taskId, task)
@@ -276,8 +281,12 @@ export class AgentService {
       // 必须在等待 createSession 前登记：否则期间到达的命令快照会因未知 taskId 被丢掉。
       this.pendingAvailableCommandTaskIds.add(taskId)
       try {
-        const session = await this.runAdapterOperation(() =>
-          this.adapter.createSession({ workspace: validatedWorkspace, taskId })
+        const session = await this.runAdapterOperation(async () =>
+          this.adapter.createSession({
+            workspace: validatedWorkspace,
+            taskId,
+            mcpServers: await this.resolveMcpServers()
+          })
         )
         this.assertOperationLeaseCurrent(lease)
         this.assertSessionRef(session, validatedWorkspace)
@@ -676,7 +685,7 @@ export class AgentService {
     let resumeError: unknown
     if (canResume) {
       try {
-        await this.adapter.resumeSession(task.session, task.taskId)
+        await this.adapter.resumeSession(task.session, task.taskId, await this.resolveMcpServers())
         this.assertOperationLeaseCurrent(lease)
         if (!this.canCommitEnter(generation)) return undefined
         this.selectedTaskId = task.taskId
@@ -697,7 +706,7 @@ export class AgentService {
         throw normalizeServiceError(resumeError)
       }
       try {
-        await this.adapter.loadSession(task.session, task.taskId)
+        await this.adapter.loadSession(task.session, task.taskId, await this.resolveMcpServers())
         this.assertOperationLeaseCurrent(lease)
         if (!this.canCommitEnter(generation)) return undefined
         this.selectedTaskId = task.taskId
@@ -834,8 +843,12 @@ export class AgentService {
 
   /** 丢掉失效 RuntimeSessionRef，在同一 taskId 上 createSession 并写回 TaskStore。 */
   private async rebuildTaskSession(task: AgentTaskRecord, lease?: OperationLease): Promise<void> {
-    const session = await this.runAdapterOperation(() =>
-      this.adapter.createSession({ workspace: task.workspace, taskId: task.taskId })
+    const session = await this.runAdapterOperation(async () =>
+      this.adapter.createSession({
+        workspace: task.workspace,
+        taskId: task.taskId,
+        mcpServers: await this.resolveMcpServers()
+      })
     )
     this.assertOperationLeaseCurrent(lease)
     this.assertSessionRef(session, task.workspace)
@@ -850,6 +863,10 @@ export class AgentService {
       )
     }
     this.selectedTaskId = task.taskId
+  }
+
+  private async resolveMcpServers(): Promise<AgentRuntimeMcpServer[]> {
+    return (await this.getSessionMcpServers?.()) ?? []
   }
 
   private isTaskSessionActive(task: AgentTaskRecord): boolean {

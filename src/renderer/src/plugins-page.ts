@@ -2,7 +2,7 @@ import type { RuntimePluginSummary } from '../../shared/runtime-plugin'
 
 export const PLUGIN_EMPTY_COPY = '还没有已安装的插件。插件由 Grok Build 加载，本页只展示已安装项。'
 
-export const PLUGIN_ENABLE_TOGGLE_HINT = '将在设置写入 Grok 配置后可用'
+export const PLUGIN_ENABLE_TOGGLE_HINT = '启用或停用插件，下一 session 生效'
 
 /** 只展示接口返回的 displayName，缺失时原样用 pluginId，禁止合成前缀。 */
 export function pluginDisplayLabel(

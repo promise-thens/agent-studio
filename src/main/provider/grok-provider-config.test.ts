@@ -1,5 +1,12 @@
-import { describe, expect, it } from 'vitest'
-import { AGENT_STUDIO_MODEL_API_KEY_ENV, buildGrokProviderConfig } from './grok-provider-config'
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  AGENT_STUDIO_MODEL_API_KEY_ENV,
+  buildGrokProviderConfig,
+  writeGrokProviderConfig
+} from './grok-provider-config'
 import type { ProviderRuntimeConfig } from './provider-config-store'
 
 const baseConfig: ProviderRuntimeConfig = {
@@ -41,5 +48,31 @@ describe('buildGrokProviderConfig', () => {
     expect(result).toContain('model = "model\\"quoted"')
     expect(result).toContain(`"${AGENT_STUDIO_MODEL_API_KEY_ENV}"`)
     expect(result).toContain('ignore_default_excludes = false')
+  })
+})
+
+describe('writeGrokProviderConfig', () => {
+  const dirs: string[] = []
+
+  afterEach(async () => {
+    const { rm } = await import('node:fs/promises')
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
+  })
+
+  it('合并写入且不修改假 ~/.grok/config.toml', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'grok-provider-write-'))
+    dirs.push(root)
+    const userGrok = join(root, '.grok')
+    await mkdir(userGrok, { recursive: true })
+    const userConfig = join(userGrok, 'config.toml')
+    await writeFile(userConfig, '[ui]\nvim_mode = true\n', 'utf8')
+    const grokHome = await writeGrokProviderConfig(root, baseConfig, {
+      userMemoryDir: join(userGrok, 'memory')
+    })
+    const appToml = await readFile(join(grokHome, 'config.toml'), 'utf8')
+    expect(appToml).toContain('[model.agent-studio-default]')
+    expect(appToml).toContain('[memory]')
+    expect(appToml).not.toContain('test-secret-key')
+    expect(await readFile(userConfig, 'utf8')).toBe('[ui]\nvim_mode = true\n')
   })
 })

@@ -1,6 +1,23 @@
 import { isAppAppearanceMode, type AppAppearanceState } from '../shared/app-appearance'
-import { APP_INVOKE_CHANNELS } from '../shared/app-ipc'
+import {
+  APP_INVOKE_CHANNELS,
+  type AppGrokConfigDocument,
+  type AppPluginEnabledState
+} from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
+import {
+  isGrokMemoryId,
+  type GrokMemoryDocument,
+  type GrokMemoryEnabledState,
+  type GrokMemorySummary
+} from '../shared/grok-memory'
+import { GROK_CONFIG_MAX_BYTES } from '../shared/grok-config-hints'
+import {
+  isMcpServerName,
+  isMcpTransportKind,
+  type McpServerInput,
+  type McpServerSummary
+} from '../shared/mcp-server-config'
 import {
   isRuntimePluginId,
   type RuntimePluginDetail,
@@ -27,10 +44,24 @@ export interface AppIpcDependencies {
   setAppearance: (mode: AppAppearanceState['mode']) => Promise<AppAppearanceState>
   listPlugins: () => Promise<RuntimePluginSummary[]>
   getPlugin: (pluginId: string) => Promise<RuntimePluginDetail | null>
+  setPluginEnabled: (pluginId: string, enabled: boolean) => Promise<AppPluginEnabledState>
+  getGrokConfig: () => Promise<AppGrokConfigDocument>
+  saveGrokConfig: (text: string) => Promise<void>
+  listMemories: (projectHint?: string) => Promise<GrokMemorySummary[]>
+  getMemory: (memoryId: string) => Promise<GrokMemoryDocument>
+  saveMemory: (memoryId: string, markdown: string) => Promise<GrokMemoryDocument>
+  deleteMemory: (memoryId: string) => Promise<void>
+  getMemoryEnabled: () => Promise<GrokMemoryEnabledState>
+  setMemoryEnabled: (enabled: boolean) => Promise<GrokMemoryEnabledState>
+  listMcpServers: (projectId?: string) => Promise<McpServerSummary[]>
+  upsertMcpServer: (input: McpServerInput) => Promise<McpServerSummary>
+  deleteMcpServer: (name: string) => Promise<void>
   sanitizeError: (error: unknown) => string
 }
 
 const MAX_IDENTIFIER_BYTES = 4 * 1024
+const MAX_MEMORY_MARKDOWN_BYTES = 256 * 1024
+const MAX_PROJECT_HINT_BYTES = 256
 
 function readRequest(args: unknown[], fields: readonly string[]): Record<string, unknown> {
   if (args.length !== 1 || !args[0] || typeof args[0] !== 'object' || Array.isArray(args[0])) {
@@ -43,17 +74,35 @@ function readRequest(args: unknown[], fields: readonly string[]): Record<string,
   return record
 }
 
-function readText(record: Record<string, unknown>, field: string): string {
+function readOptionalRequest(args: unknown[], fields: readonly string[]): Record<string, unknown> {
+  if (args.length === 0) return {}
+  return readRequest(args, fields)
+}
+
+function readText(
+  record: Record<string, unknown>,
+  field: string,
+  maxBytes = MAX_IDENTIFIER_BYTES
+): string {
   const value = record[field]
   if (
     typeof value !== 'string' ||
     !value.trim() ||
     value.includes('\0') ||
-    Buffer.byteLength(value, 'utf8') > MAX_IDENTIFIER_BYTES
+    Buffer.byteLength(value, 'utf8') > maxBytes
   ) {
     throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
   }
   return value
+}
+
+function readOptionalText(
+  record: Record<string, unknown>,
+  field: string,
+  maxBytes = MAX_IDENTIFIER_BYTES
+): string | undefined {
+  if (!(field in record) || record[field] === undefined) return undefined
+  return readText(record, field, maxBytes)
 }
 
 /** 注册 Project 管理与外观偏好 IPC，不向 Renderer 暴露 Dialog、路径或 nativeTheme。 */
@@ -127,4 +176,134 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
     }
     return detail
   })
+  register(APP_INVOKE_CHANNELS.setPluginEnabled, async (args) => {
+    const request = readRequest(args, ['pluginId', 'enabled'])
+    const pluginId = readText(request, 'pluginId')
+    if (!isRuntimePluginId(pluginId) || typeof request.enabled !== 'boolean') {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    return dependencies.setPluginEnabled(pluginId, request.enabled)
+  })
+  register(APP_INVOKE_CHANNELS.getGrokConfig, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.getGrokConfig()
+  })
+  register(APP_INVOKE_CHANNELS.saveGrokConfig, async (args) => {
+    const request = readRequest(args, ['text'])
+    const text = request.text
+    if (typeof text !== 'string' || text.includes('\0')) {
+      throw new DesktopIpcFailure('invalid-input', '配置文本无效。')
+    }
+    if (Buffer.byteLength(text, 'utf8') > GROK_CONFIG_MAX_BYTES) {
+      throw new DesktopIpcFailure('payload-too-large', '配置超过 128 KiB 上限。')
+    }
+    await dependencies.saveGrokConfig(text)
+    return null
+  })
+  register(APP_INVOKE_CHANNELS.listMemories, (args) => {
+    const request = readOptionalRequest(args, ['projectHint'])
+    return dependencies.listMemories(
+      readOptionalText(request, 'projectHint', MAX_PROJECT_HINT_BYTES)
+    )
+  })
+  register(APP_INVOKE_CHANNELS.getMemory, (args) => {
+    const request = readRequest(args, ['memoryId'])
+    const memoryId = readText(request, 'memoryId')
+    if (!isGrokMemoryId(memoryId)) throw new DesktopIpcFailure('invalid-input', '记忆标识无效。')
+    return dependencies.getMemory(memoryId)
+  })
+  register(APP_INVOKE_CHANNELS.saveMemory, (args) => {
+    const request = readRequest(args, ['memoryId', 'markdown'])
+    const memoryId = readText(request, 'memoryId')
+    if (!isGrokMemoryId(memoryId)) throw new DesktopIpcFailure('invalid-input', '记忆标识无效。')
+    const markdown = request.markdown
+    if (typeof markdown !== 'string' || markdown.includes('\0')) {
+      throw new DesktopIpcFailure('invalid-input', '记忆内容无效。')
+    }
+    if (Buffer.byteLength(markdown, 'utf8') > MAX_MEMORY_MARKDOWN_BYTES) {
+      throw new DesktopIpcFailure('payload-too-large', '记忆内容超过 256 KiB。')
+    }
+    return dependencies.saveMemory(memoryId, markdown)
+  })
+  register(APP_INVOKE_CHANNELS.deleteMemory, async (args) => {
+    const request = readRequest(args, ['memoryId'])
+    const memoryId = readText(request, 'memoryId')
+    if (!isGrokMemoryId(memoryId)) throw new DesktopIpcFailure('invalid-input', '记忆标识无效。')
+    await dependencies.deleteMemory(memoryId)
+    return null
+  })
+  register(APP_INVOKE_CHANNELS.getMemoryEnabled, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.getMemoryEnabled()
+  })
+  register(APP_INVOKE_CHANNELS.setMemoryEnabled, (args) => {
+    const request = readRequest(args, ['enabled'])
+    if (typeof request.enabled !== 'boolean') {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    return dependencies.setMemoryEnabled(request.enabled)
+  })
+  register(APP_INVOKE_CHANNELS.listMcpServers, (args) => {
+    const request = readOptionalRequest(args, ['projectId'])
+    return dependencies.listMcpServers(readOptionalText(request, 'projectId'))
+  })
+  register(APP_INVOKE_CHANNELS.upsertMcpServer, (args) => {
+    const request = readRequest(args, [
+      'name',
+      'enabled',
+      'transport',
+      'command',
+      'args',
+      'url',
+      'env',
+      'headers'
+    ])
+    return dependencies.upsertMcpServer(readMcpServerInput(request))
+  })
+  register(APP_INVOKE_CHANNELS.deleteMcpServer, async (args) => {
+    const request = readRequest(args, ['name'])
+    const name = readText(request, 'name')
+    if (!isMcpServerName(name)) throw new DesktopIpcFailure('invalid-input', 'MCP 名称无效。')
+    await dependencies.deleteMcpServer(name)
+    return null
+  })
+}
+
+function readMcpServerInput(record: Record<string, unknown>): McpServerInput {
+  const name = readText(record, 'name')
+  if (
+    !isMcpServerName(name) ||
+    typeof record.enabled !== 'boolean' ||
+    !isMcpTransportKind(record.transport)
+  ) {
+    throw new DesktopIpcFailure('invalid-input', 'MCP 配置无效。')
+  }
+  const input: McpServerInput = {
+    name,
+    enabled: record.enabled,
+    transport: record.transport
+  }
+  if (typeof record.command === 'string') input.command = record.command
+  if (Array.isArray(record.args)) {
+    if (!record.args.every((item) => typeof item === 'string')) {
+      throw new DesktopIpcFailure('invalid-input', 'MCP 配置无效。')
+    }
+    input.args = record.args
+  }
+  if (typeof record.url === 'string') input.url = record.url
+  if (record.env !== undefined) input.env = readStringMap(record.env)
+  if (record.headers !== undefined) input.headers = readStringMap(record.headers)
+  return input
+}
+
+function readStringMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new DesktopIpcFailure('invalid-input', 'MCP 配置无效。')
+  }
+  const next: Record<string, string> = {}
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof item !== 'string') throw new DesktopIpcFailure('invalid-input', 'MCP 配置无效。')
+    next[key] = item
+  }
+  return next
 }

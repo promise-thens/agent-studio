@@ -539,6 +539,39 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
   })
 
+  it('newSession 收到非空 mcpServers；默认无配置时仍是空数组', async () => {
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-mcp' })
+    const request = vi.fn().mockResolvedValue({})
+    const connection = {
+      newSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+    await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-mcp',
+      mcpServers: [
+        {
+          name: 'docs',
+          transport: 'http',
+          url: 'https://example.com/mcp',
+          headers: []
+        }
+      ]
+    })
+    expect(newSession).toHaveBeenCalledWith({
+      cwd: WORKSPACE,
+      mcpServers: [
+        {
+          type: 'http',
+          name: 'docs',
+          url: 'https://example.com/mcp',
+          headers: []
+        }
+      ]
+    })
+  })
+
   it('load/resume 首次允许 protocol-declared 证据，成功后才提升 verified', async () => {
     const loadSession = vi.fn().mockResolvedValue({})
     const resumeSession = vi.fn().mockResolvedValue({})
@@ -2034,12 +2067,28 @@ describe('Grok Runtime 环境隔离', () => {
       HOME: '/Users/tester',
       HTTPS_PROXY: 'http://127.0.0.1:7890',
       GROK_HOME: '/tmp/agent-studio-grok-home',
+      GROK_MEMORY: '1',
       [AGENT_STUDIO_MODEL_API_KEY_ENV]: FAKE_SECRET
     })
     expect(environment.PATH).toContain('/usr/bin')
     expect(environment).not.toHaveProperty('NPM_TOKEN')
     expect(environment).not.toHaveProperty('XAI_API_KEY')
     expect(environment).not.toHaveProperty('NODE_OPTIONS')
+  })
+
+  it('不继承宿主 GROK_MEMORY=0，关闭记忆时才显式传 0', () => {
+    const inherited = buildGrokRuntimeEnvironment(providerConfig(), '/tmp/home', {
+      PATH: '/usr/bin',
+      GROK_MEMORY: '0'
+    })
+    expect(inherited.GROK_MEMORY).toBe('1')
+    const disabled = buildGrokRuntimeEnvironment(
+      providerConfig(),
+      '/tmp/home',
+      { PATH: '/usr/bin', GROK_MEMORY: '1' },
+      { memoryEnabled: false }
+    )
+    expect(disabled.GROK_MEMORY).toBe('0')
   })
 })
 

@@ -19,6 +19,7 @@ import {
   type AgentRuntimeAdapter,
   type AgentRuntimeAdapterErrorCode,
   type AgentRuntimeAdapterSink,
+  type AgentRuntimeMcpServer,
   type AgentRuntimePermissionCancellation,
   type AgentRuntimePermissionResolution,
   type AgentRuntimeSessionContext,
@@ -27,6 +28,7 @@ import {
   type AgentRuntimeTurnRef,
   type AgentRuntimeTurnResult
 } from '../../agent/agent-runtime-adapter'
+import { toAcpMcpServers } from '../../mcp/mcp-server-to-acp'
 import { updateAgentRuntimeCapabilitySnapshot } from '../../agent/runtime-capabilities'
 import type { ProviderRuntimeConfig } from '../../provider/provider-config-store'
 import {
@@ -112,6 +114,10 @@ export interface GrokAcpAdapterOptions {
   controlledFixture?: ControlledAcpFixtureLaunch
   /** 仅 GACP-01 真机观察 bootstrap 注入；生产路径必须缺省。 */
   protocolObserver?: GrokAcpProtocolObserver
+  /** 已映射的 MCP 描述；Adapter 转成 ACP，不自己 spawn MCP。 */
+  getMcpServers?: () => Promise<readonly AgentRuntimeMcpServer[]> | readonly AgentRuntimeMcpServer[]
+  /** 缺省视为开启，避免宿主 GROK_MEMORY=0 把桌面记忆关掉。 */
+  isMemoryEnabled?: () => Promise<boolean> | boolean
 }
 
 /**
@@ -211,12 +217,15 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       }
 
       // 生产默认启动参数必须保持原样，不能经由通用 command/args 抽象。
+      const memoryEnabled = (await this.options.isMemoryEnabled?.()) ?? true
       child = spawn(
         this.resolveBinary(),
         ['--no-auto-update', 'agent', '--no-leader', '-m', AGENT_STUDIO_MODEL_ALIAS, 'stdio'],
         {
           cwd: workspace,
-          env: buildGrokRuntimeEnvironment(providerConfig, grokHome),
+          env: buildGrokRuntimeEnvironment(providerConfig, grokHome, process.env, {
+            memoryEnabled
+          }),
           stdio: ['pipe', 'pipe', 'pipe']
         }
       )
@@ -289,7 +298,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     try {
       const response = await current.connection.newSession({
         cwd: context.workspace,
-        mcpServers: []
+        mcpServers: await this.resolveAcpMcpServers(context.mcpServers)
       })
       this.assertSessionOperationCurrent(current)
       if (!response.sessionId) {
@@ -328,7 +337,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   }
 
   /** 只在 initialize 明确声明 load 后尝试恢复，首次真实成功后再提升为 verified。 */
-  async loadSession(session: AgentRuntimeSessionRef, taskId: string): Promise<void> {
+  async loadSession(
+    session: AgentRuntimeSessionRef,
+    taskId: string,
+    mcpServers?: AgentRuntimeMcpServer[]
+  ): Promise<void> {
     this.assertSessionRef(session)
     this.assertProductTaskId(taskId)
     this.assertRestoreCapability('session.load')
@@ -340,7 +353,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       await current.connection.loadSession({
         sessionId: session.runtimeSessionId,
         cwd: session.workspace,
-        mcpServers: []
+        mcpServers: await this.resolveAcpMcpServers(mcpServers)
       })
       this.assertSessionOperationCurrent(current)
       // load RPC 返回后立刻认 session，避免 set_model 窗口丢掉 available_commands_update。
@@ -370,7 +383,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   }
 
   /** resume 不回放历史事件，用于 Task 切回时恢复原 Grok 上下文。 */
-  async resumeSession(session: AgentRuntimeSessionRef, taskId: string): Promise<void> {
+  async resumeSession(
+    session: AgentRuntimeSessionRef,
+    taskId: string,
+    mcpServers?: AgentRuntimeMcpServer[]
+  ): Promise<void> {
     this.assertSessionRef(session)
     this.assertProductTaskId(taskId)
     this.assertRestoreCapability('session.resume')
@@ -382,7 +399,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       await current.connection.resumeSession({
         sessionId: session.runtimeSessionId,
         cwd: session.workspace,
-        mcpServers: []
+        mcpServers: await this.resolveAcpMcpServers(mcpServers)
       })
       this.assertSessionOperationCurrent(current)
       // resume RPC 返回后立刻认 session，避免 set_model 窗口丢掉 available_commands_update。
@@ -1356,6 +1373,13 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   }
 
   /** 创建 Adapter 有限错误前再次脱敏，作为所有错误出口的最终安全边界。 */
+  private async resolveAcpMcpServers(
+    explicit?: readonly AgentRuntimeMcpServer[]
+  ): Promise<acp.McpServer[]> {
+    const servers = explicit ?? (await this.options.getMcpServers?.()) ?? []
+    return toAcpMcpServers(servers)
+  }
+
   private createError(
     code: AgentRuntimeAdapterErrorCode,
     message: string
@@ -1587,7 +1611,8 @@ const RUNTIME_ENV_ALLOWLIST = [
 export function buildGrokRuntimeEnvironment(
   providerConfig: ProviderRuntimeConfig,
   grokHome: string,
-  sourceEnvironment: NodeJS.ProcessEnv = process.env
+  sourceEnvironment: NodeJS.ProcessEnv = process.env,
+  options: { memoryEnabled?: boolean } = {}
 ): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = {}
   for (const name of RUNTIME_ENV_ALLOWLIST) {
@@ -1599,6 +1624,8 @@ export function buildGrokRuntimeEnvironment(
     .filter(Boolean)
     .join(delimiter)
   environment.GROK_HOME = grokHome
+  // 显式写入，不继承宿主 GROK_MEMORY=0；设置页关闭记忆时才传 '0'。
+  environment.GROK_MEMORY = options.memoryEnabled === false ? '0' : '1'
   if (providerConfig.authMode === 'bearer' && providerConfig.apiKey) {
     environment[AGENT_STUDIO_MODEL_API_KEY_ENV] = providerConfig.apiKey
   }

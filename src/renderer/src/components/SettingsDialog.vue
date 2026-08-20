@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue'
 import {
+  PhBrain as Brain,
+  PhCode as Code,
   PhPalette as Palette,
+  PhPlugs as Plugs,
   PhPlugsConnected as PlugsConnected,
   PhX as X
 } from '@phosphor-icons/vue'
@@ -13,6 +16,9 @@ import type {
   ProviderTestResult
 } from '../../../shared/provider'
 import { APPEARANCE_OPTIONS, SETTINGS_SECTIONS, type SettingsSection } from '../settings-dialog'
+import GrokConfigEditor from './GrokConfigEditor.vue'
+import MemorySettingsPanel from './MemorySettingsPanel.vue'
+import McpSettingsPanel from './McpSettingsPanel.vue'
 import ProviderOnboarding from './ProviderOnboarding.vue'
 
 const props = defineProps<{
@@ -23,6 +29,10 @@ const props = defineProps<{
   listModels: (input: ProviderConnectionInput) => Promise<ProviderTestResult>
   saveProvider: (input: ProviderConfigInput) => Promise<ProviderConfigSummary>
   clearProvider?: () => Promise<void>
+  selectedTaskId?: string
+  grokActionsAvailable?: boolean
+  projectHint?: string
+  projectId?: string
 }>()
 
 const emit = defineEmits<{
@@ -30,27 +40,45 @@ const emit = defineEmits<{
   'update:section': [SettingsSection]
   changeAppearance: [AppAppearanceMode]
   saved: [summary: ProviderConfigSummary]
+  'start-turn': [command: string]
 }>()
 
 const closeButton = ref<HTMLButtonElement | null>(null)
+const paneDirty = ref(false)
+
+function requestClose(): void {
+  if (paneDirty.value && !window.confirm('有未保存的更改，确定关闭设置？')) return
+  emit('close')
+}
+
+function requestSection(id: SettingsSection): void {
+  if (id === props.section) return
+  if (paneDirty.value && !window.confirm('有未保存的更改，确定离开当前页？')) return
+  paneDirty.value = false
+  emit('update:section', id)
+}
 
 onMounted(() => {
   void nextTick(() => closeButton.value?.focus())
 })
 
 function sectionIcon(id: SettingsSection): typeof Palette {
-  return id === 'appearance' ? Palette : PlugsConnected
+  if (id === 'appearance') return Palette
+  if (id === 'memory') return Brain
+  if (id === 'mcp') return Plugs
+  if (id === 'grok-config') return Code
+  return PlugsConnected
 }
 </script>
 
 <template>
-  <div class="modal-backdrop settings-backdrop" @click.self="emit('close')">
+  <div class="modal-backdrop settings-backdrop" @click.self="requestClose">
     <section
       class="settings-dialog"
       role="dialog"
       aria-modal="true"
       aria-labelledby="settings-dialog-title"
-      @keydown.esc.stop="emit('close')"
+      @keydown.esc.stop="requestClose"
     >
       <header class="settings-dialog-header">
         <h2 id="settings-dialog-title">设置</h2>
@@ -60,7 +88,7 @@ function sectionIcon(id: SettingsSection): typeof Palette {
           type="button"
           title="关闭设置"
           aria-label="关闭设置"
-          @click="emit('close')"
+          @click="requestClose"
         >
           <X :size="16" />
         </button>
@@ -75,7 +103,7 @@ function sectionIcon(id: SettingsSection): typeof Palette {
             type="button"
             :class="{ current: section === item.id }"
             :aria-current="section === item.id ? 'page' : undefined"
-            @click="emit('update:section', item.id)"
+            @click="requestSection(item.id)"
           >
             <component :is="sectionIcon(item.id)" :size="15" />
             <span>{{ item.label }}</span>
@@ -96,7 +124,11 @@ function sectionIcon(id: SettingsSection): typeof Palette {
             />
           </div>
 
-          <section v-else class="appearance-pane" aria-labelledby="appearance-title">
+          <section
+            v-else-if="section === 'appearance'"
+            class="appearance-pane"
+            aria-labelledby="appearance-title"
+          >
             <h3 id="appearance-title">外观</h3>
             <p>选择工作台颜色。跟随系统时，系统浅色用米白，系统深色用现有深色。</p>
             <div class="appearance-options" role="radiogroup" aria-labelledby="appearance-title">
@@ -120,6 +152,17 @@ function sectionIcon(id: SettingsSection): typeof Palette {
               </button>
             </div>
           </section>
+
+          <MemorySettingsPanel
+            v-else-if="section === 'memory'"
+            :selected-task-id="selectedTaskId"
+            :grok-actions-available="grokActionsAvailable"
+            :project-hint="projectHint"
+            @dirty="paneDirty = $event"
+            @start-turn="emit('start-turn', $event)"
+          />
+          <McpSettingsPanel v-else-if="section === 'mcp'" :project-id="projectId" />
+          <GrokConfigEditor v-else-if="section === 'grok-config'" @dirty="paneDirty = $event" />
         </div>
       </div>
     </section>

@@ -62,6 +62,17 @@ describe('斜杠草稿识别', () => {
 })
 
 describe('合并与过滤', () => {
+  it('/mem 匹配 memory 别名且 kind 为 product', () => {
+    const items = merged()
+    const matched = filterSlashCommands(items, slashQuery('/mem'))
+    expect(matched.map((item) => item.name)).toEqual(['memory'])
+    expect(matched[0]?.source).toBe('product')
+    expect(resolveSlashSubmit(matched[0]!, '/mem')).toEqual({
+      kind: 'product',
+      action: 'open-settings-memory'
+    })
+  })
+
   it('/plug 匹配产品别名 plugins，且选 plugins 不产生 runtime prompt', () => {
     const items = merged([runtimeCommand({ name: 'compact', description: '压缩上下文' })])
     const matched = filterSlashCommands(items, slashQuery('/plug'))
@@ -102,13 +113,30 @@ describe('合并与过滤', () => {
       product: PRODUCT_SLASH_COMMANDS
     })
 
-    expect(empty.map((item) => item.name)).toEqual(['plugins', 'settings'])
-    expect(illegal.map((item) => item.name)).toEqual(['plugins', 'settings'])
+    expect(empty.map((item) => item.name)).toEqual([
+      'plugins',
+      'settings',
+      'memory',
+      'mcps',
+      'mcp',
+      'config'
+    ])
+    expect(illegal.map((item) => item.name)).toEqual([
+      'plugins',
+      'settings',
+      'memory',
+      'mcps',
+      'mcp',
+      'config'
+    ])
     expect(empty.every((item) => item.source === 'product')).toBe(true)
-    expect(PRODUCT_SLASH_COMMANDS.map((item) => item.name)).toEqual(['plugins', 'settings'])
-    expect(PRODUCT_SLASH_COMMANDS.map((item) => item.productAction)).toEqual([
-      'open-plugins',
-      'open-settings'
+    expect(PRODUCT_SLASH_COMMANDS.map((item) => item.name)).toEqual([
+      'plugins',
+      'settings',
+      'memory',
+      'mcps',
+      'mcp',
+      'config'
     ])
   })
 
@@ -122,6 +150,10 @@ describe('合并与过滤', () => {
     expect(items.map((item) => `${item.source}:${item.name}`)).toEqual([
       'product:plugins',
       'product:settings',
+      'product:memory',
+      'product:mcps',
+      'product:mcp',
+      'product:config',
       'runtime:compact'
     ])
     expect(items.find((item) => item.name === 'plugins')?.productAction).toBe('open-plugins')
@@ -259,8 +291,8 @@ describe('命令板表面', () => {
     expect(paletteSource).not.toContain('/memory')
     expect(paletteSource).not.toContain('/mcps')
     expect(helperSource).not.toContain("name: 'compact'")
-    expect(helperSource).not.toContain("name: 'memory'")
-    expect(helperSource).not.toContain("name: 'mcps'")
+    expect(helperSource).toContain("name: 'memory'")
+    expect(helperSource).toContain("name: 'mcps'")
   })
 
   it('Composer 在斜杠草稿时打开命令板，执行中仍可点产品别名', () => {
@@ -268,6 +300,7 @@ describe('命令板表面', () => {
     expect(composerSource).toContain('SlashCommandPalette')
     expect(composerSource).toContain("emit('open-plugins')")
     expect(composerSource).toContain("emit('open-settings')")
+    expect(composerSource).toContain("emit('open-settings-memory')")
     expect(composerSource).toContain('matchProductSlashSubmit')
     expect(composerSource).not.toContain('继续任务')
   })
@@ -283,7 +316,7 @@ describe('命令板表面', () => {
     expect(appSource).toContain('handleProductSlashAction')
     expect(appSource).toContain('workbench.openPlugins()')
     expect(appSource).toContain('openSettingsDialog()')
-    expect(appSource).not.toContain('/memory')
-    expect(appSource).not.toContain('/mcps')
+    expect(appSource).toContain('open-settings-memory')
+    expect(appSource).toContain('open-settings-grok-config')
   })
 })

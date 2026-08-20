@@ -296,6 +296,64 @@ vi.mock('./provider/provider-connection-tester', () => ({
     }
   }
 }))
+vi.mock('./runtime/grok/grok-home-config-controller', () => ({
+  GrokHomeConfigController: class {
+    async read(): Promise<string> {
+      return ''
+    }
+    async apply(): Promise<Record<string, never>> {
+      return {}
+    }
+    async writeText(): Promise<void> {
+      return undefined
+    }
+    async readMemoryEnabled(): Promise<boolean> {
+      return true
+    }
+    async readPluginEnablement(): Promise<Record<string, never>> {
+      return {}
+    }
+  }
+}))
+vi.mock('./runtime/grok/grok-memory-store', () => ({
+  GrokMemoryStore: class {
+    async ensureShare(): Promise<string> {
+      return 'linked'
+    }
+    async getEnabledState(): Promise<{ enabled: boolean; shareStatus: string }> {
+      return { enabled: true, shareStatus: 'linked' }
+    }
+    async list(): Promise<unknown[]> {
+      return []
+    }
+  }
+}))
+vi.mock('./mcp/mcp-server-store', () => ({
+  McpServerStore: class {
+    async initialize(): Promise<void> {
+      return undefined
+    }
+    async listEnabledResolved(): Promise<unknown[]> {
+      return []
+    }
+    list(): unknown[] {
+      return []
+    }
+    listKnownSecrets(): string[] {
+      return []
+    }
+  }
+}))
+vi.mock('./mcp/grok-user-mcp-sync', () => ({
+  getUserGrokConfigPath: () => '/tmp/agent-studio-index-test/.grok/config.toml',
+  syncUserMcpFromHome: vi.fn(async () => undefined),
+  listProjectMcpServers: vi.fn(async () => []),
+  writeUserMcpServer: vi.fn(async () => undefined),
+  removeUserMcpServer: vi.fn(async () => undefined)
+}))
+vi.mock('./mcp/mcp-server-to-acp', () => ({
+  toAgentRuntimeMcpServers: () => []
+}))
 vi.mock('./runtime/grok/grok-acp-adapter', () => ({
   GrokAcpAdapter: class {
     constructor() {
@@ -315,7 +373,8 @@ vi.mock('./agent/task-execution-controller', () => ({
   TaskExecutionController: class {}
 }))
 vi.mock('./provider/grok-provider-config', () => ({
-  clearGrokProviderConfig: vi.fn(async () => undefined)
+  clearGrokProviderConfig: vi.fn(async () => undefined),
+  getManagedGrokHome: (userDataPath: string) => `${userDataPath}/grok-home`
 }))
 
 describe('Main 删除与权限失效编排', () => {
