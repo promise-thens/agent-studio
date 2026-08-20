@@ -132,30 +132,64 @@ export function completeSlashComposerPrompt(item: SlashCommandItem, prompt: stri
 }
 
 /**
- * 丢弃过期快照：切 Task 后迟到的 available_commands 推送不能污染当前命令板。
+ * 同 Task 只接受更新的 revision；切 Task 后调用方必须先把 currentRevision 归零再拉 GET。
  */
-export function applyAvailableCommandSnapshotIfCurrent(input: {
-  selectedTaskId: string
-  snapshot: { taskId: string; commands: AgentAvailableCommand[] }
-}): { apply: true; commands: AgentAvailableCommand[] } | { apply: false } {
-  if (!input.selectedTaskId || input.snapshot.taskId !== input.selectedTaskId) {
-    return { apply: false }
-  }
-  return { apply: true, commands: input.snapshot.commands }
+function isNewerAvailableCommandRevision(
+  currentRevision: number,
+  incomingRevision: number
+): boolean {
+  return Number.isFinite(incomingRevision) && incomingRevision > currentRevision
 }
 
 /**
- * 丢弃过期拉取：selectedTaskId 已变或 IPC 失败时不覆盖。
+ * 丢弃过期快照：切 Task 后迟到的推送、同 Task 更旧 revision 都不能污染当前命令板。
+ */
+export function applyAvailableCommandSnapshotIfCurrent(input: {
+  selectedTaskId: string
+  currentRevision: number
+  snapshot: { taskId: string; revision: number; commands: AgentAvailableCommand[] }
+}): { apply: true; commands: AgentAvailableCommand[]; revision: number } | { apply: false } {
+  if (!input.selectedTaskId || input.snapshot.taskId !== input.selectedTaskId) {
+    return { apply: false }
+  }
+  if (!isNewerAvailableCommandRevision(input.currentRevision, input.snapshot.revision)) {
+    return { apply: false }
+  }
+  return {
+    apply: true,
+    commands: input.snapshot.commands,
+    revision: input.snapshot.revision
+  }
+}
+
+/**
+ * 丢弃过期拉取：selectedTaskId 已变、IPC 失败、或 revision 不新于当前推送时不覆盖。
  * 失败保持调用方现有列表（空或上一份），避免命令板崩溃。
  */
 export function applyAvailableCommandFetchIfCurrent(input: {
   selectedTaskId: string
   requestedTaskId: string
-  incoming: { ok: true; commands: AgentAvailableCommand[] } | { ok: false }
-}): { apply: true; commands: AgentAvailableCommand[] } | { apply: false } {
+  currentRevision: number
+  incoming:
+    | {
+        ok: true
+        snapshot: { taskId: string; revision: number; commands: AgentAvailableCommand[] }
+      }
+    | { ok: false }
+}): { apply: true; commands: AgentAvailableCommand[]; revision: number } | { apply: false } {
   if (!input.selectedTaskId || input.selectedTaskId !== input.requestedTaskId) {
     return { apply: false }
   }
   if (!input.incoming.ok) return { apply: false }
-  return { apply: true, commands: input.incoming.commands }
+  if (input.incoming.snapshot.taskId !== input.selectedTaskId) {
+    return { apply: false }
+  }
+  if (!isNewerAvailableCommandRevision(input.currentRevision, input.incoming.snapshot.revision)) {
+    return { apply: false }
+  }
+  return {
+    apply: true,
+    commands: input.incoming.snapshot.commands,
+    revision: input.incoming.snapshot.revision
+  }
 }

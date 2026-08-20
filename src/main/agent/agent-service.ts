@@ -133,6 +133,11 @@ export class AgentService {
   private readonly tasks = new Map<string, AgentTaskRecord>()
   private readonly allocatedTaskIds = new Set<string>()
   private readonly availableCommands = new Map<string, AgentAvailableCommandSnapshot>()
+  /**
+   * createSession 完成前允许收命令快照的 Task。
+   * Grok 可能在 createSession 等待期间就推 available_commands_update。
+   */
+  private readonly pendingAvailableCommandTaskIds = new Set<string>()
   private readonly allocatedTurnIds = new Set<string>()
   private selectedTaskId: string | null = null
   private sessionOperationActive = false
@@ -268,42 +273,51 @@ export class AgentService {
       }
       this.assertRuntimeReady(validatedWorkspace)
       const taskId = this.allocateTaskId()
-      const session = await this.runAdapterOperation(() =>
-        this.adapter.createSession({ workspace: validatedWorkspace, taskId })
-      )
-      this.assertOperationLeaseCurrent(lease)
-      this.assertSessionRef(session, validatedWorkspace)
+      // 必须在等待 createSession 前登记：否则期间到达的命令快照会因未知 taskId 被丢掉。
+      this.pendingAvailableCommandTaskIds.add(taskId)
+      try {
+        const session = await this.runAdapterOperation(() =>
+          this.adapter.createSession({ workspace: validatedWorkspace, taskId })
+        )
+        this.assertOperationLeaseCurrent(lease)
+        this.assertSessionRef(session, validatedWorkspace)
 
-      const observedAt = this.now()
-      const task: AgentTaskRecord = {
-        taskId,
-        ...(this.projectRegistry ? { projectId: projectIdOrWorkspace } : {}),
-        runtimeId: this.adapter.runtimeId,
-        workspace: validatedWorkspace,
-        runtimeSessionId: session.runtimeSessionId,
-        state: 'pending',
-        createdAt: observedAt,
-        updatedAt: observedAt,
-        session
-      }
-      if (this.taskStore && task.projectId) {
-        try {
-          await this.taskStore.createTask({
-            taskId,
-            projectId: task.projectId,
-            root: validatedWorkspace,
-            runtimeId: task.runtimeId,
-            session,
-            capabilitySnapshot: this.adapter.getCapabilitySnapshot()
-          })
-        } catch (error) {
-          await this.adapter.closeSession(session).catch(() => undefined)
-          throw error
+        const observedAt = this.now()
+        const task: AgentTaskRecord = {
+          taskId,
+          ...(this.projectRegistry ? { projectId: projectIdOrWorkspace } : {}),
+          runtimeId: this.adapter.runtimeId,
+          workspace: validatedWorkspace,
+          runtimeSessionId: session.runtimeSessionId,
+          state: 'pending',
+          createdAt: observedAt,
+          updatedAt: observedAt,
+          session
         }
+        if (this.taskStore && task.projectId) {
+          try {
+            await this.taskStore.createTask({
+              taskId,
+              projectId: task.projectId,
+              root: validatedWorkspace,
+              runtimeId: task.runtimeId,
+              session,
+              capabilitySnapshot: this.adapter.getCapabilitySnapshot()
+            })
+          } catch (error) {
+            await this.adapter.closeSession(session).catch(() => undefined)
+            throw error
+          }
+        }
+        this.tasks.set(taskId, task)
+        this.selectedTaskId = taskId
+        return cloneTask(task)
+      } catch (error) {
+        this.availableCommands.delete(taskId)
+        throw error
+      } finally {
+        this.pendingAvailableCommandTaskIds.delete(taskId)
       }
-      this.tasks.set(taskId, task)
-      this.selectedTaskId = taskId
-      return cloneTask(task)
     }, inheritedLease)
   }
 
@@ -474,10 +488,16 @@ export class AgentService {
 
   /**
    * Adapter 在无 Turn 时也会推送命令快照。未知 Task 丢弃；
+   * createSession 期间的 pending taskId 必须能收下，否则快照会在登记前丢失。
    * 只接受更新的 revision，避免乱序覆盖。
    */
   handleAvailableCommands(snapshot: AgentAvailableCommandSnapshot): void {
-    if (!this.tasks.has(snapshot.taskId)) return
+    if (
+      !this.tasks.has(snapshot.taskId) &&
+      !this.pendingAvailableCommandTaskIds.has(snapshot.taskId)
+    ) {
+      return
+    }
     const current = this.availableCommands.get(snapshot.taskId)
     if (current && snapshot.revision <= current.revision) return
     this.availableCommands.set(snapshot.taskId, cloneAvailableCommandSnapshot(snapshot))

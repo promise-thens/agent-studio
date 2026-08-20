@@ -13,7 +13,10 @@ import type {
   AgentRuntimeStatus,
   AgentTaskRuntimeState
 } from '../../shared/agent'
-import type { AgentAvailableCommand } from '../../shared/agent-available-command'
+import type {
+  AgentAvailableCommand,
+  AgentAvailableCommandSnapshot
+} from '../../shared/agent-available-command'
 import type { PublicAgentEvent, PublicAgentToolEvent } from '../../shared/agent-event'
 import type { AppAppearanceMode, AppAppearanceState } from '../../shared/app-appearance'
 import type {
@@ -176,6 +179,8 @@ let conversationEnterGeneration = 0
 let conversationEnterPromise: Promise<ConversationEntryState | null> | null = null
 const prompt = ref('')
 const runtimeSlashCommands = ref<AgentAvailableCommand[]>([])
+/** 当前命令板已应用的快照 revision；切 Task 时归零，避免旧 GET 盖住更新的 push。 */
+const runtimeSlashRevision = ref(0)
 const taskComposer = ref<{ focus: () => void; focusStop?: () => void } | null>(null)
 const promptSubmissionPending = ref(false)
 const projectConnectionPending = ref(false)
@@ -974,21 +979,20 @@ function handleProductSlashAction(action: 'open-plugins' | 'open-settings'): voi
   else openSettingsDialog()
 }
 
-/** 丢弃 taskId 对不上的推送，避免切 Task 后命令板闪到上一份 Grok 广告。 */
-function applySlashCommandSnapshot(snapshot: {
-  taskId: string
-  commands: AgentAvailableCommand[]
-}): void {
+/** 丢弃 taskId 对不上或 revision 不新的推送，避免切 Task 后命令板闪到上一份 Grok 广告。 */
+function applySlashCommandSnapshot(snapshot: AgentAvailableCommandSnapshot): void {
   const applied = applyAvailableCommandSnapshotIfCurrent({
     selectedTaskId: activeTaskId.value,
+    currentRevision: runtimeSlashRevision.value,
     snapshot
   })
   if (!applied.apply) return
   runtimeSlashCommands.value = applied.commands
+  runtimeSlashRevision.value = applied.revision
 }
 
 /**
- * 切 Task 后重拉快照；只在 selectedTaskId 仍是这次请求的目标时写入。
+ * 切 Task 后重拉快照；只在 selectedTaskId 仍是这次请求的目标、且 revision 更新时写入。
  * IPC 失败不崩 UI，保持空列表，产品别名仍可从 merge 出现。
  */
 async function loadAvailableCommands(taskId: string): Promise<void> {
@@ -998,13 +1002,18 @@ async function loadAvailableCommands(taskId: string): Promise<void> {
     const applied = applyAvailableCommandFetchIfCurrent({
       selectedTaskId: activeTaskId.value,
       requestedTaskId: taskId,
-      incoming: { ok: true, commands: snapshot.commands }
+      currentRevision: runtimeSlashRevision.value,
+      incoming: { ok: true, snapshot }
     })
-    if (applied.apply) runtimeSlashCommands.value = applied.commands
+    if (applied.apply) {
+      runtimeSlashCommands.value = applied.commands
+      runtimeSlashRevision.value = applied.revision
+    }
   } catch {
     applyAvailableCommandFetchIfCurrent({
       selectedTaskId: activeTaskId.value,
       requestedTaskId: taskId,
+      currentRevision: runtimeSlashRevision.value,
       incoming: { ok: false }
     })
   }
@@ -1012,6 +1021,7 @@ async function loadAvailableCommands(taskId: string): Promise<void> {
 
 watch(activeTaskId, (taskId) => {
   runtimeSlashCommands.value = []
+  runtimeSlashRevision.value = 0
   void loadAvailableCommands(taskId)
 })
 

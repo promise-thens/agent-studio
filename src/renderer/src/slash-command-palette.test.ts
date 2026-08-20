@@ -151,22 +151,36 @@ describe('等待文案与过期快照', () => {
     expect(
       applyAvailableCommandSnapshotIfCurrent({
         selectedTaskId: 'task-b',
-        snapshot: { taskId: 'task-a', commands: [runtimeCommand({ name: 'compact' })] }
+        currentRevision: 0,
+        snapshot: { taskId: 'task-a', revision: 1, commands: [runtimeCommand({ name: 'compact' })] }
       })
     ).toEqual({ apply: false })
 
     expect(
       applyAvailableCommandSnapshotIfCurrent({
         selectedTaskId: 'task-b',
-        snapshot: { taskId: 'task-b', commands: [runtimeCommand({ name: 'compact' })] }
+        currentRevision: 0,
+        snapshot: { taskId: 'task-b', revision: 1, commands: [runtimeCommand({ name: 'compact' })] }
       })
-    ).toEqual({ apply: true, commands: [runtimeCommand({ name: 'compact' })] })
+    ).toEqual({
+      apply: true,
+      commands: [runtimeCommand({ name: 'compact' })],
+      revision: 1
+    })
 
     expect(
       applyAvailableCommandFetchIfCurrent({
         selectedTaskId: 'task-b',
         requestedTaskId: 'task-a',
-        incoming: { ok: true, commands: [runtimeCommand({ name: 'compact' })] }
+        currentRevision: 0,
+        incoming: {
+          ok: true,
+          snapshot: {
+            taskId: 'task-a',
+            revision: 1,
+            commands: [runtimeCommand({ name: 'compact' })]
+          }
+        }
       })
     ).toEqual({ apply: false })
 
@@ -174,9 +188,63 @@ describe('等待文案与过期快照', () => {
       applyAvailableCommandFetchIfCurrent({
         selectedTaskId: 'task-b',
         requestedTaskId: 'task-b',
+        currentRevision: 0,
         incoming: { ok: false }
       })
     ).toEqual({ apply: false })
+  })
+
+  it('同 task 更旧或相同 revision 丢弃，更新的才写入', () => {
+    const compact = runtimeCommand({ name: 'compact' })
+    const dream = runtimeCommand({ name: 'dream' })
+
+    expect(
+      applyAvailableCommandSnapshotIfCurrent({
+        selectedTaskId: 'task-a',
+        currentRevision: 2,
+        snapshot: { taskId: 'task-a', revision: 2, commands: [compact] }
+      })
+    ).toEqual({ apply: false })
+
+    expect(
+      applyAvailableCommandSnapshotIfCurrent({
+        selectedTaskId: 'task-a',
+        currentRevision: 2,
+        snapshot: { taskId: 'task-a', revision: 1, commands: [compact] }
+      })
+    ).toEqual({ apply: false })
+
+    expect(
+      applyAvailableCommandSnapshotIfCurrent({
+        selectedTaskId: 'task-a',
+        currentRevision: 2,
+        snapshot: { taskId: 'task-a', revision: 3, commands: [dream] }
+      })
+    ).toEqual({ apply: true, commands: [dream], revision: 3 })
+
+    expect(
+      applyAvailableCommandFetchIfCurrent({
+        selectedTaskId: 'task-a',
+        requestedTaskId: 'task-a',
+        currentRevision: 3,
+        incoming: {
+          ok: true,
+          snapshot: { taskId: 'task-a', revision: 2, commands: [compact] }
+        }
+      })
+    ).toEqual({ apply: false })
+
+    expect(
+      applyAvailableCommandFetchIfCurrent({
+        selectedTaskId: 'task-a',
+        requestedTaskId: 'task-a',
+        currentRevision: 3,
+        incoming: {
+          ok: true,
+          snapshot: { taskId: 'task-a', revision: 4, commands: [dream] }
+        }
+      })
+    ).toEqual({ apply: true, commands: [dream], revision: 4 })
   })
 })
 
@@ -209,6 +277,8 @@ describe('命令板表面', () => {
     expect(appSource).toContain('window.agent.getAvailableCommands')
     expect(appSource).toContain('applyAvailableCommandSnapshotIfCurrent')
     expect(appSource).toContain('applyAvailableCommandFetchIfCurrent')
+    expect(appSource).toContain('runtimeSlashRevision')
+    expect(appSource).toContain('currentRevision')
     expect(appSource).toContain('matchProductSlashSubmit')
     expect(appSource).toContain('handleProductSlashAction')
     expect(appSource).toContain('workbench.openPlugins()')

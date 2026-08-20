@@ -1630,24 +1630,169 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
   })
 
-  it('createSession 在等待 newSession 前就绑定产品 taskId', async () => {
-    let boundDuringNewSession: string | null | undefined
-    const newSession = vi.fn()
-    const request = vi.fn().mockResolvedValue({})
+  it('set_model 挂起时仍接受新 session 的 available_commands_update', async () => {
+    let releaseSetModel: ((value: unknown) => void) | undefined
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-new' })
+    const request = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          releaseSetModel = resolve
+        })
+    )
     const connection = {
       newSession,
       request
     } as unknown as acp.ClientSideConnection
     const harness = createAdapterHarness(connection, false)
-    newSession.mockImplementation(async () => {
-      boundDuringNewSession = harness.internal.boundTaskId
-      return { sessionId: 'runtime-session-new' }
+
+    const createPromise = harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-test'
+    })
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
+
+    harness.internal.handleSessionUpdate(
+      {
+        sessionId: 'runtime-session-new',
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: [{ name: 'compact', description: '压缩上下文' }]
+        }
+      },
+      connection
+    )
+
+    expect(harness.availableCommands).toEqual([
+      {
+        taskId: 'task-test',
+        revision: 1,
+        commands: [{ name: 'compact', description: '压缩上下文' }]
+      }
+    ])
+    expect(harness.events).toEqual([])
+
+    releaseSetModel?.({})
+    await createPromise
+    expect(harness.internal.boundTaskId).toBe('task-test')
+    expect(harness.internal.selectedSession?.runtimeSessionId).toBe('runtime-session-new')
+  })
+
+  it('load 返回后、set_model 完成前接受该 session 的命令快照', async () => {
+    let releaseSetModel: ((value: unknown) => void) | undefined
+    const loadSession = vi.fn().mockResolvedValue({})
+    const request = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          releaseSetModel = resolve
+        })
+    )
+    const connection = {
+      loadSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    setHandshakeSnapshot(harness.internal, { loadSession: true, resume: true })
+    harness.internal.boundTaskId = 'task-old'
+    harness.internal.selectedSession = runtimeSession('runtime-session-old')
+
+    const loadPromise = harness.adapter.loadSession(
+      runtimeSession('runtime-session-new'),
+      'task-new'
+    )
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
+
+    harness.internal.handleSessionUpdate(
+      {
+        sessionId: 'runtime-session-new',
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: [{ name: 'dream', description: '整理记忆' }]
+        }
+      },
+      connection
+    )
+
+    expect(harness.availableCommands.at(-1)).toEqual({
+      taskId: 'task-new',
+      revision: expect.any(Number),
+      commands: [{ name: 'dream', description: '整理记忆' }]
+    })
+    expect(harness.events).toEqual([])
+
+    releaseSetModel?.({})
+    await loadPromise
+    expect(harness.internal.boundTaskId).toBe('task-new')
+  })
+
+  it('load 失败且未断开时回滚 boundTaskId，不把新 Task 绑到旧 session', async () => {
+    const loadSession = vi.fn().mockRejectedValue(new Error('load exploded'))
+    const request = vi.fn()
+    const connection = {
+      loadSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    setHandshakeSnapshot(harness.internal, { loadSession: true, resume: true })
+    harness.internal.boundTaskId = 'task-a'
+    harness.internal.selectedSession = runtimeSession('runtime-session-a')
+
+    await expect(
+      harness.adapter.loadSession(runtimeSession('runtime-session-b'), 'task-b')
+    ).rejects.toMatchObject({ code: 'operation-failed' })
+
+    expect(request).not.toHaveBeenCalled()
+    expect(harness.internal.connection).toBe(connection)
+    expect(harness.internal.boundTaskId).toBe('task-a')
+    expect(harness.internal.selectedSession?.runtimeSessionId).toBe('runtime-session-a')
+
+    harness.internal.handleSessionUpdate(
+      {
+        sessionId: 'runtime-session-a',
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: [{ name: 'compact', description: '压缩上下文' }]
+        }
+      },
+      connection
+    )
+    expect(harness.availableCommands.at(-1)).toMatchObject({
+      taskId: 'task-a',
+      commands: [{ name: 'compact', description: '压缩上下文' }]
     })
 
-    await harness.adapter.createSession({ workspace: WORKSPACE, taskId: 'task-test' })
+    harness.internal.handleSessionUpdate(
+      {
+        sessionId: 'runtime-session-b',
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: [{ name: 'dream', description: '整理记忆' }]
+        }
+      },
+      connection
+    )
+    expect(harness.availableCommands.map((snapshot) => snapshot.taskId)).not.toContain('task-b')
+  })
 
-    expect(boundDuringNewSession).toBe('task-test')
-    expect(harness.internal.boundTaskId).toBe('task-test')
+  it('resume 失败且未断开时回滚 boundTaskId，不把新 Task 绑到旧 session', async () => {
+    const resumeSession = vi.fn().mockRejectedValue(new Error('resume exploded'))
+    const request = vi.fn()
+    const connection = {
+      resumeSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    setHandshakeSnapshot(harness.internal, { loadSession: true, resume: true })
+    harness.internal.boundTaskId = 'task-a'
+    harness.internal.selectedSession = runtimeSession('runtime-session-a')
+
+    await expect(
+      harness.adapter.resumeSession(runtimeSession('runtime-session-b'), 'task-b')
+    ).rejects.toMatchObject({ code: 'operation-failed' })
+
+    expect(request).not.toHaveBeenCalled()
+    expect(harness.internal.connection).toBe(connection)
+    expect(harness.internal.boundTaskId).toBe('task-a')
+    expect(harness.internal.selectedSession?.runtimeSessionId).toBe('runtime-session-a')
   })
 
   it('session/new 后、startTurn 前收到命令列表会推送 sink，且不进 Timeline', async () => {

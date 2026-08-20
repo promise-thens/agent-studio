@@ -168,6 +168,54 @@ describe('窄 Preload API', () => {
     expect(JSON.stringify(listener.mock.calls)).not.toContain('runtime-session-private')
   })
 
+  it('getAvailableCommands 经白名单解析，失败返回 operation-failed 且丢掉脏字段', async () => {
+    const ipcRenderer = createIpcRenderer()
+    const agent = createAgentDesktopApi(ipcRenderer)
+
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        revision: 2,
+        commands: [{ name: 'compact', description: '压缩', inputHint: '主题' }],
+        runtimeSessionId: 'runtime-session-private'
+      }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { taskId: 'task-1', revision: 0 }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { taskId: '', revision: 1, commands: [] }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'task-not-found', message: '未找到指定 Task。' }
+    })
+
+    await expect(agent.getAvailableCommands('task-1')).resolves.toEqual({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        revision: 2,
+        commands: [{ name: 'compact', description: '压缩', inputHint: '主题' }]
+      }
+    })
+    await expect(agent.getAvailableCommands('task-1')).resolves.toEqual({
+      ok: true,
+      value: { taskId: 'task-1', revision: 0, commands: [] }
+    })
+    await expect(agent.getAvailableCommands('task-1')).resolves.toEqual({
+      ok: false,
+      error: { code: 'operation-failed', message: '命令快照无效。' }
+    })
+    await expect(agent.getAvailableCommands('task-1')).resolves.toEqual({
+      ok: false,
+      error: { code: 'task-not-found', message: '未找到指定 Task。' }
+    })
+  })
+
   it('Agent 事件推送只转发公开 DTO，丢弃 Runtime 私有字段和 Diff 正文', () => {
     const ipcRenderer = createIpcRenderer()
     const agent = createAgentDesktopApi(ipcRenderer)

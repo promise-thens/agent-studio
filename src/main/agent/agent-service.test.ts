@@ -902,6 +902,55 @@ describe('AgentService Task / Turn 编排', () => {
     }
   })
 
+  it('createSession 期间到达的命令快照在 createTask 返回后仍可读取', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    adapter.createSession.mockImplementation(async (context) => {
+      service.handleAvailableCommands({
+        taskId: context.taskId,
+        revision: 1,
+        commands: [{ name: 'compact', description: '压缩上下文' }]
+      })
+      return {
+        runtimeId: 'grok',
+        runtimeSessionId: 'runtime-session-1',
+        workspace: context.workspace
+      }
+    })
+
+    const task = await service.createTask(WORKSPACE)
+
+    expect(service.getAvailableCommands(task.taskId)).toEqual({
+      taskId: 'task-a',
+      revision: 1,
+      commands: [{ name: 'compact', description: '压缩上下文' }]
+    })
+  })
+
+  it('createSession 失败时丢弃期间登记的命令快照', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    adapter.createSession.mockImplementation(async (context) => {
+      service.handleAvailableCommands({
+        taskId: context.taskId,
+        revision: 1,
+        commands: [{ name: 'compact', description: '压缩上下文' }]
+      })
+      throw new AgentRuntimeAdapterError('operation-failed', '创建 Runtime 会话失败')
+    })
+
+    await expect(service.createTask(WORKSPACE)).rejects.toMatchObject({
+      code: 'operation-failed'
+    })
+
+    try {
+      service.getAvailableCommands('task-a')
+      throw new Error('expected AgentServiceError')
+    } catch (error) {
+      expect(error).toEqual(new AgentServiceError('task-not-found', '未找到指定 Task。'))
+    }
+  })
+
   it('createTask 后尚未收到快照时返回 revision 0 空列表', async () => {
     const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
     const service = createService(adapter, ['task-a'])

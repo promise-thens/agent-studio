@@ -552,10 +552,21 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getTaskRuntimeState, { taskId }) as Promise<
         DesktopIpcResult<AgentTaskRuntimeState>
       >,
-    getAvailableCommands: (taskId) =>
-      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getAvailableCommands, { taskId }) as Promise<
-        DesktopIpcResult<AgentAvailableCommandSnapshot>
-      >,
+    getAvailableCommands: async (taskId) => {
+      const result = (await ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getAvailableCommands, {
+        taskId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      // GET 与 Push 同一套 parse：条数、name、4KiB 字段必须在进入 Vue 前再挡一次。
+      const snapshot = parseAvailableCommandSnapshot(result.value)
+      if (!snapshot || snapshot.taskId !== taskId) {
+        return {
+          ok: false,
+          error: { code: 'operation-failed', message: '命令快照无效。' }
+        }
+      }
+      return { ok: true, value: snapshot }
+    },
     respondPermission: (request) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.respondPermission, {
         approvalId: request.approvalId,

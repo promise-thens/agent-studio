@@ -283,8 +283,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   async createSession(context: AgentRuntimeSessionContext): Promise<AgentRuntimeSessionRef> {
     this.assertProductTaskId(context.taskId)
     const current = this.beginSessionOperation(context.workspace)
-    // 必须在等待 newSession 前绑定：Grok 可能在 RPC 返回前后就推 available_commands_update。
-    this.rebindProductTask(context.taskId)
+    const previousTaskId = this.boundTaskId
+    const previousSelectedSession = this.selectedSession
 
     try {
       const response = await current.connection.newSession({
@@ -308,17 +308,19 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         sessionIdShape: describeSessionIdShape(response.sessionId),
         ok: true
       })
-      await this.bindAgentStudioModel(current, response.sessionId, context.workspace)
-
       const session: AgentRuntimeSessionRef = {
         runtimeId: GROK_RUNTIME_ID,
         runtimeSessionId: response.sessionId,
         workspace: context.workspace
       }
+      // newSession 返回 sessionId 后立刻认这个 session：set_model 完成前 Grok 就会推命令快照。
+      this.adoptSession(session, context.taskId)
+      await this.bindAgentStudioModel(current, response.sessionId, context.workspace)
       this.activateSession(session, context.taskId)
       this.verifyCapability('session.create', 'stable')
       return session
     } catch (error) {
+      this.rollbackAdoptedSession(current, previousTaskId, previousSelectedSession)
       if (error instanceof AgentRuntimeAdapterError) throw error
       this.assertSessionOperationCurrent(current)
       throw this.toAdapterError(error, 'operation-failed', '创建 Runtime 会话失败')
@@ -331,7 +333,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     this.assertProductTaskId(taskId)
     this.assertRestoreCapability('session.load')
     const current = this.beginSessionOperation(session.workspace)
-    this.rebindProductTask(taskId)
+    const previousTaskId = this.boundTaskId
+    const previousSelectedSession = this.selectedSession
 
     try {
       await current.connection.loadSession({
@@ -340,6 +343,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         mcpServers: []
       })
       this.assertSessionOperationCurrent(current)
+      // load RPC 返回后立刻认 session，避免 set_model 窗口丢掉 available_commands_update。
+      this.adoptSession(session, taskId)
       await this.bindAgentStudioModel(current, session.runtimeSessionId, session.workspace)
       this.activateSession(session, taskId)
       this.verifyCapability('session.load', 'stable')
@@ -350,6 +355,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         ok: true
       })
     } catch (error) {
+      this.rollbackAdoptedSession(current, previousTaskId, previousSelectedSession)
       this.observe({
         kind: 'session-op',
         method: 'load',
@@ -369,7 +375,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     this.assertProductTaskId(taskId)
     this.assertRestoreCapability('session.resume')
     const current = this.beginSessionOperation(session.workspace)
-    this.rebindProductTask(taskId)
+    const previousTaskId = this.boundTaskId
+    const previousSelectedSession = this.selectedSession
 
     try {
       await current.connection.resumeSession({
@@ -378,6 +385,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         mcpServers: []
       })
       this.assertSessionOperationCurrent(current)
+      // resume RPC 返回后立刻认 session，避免 set_model 窗口丢掉 available_commands_update。
+      this.adoptSession(session, taskId)
       await this.bindAgentStudioModel(current, session.runtimeSessionId, session.workspace)
       this.activateSession(session, taskId)
       this.verifyCapability('session.resume', 'stable')
@@ -388,6 +397,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         ok: true
       })
     } catch (error) {
+      this.rollbackAdoptedSession(current, previousTaskId, previousSelectedSession)
       this.observe({
         kind: 'session-op',
         method: 'resume',
@@ -890,14 +900,42 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     }
   }
 
+  private isSessionOperationCurrent(current: CurrentConnection): boolean {
+    return (
+      this.connection === current.connection &&
+      this.connectionGeneration === current.connectionGeneration &&
+      this.sessionOperationGeneration === current.sessionOperationGeneration
+    )
+  }
+
   private assertSessionOperationCurrent(current: CurrentConnection): void {
-    if (
-      this.connection !== current.connection ||
-      this.connectionGeneration !== current.connectionGeneration ||
-      this.sessionOperationGeneration !== current.sessionOperationGeneration
-    ) {
+    if (!this.isSessionOperationCurrent(current)) {
       throw this.createError('invalid-state', 'Runtime 会话操作已失效。')
     }
+  }
+
+  /**
+   * 拿到 Runtime sessionId 后立刻绑定产品和 selectedSession。
+   * 必须早于 set_model：Grok 常在这个窗口推 available_commands_update。
+   */
+  private adoptSession(session: AgentRuntimeSessionRef, taskId: string): void {
+    this.rebindProductTask(taskId)
+    this.selectedSession = { ...session }
+  }
+
+  /**
+   * load/resume/new 失败且本次操作仍有效时滚回绑定。
+   * set_model 失败已经 disconnectInternal，不能把 Task 绑回已死 session。
+   */
+  private rollbackAdoptedSession(
+    current: CurrentConnection,
+    previousTaskId: string | null,
+    previousSelectedSession: AgentRuntimeSessionRef | null
+  ): void {
+    if (!this.isSessionOperationCurrent(current)) return
+    if (previousTaskId) this.rebindProductTask(previousTaskId)
+    else this.clearAvailableCommandSnapshot()
+    this.selectedSession = previousSelectedSession ? { ...previousSelectedSession } : null
   }
 
   /**
