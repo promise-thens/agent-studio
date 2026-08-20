@@ -50,6 +50,20 @@ describe('侧栏项目平铺', () => {
     expect(sidebarSource).toContain('openProjectFolder')
   })
 
+  it('项目 ⋯ 菜单 Teleport 到 body 并 fixed，贴在按钮下方而不是侧旁', () => {
+    expect(sidebarSource).toContain('<Teleport to="body">')
+    expect(sidebarSource).toContain('resolveTaskMenuPosition')
+    expect(extractCssRuleBlock(sidebarSource, '.project-actions')).toMatch(/position:\s*fixed/)
+    expect(extractCssRuleBlock(sidebarSource, '.project-actions')).not.toMatch(
+      /position:\s*absolute/
+    )
+    expect(sidebarSource).toMatch(/transform-origin:\s*top right/)
+    expect(sidebarSource).not.toMatch(/data-placement='left'/)
+    expect(sidebarSource).not.toMatch(/data-placement='right'/)
+    const reduced = collectPrefersReducedMotionCss(sidebarSource)
+    expect(reduced).toMatch(/\.project-actions[\s\S]*transition:\s*none/)
+  })
+
   it('展开项目按内容长高，不把后续项目顶到侧栏底部', () => {
     const expanded = extractCssRuleBlock(sidebarSource, '.project-block.is-expanded')
     expect(expanded).toMatch(/flex:\s*0\s+1\s+auto/)
@@ -66,6 +80,10 @@ describe('侧栏项目平铺', () => {
 
   it('对话列表按内容长高，父级被压缩时才把滚动交给行列表', () => {
     expect(extractCssRuleBlock(taskListSource, '.task-list')).toMatch(/flex:\s*1\s+1\s+auto/)
+  })
+
+  it('展开项目没有对话时，空状态在列表里居中', () => {
+    expect(extractCssRuleBlock(taskListSource, '.task-empty')).toMatch(/text-align:\s*center/)
   })
 
   it('点目录只浏览列表，不走 selectProject；对话列表按展开项渲染', () => {

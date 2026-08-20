@@ -74,31 +74,41 @@ describe('侧栏任务行溢出契约', () => {
     )
   })
 
-  it('优先在 ⋯ 右侧弹出，避免盖住标题；右侧不够再翻到左侧', () => {
+  it('贴 ⋯ 正下方右对齐，不把菜单甩到侧栏外', () => {
     expect(
       resolveTaskMenuPosition(
         { top: 80, left: 172, right: 200, bottom: 108 },
         { width: 120, height: 96 },
         { width: 1280, height: 800 }
       )
-    ).toEqual({ top: 80, left: 206, placement: 'right' })
+    ).toEqual({ top: 114, left: 80, placement: 'below' })
     expect(
       resolveTaskMenuPosition(
         { top: 80, left: 1160, right: 1188, bottom: 108 },
         { width: 120, height: 96 },
         { width: 1280, height: 800 }
       )
-    ).toEqual({ top: 80, left: 1034, placement: 'left' })
+    ).toEqual({ top: 114, left: 1068, placement: 'below' })
   })
 
-  it('贴按钮顶对齐，到底部时上移夹在视口内', () => {
+  it('底部不够时翻到 ⋯ 上方，仍然右对齐按钮', () => {
     expect(
       resolveTaskMenuPosition(
         { top: 740, left: 172, right: 200, bottom: 768 },
         { width: 120, height: 96 },
         { width: 1280, height: 800 }
       )
-    ).toEqual({ top: 696, left: 206, placement: 'right' })
+    ).toEqual({ top: 638, left: 80, placement: 'above' })
+  })
+
+  it('左侧不够时只夹视口，不改成左右侧弹出', () => {
+    expect(
+      resolveTaskMenuPosition(
+        { top: 80, left: 12, right: 40, bottom: 108 },
+        { width: 120, height: 96 },
+        { width: 1280, height: 800 }
+      )
+    ).toEqual({ top: 114, left: 8, placement: 'below' })
   })
 
   it('点菜单内部或当前 ⋯ 不关，点列表其它地方要关', () => {
@@ -132,10 +142,12 @@ describe('侧栏任务行溢出契约', () => {
     ).toBe(false)
   })
 
-  it('⋯ 菜单从按钮旁弹出并有过渡，减少动效时关掉', () => {
+  it('⋯ 菜单从按钮正下方弹出并有过渡，减少动效时关掉', () => {
     expect(taskListSource).toContain('<Teleport')
     expect(extractCssRuleBlock(taskListSource, '.task-menu')).toContain('position: fixed')
-    expect(taskListSource).toMatch(/transform-origin:\s*top left/)
+    expect(taskListSource).toMatch(/transform-origin:\s*top right/)
+    expect(taskListSource).not.toMatch(/data-placement='left'/)
+    expect(taskListSource).not.toMatch(/data-placement='right'/)
     expect(taskListSource).toMatch(
       /prefers-reduced-motion:\s*reduce[\s\S]*\.task-menu[\s\S]*transition:\s*none/
     )

@@ -261,7 +261,7 @@ function closeMenus(): void {
   menuReady.value = false
 }
 
-/** 用按钮的视口坐标定位到 body，侧栏 overflow 裁不到，也不会盖住标题。 */
+/** 用按钮视口坐标定位到 body，贴在 ⋯ 正下方；后续项目目录盖不住。 */
 function placeMenu(button: HTMLElement, size = TASK_MENU_FALLBACK_SIZE): void {
   const rect = button.getBoundingClientRect()
   const next = resolveTaskMenuPosition(
@@ -538,7 +538,12 @@ onBeforeUnmount(() => {
         :class="{ ready: menuReady }"
         :data-placement="menuPosition.placement"
         role="menu"
-        :style="{ top: menuPosition.top, left: menuPosition.left }"
+        :style="{
+          position: 'fixed',
+          zIndex: 40,
+          top: menuPosition.top,
+          left: menuPosition.left
+        }"
       >
         <button
           type="button"
@@ -582,13 +587,22 @@ onBeforeUnmount(() => {
   gap: 4px;
 }
 
-.task-list-hint,
-.task-empty {
+.task-list-hint {
   margin: 0;
   padding: 6px 10px;
   color: var(--text-3);
   font-size: 11px;
   line-height: 1.5;
+}
+
+/* 空列表在展开目录里水平居中，不要贴左看起来像漏排。 */
+.task-empty {
+  margin: 0;
+  padding: 12px 10px;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
 }
 
 .task-rows {
@@ -772,15 +786,15 @@ onBeforeUnmount(() => {
   border-radius: 10px;
   background: var(--surface-2);
   box-shadow: 0 12px 32px color-mix(in srgb, var(--text-1) 18%, transparent);
-  transform-origin: top left;
+  transform-origin: top right;
   opacity: 0;
-  transform: translateX(-6px) scale(0.96);
+  transform: translateY(-6px) scale(0.96);
   pointer-events: none;
 }
 
-.task-menu[data-placement='left'] {
-  transform-origin: top right;
-  transform: translateX(6px) scale(0.96);
+.task-menu[data-placement='above'] {
+  transform-origin: bottom right;
+  transform: translateY(6px) scale(0.96);
 }
 
 .task-menu.ready {
@@ -831,7 +845,7 @@ onBeforeUnmount(() => {
 
   .task-menu,
   .task-menu.ready,
-  .task-menu[data-placement='left'] {
+  .task-menu[data-placement='above'] {
     transform: none;
     transition: none;
   }

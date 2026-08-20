@@ -33,11 +33,11 @@ export interface TaskMenuViewport {
   height: number
 }
 
-export type TaskMenuPlacement = 'left' | 'right'
+export type TaskMenuPlacement = 'below' | 'above'
 
 /**
- * 优先在 ⋯ 右侧弹出，盖到对话列而不是标题。
- * 右侧不够再翻到左侧；垂直贴按钮顶，并夹在视口内。
+ * 贴 ⋯ 正下方弹出，并右对齐按钮，菜单留在侧栏里。
+ * 禁止挪到右侧对话列；只有底部不够时才翻到上方。
  */
 export function resolveTaskMenuPosition(
   button: TaskMenuAnchorRect,
@@ -46,14 +46,16 @@ export function resolveTaskMenuPosition(
   gap = 6
 ): { top: number; left: number; placement: TaskMenuPlacement } {
   const margin = 8
-  const fitsRight = button.right + gap + menu.width <= viewport.width - margin
-  const placement: TaskMenuPlacement = fitsRight ? 'right' : 'left'
-  const unclampedLeft = placement === 'right' ? button.right + gap : button.left - gap - menu.width
+  const fitsBelow = button.bottom + gap + menu.height <= viewport.height - margin
+  const placement: TaskMenuPlacement = fitsBelow ? 'below' : 'above'
+  const unclampedTop = placement === 'below' ? button.bottom + gap : button.top - gap - menu.height
+  // 右对齐 ⋯，落在按钮正下方，而不是 button.right + gap 甩到对话列。
+  const unclampedLeft = button.right - menu.width
   const maxLeft = Math.max(margin, viewport.width - menu.width - margin)
   const maxTop = Math.max(margin, viewport.height - menu.height - margin)
   return {
     placement,
-    top: Math.min(Math.max(margin, button.top), maxTop),
+    top: Math.min(Math.max(margin, unclampedTop), maxTop),
     left: Math.min(Math.max(margin, unclampedLeft), maxLeft)
   }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   PhCaretDown as CaretDown,
   PhDotsThree as DotsThree,
@@ -15,6 +15,11 @@ import {
   createWorkbenchLoadState,
   type WorkbenchLoadState
 } from '../composables/useProjectRegistry'
+import {
+  resolveTaskMenuPosition,
+  shouldCloseTaskMenuOnPointerDown,
+  type TaskMenuPlacement
+} from '../task-list-overflow'
 import { resolveProjectAccordionToggle, tasksForExpandedProject } from '../task-navigation'
 import type { WorkbenchPrimaryView } from '../workbench-primary-view'
 import TaskList from './TaskList.vue'
@@ -86,9 +91,18 @@ const emit = defineEmits<{
 
 const expandedProjectId = ref(props.selectedProjectId)
 const actionProjectId = ref('')
+const menuReady = ref(false)
+const menuPosition = ref<{ top: string; left: string; placement: TaskMenuPlacement } | null>(null)
+
+/** 与三项菜单高度大致对齐，首帧定位用；实际尺寸在 nextTick 后重测。 */
+const PROJECT_MENU_FALLBACK_SIZE = { width: 136, height: 96 }
 
 const visibleProjects = computed(() =>
   props.projects.filter((project) => project.status === 'active')
+)
+
+const actionProject = computed(
+  () => visibleProjects.value.find((project) => project.projectId === actionProjectId.value) ?? null
 )
 
 watch(
@@ -119,6 +133,8 @@ function availabilityLabel(project: ProjectSummary): string {
 
 function closeProjectActions(): void {
   actionProjectId.value = ''
+  menuPosition.value = null
+  menuReady.value = false
 }
 
 /** 点标题只折叠或展开；展开其它项目时拉浏览列表，不切当前对话。 */
@@ -167,10 +183,42 @@ function onRetryTaskList(): void {
   else emit('retryBrowseTasks')
 }
 
+/** 用按钮视口坐标定位到 body，贴在 ⋯ 正下方；侧栏 overflow 和后续项目目录盖不住。 */
+function placeProjectMenu(button: HTMLElement, size = PROJECT_MENU_FALLBACK_SIZE): void {
+  const rect = button.getBoundingClientRect()
+  const next = resolveTaskMenuPosition(
+    { top: rect.top, left: rect.left, right: rect.right, bottom: rect.bottom },
+    size,
+    { width: window.innerWidth, height: window.innerHeight }
+  )
+  menuPosition.value = {
+    top: `${next.top}px`,
+    left: `${next.left}px`,
+    placement: next.placement
+  }
+}
+
 function toggleProjectActions(projectId: string, event: Event): void {
   event.stopPropagation()
   if (props.mutationActionsDisabled) return
-  actionProjectId.value = actionProjectId.value === projectId ? '' : projectId
+  if (actionProjectId.value === projectId) {
+    closeProjectActions()
+    return
+  }
+  const button = event.currentTarget
+  if (!(button instanceof HTMLElement)) return
+  menuReady.value = false
+  placeProjectMenu(button)
+  actionProjectId.value = projectId
+  void nextTick(() => {
+    const menu = document.querySelector('.project-actions')
+    if (!(menu instanceof HTMLElement) || actionProjectId.value !== projectId) return
+    placeProjectMenu(button, { width: menu.offsetWidth, height: menu.offsetHeight })
+    requestAnimationFrame(() => {
+      if (actionProjectId.value !== projectId) return
+      menuReady.value = true
+    })
+  })
 }
 
 function retryAccess(projectId: string): void {
@@ -195,17 +243,41 @@ function openProjectFolder(projectId: string): void {
 
 function onDocumentPointerDown(event: PointerEvent): void {
   const target = event.target
-  if (!(target instanceof Element)) {
+  if (
+    shouldCloseTaskMenuOnPointerDown({
+      open: Boolean(actionProjectId.value),
+      insideMenu: target instanceof Element && Boolean(target.closest('.project-actions')),
+      onExpandedMenuButton:
+        target instanceof Element &&
+        Boolean(target.closest('.project-action-button[aria-expanded="true"]'))
+    })
+  ) {
     closeProjectActions()
-    return
   }
-  if (target.closest('.project-actions')) return
-  if (target.closest('.project-action-button[aria-expanded="true"]')) return
+}
+
+function onWindowKeyDown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || !actionProjectId.value) return
+  if (event.defaultPrevented || event.isComposing) return
+  event.preventDefault()
   closeProjectActions()
 }
 
+watch(
+  () => props.mutationActionsDisabled,
+  (disabled) => {
+    if (disabled) closeProjectActions()
+  }
+)
+
 window.addEventListener('pointerdown', onDocumentPointerDown)
-onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointerDown))
+window.addEventListener('keydown', onWindowKeyDown)
+window.addEventListener('resize', closeProjectActions)
+onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', onDocumentPointerDown)
+  window.removeEventListener('keydown', onWindowKeyDown)
+  window.removeEventListener('resize', closeProjectActions)
+})
 </script>
 
 <template>
@@ -307,42 +379,6 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
           >
             <DotsThree :size="16" weight="bold" />
           </button>
-          <div v-if="actionProjectId === project.projectId" class="project-actions" role="menu">
-            <button
-              v-if="project.availability.state !== 'available'"
-              type="button"
-              role="menuitem"
-              :disabled="mutationActionsDisabled"
-              @click="retryAccess(project.projectId)"
-            >
-              重试访问
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              :disabled="mutationActionsDisabled"
-              @click="openProjectFolder(project.projectId)"
-            >
-              打开文件夹
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              :disabled="mutationActionsDisabled"
-              @click="removeProject(project.projectId)"
-            >
-              移除记录
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              class="danger"
-              :disabled="mutationActionsDisabled"
-              @click="deleteProjectHistory(project.projectId)"
-            >
-              删除本地历史
-            </button>
-          </div>
         </div>
 
         <Transition name="project-fold">
@@ -371,6 +407,57 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
         </Transition>
       </section>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="actionProject && menuPosition"
+        class="project-actions"
+        :class="{ ready: menuReady }"
+        :data-placement="menuPosition.placement"
+        role="menu"
+        :style="{
+          position: 'fixed',
+          zIndex: 40,
+          top: menuPosition.top,
+          left: menuPosition.left
+        }"
+      >
+        <button
+          v-if="actionProject.availability.state !== 'available'"
+          type="button"
+          role="menuitem"
+          :disabled="mutationActionsDisabled"
+          @click="retryAccess(actionProject.projectId)"
+        >
+          重试访问
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          :disabled="mutationActionsDisabled"
+          @click="openProjectFolder(actionProject.projectId)"
+        >
+          打开文件夹
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          :disabled="mutationActionsDisabled"
+          @click="removeProject(actionProject.projectId)"
+        >
+          移除记录
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="danger"
+          :disabled="mutationActionsDisabled"
+          @click="deleteProjectHistory(actionProject.projectId)"
+        >
+          删除本地历史
+        </button>
+      </div>
+    </Teleport>
   </aside>
 </template>
 
@@ -485,7 +572,8 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   flex: 0 0 auto;
 }
 
-/* 按内容长高，剩余空白留在树底部；空间不够再收缩，交给内部对话列表滚动。 */
+/* 按内容长高，剩余空白留在树底部；空间不够再收缩，交给内部对话列表滚动。
+   overflow 必须 hidden 才能夹住 0fr→1fr 折叠；项目 ⋯ 菜单因此 Teleport 到 body。 */
 .project-block.is-expanded {
   display: flex;
   min-height: 0;
@@ -613,17 +701,34 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
 }
 
 .project-actions {
-  position: absolute;
-  z-index: 8;
-  top: 30px;
-  right: 8px;
+  -webkit-app-region: no-drag;
+  position: fixed;
+  z-index: 40;
   display: grid;
-  min-width: 132px;
+  min-width: 136px;
   padding: 4px;
   border: 1px solid var(--border-strong);
   border-radius: 10px;
   background: var(--surface-2);
   box-shadow: 0 12px 32px color-mix(in srgb, var(--text-1) 18%, transparent);
+  transform-origin: top right;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.96);
+  pointer-events: none;
+}
+
+.project-actions[data-placement='above'] {
+  transform-origin: bottom right;
+  transform: translateY(6px) scale(0.96);
+}
+
+.project-actions.ready {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition:
+    opacity 160ms ease,
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .project-actions button {
@@ -653,6 +758,13 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   .project-fold-leave-active,
   .project-fold-enter-active .project-fold-clip,
   .project-fold-leave-active .project-fold-clip {
+    transition: none;
+  }
+
+  .project-actions,
+  .project-actions.ready,
+  .project-actions[data-placement='above'] {
+    transform: none;
     transition: none;
   }
 }
