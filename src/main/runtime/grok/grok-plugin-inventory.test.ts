@@ -47,6 +47,31 @@ function expectNoLeak(value: unknown, forbidden: string[]): void {
   }
 }
 
+function isSymlinkPrivilegeError(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    (error.code === 'EPERM' || error.code === 'EACCES')
+  )
+}
+
+/** Windows 未开开发人员模式时无法建 symlink，跳过而不是把套件打红。 */
+async function symlinkOrSkip(
+  skip: (reason?: string) => void,
+  target: string,
+  linkPath: string
+): Promise<boolean> {
+  try {
+    await symlink(target, linkPath)
+    return true
+  } catch (error) {
+    if (!isSymlinkPrivilegeError(error)) throw error
+    skip('本机无权创建 symlink')
+    return false
+  }
+}
+
 describe('Grok 插件库存扫描', () => {
   it('plugins 目录或 grok-home 不存在时返回空列表，且不创建目录', async () => {
     const userDataPath = await createUserData()
@@ -247,7 +272,9 @@ describe('Grok 插件库存扫描', () => {
     expectNoLeak(detail, ['sk-oversize', 'sk-0', 'secret-0', 'leak'])
   })
 
-  it('逃出 grok-home 的 symlink 标为 invalid，原因不含绝对路径，且不中断其它插件', async () => {
+  it('逃出 grok-home 的 symlink 标为 invalid，原因不含绝对路径，且不中断其它插件', async ({
+    skip
+  }) => {
     const userDataPath = await createUserData()
     const root = await pluginsRoot(userDataPath)
     const outsideRoot = await createTemporaryDirectory('agent-studio-plugin-outside-')
@@ -257,7 +284,7 @@ describe('Grok 插件库存扫描', () => {
     await writeJson(join(outsidePlugin, '.mcp.json'), {
       mcpServers: { stolen: { env: { API_KEY: 'sk-outside-secret' } } }
     })
-    await symlink(outsidePlugin, join(root, 'escaped'))
+    if (!(await symlinkOrSkip(skip, outsidePlugin, join(root, 'escaped')))) return
 
     const goodDir = join(root, 'safe-plugin')
     await mkdir(goodDir)
@@ -300,7 +327,7 @@ describe('Grok 插件库存扫描', () => {
     ])
   })
 
-  it('插件内文件 symlink 逃逸时该项 invalid，不读取外部内容', async () => {
+  it('插件内文件 symlink 逃逸时该项 invalid，不读取外部内容', async ({ skip }) => {
     const userDataPath = await createUserData()
     const root = await pluginsRoot(userDataPath)
     const pluginDir = join(root, 'file-escape')
@@ -311,7 +338,11 @@ describe('Grok 插件库存扫描', () => {
     const outsideSkill = join(outsideRoot, 'SKILL.md')
     await writeFile(outsideSkill, '# stolen\nsk-file-secret\n')
     await mkdir(join(pluginDir, 'skills', 'stolen'))
-    await symlink(outsideSkill, join(pluginDir, 'skills', 'stolen', 'SKILL.md'))
+    if (
+      !(await symlinkOrSkip(skip, outsideSkill, join(pluginDir, 'skills', 'stolen', 'SKILL.md')))
+    ) {
+      return
+    }
 
     const detail = await getGrokPlugin(userDataPath, 'file-escape')
     expect(detail?.status).toBe('invalid')
@@ -342,5 +373,123 @@ describe('Grok 插件库存扫描', () => {
     expect(broken?.status).toBe('invalid')
     expect(broken?.invalidReason).toMatch(/[\u4e00-\u9fff]/)
     expectNoLeak(broken, [userDataPath, join(root, 'broken')])
+  })
+
+  it('扫描 grok plugin install 的 installed-plugins，并用 registry 插件名而不是 hash 目录名', async () => {
+    const userDataPath = await createUserData()
+    const grokHome = getManagedGrokHome(userDataPath)
+    const installedRoot = join(grokHome, 'installed-plugins')
+    const hashedDir = join(installedRoot, 'chrome-devtools-mcp-2df60288')
+    await mkdir(join(hashedDir, '.claude-plugin'), { recursive: true })
+    await mkdir(join(hashedDir, 'skills', 'chrome-devtools'), { recursive: true })
+    await writeFile(join(hashedDir, 'skills', 'chrome-devtools', 'SKILL.md'), '# chrome\n')
+    await writeJson(join(hashedDir, '.claude-plugin', 'plugin.json'), {
+      name: 'chrome-devtools-mcp',
+      version: '1.7.0',
+      mcpServers: {
+        'chrome-devtools': {
+          command: 'npx',
+          args: ['chrome-devtools-mcp@1.7.0']
+        }
+      }
+    })
+    const absolutePath = hashedDir
+    await writeJson(join(installedRoot, 'registry.json'), {
+      version: 1,
+      repos: {
+        'chrome-devtools-mcp-2df60288': {
+          kind: {
+            type: 'Git',
+            url: 'https://github.com/ChromeDevTools/chrome-devtools-mcp.git'
+          },
+          path: absolutePath,
+          plugins: {
+            'chrome-devtools-mcp': { version: '1.7.0' }
+          }
+        }
+      }
+    })
+
+    const listed = await listGrokPlugins(userDataPath)
+    expect(listed).toEqual([
+      {
+        pluginId: 'chrome-devtools-mcp',
+        displayName: 'chrome-devtools-mcp',
+        status: 'enabled',
+        scope: MANAGED_GROK_PLUGIN_SCOPE,
+        skillCount: 1,
+        mcpCount: 1,
+        hookCount: 0,
+        version: '1.7.0'
+      }
+    ])
+    expect(listed.some((item) => item.pluginId.includes('2df60288'))).toBe(false)
+
+    const detail = await getGrokPlugin(userDataPath, 'chrome-devtools-mcp')
+    expect(detail).toMatchObject({
+      pluginId: 'chrome-devtools-mcp',
+      skillNames: ['chrome-devtools'],
+      mcpNames: ['chrome-devtools'],
+      version: '1.7.0'
+    })
+    expectNoLeak(listed, [absolutePath, userDataPath, 'npx', 'chrome-devtools-mcp@1.7.0'])
+    expectNoLeak(detail, [absolutePath, userDataPath, 'npx', 'chrome-devtools-mcp@1.7.0'])
+  })
+
+  it('只有 installed-plugins、没有 plugins 时仍能列出，且不创建 plugins 目录', async () => {
+    const userDataPath = await createUserData()
+    const grokHome = getManagedGrokHome(userDataPath)
+    const pluginDir = join(grokHome, 'installed-plugins', 'plain-market')
+    await mkdir(pluginDir, { recursive: true })
+    await writeJson(join(pluginDir, 'plugin.json'), { displayName: '市场插件' })
+
+    const listed = await listGrokPlugins(userDataPath)
+    expect(listed).toEqual([
+      {
+        pluginId: 'plain-market',
+        displayName: '市场插件',
+        status: 'enabled',
+        scope: MANAGED_GROK_PLUGIN_SCOPE,
+        skillCount: 0,
+        mcpCount: 0,
+        hookCount: 0
+      }
+    ])
+    await expect(realpath(join(grokHome, 'plugins'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('registry 指向 grok-home 外的 path 时标 invalid，且不泄漏绝对路径', async () => {
+    const userDataPath = await createUserData()
+    const grokHome = getManagedGrokHome(userDataPath)
+    const installedRoot = join(grokHome, 'installed-plugins')
+    await mkdir(installedRoot, { recursive: true })
+    const outsideRoot = await createTemporaryDirectory('agent-studio-plugin-reg-out-')
+    const outsidePlugin = join(outsideRoot, 'leaky')
+    await mkdir(outsidePlugin)
+    await writeJson(join(outsidePlugin, 'plugin.json'), { displayName: '不该读取' })
+    await writeJson(join(installedRoot, 'registry.json'), {
+      version: 1,
+      repos: {
+        escaped: {
+          path: outsidePlugin,
+          plugins: { escaped: { version: '9.9.9' } }
+        }
+      }
+    })
+
+    const listed = await listGrokPlugins(userDataPath)
+    expect(listed).toEqual([
+      {
+        pluginId: 'escaped',
+        displayName: 'escaped',
+        status: 'invalid',
+        scope: MANAGED_GROK_PLUGIN_SCOPE,
+        skillCount: 0,
+        mcpCount: 0,
+        hookCount: 0,
+        version: '9.9.9'
+      }
+    ])
+    expectNoLeak(listed, [outsidePlugin, outsideRoot, userDataPath, '不该读取'])
   })
 })

@@ -10,7 +10,7 @@
 
 **目标：** 工作台成为 Grok Build 的可视化宿主：输入框 `/` 列出 Grok 广告的斜杠命令；侧栏「插件」打开独立整页且**不停止**正在跑的 Task；检查器不塞记忆/MCP。
 
-**Architecture：** Agent Studio 只做 ACP Client 与产品导航。斜杠命令来自 `available_commands_update`，作为 **session 级快照** 推给 Renderer，**不进 Timeline**。插件页读取 App 专属 `GROK_HOME` 里 Grok 已加载的插件。`primaryView` 与 `selectedTaskId` / `activeExecution` 三套状态独立：换页只换主列，不 `cancel`、不 `disconnect`、不清选中 Task。
+**Architecture：** Agent Studio 只做 ACP Client 与产品导航。斜杠命令来自 `available_commands_update`，作为 **session 级快照** 推给 Renderer，**不进 Timeline**。插件页读取 App 专属 `GROK_HOME` 里 Grok 已加载的插件（`plugins/` drop-in 与 `installed-plugins/` 市场安装）。`primaryView` 与 `selectedTaskId` / `activeExecution` 三套状态独立：换页只换主列，不 `cancel`、不 `disconnect`、不清选中 Task。安装/信任见 [P0-10E](p0-10e-grok-plugin-install-and-trust.md)。
 
 **Tech Stack：** Electron 39、Vue 3、TypeScript、electron-vite、pnpm 10、Node.js 20+、Vitest、`@agentclientprotocol/sdk` 1.3.x。不新增 UI 框架。
 
@@ -343,7 +343,12 @@ export interface RuntimePluginDetail extends RuntimePluginSummary {
 }
 ```
 
-扫描根：`join(getManagedGrokHome(userDataPath), 'plugins')`。目录不存在 → 空列表，不是错误。单层子目录；有 `plugin.json` 则读 displayName/version；否则用目录名。Skill/MCP/Hooks 只 **计数和名称**：`skills/*/SKILL.md`、`.mcp.json` 的 server 名、`hooks/hooks.json` 的 hook 名。读文件失败 → 该项 `invalid`，不让扫描中断。
+扫描根（2026-08-20 按真机 `grok plugin install` 修正）：
+
+- `join(getManagedGrokHome(userDataPath), 'plugins')`：drop-in 目录，缺则跳过。
+- `join(getManagedGrokHome(userDataPath), 'installed-plugins')`：市场安装落点。以 `registry.json` 的插件名为 `pluginId`，不要用 `name-hash` 目录名。`registry.json` 里的绝对 `path` 只做 jail 校验，不得回 Renderer。
+
+两根都缺 → 空列表，不是错误。清单按 `.grok-plugin/plugin.json`、`.claude-plugin/plugin.json`、根 `plugin.json` 顺序读。Skill/MCP/Hooks 只 **计数和名称**：`skills/*/SKILL.md`、`.mcp.json` 或清单里的 `mcpServers` 名、`hooks/hooks.json` 的 hook 名。读文件失败 → 该项 `invalid`，不让扫描中断。安装/信任/货架见 [P0-10E](p0-10e-grok-plugin-install-and-trust.md)。
 
 名称限 80 项、每名 128 字符。测试用临时目录，断言逃出 grok-home 的 symlink 被标 invalid。
 
