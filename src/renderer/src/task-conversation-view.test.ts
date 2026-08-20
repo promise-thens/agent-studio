@@ -12,6 +12,8 @@ import {
   nextConversationScrollIntent,
   nextPinnedConversationScrollTop,
   nextProgrammaticFollowFlag,
+  resolveConversationConnectFailure,
+  resolveConversationEmptyCopy,
   resolveConversationScrollSource,
   shouldHoldPinnedFollow,
   shouldMirrorLiveAgentErrorLocally,
@@ -363,5 +365,53 @@ describe('对话滚动与折叠', () => {
         ['Runtime 拒绝了这次调用']
       )
     ).toEqual(['发送失败：网络中断'])
+  })
+
+  it('无 Turn 时空状态是短提示，不含插画墙含义', () => {
+    const emptyCopy = resolveConversationEmptyCopy(false)
+    expect(emptyCopy).toBe('问一件事')
+    expect(emptyCopy.length).toBeLessThan(12)
+    expect(emptyCopy).not.toMatch(/Robot|插画|机器人|从下面输入/i)
+    expect(resolveConversationEmptyCopy(true)).toBe('')
+  })
+
+  it('连接失败走对话流短错误和重试，而不是页眉主按钮文案', () => {
+    const failure = resolveConversationConnectFailure({
+      runtimeState: 'error',
+      runtimeMessage: 'Runtime 异常退出（代码 17）',
+      providerConfigured: true,
+      hasActiveExecution: false
+    })
+    expect(failure).toEqual({
+      message: 'Runtime 异常退出（代码 17）',
+      canRetry: true,
+      retryLabel: '重试'
+    })
+    expect(failure?.retryLabel).not.toContain('连接 Grok')
+    expect(failure?.retryLabel).not.toContain('继续任务')
+    expect(failure?.message).not.toContain('继续任务')
+
+    expect(
+      resolveConversationConnectFailure({
+        runtimeState: 'idle',
+        runtimeMessage: '尚未连接 Grok Build',
+        providerConfigured: true,
+        hasActiveExecution: false
+      })
+    ).toBeNull()
+
+    expect(
+      resolveConversationConnectFailure({
+        runtimeState: 'error',
+        runtimeMessage: 'Runtime 异常退出（代码 17）',
+        providerConfigured: true,
+        hasActiveExecution: false,
+        localErrors: ['Runtime 异常退出（代码 17）']
+      })
+    ).toEqual({
+      message: '',
+      canRetry: true,
+      retryLabel: '重试'
+    })
   })
 })

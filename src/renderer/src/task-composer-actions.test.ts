@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import {
+  COMPOSER_COMPACT_ALWAYS_VISIBLE,
+  COMPOSER_COMPACT_MIN_WIDTH_PX,
   canSendWhileConversationRestoring,
   evaluateTaskComposerSend,
   isForeignExecutionBlockingSend,
+  pickLatestContextUsage,
   resolveCancelTurnRequest,
   resolveComposerAction,
+  resolveComposerChrome,
+  resolveComposerContextUsage,
   resolveProviderModelLabel,
   resolveStopButtonAriaLabel,
   resolveStopButtonTitle,
   restoreComposerPromptAfterFailure,
-  resolveTaskHeaderFacts
+  resolveTaskHeaderFacts,
+  resolveTaskHeaderMainPath,
+  shouldShowTaskHeaderFacts
 } from './task-composer-actions'
+import { resolveConversationConnectFailure } from './task-conversation-view'
 
 const runningExecution = {
   executionId: 'exec-a',
@@ -114,6 +122,67 @@ describe('发送与停止身份', () => {
     expect(restoreComposerPromptAfterFailure('', '原来的草稿')).toBe('原来的草稿')
     expect(restoreComposerPromptAfterFailure('用户又打了字', '原来的草稿')).toBe('用户又打了字')
   })
+
+  it('空闲发送、执行中停止；模型 busy，输入框仍在，980 宽仍见模型和停止', () => {
+    const idle = resolveComposerChrome({ activeExecution: null })
+    expect(idle.action).toBe('send')
+    expect(idle.modelBusy).toBe(false)
+    expect(idle.textareaVisible).toBe(true)
+    expect(resolveComposerAction(null)).toBe('send')
+
+    const running = resolveComposerChrome({ activeExecution: runningExecution })
+    expect(running.action).toBe('stop')
+    expect(running.modelBusy).toBe(true)
+    expect(running.textareaVisible).toBe(true)
+    expect(running.keepVisibleAtCompactWidth).toEqual(['model', 'send-or-stop'])
+    expect(COMPOSER_COMPACT_MIN_WIDTH_PX).toBe(980)
+    expect(COMPOSER_COMPACT_ALWAYS_VISIBLE).toEqual(['model', 'send-or-stop'])
+
+    expect(
+      resolveComposerChrome({
+        activeExecution: null,
+        projectInteractionBlocked: true
+      }).modelBusy
+    ).toBe(true)
+  })
+
+  it('输入框只展示上下文 used/limit，没数据就藏', () => {
+    expect(
+      resolveComposerContextUsage({ scope: 'context', usedTokens: 120, limitTokens: 4096 })
+    ).toBe('120/4096')
+    expect(resolveComposerContextUsage(null)).toBeNull()
+    expect(
+      resolveComposerContextUsage({ scope: 'turn', usedTokens: 12, limitTokens: 100 })
+    ).toBeNull()
+    expect(
+      resolveComposerContextUsage({
+        scope: 'context',
+        usedTokens: Number.NaN,
+        limitTokens: 4096
+      })
+    ).toBeNull()
+
+    expect(pickLatestContextUsage(null)).toBeNull()
+    expect(
+      pickLatestContextUsage({
+        turns: [
+          { usage: { contextSamples: [] } },
+          {
+            usage: {
+              contextSamples: [{ scope: 'context', usedTokens: 88, limitTokens: 2048 }]
+            }
+          }
+        ]
+      })
+    ).toEqual({ scope: 'context', usedTokens: 88, limitTokens: 2048 })
+    expect(
+      resolveComposerContextUsage(
+        pickLatestContextUsage({
+          turns: [{ usage: { contextSamples: [] } }]
+        })
+      )
+    ).toBeNull()
+  })
 })
 
 describe('Task 页眉事实', () => {
@@ -201,6 +270,63 @@ describe('Task 页眉事实', () => {
     })
     expect(crashed.runtimeState).toBe('error')
     expect(crashed.canRetryConnect).toBe(true)
-    expect(crashed.weakStatusLine).toContain('代码 17')
+    expect(crashed.weakStatusLine).toBe('连接异常')
+    expect(crashed.weakStatusLine).not.toContain('代码 17')
+  })
+
+  it('对话流已展示连接失败全文时，页眉弱状态不再重复完整 Runtime 文案', () => {
+    const runtimeMessage = 'Runtime 异常退出（代码 17）'
+    const facts = resolveTaskHeaderFacts({
+      selectedTaskId: 'task-b',
+      selectedTitle: '改登录',
+      selectedProjectName: 'studio',
+      selectedRuntimeId: 'grok',
+      runtimeState: 'error',
+      runtimeMessage,
+      providerConfigured: true,
+      activeExecution: null
+    })
+    const main = resolveTaskHeaderMainPath(facts)
+    const stream = resolveConversationConnectFailure({
+      runtimeState: facts.runtimeState,
+      runtimeMessage,
+      providerConfigured: true,
+      hasActiveExecution: false
+    })
+
+    expect(stream?.message).toBe(runtimeMessage)
+    expect(stream?.canRetry).toBe(true)
+    expect(main.weakStatusLine).not.toBe(runtimeMessage)
+    expect(main.weakStatusLine).not.toContain('代码 17')
+    expect(main.weakStatusLine).toBe('连接异常')
+  })
+
+  it('主路径页眉只暴露标题和弱状态，不把 Project/Runtime/环境当必显运维芯片', () => {
+    const facts = resolveTaskHeaderFacts({
+      selectedTaskId: 'task-b',
+      selectedTitle: '改登录',
+      selectedProjectName: 'studio',
+      selectedRuntimeId: 'grok',
+      selectedState: 'completed',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      selectedModel: { modelId: 'other-model', displayName: 'Other' },
+      runtimeState: 'idle',
+      runtimeMessage: '尚未连接 Grok Build',
+      providerConfigured: true,
+      activeExecution: null
+    })
+    const main = resolveTaskHeaderMainPath(facts)
+
+    expect(shouldShowTaskHeaderFacts()).toBe(false)
+    expect(Object.keys(main).sort()).toEqual(
+      ['canRetryConnect', 'executionScope', 'runtimeState', 'title', 'weakStatusLine'].sort()
+    )
+    expect(main.title).toBe('改登录')
+    expect(main).not.toHaveProperty('projectName')
+    expect(main).not.toHaveProperty('runtimeLabel')
+    expect(main).not.toHaveProperty('environmentLabel')
+    expect(main).not.toHaveProperty('worktreeLabel')
+    expect(`${main.title}${main.weakStatusLine}`).not.toContain('连接 Grok')
+    expect(`${main.title}${main.weakStatusLine}`).not.toContain('继续任务')
   })
 })

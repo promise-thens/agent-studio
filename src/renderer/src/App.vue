@@ -28,7 +28,6 @@ import {
   createAgentToolKey
 } from './agent-event-consumer'
 import { unwrapDesktopIpcResult } from './desktop-ipc-result'
-import PermissionPrompt from './components/PermissionPrompt.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import TaskComposer from './components/TaskComposer.vue'
@@ -41,8 +40,10 @@ import { useTaskWorkbench } from './composables/useTaskWorkbench'
 import {
   evaluateTaskComposerSend,
   isForeignExecutionBlockingSend,
+  pickLatestContextUsage,
   resolveCancelTurnRequest,
-  resolveComposerAction,
+  resolveComposerChrome,
+  resolveComposerContextUsage,
   resolveStopButtonAriaLabel,
   resolveStopButtonTitle,
   resolveTaskHeaderFacts,
@@ -51,6 +52,7 @@ import {
 import {
   collectLocalComposerErrors,
   collectTurnErrorMessages,
+  resolveConversationConnectFailure,
   shouldMirrorLiveAgentErrorLocally
 } from './task-conversation-view'
 import { projectTaskHistory } from './task-history-projector'
@@ -61,6 +63,12 @@ import {
   toggleInspectorOpen,
   type InspectorTab
 } from './task-inspector'
+import {
+  isFocusInsideInspector,
+  overlayConsumesEscape,
+  resolveEscapeWorkbenchTarget,
+  shouldIgnoreWorkbenchEscape
+} from './workbench-keyboard'
 import {
   createAndSelectTask,
   deriveSessionTitle,
@@ -145,7 +153,7 @@ const conversationEntry = ref<ConversationEntryState | null>(null)
 let conversationEnterGeneration = 0
 let conversationEnterPromise: Promise<ConversationEntryState | null> | null = null
 const prompt = ref('')
-const taskComposer = ref<{ focus: () => void } | null>(null)
+const taskComposer = ref<{ focus: () => void; focusStop?: () => void } | null>(null)
 const promptSubmissionPending = ref(false)
 const projectConnectionPending = ref(false)
 const projectSelectionPending = ref(false)
@@ -398,7 +406,16 @@ const composerSend = computed(() =>
 )
 const canSend = computed(() => composerSend.value.canSend)
 const composerDisabledMessage = computed(() => composerSend.value.reason)
-const composerAction = computed(() => resolveComposerAction(activeExecution.value))
+const composerChrome = computed(() =>
+  resolveComposerChrome({
+    activeExecution: activeExecution.value,
+    projectInteractionBlocked: projectInteractionBlocked.value
+  })
+)
+const composerAction = computed(() => composerChrome.value.action)
+const composerContextUsage = computed(() =>
+  resolveComposerContextUsage(pickLatestContextUsage(taskTimeline.activeTimeline.value))
+)
 const stopButtonTitle = computed(() => resolveStopButtonTitle(activeExecution.value))
 const stopButtonAriaLabel = computed(() =>
   resolveStopButtonAriaLabel(activeExecution.value, runningTaskTitle.value)
@@ -486,6 +503,16 @@ const workbenchLoadError = computed(
     workbench.taskListLoadState.value.status === 'error' ||
     workbench.taskDetailLoadState.value.status === 'error'
 )
+/** 连接失败进对话流短错误+重试；页眉只留弱状态，避免两个主按钮。 */
+const conversationConnectFailure = computed(() =>
+  resolveConversationConnectFailure({
+    runtimeState: status.value.state,
+    runtimeMessage: status.value.message,
+    providerConfigured: Boolean(providerSummary.value?.configured),
+    hasActiveExecution: Boolean(activeExecution.value),
+    localErrors: localErrorMessages.value
+  })
+)
 
 // 查看身份变化只切换计时可见性；execution 终态按其真实 taskId 收束，不能误写当前历史 B。
 watch([hasStreamingMessage, isTurnTiming, activeTaskId, () => status.value.state], () => {
@@ -523,6 +550,8 @@ watch(
 )
 
 onMounted(async () => {
+  window.addEventListener('keydown', onWorkbenchKeydown)
+  cleanupListeners.push(() => window.removeEventListener('keydown', onWorkbenchKeydown))
   cleanupListeners.push(
     window.agent.onStatus((nextStatus) => {
       status.value = nextStatus
@@ -910,7 +939,7 @@ async function ensureProjectConnected(
   return connected
 }
 
-/** 页眉弱状态重试；有活动执行时不得为查看其它 Project 去抢执行槽。 */
+/** 对话流连接失败重试；有活动执行时不得为查看其它 Project 去抢执行槽。 */
 async function retryRuntimeConnect(): Promise<void> {
   if (activeExecution.value || !activeProjectId.value) return
   await ensureProjectConnected(activeProjectId.value)
@@ -1067,6 +1096,37 @@ function schedulePermissionExpiry(): void {
 
 function toggleInspector(): void {
   showInspector.value = toggleInspectorOpen(showInspector.value)
+}
+
+/**
+ * 全局 Esc：执行中优先把焦点放到停止按钮；
+ * 焦点已在检查器内或空闲时才关抽屉。权限卡/确认框自己处理 Esc。
+ */
+function onWorkbenchKeydown(event: KeyboardEvent): void {
+  if (
+    shouldIgnoreWorkbenchEscape({
+      key: event.key,
+      isComposing: event.isComposing,
+      keyCode: event.keyCode,
+      defaultPrevented: event.defaultPrevented,
+      overlayConsumesEscape: overlayConsumesEscape(event.target)
+    })
+  ) {
+    return
+  }
+  if (historyConfirmation.value) return
+  const target = resolveEscapeWorkbenchTarget({
+    turnExecuting: composerAction.value === 'stop',
+    inspectorOpen: showInspector.value,
+    focusInsideInspector: isFocusInsideInspector(event.target)
+  })
+  if (target === 'none') return
+  event.preventDefault()
+  if (target === 'stop-button') {
+    taskComposer.value?.focusStop?.()
+    return
+  }
+  showInspector.value = false
 }
 
 function handleAgentEvent(event: PublicAgentEvent): void {
@@ -1372,7 +1432,6 @@ function scrollMessagesToBottom(): void {
           :facts="taskHeaderFacts"
           :load-error="workbenchLoadError"
           @retry-load="retryWorkbenchLoad"
-          @retry-connect="retryRuntimeConnect"
         />
 
         <TaskConversation
@@ -1387,9 +1446,16 @@ function scrollMessagesToBottom(): void {
           :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
           :local-errors="localErrorMessages"
           :can-create-task="!newChatDisabled"
+          :connect-failure="conversationConnectFailure"
+          :permission="permission"
+          :permission-pending="permissionResponsePending"
+          :permission-task-title="permissionTaskTitle"
           @load-more-turns="loadMoreHistoryTurns"
           @load-more-events="loadMoreHistoryEvents"
           @create-task="startNewChat"
+          @retry-connect="retryRuntimeConnect"
+          @respond-permission="respondPermission"
+          @cancel-turn="cancelTurn"
         />
 
         <TaskComposer
@@ -1404,8 +1470,9 @@ function scrollMessagesToBottom(): void {
           :model="currentModel"
           :load-models="loadSavedModels"
           :select-model="selectProviderModel"
-          :model-busy="Boolean(activeExecution) || projectInteractionBlocked"
+          :model-busy="composerChrome.modelBusy"
           :model-disabled="!providerSummary?.configured"
+          :context-usage="composerContextUsage"
           @update:prompt="prompt = $event"
           @send="sendPrompt"
           @stop="cancelTurn"
@@ -1419,28 +1486,15 @@ function scrollMessagesToBottom(): void {
         :active-tab="inspectorTab"
         :timeline="taskTimeline.activeTimeline.value"
         :timeline-loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
-        :event-after-sequence-by-turn="taskHistory.eventAfterSequenceByTurn.value"
-        :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
         :permission-audits="taskHistory.permissionAudits.value"
         :permission-audit-cursor="taskHistory.permissionAuditCursor.value"
         :loading-more-permission-audits="taskHistory.loadingMorePermissionAudits.value"
         :show-permission-audits="activeTaskView?.mode === 'history'"
         @close="showInspector = false"
         @update:active-tab="inspectorTab = $event"
-        @load-more-events="loadMoreHistoryEvents"
         @load-more-permission-audits="taskHistory.loadMorePermissionAudits"
       />
     </div>
-
-    <PermissionPrompt
-      v-if="permission"
-      :key="`${permission.approvalId}:${permission.taskId}:${permission.turnId}`"
-      :request="permission"
-      :pending="permissionResponsePending"
-      :task-title="permissionTaskTitle"
-      @respond="respondPermission"
-      @cancel-turn="cancelTurn"
-    />
 
     <div
       v-if="historyConfirmation"

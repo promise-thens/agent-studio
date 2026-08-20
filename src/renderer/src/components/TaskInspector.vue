@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, watch } from 'vue'
+import { computed, nextTick } from 'vue'
 import { PhX as X } from '@phosphor-icons/vue'
 import type { PermissionAuditRecord } from '../../../shared/task-history'
 import type { TaskTimelineViewModel } from '../task-timeline-reducer'
@@ -10,10 +10,10 @@ import {
   permissionAuditInitiatorLabel,
   permissionAuditReasonLabel,
   permissionAuditScopeLabel,
+  projectInspectorTimelineSummary,
   resolveInspectorTab,
   type InspectorTab
 } from '../task-inspector'
-import ExecutionTimeline from './ExecutionTimeline.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -21,8 +21,6 @@ const props = withDefaults(
     activeTab: InspectorTab
     timeline: TaskTimelineViewModel | null
     timelineLoading?: boolean
-    eventAfterSequenceByTurn?: Record<string, number | null>
-    loadingEventTurnIds?: readonly string[]
     permissionAudits?: readonly PermissionAuditRecord[]
     permissionAuditCursor?: string | null
     loadingMorePermissionAudits?: boolean
@@ -40,7 +38,6 @@ const props = withDefaults(
 const emit = defineEmits<{
   close: []
   'update:activeTab': [tab: InspectorTab]
-  loadMoreEvents: [turnId: string]
   loadMorePermissionAudits: []
 }>()
 
@@ -48,20 +45,8 @@ const currentTab = computed(() => resolveInspectorTab(props.activeTab))
 const placeholder = computed(() =>
   currentTab.value === 'timeline' ? null : inspectorPlaceholderCopy(currentTab.value)
 )
-
-/** Esc 关闭抽屉；不拦截侧栏/Composer 点击，方便边审阅边发送或切 Task。 */
-function onDocumentKeydown(event: KeyboardEvent): void {
-  if (!props.open) return
-  if (event.key !== 'Escape') return
-  if (
-    event.target instanceof Element &&
-    event.target.closest('.modal-backdrop, .permission-dialog')
-  ) {
-    return
-  }
-  event.preventDefault()
-  emit('close')
-}
+const timelineSummary = computed(() => projectInspectorTimelineSummary(props.timeline))
+// Esc 由 App 裁定：执行中先聚焦停止，只有焦点已在抽屉内才关检查器。
 
 function selectTab(tab: InspectorTab, focus = false): void {
   const next = resolveInspectorTab(tab)
@@ -93,22 +78,6 @@ function onTabListKeydown(event: KeyboardEvent): void {
     selectTab('artifacts', true)
   }
 }
-
-watch(
-  () => props.open,
-  (open) => {
-    if (open) {
-      window.addEventListener('keydown', onDocumentKeydown)
-      return
-    }
-    window.removeEventListener('keydown', onDocumentKeydown)
-  },
-  { immediate: true }
-)
-
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onDocumentKeydown)
-})
 </script>
 
 <template>
@@ -159,15 +128,18 @@ onBeforeUnmount(() => {
       :aria-labelledby="`inspector-tab-${currentTab}`"
     >
       <template v-if="currentTab === 'timeline'">
-        <ExecutionTimeline
-          v-if="timeline"
-          :model="timeline"
-          :loading="timelineLoading"
-          :event-after-sequence-by-turn="eventAfterSequenceByTurn"
-          :loading-event-turn-ids="loadingEventTurnIds"
-          @load-more-events="emit('loadMoreEvents', $event)"
-        />
-        <div v-else class="timeline-state" role="status">暂无执行记录</div>
+        <!-- Timeline 只读摘要：不挂计划主副本，P0-12/13/15 走其它标签。 -->
+        <div v-if="timelineLoading && timelineSummary.empty" class="timeline-state" role="status">
+          正在加载执行历史…
+        </div>
+        <div v-else-if="timelineSummary.empty" class="timeline-state" role="status">
+          {{ timelineSummary.statusLabel }}
+        </div>
+        <div v-else class="inspector-timeline-summary" role="status">
+          <p>{{ timelineSummary.turnCount }} 轮 · {{ timelineSummary.statusLabel }}</p>
+          <p v-if="timelineSummary.planLine">{{ timelineSummary.planLine }}</p>
+          <p v-if="timelineSummary.toolCount">{{ timelineSummary.toolCount }} 次工具</p>
+        </div>
 
         <section v-if="showPermissionAudits" class="inspector-section audit-section">
           <div class="inspector-heading">

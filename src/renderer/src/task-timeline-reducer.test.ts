@@ -87,7 +87,9 @@ describe('Task Timeline reducer', () => {
       type: 'events/ingest-public',
       events: EVENTS
     })
-    expect(selectTaskTimeline(withEvents, { executionSnapshot: snapshot('running') }).turns[0]).toMatchObject({
+    expect(
+      selectTaskTimeline(withEvents, { executionSnapshot: snapshot('running') }).turns[0]
+    ).toMatchObject({
       prompt: '用户指令不可用'
     })
 
@@ -114,9 +116,9 @@ describe('Task Timeline reducer', () => {
       type: 'turns/upsert',
       turns: [TURN]
     })
-    expect(selectTaskTimeline(withHistory, { executionSnapshot: snapshot() }).turns[0]?.prompt).toBe(
-      TURN.promptDisplayText
-    )
+    expect(
+      selectTaskTimeline(withHistory, { executionSnapshot: snapshot() }).turns[0]?.prompt
+    ).toBe(TURN.promptDisplayText)
   })
 
   it('实时与历史任意顺序输入收敛为同一投影', () => {
@@ -268,5 +270,44 @@ describe('Task Timeline reducer', () => {
       expect.objectContaining({ kind: 'message', text: '尾部回复' })
     ])
     expect(nodes.filter((node) => node.kind === 'tool')).toHaveLength(1)
+  })
+
+  it('同一 Turn 连续三次 plan 快照只保留一张卡，entries 取最后一次且 nodeId 不含 sequence', () => {
+    const firstEntries = [
+      { content: '找现有 auth', priority: 'high' as const, status: 'pending' as const },
+      { content: '改登录表单', priority: 'medium' as const, status: 'pending' as const },
+      { content: '补测试', priority: 'low' as const, status: 'pending' as const }
+    ]
+    const secondEntries = [
+      { content: '找现有 auth', priority: 'high' as const, status: 'completed' as const },
+      { content: '改登录表单', priority: 'medium' as const, status: 'in_progress' as const },
+      { content: '补测试', priority: 'low' as const, status: 'pending' as const }
+    ]
+    const thirdEntries = [
+      { content: '找现有 auth', priority: 'high' as const, status: 'completed' as const },
+      { content: '改登录表单', priority: 'medium' as const, status: 'completed' as const },
+      { content: '补测试', priority: 'low' as const, status: 'completed' as const }
+    ]
+    const state = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+      type: 'events/ingest-public',
+      events: [
+        { ...BASE, sequence: 1, kind: 'plan', entries: firstEntries },
+        { ...BASE, sequence: 2, kind: 'plan', entries: secondEntries },
+        { ...BASE, sequence: 3, kind: 'plan', entries: thirdEntries }
+      ]
+    })
+    const nodes =
+      selectTaskTimeline(state, { executionSnapshot: snapshot('running') }).turns[0]?.nodes ?? []
+    const planNodes = nodes.filter((node) => node.kind === 'plan')
+
+    expect(planNodes).toHaveLength(1)
+    expect(planNodes[0]).toMatchObject({
+      nodeId: 'task-1:turn-1:plan',
+      kind: 'plan',
+      entries: thirdEntries
+    })
+    expect(planNodes[0]?.nodeId).not.toContain(':plan:1')
+    expect(planNodes[0]?.nodeId).not.toContain(':plan:2')
+    expect(planNodes[0]?.nodeId).not.toContain(':plan:3')
   })
 })

@@ -1,4 +1,4 @@
-import type { AgentRuntimeId } from '../../shared/agent'
+import type { AgentContextUsage, AgentRuntimeId, AgentUsage } from '../../shared/agent'
 import type {
   TaskExecutionCancellationRequest,
   TaskExecutionDto
@@ -73,6 +73,15 @@ export interface TaskHeaderFacts {
   modelReadOnly: boolean
 }
 
+/** 主路径页眉只留标题和弱状态；facts 仍可供测试/后台逻辑读取。 */
+export interface TaskHeaderMainPath {
+  title: string
+  weakStatusLine: string
+  runtimeState: string
+  executionScope: HeaderExecutionScope
+  canRetryConnect: boolean
+}
+
 /** 模型名称必须来自 Provider 真实字段，禁止拼接 Runtime 前缀。 */
 export function resolveProviderModelLabel(
   model: Pick<TurnModelSnapshot, 'modelId' | 'displayName'> | null | undefined
@@ -116,11 +125,64 @@ export function resolveCancelTurnRequest(
   }
 }
 
+/** 小窗保底宽度：模型选择和发送/停止不得 `display:none`。 */
+export const COMPOSER_COMPACT_MIN_WIDTH_PX = 980
+export const COMPOSER_COMPACT_ALWAYS_VISIBLE = ['model', 'send-or-stop'] as const
+
+export interface ComposerChrome {
+  action: 'send' | 'stop'
+  modelBusy: boolean
+  textareaVisible: true
+  keepVisibleAtCompactWidth: typeof COMPOSER_COMPACT_ALWAYS_VISIBLE
+}
+
 /** 有活动执行就显示停止，空闲才显示发送。 */
 export function resolveComposerAction(
   activeExecution: Pick<TaskExecutionDto, 'taskId'> | null
 ): 'send' | 'stop' {
   return activeExecution ? 'stop' : 'send'
+}
+
+/**
+ * 输入框自包含动作：空闲发送、执行中停止；执行中模型 busy；输入框始终保留。
+ */
+export function resolveComposerChrome(input: {
+  activeExecution: Pick<TaskExecutionDto, 'taskId'> | null
+  projectInteractionBlocked?: boolean
+}): ComposerChrome {
+  return {
+    action: resolveComposerAction(input.activeExecution),
+    modelBusy: Boolean(input.activeExecution) || Boolean(input.projectInteractionBlocked),
+    textareaVisible: true,
+    keepVisibleAtCompactWidth: COMPOSER_COMPACT_ALWAYS_VISIBLE
+  }
+}
+
+/** 极小字只画上下文 used/limit；turn usage 或 NaN 都藏起来。 */
+export function resolveComposerContextUsage(
+  usage:
+    (Pick<AgentUsage, 'scope'> & { usedTokens?: number; limitTokens?: number }) | null | undefined
+): string | null {
+  if (!usage || usage.scope !== 'context') return null
+  if (!Number.isFinite(usage.usedTokens) || !Number.isFinite(usage.limitTokens)) return null
+  return `${usage.usedTokens}/${usage.limitTokens}`
+}
+
+/** 从最近一轮往前找最后一条可展示的上下文用量。 */
+export function pickLatestContextUsage(
+  timeline:
+    | { turns: readonly { usage: { contextSamples: readonly AgentContextUsage[] } }[] }
+    | null
+    | undefined
+): AgentContextUsage | null {
+  if (!timeline?.turns.length) return null
+  for (let index = timeline.turns.length - 1; index >= 0; index -= 1) {
+    const sample = timeline.turns[index]?.usage.contextSamples.at(-1)
+    if (sample && Number.isFinite(sample.usedTokens) && Number.isFinite(sample.limitTokens)) {
+      return sample
+    }
+  }
+  return null
 }
 
 /** 停止按钮 title 永远带 running taskId，避免停错当前选中而非正在跑的 Task。 */
@@ -238,6 +300,22 @@ export function resolveTaskHeaderFacts(input: TaskHeaderFactsInput): TaskHeaderF
   }
 }
 
+/** Project/Runtime/环境不再作为主路径运维芯片；侧栏已能表达项目身份。 */
+export function shouldShowTaskHeaderFacts(): boolean {
+  return false
+}
+
+/** 从完整 facts 抽出页眉主路径字段，避免模板误把运维丛当必显。 */
+export function resolveTaskHeaderMainPath(facts: TaskHeaderFacts): TaskHeaderMainPath {
+  return {
+    title: facts.title,
+    weakStatusLine: facts.weakStatusLine,
+    runtimeState: facts.runtimeState,
+    executionScope: facts.executionScope,
+    canRetryConnect: facts.canRetryConnect
+  }
+}
+
 function resolveHeaderWeakStatusLine(
   input: TaskHeaderFactsInput,
   viewingForeignExecution: boolean,
@@ -259,8 +337,17 @@ function resolveHeaderWeakStatusLine(
   }
   if (executionScope === 'selected') return '执行中'
   if (input.runtimeState === 'connecting') return '正在连接 Runtime…'
-  if (input.runtimeState === 'error') return input.runtimeMessage?.trim() || 'Runtime 连接异常'
+  if (input.runtimeState === 'error') {
+    // 对话流已承载失败全文+重试时，页眉只留软状态，避免第一眼仍是运维错误句。
+    if (shouldDeferConnectFailureToConversation(input)) return '连接异常'
+    return input.runtimeMessage?.trim() || 'Runtime 连接异常'
+  }
   return ''
+}
+
+/** 与对话流 connectFailure 同条件：已配置且无活动执行时失败说明进流，不在页眉双显。 */
+function shouldDeferConnectFailureToConversation(input: TaskHeaderFactsInput): boolean {
+  return Boolean(input.providerConfigured && !input.activeExecution)
 }
 
 function formatTaskCreatedAt(iso?: string): string {

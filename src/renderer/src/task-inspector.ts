@@ -1,5 +1,11 @@
 import type { AgentPermissionResolutionReason, AgentRuntimeId } from '../../shared/agent'
 import type { PermissionAuditRecord } from '../../shared/task-history'
+import type {
+  TaskTimelineViewModel,
+  TimelinePlanNode,
+  TimelineToolNode,
+  TurnTimelineViewModel
+} from './task-timeline-reducer'
 
 /** 检查器顶层标签；后续 P0-12/13/15 只填内容，不改这组 id。 */
 export type InspectorTab = 'timeline' | 'changes' | 'terminal' | 'artifacts'
@@ -17,6 +23,18 @@ export interface InspectorPlaceholderCopy {
 /** 抽屉默认关上，避免常驻 310px 挤占对话列。 */
 export const INSPECTOR_DEFAULT_OPEN = false
 export const INSPECTOR_DEFAULT_TAB: InspectorTab = 'timeline'
+/** 主列仍是侧栏+对话两列；检查器 overlay 覆盖右侧，不改栅格。 */
+export const WORKSPACE_PRIMARY_COLUMNS = ['sidebar', 'conversation'] as const
+export const WORKSPACE_INSPECTOR_PLACEMENT = 'overlay' as const
+
+export interface InspectorTimelineSummary {
+  empty: boolean
+  turnCount: number
+  statusLabel: string
+  /** 只读一行缩略，不是计划主副本，不含 entries。 */
+  planLine: string | null
+  toolCount: number
+}
 
 export const INSPECTOR_TABS: readonly InspectorTabDefinition[] = [
   { id: 'timeline', label: 'Timeline' },
@@ -67,6 +85,58 @@ export function nextInspectorTab(current: InspectorTab, delta: -1 | 1): Inspecto
  * 未实现标签的诚实占位。
  * Terminal 只声明 P0-15 用户交互终端，不把 P0-11 命令证据缺失说成终端没接上。
  */
+function inspectorTurnStatusLabel(status: TurnTimelineViewModel['status']): string {
+  if (status === 'waiting-permission') return '待审批'
+  if (status === 'failed') return '失败'
+  if (status === 'cancelled' || status === 'interrupted') return '已停止'
+  if (status === 'completed') return '已完成'
+  if (status === 'pending') return '等待中'
+  return '执行中'
+}
+
+function latestPlanLine(turns: readonly TurnTimelineViewModel[]): string | null {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const plan = [...turns[index].nodes]
+      .reverse()
+      .find((node): node is TimelinePlanNode => node.kind === 'plan')
+    if (!plan || plan.entries.length === 0) continue
+    const completed = plan.entries.filter((entry) => entry.status === 'completed').length
+    return `计划 · ${completed}/${plan.entries.length}`
+  }
+  return null
+}
+
+/**
+ * Timeline 标签只给只读摘要，方便 P0-12/13/15 挂内容；计划条目仍只活在主列。
+ */
+export function projectInspectorTimelineSummary(
+  timeline: Pick<TaskTimelineViewModel, 'turns'> | null | undefined
+): InspectorTimelineSummary {
+  const turns = timeline?.turns ?? []
+  if (turns.length === 0) {
+    return {
+      empty: true,
+      turnCount: 0,
+      statusLabel: '暂无执行记录',
+      planLine: null,
+      toolCount: 0
+    }
+  }
+  const latest = turns[turns.length - 1]
+  const toolCount = turns.reduce(
+    (total, turn) =>
+      total + turn.nodes.filter((node): node is TimelineToolNode => node.kind === 'tool').length,
+    0
+  )
+  return {
+    empty: false,
+    turnCount: turns.length,
+    statusLabel: inspectorTurnStatusLabel(latest.status),
+    planLine: latestPlanLine(turns),
+    toolCount
+  }
+}
+
 export function inspectorPlaceholderCopy(
   tab: Exclude<InspectorTab, 'timeline'>
 ): InspectorPlaceholderCopy {

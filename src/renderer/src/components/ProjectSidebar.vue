@@ -9,6 +9,7 @@ import {
 import type { ProjectSummary, TaskHistorySummary } from '../../../shared/task-history'
 import type { TaskExecutionDto } from '../../../shared/task-execution'
 import type { WorkbenchLoadState } from '../composables/useProjectRegistry'
+import { toProjectSwitcherRow } from '../task-navigation'
 import TaskList from './TaskList.vue'
 
 const props = withDefaults(
@@ -68,6 +69,16 @@ const visibleProjects = computed(() =>
 const selectedProject = computed(
   () =>
     visibleProjects.value.find((project) => project.projectId === props.selectedProjectId) ?? null
+)
+
+const currentProjectRow = computed(() =>
+  toProjectSwitcherRow({
+    displayName: selectedProject.value?.displayName,
+    canonicalRoot: selectedProject.value?.canonicalRoot,
+    runningTaskCount: selectedProject.value
+      ? props.runningTaskCountByProjectId[selectedProject.value.projectId]
+      : 0
+  })
 )
 
 function pathHint(path: string): string {
@@ -146,23 +157,15 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
       <button
         class="project-current"
         type="button"
+        :class="{ live: currentProjectRow.live }"
         :disabled="historyNavigationDisabled"
-        :title="selectedProject?.canonicalRoot || '选择项目'"
+        :title="currentProjectRow.titleAttribute"
         :aria-expanded="projectMenuOpen"
         aria-haspopup="listbox"
         @click="toggleProjectMenu"
       >
         <span class="project-current-copy">
-          <strong>{{ selectedProject?.displayName || '选择项目' }}</strong>
-          <small>
-            {{ selectedProject ? pathHint(selectedProject.canonicalRoot) : '注册目录后开始工作' }}
-          </small>
-        </span>
-        <span
-          v-if="selectedProject && runningTaskCountByProjectId[selectedProject.projectId]"
-          class="run-count"
-        >
-          {{ runningTaskCountByProjectId[selectedProject.projectId] }}
+          <strong>{{ currentProjectRow.label }}</strong>
         </span>
         <small v-if="selectedProject && availabilityLabel(selectedProject)" class="unavailable">
           {{ availabilityLabel(selectedProject) }}
@@ -337,10 +340,15 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   min-width: 0;
   align-items: center;
   gap: 6px;
-  min-height: 40px;
-  padding: 4px 8px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-left: 2px solid transparent;
   border-radius: var(--radius-soft);
   text-align: left;
+}
+
+.project-current.live {
+  border-left-color: var(--accent);
 }
 
 .project-current-copy,
@@ -349,9 +357,10 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   flex: 1;
 }
 
+.project-current-copy,
+.project-option-copy,
 .project-current-copy strong,
 .project-option-copy strong,
-.project-current-copy small,
 .project-option-copy small {
   display: block;
   overflow: hidden;

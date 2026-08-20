@@ -2,7 +2,7 @@
 
 > **致执行者：** 产品已确认当前界面太重、太碎，要按 **Claude Code Desktop** 的便捷度大修：对话是唯一主角，工具和子 Agent 收进安静的嵌套行，不要再做三栏卡片仪表盘。
 >
-> **状态：** 助手正文 Markdown 已接入主列；布局/计划卡/子 Agent 换皮仍待开始（前置：P0-09 测试门关闭，时间线数据模型稳住）
+> **状态：** 助手正文 Markdown 已接入主列；Task 2 对话块/计划清单/工具行/流内权限已落地。子 Agent 无父子字段保持扁平（前置：P0-09 测试门关闭，时间线数据模型稳住）
 >
 > **插入点：** P0-09 之后、P0-10 状态拆分之前或与之同迭代。**P0-10 必须消费本计划的视觉语言，禁止再发明第三套皮肤。**
 >
@@ -115,6 +115,7 @@ Claude Code Desktop 相反：
 - `--app-bg` / `--surface-1` 几乎连成一块，侧栏只用 1px 分割，不要各包一层阴影。
 - `--accent` 只给发送、当前对话高亮、进行中指示。
 - 成功/危险只出现在真的终态和审批，不要每条 tool 一颗彩点。
+- 浅色主题可以切换。
 
 ### 4. 输入框（整页最重要的控件）
 
@@ -289,33 +290,33 @@ Tool    读取 package.json · in_progress
 
 ## 任务 1: 定壳，拆仪表盘
 
-- [ ] **第 1 步: 两栏栅格**
+- [x] **第 1 步: 两栏栅格**
       说明：`workspace-layout` 改为 `220px 1fr`。去掉面板 box-shadow 和 22px 卡片围栏。检查器改 `position` 抽屉。
       预期：默认只有侧栏+对话；打开检查器时对话列不被压到 400px 以下。
 
-- [ ] **第 2 步: 砍掉页眉运维区**
+- [x] **第 2 步: 砍掉页眉运维区**
       说明：删除主路径上的「连接 Grok」按钮、状态芯片丛、只读横幅、轮次锚点轨。连接失败用对话流里的一条错误说明 + 重试。
       预期：进入已配置应用，第一眼是对话或空状态「问一件事」，不是运维条。
 
-- [ ] **第 3 步: 空状态**
+- [x] **第 3 步: 空状态**
       说明：无对话时主列居中一句短提示，输入框仍在底。不要大 Robot 插画墙。
       预期：回车就能发（GACP-02 懒创建 Task 仍可用）。
 
 ## 任务 2: 把时间线收成对话
 
-- [ ] **第 1 步: 重画 Turn 为对话块**
+- [x] **第 1 步: 重画 Turn 为对话块**
       说明：用户句、助手句、折叠思考。禁止输出 `Tool`/`Plan` 调试名。同一轮用户句只留一处。助手句用任务 2a 的 Markdown 渲染，不要退回整段 `pre-wrap` 原文。
       预期：关掉工具和计划后，主列就是 Claude Desktop 那种对话。
 
-- [ ] **第 2 步: 计划改成一张原地打勾的清单**
+- [x] **第 2 步: 计划改成一张原地打勾的清单**
       说明：reducer 每个 Turn 只留一个 plan 节点，后到的 `plan` 覆盖 `entries`。新建 `PlanChecklist.vue`。拆掉检查器里的主「执行计划」栏。进行中展开，结束后折叠。
       预期：一次 Turn 里计划从 3 步勾到 3/3，始终只有一张卡，不会在流里叠出「Plan · 3 项」三次。
 
-- [ ] **第 3 步: 工具行 + 子 Agent 卡**
+- [x] **第 3 步: 工具行 + 子 Agent 卡**
       说明：`ToolRow.vue` 用动词短句；连续 read 合并。`SubagentCard.vue` 按第 5A / GACP-06。无父子字段不画空壳。
       预期：10 个读文件两行以内；两个子 Agent 上下各一卡，工具不串。
 
-- [ ] **第 4 步: 权限进流**
+- [x] **第 4 步: 权限进流**
       说明：`PermissionPrompt` 变成流内卡片，宽度跟正文和计划卡一致。主按钮「本任务允许」。
       预期：审批时仍能看见上面的对话和计划当前步。
 
@@ -337,31 +338,52 @@ Tool    读取 package.json · in_progress
 
 ## 任务 3: 输入框和侧栏收成 Desktop 密度
 
-- [ ] **第 1 步: Composer 自包含**
+- [x] **第 1 步: Composer 自包含**
       说明：模型、发送、停止、可选上下文都在框内。执行中输入框仍在，发送变停止。
       预期：小窗 980px 宽时，模型选择和停止仍在。
 
-- [ ] **第 2 步: 侧栏只留对话**
+- [x] **第 2 步: 侧栏只留对话**
       说明：新对话、项目一排、列表。运行态用细条，不用芯片。
       预期：20 条历史不出现横向滚动，标题省略 + `title` 全文。
 
-- [ ] **第 3 步: 检查器抽屉**
+- [x] **第 3 步: 检查器抽屉**
       说明：Timeline 摘要、Changes/Terminal/Artifacts 占位。默认关。
       预期：P0-12/13/15 有地方挂，主列不提前为它们让位。
 
 ## 任务 4: 套上子 Agent 皮肤并走查便捷
 
-- [ ] **第 1 步: 按 GACP-06 做 `SubagentCard.vue`**
+- [x] **第 1 步: 按 GACP-06 做 `SubagentCard.vue`**
       说明：只用本计划第 7 节皮肤。无父子字段时不渲染该组件。
       预期：和 ToolRow 间距、字号、颜色一致。
 
-- [ ] **第 2 步: 键盘和减少动画**
+- [x] **第 2 步: 键盘和减少动画**
       说明：Enter 发送、Esc 聚焦停止、`prefers-reduced-motion` 关掉展开动画。
       预期：不看鼠标也能发、停、切上一条对话（可选 j/k 以后再做，本任务不强制）。
 
-- [ ] **第 3 步: 对照走查**
+- [x] **第 3 步: 对照走查**
       说明：同一条真实或夹具 Turn，截「大修前/后」：页眉高度、主列宽度、工具是否还像日志。清单：点进历史能打字、执行中能停、审批不挡对话、两个子 Agent 不串。
       预期：走查记录写进本计划，不把「换了圆角」当成完成。
+
+### 任务 4 第 3 步走查记录（2026-08-20）
+
+**怎么走查：** 夹具 + 纯 TS helper（`collectWorkbenchWalkthroughFacts` / `projectConversationTurn` / `evaluateTaskComposerSend`），对照当前 CSS 与组件源码。本机 `127.0.0.1:5173` 已被既有 node 占用，**未开本 worktree 的 Electron 开发版，未跑真实 Grok GUI，未截桌面像素图。** 不把「换了圆角」当成完成。
+
+| 项 | 大修前（对照代码/计划表） | 大修后（本分支夹具） |
+| --- | --- | --- |
+| 页眉高度 | `.chat-header` 约 66px + 运维芯片 /「连接 Grok」 | `--titlebar-height: 46px`；主列 `.task-header` 只留标题+弱状态，`min-height: 0` |
+| 主列宽度 | 左 272 + 中 + 右 310 三块投影卡片 | `.workspace-layout: 220px 1fr`；对话 `width: min(100%, 760px)` 居中；检查器 overlay 不占第三列 |
+| 工具像不像日志 | `Tool    读取 package.json · in_progress` / `.timeline-node` / `.conversation-process` | `▸ 读了 package.json`（连续读取合成一块）；主列不再挂 `timeline-node` |
+| 子 Agent | 无独立卡，或靠标题猜组 | 第 7 节两行卡（名字+状态 / `已运行 N 个工具 · 点开查看`），12px 缩进 ToolRow；**无 parent 字段时投影不产出 `subagent`，主列不挂空壳** |
+| 点进历史能打字 | 「只读历史 + 继续任务」横幅 | GACP-02：`restore: ready` 时 Composer `canSend`；源码无「继续任务」 |
+| 执行中能停 | 页眉停止 / 检查器 Esc 可能抢走 | 输入框内 `stop-button`；Esc 执行中聚焦停止，焦点已在检查器内才关抽屉 |
+| 审批不挡对话 | 全屏 `dialog`「需要你的确认」 | 流内 `region` 小卡，`autofocus: false`；主按钮仍是「本任务允许」，次按钮「仅允许这一次」 |
+| 两个子 Agent 不串 | 无分组 | 夹具两张卡各自 `nodeId`，工具 nodeId 不相交；真实 Runtime 仍无父子字段，故主列目前是扁平行 |
+
+**键盘 / 动画：** Enter 发送保留 IME `isComposing` / `keyCode === 229`。j/k 切对话本任务不做。`prefers-reduced-motion` 把检查器 slide、details/子 Agent 展开、spinner 的 duration 设为 `0s`（不再用 1ms 充数）。
+
+**受控 e2e：** `permission-broker.spec.ts` 与 `task-executor-background-lifecycle.spec.ts` 选择器改为 `.permission-inline-card` / `.tool-row`，不再找 `dialog`「需要你的确认」/ `.permission-summary` / `.conversation-process` / `.timeline-node`。错位卡断言可见操作标题和「来自「任务名」」。**未跑 Playwright**（无桌面 GUI）。权限决策仍点「仅允许这一次」，没有把主路径改成 GACP-03 以外的政策。
+
+**未验证：** 真实 Grok 分两个子 Agent、流式半截 Markdown、980 小窗手工、检查器开合手感。这些留给开发版有空闲端口后再走。
 
 ---
 
@@ -379,7 +401,7 @@ Tool    读取 package.json · in_progress
 
 ## 非目标
 
-- 不做浅色主题（以后再说）。
+
 - 不复制 Claude 品牌。
 - 不做消息里的 Markdown 编辑器 / 代码 IDE；代码块只求可读，不做语法高亮。
 - 不把 P0-10 的状态机重构吞进来；本计划交壳，P0-10 填状态。
