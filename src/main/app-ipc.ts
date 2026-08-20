@@ -1,6 +1,11 @@
 import { isAppAppearanceMode, type AppAppearanceState } from '../shared/app-appearance'
 import { APP_INVOKE_CHANNELS } from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
+import {
+  isRuntimePluginId,
+  type RuntimePluginDetail,
+  type RuntimePluginSummary
+} from '../shared/runtime-plugin'
 import type { DeletionPreview, ProjectSummary } from '../shared/task-history'
 import type { DesktopIpcMain } from './ipc-types'
 import {
@@ -20,6 +25,8 @@ export interface AppIpcDependencies {
   deleteProjectHistory: (projectId: string, token: string) => Promise<void>
   getAppearance: () => AppAppearanceState | Promise<AppAppearanceState>
   setAppearance: (mode: AppAppearanceState['mode']) => Promise<AppAppearanceState>
+  listPlugins: () => Promise<RuntimePluginSummary[]>
+  getPlugin: (pluginId: string) => Promise<RuntimePluginDetail | null>
   sanitizeError: (error: unknown) => string
 }
 
@@ -99,5 +106,25 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
     const mode = request.mode
     if (!isAppAppearanceMode(mode)) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
     return dependencies.setAppearance(mode)
+  })
+  register(APP_INVOKE_CHANNELS.listPlugins, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.listPlugins()
+  })
+  /**
+   * pluginId 禁止含 `/` `\`：否则 join(plugins, id) 会在扫描前越出受管目录。
+   * 格式非法用 invalid-input；格式合法但库存没有该项才用 not-found，便于 UI 区分。
+   */
+  register(APP_INVOKE_CHANNELS.getPlugin, async (args) => {
+    const request = readRequest(args, ['pluginId'])
+    const pluginId = readText(request, 'pluginId')
+    if (!isRuntimePluginId(pluginId)) {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    const detail = await dependencies.getPlugin(pluginId)
+    if (!detail) {
+      throw new DesktopIpcFailure('not-found', '未找到指定插件。')
+    }
+    return detail
   })
 }

@@ -42,6 +42,7 @@ import { clearGrokProviderConfig } from './provider/grok-provider-config'
 import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
 import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
+import { getGrokPlugin, listGrokPlugins } from './runtime/grok/grok-plugin-inventory'
 import { PermissionAuditStore } from './security/permission-audit-store'
 import { PermissionBroker } from './security/permission-broker'
 import { createLocalEnvironmentId } from './security/permission-policy'
@@ -375,6 +376,9 @@ function registerIpcHandlers(): void {
       requireTaskStore().previewProjectDeletion(projectId),
     getAppearance: () => requireAppearanceController().getState(),
     setAppearance: (mode) => requireAppearanceController().setMode(mode),
+    // 插件扫描牢笼绑在 userData，不把绝对路径经 IPC 回传
+    listPlugins: () => listGrokPlugins(app.getPath('userData')),
+    getPlugin: (pluginId) => getGrokPlugin(app.getPath('userData'), pluginId),
     deleteProjectHistory: async (projectId, token) => {
       const preparation = requireTaskStore().prepareProjectHistoryDeletion(projectId, token)
       let deletionLease: Awaited<ReturnType<PermissionBroker['beginProjectDeletion']>>

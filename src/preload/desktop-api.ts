@@ -23,6 +23,12 @@ import {
 import { parseAppAppearanceState } from '../shared/app-appearance'
 import { APP_INVOKE_CHANNELS, APP_PUSH_CHANNELS, type AppDesktopApi } from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
+import {
+  parseRuntimePluginDetail,
+  parseRuntimePluginSummary,
+  type RuntimePluginDetail,
+  type RuntimePluginSummary
+} from '../shared/runtime-plugin'
 import type { TaskExecutionSnapshot } from '../shared/task-execution'
 import type { ProviderDesktopApi } from '../shared/provider'
 import type { ConversationEntryState } from '../shared/task-history'
@@ -593,7 +599,7 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
   }
 }
 
-/** 创建只包含 Project 注册、历史清理和外观偏好的 App API。 */
+/** 创建只包含 Project 注册、历史清理、外观偏好和插件只读查询的 App API。 */
 export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopApi {
   return {
     chooseProject: () =>
@@ -629,6 +635,40 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
       ipcRenderer.invoke(APP_INVOKE_CHANNELS.setAppearance, { mode }) as ReturnType<
         AppDesktopApi['setAppearance']
       >,
+    // Preload 再 parse：丢掉 absolutePath 等脏字段，坏项静默剔除而不是整表失败
+    listPlugins: async () => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.listPlugins
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      if (!Array.isArray(result.value)) {
+        return {
+          ok: false,
+          error: { code: 'operation-failed', message: '插件列表无效。' }
+        }
+      }
+      const plugins: RuntimePluginSummary[] = []
+      for (const item of result.value) {
+        const parsed = parseRuntimePluginSummary(item)
+        if (parsed) plugins.push(parsed)
+      }
+      return { ok: true, value: plugins }
+    },
+    // 详情必须完整可解析；失败不把残缺对象或路径字段交给 Renderer
+    getPlugin: async (pluginId) => {
+      const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.getPlugin, {
+        pluginId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const detail: RuntimePluginDetail | null = parseRuntimePluginDetail(result.value)
+      if (!detail) {
+        return {
+          ok: false,
+          error: { code: 'operation-failed', message: '插件详情无效。' }
+        }
+      }
+      return { ok: true, value: detail }
+    },
     onAppearanceChanged: (listener) =>
       subscribe(ipcRenderer, APP_PUSH_CHANNELS.appearance, listener, parseAppAppearanceState)
   }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { APP_INVOKE_CHANNELS } from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
+import type { RuntimePluginDetail, RuntimePluginSummary } from '../shared/runtime-plugin'
 import type { ProjectSummary } from '../shared/task-history'
 import type { DesktopIpcHandler } from './ipc-types'
 import { DesktopIpcFailure, type TrustedIpcInvokeEvent } from './security/ipc-sender-validation'
@@ -20,12 +21,31 @@ const project: ProjectSummary = {
 
 const appearanceState = { mode: 'dark' as const, resolved: 'dark' as const }
 
+const pluginSummary: RuntimePluginSummary = {
+  pluginId: 'demo-plugin',
+  displayName: 'Demo Plugin',
+  status: 'enabled',
+  scope: 'user',
+  skillCount: 1,
+  mcpCount: 0,
+  hookCount: 0
+}
+
+const pluginDetail: RuntimePluginDetail = {
+  ...pluginSummary,
+  skillNames: ['demo-skill'],
+  mcpNames: [],
+  hookNames: []
+}
+
 function createFixture(): {
   handlers: Map<string, DesktopIpcHandler>
   chooseProject: ReturnType<typeof vi.fn>
   revealProject: ReturnType<typeof vi.fn>
   assertTrustedSender: ReturnType<typeof vi.fn>
   setAppearance: ReturnType<typeof vi.fn>
+  listPlugins: ReturnType<typeof vi.fn>
+  getPlugin: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<DesktopIpcResult<T>>
 } {
   const handlers = new Map<string, DesktopIpcHandler>()
@@ -51,6 +71,8 @@ function createFixture(): {
     mode,
     resolved: mode === 'light' ? ('light' as const) : ('dark' as const)
   }))
+  const listPlugins = vi.fn(async () => [pluginSummary])
+  const getPlugin = vi.fn(async () => pluginDetail as RuntimePluginDetail | null)
   registerAppIpcHandlers({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     assertTrustedSender,
@@ -62,6 +84,8 @@ function createFixture(): {
     deleteProjectHistory,
     getAppearance,
     setAppearance,
+    listPlugins,
+    getPlugin,
     sanitizeError: (error) => (error instanceof Error ? error.message : String(error))
   })
   const invoke = async <T>(channel: string, ...args: unknown[]): Promise<DesktopIpcResult<T>> => {
@@ -69,7 +93,16 @@ function createFixture(): {
     if (!handler) throw new Error(`缺少 Handler: ${channel}`)
     return (await handler(event, ...args)) as DesktopIpcResult<T>
   }
-  return { handlers, chooseProject, revealProject, assertTrustedSender, setAppearance, invoke }
+  return {
+    handlers,
+    chooseProject,
+    revealProject,
+    assertTrustedSender,
+    setAppearance,
+    listPlugins,
+    getPlugin,
+    invoke
+  }
 }
 
 describe('App IPC Handler', () => {
@@ -162,5 +195,57 @@ describe('App IPC Handler', () => {
         workspace: '/tmp/project'
       })
     ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+  })
+
+  it('插件列表无参，详情只接受合法 pluginId', async () => {
+    const fixture = createFixture()
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.listPlugins)).toEqual({
+      ok: true,
+      value: [pluginSummary]
+    })
+    expect(fixture.listPlugins).toHaveBeenCalledTimes(1)
+
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.getPlugin, { pluginId: 'demo-plugin' })
+    ).toEqual({ ok: true, value: pluginDetail })
+    expect(fixture.getPlugin).toHaveBeenCalledWith('demo-plugin')
+
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.listPlugins, { extra: true })).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-input' }
+    })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.getPlugin, {
+        pluginId: 'demo-plugin',
+        path: '/tmp/plugins/demo-plugin'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.getPlugin).toHaveBeenCalledTimes(1)
+  })
+
+  it('非法 pluginId 为 invalid-input，缺失插件为 not-found', async () => {
+    const fixture = createFixture()
+    // 路径分隔符会在 join 前逃出 plugins 目录，必须在 IPC 层拒绝
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.getPlugin, { pluginId: '../escape' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.getPlugin, { pluginId: 'a\\b' })).toMatchObject(
+      { ok: false, error: { code: 'invalid-input' } }
+    )
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.getPlugin, { pluginId: '' })).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-input' }
+    })
+    expect(fixture.getPlugin).not.toHaveBeenCalled()
+
+    // 格式合法但库存无此项：与输入错误分开，方便 UI 显示「未找到」
+    fixture.getPlugin.mockResolvedValueOnce(null)
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.getPlugin, { pluginId: 'missing-plugin' })
+    ).toEqual({
+      ok: false,
+      error: { code: 'not-found', message: '未找到指定插件。' }
+    })
+    expect(fixture.getPlugin).toHaveBeenCalledWith('missing-plugin')
   })
 })

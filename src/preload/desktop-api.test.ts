@@ -51,6 +51,8 @@ describe('窄 Preload API', () => {
     })
     await app.chooseProject()
     await app.revealProject('project-1')
+    await app.listPlugins()
+    await app.getPlugin('demo-plugin')
     await task.list('project-1')
     await task.listEvents('task-1', 'turn-1', 42, 200)
     await task.listPermissionAudits('task-1')
@@ -83,6 +85,8 @@ describe('窄 Preload API', () => {
       ],
       [APP_INVOKE_CHANNELS.chooseProject],
       [APP_INVOKE_CHANNELS.revealProject, { projectId: 'project-1' }],
+      [APP_INVOKE_CHANNELS.listPlugins],
+      [APP_INVOKE_CHANNELS.getPlugin, { pluginId: 'demo-plugin' }],
       [TASK_INVOKE_CHANNELS.list, { projectId: 'project-1' }],
       [
         TASK_INVOKE_CHANNELS.listEvents,
@@ -435,5 +439,99 @@ describe('窄 Preload API', () => {
     expect(listener).toHaveBeenCalledTimes(1)
     expect(listener).toHaveBeenCalledWith({ mode: 'system', resolved: 'light' })
     expect(ipcRenderer.removeListener).toHaveBeenCalledTimes(1)
+  })
+
+  it('插件 API 解析摘要并丢掉含路径的脏项', async () => {
+    const ipcRenderer = createIpcRenderer()
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: [
+        {
+          pluginId: 'demo-plugin',
+          displayName: 'Demo',
+          status: 'enabled',
+          scope: 'user',
+          skillCount: 1,
+          mcpCount: 0,
+          hookCount: 0,
+          absolutePath: '/secret/plugins/demo-plugin'
+        },
+        {
+          pluginId: 'bad/id',
+          displayName: 'Bad',
+          status: 'enabled',
+          scope: 'user',
+          skillCount: 0,
+          mcpCount: 0,
+          hookCount: 0
+        }
+      ]
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        pluginId: 'demo-plugin',
+        displayName: 'Demo',
+        status: 'enabled',
+        scope: 'user',
+        skillCount: 1,
+        mcpCount: 0,
+        hookCount: 0,
+        skillNames: ['demo-skill'],
+        mcpNames: [],
+        hookNames: [],
+        installPath: '/secret/plugins/demo-plugin'
+      }
+    })
+    const app = createAppDesktopApi(ipcRenderer)
+
+    const listed = await app.listPlugins()
+    const detail = await app.getPlugin('demo-plugin')
+
+    expect(listed).toEqual({
+      ok: true,
+      value: [
+        {
+          pluginId: 'demo-plugin',
+          displayName: 'Demo',
+          status: 'enabled',
+          scope: 'user',
+          skillCount: 1,
+          mcpCount: 0,
+          hookCount: 0
+        }
+      ]
+    })
+    expect(detail).toEqual({
+      ok: true,
+      value: {
+        pluginId: 'demo-plugin',
+        displayName: 'Demo',
+        status: 'enabled',
+        scope: 'user',
+        skillCount: 1,
+        mcpCount: 0,
+        hookCount: 0,
+        skillNames: ['demo-skill'],
+        mcpNames: [],
+        hookNames: []
+      }
+    })
+    expect(JSON.stringify(listed)).not.toContain('/secret')
+    expect(JSON.stringify(detail)).not.toContain('/secret')
+  })
+
+  it('插件详情解析失败时返回 operation-failed', async () => {
+    const ipcRenderer = createIpcRenderer()
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { pluginId: 'demo-plugin', path: '/tmp/demo' }
+    })
+    const app = createAppDesktopApi(ipcRenderer)
+
+    expect(await app.getPlugin('demo-plugin')).toEqual({
+      ok: false,
+      error: { code: 'operation-failed', message: '插件详情无效。' }
+    })
   })
 })

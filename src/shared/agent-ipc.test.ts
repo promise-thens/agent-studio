@@ -40,6 +40,8 @@ describe('桌面 IPC 静态契约', () => {
       'app:delete-project-history',
       'app:get-appearance',
       'app:set-appearance',
+      'app:list-plugins',
+      'app:get-plugin',
       'app:appearance',
       'task:list',
       'task:get',

@@ -18,6 +18,8 @@ export type DesktopIpcErrorCode =
   | 'history-capacity-exceeded'
   | 'task-turn-limit-reached'
   | 'deletion-token-invalid'
+  /** 合法标识已通过校验，但目标资源不存在（例如插件目录缺失）。 */
+  | 'not-found'
   | 'operation-failed'
 
 export interface DesktopIpcError {
