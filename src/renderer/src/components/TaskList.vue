@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { PhDotsThree as DotsThree } from '@phosphor-icons/vue'
 import type { TaskExecutionDto } from '../../../shared/task-execution'
-import type { HistoryExecutionState, TaskHistorySummary } from '../../../shared/task-history'
+import type { TaskHistorySummary } from '../../../shared/task-history'
 import type { WorkbenchLoadState } from '../composables/useProjectRegistry'
 import { toTaskListItemView } from '../task-navigation'
 
@@ -47,17 +47,6 @@ const renameInput = ref<HTMLInputElement | null>(null)
 const items = computed(() =>
   props.tasks.map((task) => toTaskListItemView(task, props.selectedTaskId, props.activeExecution))
 )
-
-function stateLabel(state: HistoryExecutionState, waitingPermission: boolean): string {
-  if (waitingPermission) return '待审批'
-  if (state === 'running') return '进行中'
-  if (state === 'failed') return '失败'
-  if (state === 'cancelled') return '已取消'
-  if (state === 'interrupted') return '已中断'
-  if (state === 'queued') return '排队'
-  if (state === 'cancelling') return '停止中'
-  return ''
-}
 
 function closeMenus(): void {
   menuTaskId.value = ''
@@ -157,7 +146,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
         class="task-row"
         :class="{
           selected: item.selected,
-          live: item.live,
+          live: item.runningMarker === 'accent',
           waiting: item.waitingPermission
         }"
       >
@@ -166,14 +155,11 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
           class="task-main"
           type="button"
           :disabled="historyNavigationDisabled"
-          :title="item.title"
+          :title="item.titleAttribute"
           :aria-current="item.selected ? 'true' : undefined"
           @click="emit('selectTask', item.taskId)"
         >
           <span class="task-title">{{ item.title }}</span>
-          <small v-if="stateLabel(item.state, item.waitingPermission)" class="task-state">
-            {{ stateLabel(item.state, item.waitingPermission) }}
-          </small>
         </button>
         <input
           v-else
@@ -273,7 +259,8 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   display: flex;
   min-height: 0;
   flex-direction: column;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .task-row {
@@ -281,6 +268,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   display: flex;
   align-items: center;
   min-width: 0;
+  overflow: hidden;
   border-left: 2px solid transparent;
 }
 
@@ -332,15 +320,11 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
 }
 
 .task-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.task-state {
-  flex: 0 0 auto;
-  color: var(--text-3);
-  font-size: 10px;
 }
 
 .task-rename {

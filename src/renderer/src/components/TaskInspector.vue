@@ -10,10 +10,10 @@ import {
   permissionAuditInitiatorLabel,
   permissionAuditReasonLabel,
   permissionAuditScopeLabel,
+  projectInspectorTimelineSummary,
   resolveInspectorTab,
   type InspectorTab
 } from '../task-inspector'
-import ExecutionTimeline from './ExecutionTimeline.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -21,8 +21,6 @@ const props = withDefaults(
     activeTab: InspectorTab
     timeline: TaskTimelineViewModel | null
     timelineLoading?: boolean
-    eventAfterSequenceByTurn?: Record<string, number | null>
-    loadingEventTurnIds?: readonly string[]
     permissionAudits?: readonly PermissionAuditRecord[]
     permissionAuditCursor?: string | null
     loadingMorePermissionAudits?: boolean
@@ -40,7 +38,6 @@ const props = withDefaults(
 const emit = defineEmits<{
   close: []
   'update:activeTab': [tab: InspectorTab]
-  loadMoreEvents: [turnId: string]
   loadMorePermissionAudits: []
 }>()
 
@@ -48,6 +45,7 @@ const currentTab = computed(() => resolveInspectorTab(props.activeTab))
 const placeholder = computed(() =>
   currentTab.value === 'timeline' ? null : inspectorPlaceholderCopy(currentTab.value)
 )
+const timelineSummary = computed(() => projectInspectorTimelineSummary(props.timeline))
 
 /** Esc 关闭抽屉；不拦截侧栏/Composer 点击，方便边审阅边发送或切 Task。 */
 function onDocumentKeydown(event: KeyboardEvent): void {
@@ -159,15 +157,18 @@ onBeforeUnmount(() => {
       :aria-labelledby="`inspector-tab-${currentTab}`"
     >
       <template v-if="currentTab === 'timeline'">
-        <ExecutionTimeline
-          v-if="timeline"
-          :model="timeline"
-          :loading="timelineLoading"
-          :event-after-sequence-by-turn="eventAfterSequenceByTurn"
-          :loading-event-turn-ids="loadingEventTurnIds"
-          @load-more-events="emit('loadMoreEvents', $event)"
-        />
-        <div v-else class="timeline-state" role="status">暂无执行记录</div>
+        <!-- Timeline 只读摘要：不挂计划主副本，P0-12/13/15 走其它标签。 -->
+        <div v-if="timelineLoading && timelineSummary.empty" class="timeline-state" role="status">
+          正在加载执行历史…
+        </div>
+        <div v-else-if="timelineSummary.empty" class="timeline-state" role="status">
+          {{ timelineSummary.statusLabel }}
+        </div>
+        <div v-else class="inspector-timeline-summary" role="status">
+          <p>{{ timelineSummary.turnCount }} 轮 · {{ timelineSummary.statusLabel }}</p>
+          <p v-if="timelineSummary.planLine">{{ timelineSummary.planLine }}</p>
+          <p v-if="timelineSummary.toolCount">{{ timelineSummary.toolCount }} 次工具</p>
+        </div>
 
         <section v-if="showPermissionAudits" class="inspector-section audit-section">
           <div class="inspector-heading">

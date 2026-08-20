@@ -40,15 +40,29 @@ export function resolvePermissionTaskTitle(input: {
   return input.taskId
 }
 
+export type TaskListRunningMarker = 'accent' | 'none'
+
 export interface TaskListItemView {
   taskId: string
   title: string
+  /** 完整标题给 `title` 属性；展示层用 CSS ellipsis，这里不再截断。 */
+  titleAttribute: string
   selected: boolean
   /** 排队/运行/待审批/停止中：由列表状态或后台 execution 共同决定，不依赖当前选中项。 */
   live: boolean
+  /** 运行态用左侧细条，不要状态芯片文案。 */
+  runningMarker: TaskListRunningMarker
+  showStateChip: false
   waitingPermission: boolean
   state: HistoryExecutionState
   canArchiveOrDelete: boolean
+}
+
+export interface ProjectSwitcherRow {
+  label: string
+  titleAttribute: string
+  showPathLine: false
+  live: boolean
 }
 
 /** 后台执行中的 Task 即使没被选中也要显示稳定活动指示。 */
@@ -74,11 +88,30 @@ export function toTaskListItemView(
   return {
     taskId: task.taskId,
     title: task.title,
+    titleAttribute: task.title,
     selected: task.taskId === selectedTaskId,
     live,
+    runningMarker: live ? 'accent' : 'none',
+    showStateChip: false,
     waitingPermission,
     state: task.state,
     canArchiveOrDelete: !live
+  }
+}
+
+/** 项目切换收成一行标签；完整路径只进 title，避免侧栏堆路径卡。 */
+export function toProjectSwitcherRow(input: {
+  displayName?: string | null
+  canonicalRoot?: string | null
+  runningTaskCount?: number
+}): ProjectSwitcherRow {
+  const label = input.displayName?.trim() || '选择项目'
+  const path = input.canonicalRoot?.trim() || ''
+  return {
+    label,
+    titleAttribute: path || label,
+    showPathLine: false,
+    live: (input.runningTaskCount ?? 0) > 0
   }
 }
 

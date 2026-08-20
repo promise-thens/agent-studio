@@ -1,4 +1,4 @@
-import type { AgentRuntimeId } from '../../shared/agent'
+import type { AgentContextUsage, AgentRuntimeId, AgentUsage } from '../../shared/agent'
 import type {
   TaskExecutionCancellationRequest,
   TaskExecutionDto
@@ -125,11 +125,64 @@ export function resolveCancelTurnRequest(
   }
 }
 
+/** 小窗保底宽度：模型选择和发送/停止不得 `display:none`。 */
+export const COMPOSER_COMPACT_MIN_WIDTH_PX = 980
+export const COMPOSER_COMPACT_ALWAYS_VISIBLE = ['model', 'send-or-stop'] as const
+
+export interface ComposerChrome {
+  action: 'send' | 'stop'
+  modelBusy: boolean
+  textareaVisible: true
+  keepVisibleAtCompactWidth: typeof COMPOSER_COMPACT_ALWAYS_VISIBLE
+}
+
 /** 有活动执行就显示停止，空闲才显示发送。 */
 export function resolveComposerAction(
   activeExecution: Pick<TaskExecutionDto, 'taskId'> | null
 ): 'send' | 'stop' {
   return activeExecution ? 'stop' : 'send'
+}
+
+/**
+ * 输入框自包含动作：空闲发送、执行中停止；执行中模型 busy；输入框始终保留。
+ */
+export function resolveComposerChrome(input: {
+  activeExecution: Pick<TaskExecutionDto, 'taskId'> | null
+  projectInteractionBlocked?: boolean
+}): ComposerChrome {
+  return {
+    action: resolveComposerAction(input.activeExecution),
+    modelBusy: Boolean(input.activeExecution) || Boolean(input.projectInteractionBlocked),
+    textareaVisible: true,
+    keepVisibleAtCompactWidth: COMPOSER_COMPACT_ALWAYS_VISIBLE
+  }
+}
+
+/** 极小字只画上下文 used/limit；turn usage 或 NaN 都藏起来。 */
+export function resolveComposerContextUsage(
+  usage:
+    (Pick<AgentUsage, 'scope'> & { usedTokens?: number; limitTokens?: number }) | null | undefined
+): string | null {
+  if (!usage || usage.scope !== 'context') return null
+  if (!Number.isFinite(usage.usedTokens) || !Number.isFinite(usage.limitTokens)) return null
+  return `${usage.usedTokens}/${usage.limitTokens}`
+}
+
+/** 从最近一轮往前找最后一条可展示的上下文用量。 */
+export function pickLatestContextUsage(
+  timeline:
+    | { turns: readonly { usage: { contextSamples: readonly AgentContextUsage[] } }[] }
+    | null
+    | undefined
+): AgentContextUsage | null {
+  if (!timeline?.turns.length) return null
+  for (let index = timeline.turns.length - 1; index >= 0; index -= 1) {
+    const sample = timeline.turns[index]?.usage.contextSamples.at(-1)
+    if (sample && Number.isFinite(sample.usedTokens) && Number.isFinite(sample.limitTokens)) {
+      return sample
+    }
+  }
+  return null
 }
 
 /** 停止按钮 title 永远带 running taskId，避免停错当前选中而非正在跑的 Task。 */

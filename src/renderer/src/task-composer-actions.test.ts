@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  COMPOSER_COMPACT_ALWAYS_VISIBLE,
+  COMPOSER_COMPACT_MIN_WIDTH_PX,
   canSendWhileConversationRestoring,
   evaluateTaskComposerSend,
   isForeignExecutionBlockingSend,
+  pickLatestContextUsage,
   resolveCancelTurnRequest,
   resolveComposerAction,
+  resolveComposerChrome,
+  resolveComposerContextUsage,
   resolveProviderModelLabel,
   resolveStopButtonAriaLabel,
   resolveStopButtonTitle,
@@ -116,6 +121,67 @@ describe('发送与停止身份', () => {
   it('发送失败后恢复已清空的草稿，不覆盖用户新输入', () => {
     expect(restoreComposerPromptAfterFailure('', '原来的草稿')).toBe('原来的草稿')
     expect(restoreComposerPromptAfterFailure('用户又打了字', '原来的草稿')).toBe('用户又打了字')
+  })
+
+  it('空闲发送、执行中停止；模型 busy，输入框仍在，980 宽仍见模型和停止', () => {
+    const idle = resolveComposerChrome({ activeExecution: null })
+    expect(idle.action).toBe('send')
+    expect(idle.modelBusy).toBe(false)
+    expect(idle.textareaVisible).toBe(true)
+    expect(resolveComposerAction(null)).toBe('send')
+
+    const running = resolveComposerChrome({ activeExecution: runningExecution })
+    expect(running.action).toBe('stop')
+    expect(running.modelBusy).toBe(true)
+    expect(running.textareaVisible).toBe(true)
+    expect(running.keepVisibleAtCompactWidth).toEqual(['model', 'send-or-stop'])
+    expect(COMPOSER_COMPACT_MIN_WIDTH_PX).toBe(980)
+    expect(COMPOSER_COMPACT_ALWAYS_VISIBLE).toEqual(['model', 'send-or-stop'])
+
+    expect(
+      resolveComposerChrome({
+        activeExecution: null,
+        projectInteractionBlocked: true
+      }).modelBusy
+    ).toBe(true)
+  })
+
+  it('输入框只展示上下文 used/limit，没数据就藏', () => {
+    expect(
+      resolveComposerContextUsage({ scope: 'context', usedTokens: 120, limitTokens: 4096 })
+    ).toBe('120/4096')
+    expect(resolveComposerContextUsage(null)).toBeNull()
+    expect(
+      resolveComposerContextUsage({ scope: 'turn', usedTokens: 12, limitTokens: 100 })
+    ).toBeNull()
+    expect(
+      resolveComposerContextUsage({
+        scope: 'context',
+        usedTokens: Number.NaN,
+        limitTokens: 4096
+      })
+    ).toBeNull()
+
+    expect(pickLatestContextUsage(null)).toBeNull()
+    expect(
+      pickLatestContextUsage({
+        turns: [
+          { usage: { contextSamples: [] } },
+          {
+            usage: {
+              contextSamples: [{ scope: 'context', usedTokens: 88, limitTokens: 2048 }]
+            }
+          }
+        ]
+      })
+    ).toEqual({ scope: 'context', usedTokens: 88, limitTokens: 2048 })
+    expect(
+      resolveComposerContextUsage(
+        pickLatestContextUsage({
+          turns: [{ usage: { contextSamples: [] } }]
+        })
+      )
+    ).toBeNull()
   })
 })
 

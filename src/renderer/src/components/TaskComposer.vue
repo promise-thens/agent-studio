@@ -23,6 +23,8 @@ const props = defineProps<{
   selectModel: (model: ProviderModelOption) => Promise<ProviderConfigSummary>
   modelBusy?: boolean
   modelDisabled?: boolean
+  /** 上下文 used/limit；没数据时不传或传空，模板藏起来。 */
+  contextUsage?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -75,6 +77,9 @@ defineExpose({ focus })
             @changed="emit('modelChanged', $event)"
             @error="emit('modelError', $event)"
           />
+          <span v-if="contextUsage" class="composer-usage" title="上下文用量">{{
+            contextUsage
+          }}</span>
         </div>
         <button
           v-if="action === 'stop'"

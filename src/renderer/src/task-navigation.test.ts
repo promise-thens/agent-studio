@@ -6,6 +6,7 @@ import {
   deriveSessionTitle,
   isUntitledTaskTitle,
   resolvePermissionTaskTitle,
+  toProjectSwitcherRow,
   toTaskListItemView
 } from './task-navigation'
 
@@ -60,6 +61,46 @@ describe('Task 导航展示', () => {
     expect(view.live).toBe(true)
     expect(view.waitingPermission).toBe(true)
     expect(view.canArchiveOrDelete).toBe(false)
+    expect(view.runningMarker).toBe('accent')
+    expect(view.showStateChip).toBe(false)
+  })
+
+  it('运行中用 accent 条而不是状态芯片文案，title 全文留给 title 属性', () => {
+    const longTitle = `把登录改成支持邮箱并补齐回归测试-${'很长标题'.repeat(12)}`
+    const view = toTaskListItemView({ ...task('task-a', 'running'), title: longTitle }, 'task-a', {
+      taskId: 'task-a',
+      state: 'running'
+    })
+
+    expect(view.live).toBe(true)
+    expect(view.runningMarker).toBe('accent')
+    expect(view.showStateChip).toBe(false)
+    expect(view.title).toBe(longTitle)
+    expect(view.titleAttribute).toBe(longTitle)
+    expect(view.title).not.toMatch(/进行中|待审批|排队/)
+    expect(view.titleAttribute.length).toBe(longTitle.length)
+
+    const idle = toTaskListItemView(task('task-b', 'completed'), 'task-b', null)
+    expect(idle.runningMarker).toBe('none')
+    expect(idle.showStateChip).toBe(false)
+    expect(idle.titleAttribute).toBe('task-b')
+  })
+
+  it('项目切换只给一行标签，路径进 title，不堆路径卡', () => {
+    const row = toProjectSwitcherRow({
+      displayName: 'agent-studio',
+      canonicalRoot: '/Users/demo/work/agent-studio',
+      runningTaskCount: 1
+    })
+    expect(row.label).toBe('agent-studio')
+    expect(row.titleAttribute).toBe('/Users/demo/work/agent-studio')
+    expect(row.showPathLine).toBe(false)
+    expect(row.live).toBe(true)
+
+    const empty = toProjectSwitcherRow({ displayName: '', canonicalRoot: '', runningTaskCount: 0 })
+    expect(empty.label).toBe('选择项目')
+    expect(empty.showPathLine).toBe(false)
+    expect(empty.live).toBe(false)
   })
 
   it('queued 与 cancelling 也是活动项，不能归档删除', () => {

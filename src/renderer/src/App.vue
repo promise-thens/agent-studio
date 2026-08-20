@@ -40,8 +40,10 @@ import { useTaskWorkbench } from './composables/useTaskWorkbench'
 import {
   evaluateTaskComposerSend,
   isForeignExecutionBlockingSend,
+  pickLatestContextUsage,
   resolveCancelTurnRequest,
-  resolveComposerAction,
+  resolveComposerChrome,
+  resolveComposerContextUsage,
   resolveStopButtonAriaLabel,
   resolveStopButtonTitle,
   resolveTaskHeaderFacts,
@@ -398,7 +400,16 @@ const composerSend = computed(() =>
 )
 const canSend = computed(() => composerSend.value.canSend)
 const composerDisabledMessage = computed(() => composerSend.value.reason)
-const composerAction = computed(() => resolveComposerAction(activeExecution.value))
+const composerChrome = computed(() =>
+  resolveComposerChrome({
+    activeExecution: activeExecution.value,
+    projectInteractionBlocked: projectInteractionBlocked.value
+  })
+)
+const composerAction = computed(() => composerChrome.value.action)
+const composerContextUsage = computed(() =>
+  resolveComposerContextUsage(pickLatestContextUsage(taskTimeline.activeTimeline.value))
+)
 const stopButtonTitle = computed(() => resolveStopButtonTitle(activeExecution.value))
 const stopButtonAriaLabel = computed(() =>
   resolveStopButtonAriaLabel(activeExecution.value, runningTaskTitle.value)
@@ -1420,8 +1431,9 @@ function scrollMessagesToBottom(): void {
           :model="currentModel"
           :load-models="loadSavedModels"
           :select-model="selectProviderModel"
-          :model-busy="Boolean(activeExecution) || projectInteractionBlocked"
+          :model-busy="composerChrome.modelBusy"
           :model-disabled="!providerSummary?.configured"
+          :context-usage="composerContextUsage"
           @update:prompt="prompt = $event"
           @send="sendPrompt"
           @stop="cancelTurn"
@@ -1435,15 +1447,12 @@ function scrollMessagesToBottom(): void {
         :active-tab="inspectorTab"
         :timeline="taskTimeline.activeTimeline.value"
         :timeline-loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
-        :event-after-sequence-by-turn="taskHistory.eventAfterSequenceByTurn.value"
-        :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
         :permission-audits="taskHistory.permissionAudits.value"
         :permission-audit-cursor="taskHistory.permissionAuditCursor.value"
         :loading-more-permission-audits="taskHistory.loadingMorePermissionAudits.value"
         :show-permission-audits="activeTaskView?.mode === 'history'"
         @close="showInspector = false"
         @update:active-tab="inspectorTab = $event"
-        @load-more-events="loadMoreHistoryEvents"
         @load-more-permission-audits="taskHistory.loadMorePermissionAudits"
       />
     </div>
