@@ -268,7 +268,6 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
   display: flex;
   align-items: center;
   min-width: 0;
-  overflow: hidden;
   border-left: 2px solid transparent;
 }
 
