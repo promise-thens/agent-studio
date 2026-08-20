@@ -27,9 +27,15 @@ interface Props {
   saveProvider: (input: ProviderConfigInput) => Promise<ProviderConfigSummary>
   clearProvider?: () => Promise<void>
   canCancel?: boolean
+  /** page 是首次全屏引导；embedded 嵌进设置弹窗，去掉品牌头。 */
+  layout?: 'page' | 'embedded'
 }
 
-const props = withDefaults(defineProps<Props>(), { initialSummary: null, canCancel: false })
+const props = withDefaults(defineProps<Props>(), {
+  initialSummary: null,
+  canCancel: false,
+  layout: 'page'
+})
 const emit = defineEmits<{
   saved: [summary: ProviderConfigSummary]
   cancelled: []
@@ -264,9 +270,13 @@ function hasSameOrigin(left: string, right?: string): boolean {
 </script>
 
 <template>
-  <main class="provider-onboarding">
-    <section class="onboarding-panel" aria-labelledby="provider-title">
-      <header class="onboarding-header">
+  <main class="provider-onboarding" :class="{ embedded: layout === 'embedded' }">
+    <section
+      class="onboarding-panel"
+      :aria-labelledby="layout === 'page' ? 'provider-title' : undefined"
+      :aria-label="layout === 'embedded' ? '供应商配置' : undefined"
+    >
+      <header v-if="layout === 'page'" class="onboarding-header">
         <span class="brand-mark" aria-hidden="true"><Robot :size="22" weight="fill" /></span>
         <div>
           <p>Agent Studio</p>
@@ -479,6 +489,25 @@ function hasSameOrigin(left: string, right?: string): boolean {
   padding: clamp(32px, 7vh, 68px) 24px 52px;
   color: var(--text-1);
   background: var(--app-bg);
+}
+
+.provider-onboarding.embedded {
+  min-height: 0;
+  overflow: visible;
+  padding: 0;
+  background: transparent;
+}
+
+.provider-onboarding.embedded .onboarding-panel {
+  width: 100%;
+}
+
+.provider-onboarding.embedded form {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .onboarding-panel {

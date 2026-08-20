@@ -1,9 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { appearanceWindowBackground, type AppAppearanceState } from '../shared/app-appearance'
 import { AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
+import { APP_PUSH_CHANNELS } from '../shared/app-ipc'
 import { sanitizeExternalHref } from '../shared/external-href'
 import type {
   ProviderConfigInput,
@@ -19,6 +21,8 @@ import { TaskStore } from './agent/task-store'
 import { OperationGate, type OperationLease } from './agent/operation-gate'
 import { TaskExecutor } from './agent/task-executor'
 import { TaskExecutionController } from './agent/task-execution-controller'
+import { AppearanceController, type NativeThemeAdapter } from './appearance/appearance-controller'
+import { AppearanceStore } from './appearance/appearance-store'
 import { registerAppIpcHandlers } from './app-ipc'
 import { createAppShutdownGate } from './app-shutdown'
 import {
@@ -60,6 +64,7 @@ let projectRegistry: ProjectRegistry | null = null
 let taskStore: TaskStore | null = null
 let permissionAuditStore: PermissionAuditStore | null = null
 let permissionBroker: PermissionBroker | null = null
+let appearanceController: AppearanceController | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -69,7 +74,7 @@ function createWindow(): void {
     minWidth: 980,
     minHeight: 680,
     show: false,
-    backgroundColor: '#0d1117',
+    backgroundColor: appearanceController?.windowBackground() ?? '#0d1117',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 18, y: 17 },
     autoHideMenuBar: true,
@@ -116,6 +121,12 @@ async function initializeServices(
     }
   })
   await providerStore.initialize()
+  appearanceController = new AppearanceController({
+    store: new AppearanceStore({ userDataPath: app.getPath('userData') }),
+    nativeTheme: createNativeThemeAdapter()
+  })
+  await appearanceController.initialize()
+  appearanceController.onResolvedChange((state) => publishAppearance(state))
   providerTester = new ProviderConnectionTester({ redact: redactProviderText })
   if (controlledE2e) {
     // 受控 E2E 只验证 127.0.0.1 无认证 Mock Provider；失败时终止启动，绝不读取真实配置。
@@ -339,6 +350,8 @@ function registerIpcHandlers(): void {
     },
     previewProjectHistoryDeletion: (projectId) =>
       requireTaskStore().previewProjectDeletion(projectId),
+    getAppearance: () => requireAppearanceController().getState(),
+    setAppearance: (mode) => requireAppearanceController().setMode(mode),
     deleteProjectHistory: async (projectId, token) => {
       const preparation = requireTaskStore().prepareProjectHistoryDeletion(projectId, token)
       let deletionLease: Awaited<ReturnType<PermissionBroker['beginProjectDeletion']>>
@@ -498,6 +511,44 @@ function createRendererTrustOptions(): RendererTrustOptions {
       : {}),
     productionFileUrl: pathToFileURL(join(__dirname, '../renderer/index.html')).href
   }
+}
+
+/** 把 Electron nativeTheme 收成可测适配器，避免 AppearanceController 直接依赖 electron 模块。 */
+function createNativeThemeAdapter(): NativeThemeAdapter {
+  return {
+    get shouldUseDarkColors() {
+      return nativeTheme.shouldUseDarkColors
+    },
+    get themeSource() {
+      if (nativeTheme.themeSource === 'light' || nativeTheme.themeSource === 'dark') {
+        return nativeTheme.themeSource
+      }
+      return 'system'
+    },
+    set themeSource(value) {
+      nativeTheme.themeSource = value
+    },
+    onUpdated(listener) {
+      nativeTheme.on('updated', listener)
+      return () => {
+        nativeTheme.off('updated', listener)
+      }
+    }
+  }
+}
+
+function requireAppearanceController(): AppearanceController {
+  if (!appearanceController) throw new Error('AppearanceController 尚未初始化。')
+  return appearanceController
+}
+
+/** 窗口底色和 Renderer 必须同时拿到解析结果，避免只改 CSS 还闪一帧旧背景。 */
+function publishAppearance(state: AppAppearanceState): void {
+  const window = mainWindow
+  if (window && !window.isDestroyed()) {
+    window.setBackgroundColor(appearanceWindowBackground(state.resolved))
+  }
+  sendToTrustedRenderer(createRendererTrustOptions(), APP_PUSH_CHANNELS.appearance, state)
 }
 
 /** Provider 变更需要与已连接 Runtime 保持事务一致，失败时恢复旧配置。 */

@@ -1,6 +1,7 @@
 :root {
   color-scheme: dark;
   --app-bg: #0d1117;
+  --surface-0: #0a0d12;
   --surface-1: #11161d;
   --surface-2: #161c24;
   --surface-3: #1c2430;
@@ -14,6 +15,7 @@
   --accent-ink: #1d1009;
   --danger: #dc6b6b;
   --success: #62b886;
+  --hover-fill: color-mix(in srgb, var(--text-1) 6%, transparent);
   --radius-panel: 18px;
   --radius-control: 12px;
   --radius-chip: 999px;
@@ -65,4 +67,47 @@ input:focus-visible {
 
 button:active:not(:disabled) {
   transform: translateY(1px);
+}
+
+/* 米白主题：同一套 token 换值，不另起组件颜色。跟随系统时靠 prefers-color-scheme 避免首帧闪深色。 */
+html[data-theme='light'] {
+  color-scheme: light;
+  --app-bg: #f4efe6;
+  --surface-0: #e8dfd0;
+  --surface-1: #f7f3eb;
+  --surface-2: #efe8db;
+  --surface-3: #e6dccb;
+  --border: #d9cdb8;
+  --border-strong: #c4b59a;
+  --text-1: #2c261f;
+  --text-2: #5c5348;
+  --text-3: #8a7f70;
+  --accent: #d98252;
+  --accent-hover: #c56b35;
+  --accent-ink: #fff8ef;
+  --danger: #c45c5c;
+  --success: #3d8a62;
+  --hover-fill: color-mix(in srgb, var(--text-1) 7%, transparent);
+}
+
+@media (prefers-color-scheme: light) {
+  html:not([data-theme='dark']) {
+    color-scheme: light;
+    --app-bg: #f4efe6;
+    --surface-0: #e8dfd0;
+    --surface-1: #f7f3eb;
+    --surface-2: #efe8db;
+    --surface-3: #e6dccb;
+    --border: #d9cdb8;
+    --border-strong: #c4b59a;
+    --text-1: #2c261f;
+    --text-2: #5c5348;
+    --text-3: #8a7f70;
+    --accent: #d98252;
+    --accent-hover: #c56b35;
+    --accent-ink: #fff8ef;
+    --danger: #c45c5c;
+    --success: #3d8a62;
+    --hover-fill: color-mix(in srgb, var(--text-1) 7%, transparent);
+  }
 }

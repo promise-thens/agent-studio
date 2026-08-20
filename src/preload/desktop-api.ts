@@ -16,7 +16,8 @@ import {
   type AgentDesktopApi,
   type AgentPermissionCancellation
 } from '../shared/agent-ipc'
-import { APP_INVOKE_CHANNELS, type AppDesktopApi } from '../shared/app-ipc'
+import { parseAppAppearanceState } from '../shared/app-appearance'
+import { APP_INVOKE_CHANNELS, APP_PUSH_CHANNELS, type AppDesktopApi } from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import type { TaskExecutionSnapshot } from '../shared/task-execution'
 import type { ProviderDesktopApi } from '../shared/provider'
@@ -576,7 +577,7 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
   }
 }
 
-/** 创建只包含 Project 注册与历史清理能力的 App API。 */
+/** 创建只包含 Project 注册、历史清理和外观偏好的 App API。 */
 export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopApi {
   return {
     chooseProject: () =>
@@ -599,7 +600,17 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
       ipcRenderer.invoke(APP_INVOKE_CHANNELS.deleteProjectHistory, {
         projectId,
         token
-      }) as ReturnType<AppDesktopApi['deleteProjectHistory']>
+      }) as ReturnType<AppDesktopApi['deleteProjectHistory']>,
+    getAppearance: () =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.getAppearance) as ReturnType<
+        AppDesktopApi['getAppearance']
+      >,
+    setAppearance: (mode) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.setAppearance, { mode }) as ReturnType<
+        AppDesktopApi['setAppearance']
+      >,
+    onAppearanceChanged: (listener) =>
+      subscribe(ipcRenderer, APP_PUSH_CHANNELS.appearance, listener, parseAppAppearanceState)
   }
 }
 

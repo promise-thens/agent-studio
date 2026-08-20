@@ -9,6 +9,7 @@
 ## 当前能力（Grok Build Runtime）
 
 - 首次启动配置 OpenAI Chat Completions 兼容服务的 Base URL、认证信息和 Model ID
+- 已配置后从侧栏打开设置弹窗，可修改供应商，或在深色、米白、跟随系统之间切换外观
 - 通过 `/models` 获取真实模型名称，并在输入框左下角安全切换模型
 - 使用 Electron `safeStorage` 加密保存 API Key，重启后无需重复输入
 - 支持 HTTP 和 HTTPS Provider；HTTP 配置会持续显示明文传输风险提示

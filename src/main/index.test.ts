@@ -195,6 +195,9 @@ vi.mock('electron', () => {
     focus(): void {
       return undefined
     }
+    setBackgroundColor(color: string): void {
+      void color
+    }
   }
 
   return {
@@ -211,6 +214,12 @@ vi.mock('electron', () => {
       showErrorBox: vi.fn()
     },
     ipcMain: { handle: vi.fn() },
+    nativeTheme: {
+      shouldUseDarkColors: true,
+      themeSource: 'system',
+      on: vi.fn(),
+      off: vi.fn()
+    },
     safeStorage: {
       isEncryptionAvailable: vi.fn(() => true),
       encryptString: vi.fn((value: string) => Buffer.from(value)),

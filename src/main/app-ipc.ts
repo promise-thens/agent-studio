@@ -1,3 +1,4 @@
+import { isAppAppearanceMode, type AppAppearanceState } from '../shared/app-appearance'
 import { APP_INVOKE_CHANNELS } from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import type { DeletionPreview, ProjectSummary } from '../shared/task-history'
@@ -16,6 +17,8 @@ export interface AppIpcDependencies {
   removeProject: (projectId: string) => Promise<void>
   previewProjectHistoryDeletion: (projectId: string) => Promise<DeletionPreview>
   deleteProjectHistory: (projectId: string, token: string) => Promise<void>
+  getAppearance: () => AppAppearanceState | Promise<AppAppearanceState>
+  setAppearance: (mode: AppAppearanceState['mode']) => Promise<AppAppearanceState>
   sanitizeError: (error: unknown) => string
 }
 
@@ -45,7 +48,7 @@ function readText(record: Record<string, unknown>, field: string): string {
   return value
 }
 
-/** 注册 Project 选择、列表与历史删除 IPC，不向 Renderer 暴露 Dialog 或任意路径。 */
+/** 注册 Project 管理与外观偏好 IPC，不向 Renderer 暴露 Dialog、路径或 nativeTheme。 */
 export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
   const register = <T>(channel: string, operation: (args: unknown[]) => Promise<T> | T): void => {
     dependencies.ipcMain.handle(channel, (event, ...args): Promise<DesktopIpcResult<T>> =>
@@ -80,5 +83,15 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
       readText(request, 'token')
     )
     return null
+  })
+  register(APP_INVOKE_CHANNELS.getAppearance, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.getAppearance()
+  })
+  register(APP_INVOKE_CHANNELS.setAppearance, (args) => {
+    const request = readRequest(args, ['mode'])
+    const mode = request.mode
+    if (!isAppAppearanceMode(mode)) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.setAppearance(mode)
   })
 }

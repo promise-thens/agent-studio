@@ -132,7 +132,7 @@ textarea {
 .inspector-panel,
 .task-inspector {
   min-width: 0;
-  background: color-mix(in srgb, var(--surface-1) 94%, #0a0d12);
+  background: color-mix(in srgb, var(--surface-1) 94%, var(--surface-0));
 }
 
 .inspector-heading,
@@ -733,7 +733,7 @@ button:disabled {
   border: 1px solid var(--border);
   border-radius: var(--radius-chip);
   color: var(--text-2);
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--hover-fill);
   cursor: pointer;
 }
 
@@ -1357,7 +1357,7 @@ button:disabled {
   flex-direction: column;
   overflow: hidden;
   border-left: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-1) 96%, #0a0d12);
+  background: color-mix(in srgb, var(--surface-1) 96%, var(--surface-0));
   box-shadow: -16px 0 36px rgb(2 5 9 / 28%);
   animation: inspector-slide-in 180ms ease;
 }
@@ -1479,7 +1479,7 @@ button:disabled {
   padding: 14px 14px 16px;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   border-radius: var(--radius-panel);
-  background: color-mix(in srgb, var(--surface-1) 94%, #0a0d12);
+  background: color-mix(in srgb, var(--surface-1) 94%, var(--surface-0));
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 3%),
     0 6px 18px rgb(2 5 9 / 14%);
@@ -1613,7 +1613,7 @@ button:disabled {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgb(3 6 10 / 72%);
+  background: color-mix(in srgb, var(--surface-0) 72%, transparent);
 }
 
 .permission-dialog {

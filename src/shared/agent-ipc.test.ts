@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AGENT_INVOKE_CHANNELS, AGENT_PUSH_CHANNELS } from './agent-ipc'
-import { APP_INVOKE_CHANNELS } from './app-ipc'
+import { APP_INVOKE_CHANNELS, APP_PUSH_CHANNELS } from './app-ipc'
 import { TASK_INVOKE_CHANNELS } from './task-ipc'
 
 describe('桌面 IPC 静态契约', () => {
@@ -9,6 +9,7 @@ describe('桌面 IPC 静态契约', () => {
       ...Object.values(AGENT_INVOKE_CHANNELS),
       ...Object.values(AGENT_PUSH_CHANNELS),
       ...Object.values(APP_INVOKE_CHANNELS),
+      ...Object.values(APP_PUSH_CHANNELS),
       ...Object.values(TASK_INVOKE_CHANNELS)
     ]
 
@@ -34,6 +35,9 @@ describe('桌面 IPC 静态契约', () => {
       'app:remove-project',
       'app:preview-project-history-deletion',
       'app:delete-project-history',
+      'app:get-appearance',
+      'app:set-appearance',
+      'app:appearance',
       'task:list',
       'task:get',
       'task:list-turns',
@@ -52,6 +56,7 @@ describe('桌面 IPC 静态契约', () => {
       ...Object.values(AGENT_INVOKE_CHANNELS),
       ...Object.values(AGENT_PUSH_CHANNELS),
       ...Object.values(APP_INVOKE_CHANNELS),
+      ...Object.values(APP_PUSH_CHANNELS),
       ...Object.values(TASK_INVOKE_CHANNELS)
     ]
 

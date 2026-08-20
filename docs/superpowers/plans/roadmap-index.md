@@ -38,6 +38,7 @@
 |       5a | GACP-01 |    5 | [真机 Grok ACP 协议观察与能力核实](grokACP计划/gacp-01-real-grok-protocol-verification.md)   | 已完成（2026-08-19 受限关闭）      | P0-09 测试门                             |
 |       5b | GACP-02 |    5 | [会话恢复能力产品契约](grokACP计划/gacp-02-session-restore-capability-contract.md)           | 待开始                             | GACP-01                                  |
 |       5c | P0-10A  |    5 | [Claude Desktop 风格工作台大修](p0-10a-claude-desktop-workbench-ui.md)                       | 助手 Markdown 已接入；换皮待开始   | P0-09 测试门；与 GACP-02/06 对齐皮肤     |
+|       5d | P0-10B  |    3 | [设置弹窗与外观](p0-10b-settings-dialog-and-appearance.md)                                   | 代码已落地；开发版走查待做         | P0-10A 视觉 token；与 P1-04 设置入口衔接 |
 |        6 | P0-10   |    5 | [单 Runtime 任务工作台](p0-10-single-runtime-task-workbench.md)                              | Task 1–4 已合入功能分支；开发版手工与 lifecycle e2e 未在本分支实跑 | P0-06、P0-08、P0-09、P0-10A、GACP-02     |
 |        7 | P0-11   |    5 | [Command Runner 与执行证据](p0-11-command-execution-evidence.md)                             | 待开始                             | P0-06、P0-07、P0-08、P0-10               |
 |       7a | GACP-03 |    4 | [结构化权限证据](grokACP计划/gacp-03-structured-permission-evidence.md)                     | 待开始                             | P0-11、GACP-01                           |

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
 import { AGENT_INVOKE_CHANNELS, AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
-import { APP_INVOKE_CHANNELS } from '../shared/app-ipc'
+import { APP_INVOKE_CHANNELS, APP_PUSH_CHANNELS } from '../shared/app-ipc'
 import { TASK_INVOKE_CHANNELS } from '../shared/task-ipc'
 import {
   createAgentDesktopApi,
@@ -375,5 +375,29 @@ describe('窄 Preload API', () => {
     await provider.listModels(input)
 
     expect(ipcRenderer.invoke).toHaveBeenCalledWith('provider:list-models', input)
+  })
+
+  it('外观 API 走固定 channel，非法推送丢弃', async () => {
+    const ipcRenderer = createIpcRenderer()
+    const app = createAppDesktopApi(ipcRenderer)
+    const listener = vi.fn()
+    const cleanup = app.onAppearanceChanged(listener)
+    const handler = ipcRenderer.on.mock.calls.find(
+      ([channel]) => channel === APP_PUSH_CHANNELS.appearance
+    )?.[1]
+
+    await app.getAppearance()
+    await app.setAppearance('light')
+    handler?.({}, { mode: 'system', resolved: 'light' })
+    handler?.({}, { mode: 'system', resolved: 'light', extra: true })
+    cleanup()
+
+    expect(ipcRenderer.invoke.mock.calls).toEqual([
+      [APP_INVOKE_CHANNELS.getAppearance],
+      [APP_INVOKE_CHANNELS.setAppearance, { mode: 'light' }]
+    ])
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledWith({ mode: 'system', resolved: 'light' })
+    expect(ipcRenderer.removeListener).toHaveBeenCalledTimes(1)
   })
 })

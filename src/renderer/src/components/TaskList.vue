@@ -280,7 +280,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
 }
 
 .task-row.selected {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover-fill);
 }
 
 .task-main,
@@ -356,7 +356,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
 .task-text-button:not(:disabled):hover,
 .task-menu button:not(:disabled):hover {
   color: var(--text-1);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-fill);
 }
 
 .task-menu {

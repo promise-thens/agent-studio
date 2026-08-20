@@ -14,6 +14,7 @@ import type {
   AgentTaskRuntimeState
 } from '../../shared/agent'
 import type { PublicAgentEvent, PublicAgentToolEvent } from '../../shared/agent-event'
+import type { AppAppearanceMode, AppAppearanceState } from '../../shared/app-appearance'
 import type {
   ProviderConfigInput,
   ProviderConfigSummary,
@@ -29,6 +30,7 @@ import {
 } from './agent-event-consumer'
 import { unwrapDesktopIpcResult } from './desktop-ipc-result'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import TaskComposer from './components/TaskComposer.vue'
 import TaskConversation from './components/TaskConversation.vue'
@@ -63,6 +65,11 @@ import {
   toggleInspectorOpen,
   type InspectorTab
 } from './task-inspector'
+import {
+  applyResolvedAppearance,
+  DEFAULT_SETTINGS_SECTION,
+  type SettingsSection
+} from './settings-dialog'
 import {
   isFocusInsideInspector,
   overlayConsumesEscape,
@@ -139,7 +146,10 @@ const activeTaskId = workbench.selectedTaskId
 const activeExecution = workbench.activeExecution
 const providerSummary = ref<ProviderConfigSummary | null>(null)
 const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
-const showProviderSettings = ref(false)
+const showSettingsDialog = ref(false)
+const settingsSection = ref<SettingsSection>(DEFAULT_SETTINGS_SECTION)
+const appearance = ref<AppAppearanceState>({ mode: 'dark', resolved: 'dark' })
+const appearancePending = ref(false)
 const workspace = ref('')
 type HistoryConfirmationKind = 'task-delete' | 'project-remove' | 'project-history-delete'
 const historyConfirmation = ref<{
@@ -460,9 +470,7 @@ const currentModel = computed<ProviderModelOption | null>(() => {
   }
 })
 const showProviderScreen = computed(
-  () =>
-    showProviderSettings.value ||
-    (providerBootState.value !== 'ready' && workbench.projects.value.length === 0)
+  () => providerBootState.value !== 'ready' && workbench.projects.value.length === 0
 )
 const workbenchLoadMessage = computed(() => {
   if (workbench.projectLoadState.value.status === 'error') {
@@ -566,8 +574,15 @@ onMounted(async () => {
     window.agent.onPermissionCancelled((request) => {
       removePermission(request)
       respondingPermission.value = clearRespondingPermission(respondingPermission.value, request)
-    })
+    }),
+    window.app.onAppearanceChanged(applyAppearanceState)
   )
+
+  try {
+    applyAppearanceState(unwrapDesktopIpcResult(await window.app.getAppearance()))
+  } catch {
+    applyResolvedAppearance('dark')
+  }
 
   try {
     providerSummary.value = await window.provider.getSummary()
@@ -862,7 +877,6 @@ function saveProvider(input: ProviderConfigInput): Promise<ProviderConfigSummary
 function handleProviderSaved(summary: ProviderConfigSummary): void {
   providerSummary.value = summary
   providerBootState.value = summary.configured ? 'ready' : 'needs-provider'
-  showProviderSettings.value = false
 }
 
 async function selectProviderModel(model: ProviderModelOption): Promise<ProviderConfigSummary> {
@@ -877,12 +891,29 @@ function handleModelError(message: string): void {
   appendMessage('error', message)
 }
 
-function openProviderSettings(): void {
-  showProviderSettings.value = true
+function openSettingsDialog(): void {
+  settingsSection.value = DEFAULT_SETTINGS_SECTION
+  showSettingsDialog.value = true
 }
 
-function closeProviderSettings(): void {
-  if (providerSummary.value?.configured) showProviderSettings.value = false
+function closeSettingsDialog(): void {
+  showSettingsDialog.value = false
+}
+
+function applyAppearanceState(state: AppAppearanceState): void {
+  appearance.value = state
+  applyResolvedAppearance(state.resolved)
+}
+
+async function changeAppearance(mode: AppAppearanceMode): Promise<void> {
+  appearancePending.value = true
+  try {
+    applyAppearanceState(unwrapDesktopIpcResult(await window.app.setAppearance(mode)))
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    appearancePending.value = false
+  }
 }
 
 async function clearProvider(): Promise<void> {
@@ -892,7 +923,7 @@ async function clearProvider(): Promise<void> {
   projectSelection.invalidate()
   providerSummary.value = await window.provider.clear()
   providerBootState.value = 'needs-provider'
-  showProviderSettings.value = false
+  showSettingsDialog.value = false
   syncWorkspaceDisplay()
   activeTaskId.value = ''
   reconcilePermissionQueue('', '')
@@ -1109,9 +1140,14 @@ function onWorkbenchKeydown(event: KeyboardEvent): void {
       isComposing: event.isComposing,
       keyCode: event.keyCode,
       defaultPrevented: event.defaultPrevented,
-      overlayConsumesEscape: overlayConsumesEscape(event.target)
+      overlayConsumesEscape: overlayConsumesEscape(event.target) && !showSettingsDialog.value
     })
   ) {
+    return
+  }
+  if (showSettingsDialog.value) {
+    event.preventDefault()
+    closeSettingsDialog()
     return
   }
   if (historyConfirmation.value) return
@@ -1386,10 +1422,7 @@ function scrollMessagesToBottom(): void {
         :initial-summary="providerSummary"
         :list-models="listProviderModels"
         :save-provider="saveProvider"
-        :clear-provider="providerSummary?.configured ? clearProvider : undefined"
-        :can-cancel="Boolean(providerSummary?.configured)"
         @saved="handleProviderSaved"
-        @cancelled="closeProviderSettings"
       />
     </div>
 
@@ -1412,7 +1445,7 @@ function scrollMessagesToBottom(): void {
         :has-more-tasks="Boolean(taskHistory.taskCursor.value)"
         :loading-more-tasks="taskHistory.loadingMoreTasks.value"
         @new-chat="startNewChat"
-        @open-settings="openProviderSettings"
+        @open-settings="openSettingsDialog"
         @select-project="selectProject"
         @choose-project="chooseWorkspace"
         @retry-access="(projectId) => workbench.registry.retryAccess(projectId)"
@@ -1495,6 +1528,21 @@ function scrollMessagesToBottom(): void {
         @load-more-permission-audits="taskHistory.loadMorePermissionAudits"
       />
     </div>
+
+    <SettingsDialog
+      v-if="showSettingsDialog"
+      :section="settingsSection"
+      :appearance="appearance"
+      :appearance-pending="appearancePending"
+      :initial-summary="providerSummary"
+      :list-models="listProviderModels"
+      :save-provider="saveProvider"
+      :clear-provider="providerSummary?.configured ? clearProvider : undefined"
+      @close="closeSettingsDialog"
+      @update:section="settingsSection = $event"
+      @change-appearance="changeAppearance"
+      @saved="handleProviderSaved"
+    />
 
     <div
       v-if="historyConfirmation"

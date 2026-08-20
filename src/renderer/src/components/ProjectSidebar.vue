@@ -145,8 +145,8 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
       <button
         class="icon-button"
         type="button"
-        title="模型设置"
-        aria-label="模型设置"
+        title="设置"
+        aria-label="设置"
         @click="emit('openSettings')"
       >
         <GearSix :size="15" />
@@ -318,7 +318,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
 .icon-button:hover,
 .project-current:not(:disabled):hover,
 .project-option:not(:disabled):hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-fill);
   color: var(--text-1);
 }
 
@@ -425,7 +425,7 @@ onBeforeUnmount(() => window.removeEventListener('pointerdown', onDocumentPointe
 }
 
 .project-option.selected {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover-fill);
 }
 
 .project-option.action {

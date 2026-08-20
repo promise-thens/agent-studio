@@ -18,10 +18,13 @@ const project: ProjectSummary = {
   revision: 1
 }
 
+const appearanceState = { mode: 'dark' as const, resolved: 'dark' as const }
+
 function createFixture(): {
   handlers: Map<string, DesktopIpcHandler>
   chooseProject: ReturnType<typeof vi.fn>
   assertTrustedSender: ReturnType<typeof vi.fn>
+  setAppearance: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<DesktopIpcResult<T>>
 } {
   const handlers = new Map<string, DesktopIpcHandler>()
@@ -41,6 +44,11 @@ function createFixture(): {
     expiresAt: '2026-08-12T00:05:00.000Z'
   }))
   const deleteProjectHistory = vi.fn(async () => undefined)
+  const getAppearance = vi.fn(() => appearanceState)
+  const setAppearance = vi.fn(async (mode: 'dark' | 'light' | 'system') => ({
+    mode,
+    resolved: mode === 'light' ? ('light' as const) : ('dark' as const)
+  }))
   registerAppIpcHandlers({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     assertTrustedSender,
@@ -49,6 +57,8 @@ function createFixture(): {
     removeProject,
     previewProjectHistoryDeletion,
     deleteProjectHistory,
+    getAppearance,
+    setAppearance,
     sanitizeError: (error) => (error instanceof Error ? error.message : String(error))
   })
   const invoke = async <T>(channel: string, ...args: unknown[]): Promise<DesktopIpcResult<T>> => {
@@ -56,7 +66,7 @@ function createFixture(): {
     if (!handler) throw new Error(`缺少 Handler: ${channel}`)
     return (await handler(event, ...args)) as DesktopIpcResult<T>
   }
-  return { handlers, chooseProject, assertTrustedSender, invoke }
+  return { handlers, chooseProject, assertTrustedSender, setAppearance, invoke }
 }
 
 describe('App IPC Handler', () => {
@@ -84,6 +94,32 @@ describe('App IPC Handler', () => {
       error: { code: 'forbidden' }
     })
     expect(fixture.chooseProject).not.toHaveBeenCalled()
+  })
+
+  it('外观读写只接受合法 mode，拒绝未知字段', async () => {
+    const fixture = createFixture()
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.getAppearance)).toEqual({
+      ok: true,
+      value: appearanceState
+    })
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.setAppearance, { mode: 'light' })).toEqual({
+      ok: true,
+      value: { mode: 'light', resolved: 'light' }
+    })
+    expect(fixture.setAppearance).toHaveBeenCalledWith('light')
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.setAppearance, { mode: 'dim' })).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-input' }
+    })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setAppearance, { mode: 'dark', extra: true })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.getAppearance, { mode: 'dark' })).toMatchObject(
+      {
+        ok: false,
+        error: { code: 'invalid-input' }
+      }
+    )
   })
 
   it('删除接口拒绝未知字段', async () => {
