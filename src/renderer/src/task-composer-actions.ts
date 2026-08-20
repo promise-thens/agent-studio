@@ -284,8 +284,17 @@ function resolveHeaderWeakStatusLine(
   }
   if (executionScope === 'selected') return '执行中'
   if (input.runtimeState === 'connecting') return '正在连接 Runtime…'
-  if (input.runtimeState === 'error') return input.runtimeMessage?.trim() || 'Runtime 连接异常'
+  if (input.runtimeState === 'error') {
+    // 对话流已承载失败全文+重试时，页眉只留软状态，避免第一眼仍是运维错误句。
+    if (shouldDeferConnectFailureToConversation(input)) return '连接异常'
+    return input.runtimeMessage?.trim() || 'Runtime 连接异常'
+  }
   return ''
+}
+
+/** 与对话流 connectFailure 同条件：已配置且无活动执行时失败说明进流，不在页眉双显。 */
+function shouldDeferConnectFailureToConversation(input: TaskHeaderFactsInput): boolean {
+  return Boolean(input.providerConfigured && !input.activeExecution)
 }
 
 function formatTaskCreatedAt(iso?: string): string {

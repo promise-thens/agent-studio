@@ -13,6 +13,7 @@ import {
   resolveTaskHeaderMainPath,
   shouldShowTaskHeaderFacts
 } from './task-composer-actions'
+import { resolveConversationConnectFailure } from './task-conversation-view'
 
 const runningExecution = {
   executionId: 'exec-a',
@@ -203,7 +204,35 @@ describe('Task 页眉事实', () => {
     })
     expect(crashed.runtimeState).toBe('error')
     expect(crashed.canRetryConnect).toBe(true)
-    expect(crashed.weakStatusLine).toContain('代码 17')
+    expect(crashed.weakStatusLine).toBe('连接异常')
+    expect(crashed.weakStatusLine).not.toContain('代码 17')
+  })
+
+  it('对话流已展示连接失败全文时，页眉弱状态不再重复完整 Runtime 文案', () => {
+    const runtimeMessage = 'Runtime 异常退出（代码 17）'
+    const facts = resolveTaskHeaderFacts({
+      selectedTaskId: 'task-b',
+      selectedTitle: '改登录',
+      selectedProjectName: 'studio',
+      selectedRuntimeId: 'grok',
+      runtimeState: 'error',
+      runtimeMessage,
+      providerConfigured: true,
+      activeExecution: null
+    })
+    const main = resolveTaskHeaderMainPath(facts)
+    const stream = resolveConversationConnectFailure({
+      runtimeState: facts.runtimeState,
+      runtimeMessage,
+      providerConfigured: true,
+      hasActiveExecution: false
+    })
+
+    expect(stream?.message).toBe(runtimeMessage)
+    expect(stream?.canRetry).toBe(true)
+    expect(main.weakStatusLine).not.toBe(runtimeMessage)
+    expect(main.weakStatusLine).not.toContain('代码 17')
+    expect(main.weakStatusLine).toBe('连接异常')
   })
 
   it('主路径页眉只暴露标题和弱状态，不把 Project/Runtime/环境当必显运维芯片', () => {
