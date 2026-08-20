@@ -6,6 +6,7 @@ import type { RuntimePluginSummary } from '../../shared/runtime-plugin'
 import {
   PLUGIN_EMPTY_COPY,
   PLUGIN_ENABLE_TOGGLE_HINT,
+  applyPluginDetailIfCurrent,
   filterInstalledPlugins,
   pluginDisplayLabel
 } from './plugins-page'
@@ -52,6 +53,50 @@ describe('插件页列表过滤', () => {
       /Grok\s·/
     )
   })
+
+  it('选中已变时丢掉迟到的 getPlugin 结果', () => {
+    expect(
+      applyPluginDetailIfCurrent({
+        selectedPluginId: 'b',
+        requestedPluginId: 'a',
+        incoming: { ok: true, detail: { pluginId: 'a' } }
+      })
+    ).toEqual({ apply: false })
+
+    expect(
+      applyPluginDetailIfCurrent({
+        selectedPluginId: 'b',
+        requestedPluginId: 'a',
+        incoming: { ok: false, errorMessage: '插件详情加载失败。' }
+      })
+    ).toEqual({ apply: false })
+
+    expect(
+      applyPluginDetailIfCurrent({
+        selectedPluginId: 'b',
+        requestedPluginId: 'b',
+        incoming: { ok: true, detail: { pluginId: 'b' } }
+      })
+    ).toEqual({
+      apply: true,
+      detail: { pluginId: 'b' },
+      detailState: 'ready',
+      detailError: ''
+    })
+
+    expect(
+      applyPluginDetailIfCurrent({
+        selectedPluginId: 'b',
+        requestedPluginId: 'b',
+        incoming: { ok: false, errorMessage: '插件详情加载失败。' }
+      })
+    ).toEqual({
+      apply: true,
+      detail: null,
+      detailState: 'error',
+      detailError: '插件详情加载失败。'
+    })
+  })
 })
 
 describe('插件主列表面', () => {
@@ -62,6 +107,7 @@ describe('插件主列表面', () => {
     expect(pluginsPageSource).toContain(PLUGIN_EMPTY_COPY)
     expect(pluginsPageSource).toContain('window.app.listPlugins()')
     expect(pluginsPageSource).toContain('window.app.getPlugin')
+    expect(pluginsPageSource).toContain('applyPluginDetailIfCurrent')
     expect(pluginsPageSource).toContain(`title="${PLUGIN_ENABLE_TOGGLE_HINT}"`)
     expect(pluginsPageSource).toContain(`aria-label="${PLUGIN_ENABLE_TOGGLE_HINT}"`)
     expect(pluginsPageSource).toContain('disabled')

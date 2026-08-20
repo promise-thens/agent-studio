@@ -11,6 +11,32 @@ export function pluginDisplayLabel(
   return plugin.displayName.trim() || plugin.pluginId
 }
 
+/** 选中已变时丢掉迟到的 getPlugin，避免列表亮 B、详情却是 A。 */
+export function applyPluginDetailIfCurrent<T>(input: {
+  selectedPluginId: string
+  requestedPluginId: string
+  incoming: { ok: true; detail: T } | { ok: false; errorMessage: string }
+}):
+  | { apply: false }
+  | { apply: true; detail: T; detailState: 'ready'; detailError: '' }
+  | { apply: true; detail: null; detailState: 'error'; detailError: string } {
+  if (input.selectedPluginId !== input.requestedPluginId) return { apply: false }
+  if (input.incoming.ok) {
+    return {
+      apply: true,
+      detail: input.incoming.detail,
+      detailState: 'ready',
+      detailError: ''
+    }
+  }
+  return {
+    apply: true,
+    detail: null,
+    detailState: 'error',
+    detailError: input.incoming.errorMessage
+  }
+}
+
 /** 搜索只过滤已经加载的摘要，不再请求 IPC。 */
 export function filterInstalledPlugins(
   plugins: readonly RuntimePluginSummary[],

@@ -3,7 +3,11 @@ import { computed, onMounted, ref } from 'vue'
 import { PhCircleNotch as CircleNotch, PhPuzzlePiece as PuzzlePiece } from '@phosphor-icons/vue'
 import type { RuntimePluginDetail, RuntimePluginSummary } from '../../../shared/runtime-plugin'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
-import { filterInstalledPlugins, pluginDisplayLabel } from '../plugins-page'
+import {
+  applyPluginDetailIfCurrent,
+  filterInstalledPlugins,
+  pluginDisplayLabel
+} from '../plugins-page'
 
 const loadState = ref<'loading' | 'ready' | 'error'>('loading')
 const errorMessage = ref('')
@@ -29,20 +33,35 @@ async function loadPlugins(): Promise<void> {
   }
 }
 
-/** 点一项再取详情；不预取路径、env 或 hook 命令。 */
+/** 点一项再取详情；不预取路径、env 或 hook 命令。迟到响应不得覆盖当前选中项。 */
 async function openPlugin(pluginId: string): Promise<void> {
   selectedPluginId.value = pluginId
   detailState.value = 'loading'
   detailError.value = ''
   try {
-    detail.value = unwrapDesktopIpcResult(await window.app.getPlugin(pluginId))
-    if (selectedPluginId.value !== pluginId) return
-    detailState.value = 'ready'
+    const nextDetail = unwrapDesktopIpcResult(await window.app.getPlugin(pluginId))
+    const applied = applyPluginDetailIfCurrent({
+      selectedPluginId: selectedPluginId.value,
+      requestedPluginId: pluginId,
+      incoming: { ok: true, detail: nextDetail }
+    })
+    if (!applied.apply) return
+    detail.value = applied.detail
+    detailState.value = applied.detailState
+    detailError.value = applied.detailError
   } catch (error) {
-    if (selectedPluginId.value !== pluginId) return
-    detail.value = null
-    detailError.value = error instanceof Error ? error.message : String(error)
-    detailState.value = 'error'
+    const applied = applyPluginDetailIfCurrent({
+      selectedPluginId: selectedPluginId.value,
+      requestedPluginId: pluginId,
+      incoming: {
+        ok: false,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      }
+    })
+    if (!applied.apply) return
+    detail.value = applied.detail
+    detailState.value = applied.detailState
+    detailError.value = applied.detailError
   }
 }
 
