@@ -9,7 +9,9 @@ import {
   resolveStopButtonAriaLabel,
   resolveStopButtonTitle,
   restoreComposerPromptAfterFailure,
-  resolveTaskHeaderFacts
+  resolveTaskHeaderFacts,
+  resolveTaskHeaderMainPath,
+  shouldShowTaskHeaderFacts
 } from './task-composer-actions'
 
 const runningExecution = {
@@ -202,5 +204,34 @@ describe('Task 页眉事实', () => {
     expect(crashed.runtimeState).toBe('error')
     expect(crashed.canRetryConnect).toBe(true)
     expect(crashed.weakStatusLine).toContain('代码 17')
+  })
+
+  it('主路径页眉只暴露标题和弱状态，不把 Project/Runtime/环境当必显运维芯片', () => {
+    const facts = resolveTaskHeaderFacts({
+      selectedTaskId: 'task-b',
+      selectedTitle: '改登录',
+      selectedProjectName: 'studio',
+      selectedRuntimeId: 'grok',
+      selectedState: 'completed',
+      createdAt: '2026-08-12T00:00:00.000Z',
+      selectedModel: { modelId: 'other-model', displayName: 'Other' },
+      runtimeState: 'idle',
+      runtimeMessage: '尚未连接 Grok Build',
+      providerConfigured: true,
+      activeExecution: null
+    })
+    const main = resolveTaskHeaderMainPath(facts)
+
+    expect(shouldShowTaskHeaderFacts()).toBe(false)
+    expect(Object.keys(main).sort()).toEqual(
+      ['canRetryConnect', 'executionScope', 'runtimeState', 'title', 'weakStatusLine'].sort()
+    )
+    expect(main.title).toBe('改登录')
+    expect(main).not.toHaveProperty('projectName')
+    expect(main).not.toHaveProperty('runtimeLabel')
+    expect(main).not.toHaveProperty('environmentLabel')
+    expect(main).not.toHaveProperty('worktreeLabel')
+    expect(`${main.title}${main.weakStatusLine}`).not.toContain('连接 Grok')
+    expect(`${main.title}${main.weakStatusLine}`).not.toContain('继续任务')
   })
 })

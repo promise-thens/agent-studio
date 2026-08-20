@@ -207,13 +207,13 @@ button:disabled {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: color-mix(in srgb, var(--surface-1) 88%, #0b1016);
+  background: var(--app-bg);
 }
 
 .task-header {
   grid-area: header;
-  flex-wrap: wrap;
-  justify-content: space-between;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
   gap: 8px 16px;
   min-height: 0;
   padding: 10px 18px 8px;
@@ -244,36 +244,19 @@ button:disabled {
   line-height: 1.45;
 }
 
-.task-header-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-  min-width: 0;
-  margin: 0;
-}
-
-.task-header-facts > div {
-  min-width: 0;
-}
-
-.task-header-facts dt {
-  color: var(--text-3);
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.task-header-facts dd {
-  margin: 2px 0 0;
-  overflow: hidden;
+.task-header-retry {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
   color: var(--text-2);
+  background: transparent;
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 650;
+  cursor: pointer;
 }
 
-.task-header-worktree {
-  margin-left: 6px;
-  color: var(--text-3);
+.task-header-retry:hover {
+  color: var(--text-1);
 }
 
 .status-chip {
@@ -318,11 +301,14 @@ button:disabled {
 }
 
 .conversation-empty {
+  display: grid;
+  flex: 1 1 auto;
+  place-content: center;
   width: min(100%, 760px);
-  margin: 36px auto 0;
+  margin: 0 auto;
   padding: 0 24px;
   color: var(--text-3);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.55;
   text-align: center;
 }
@@ -509,59 +495,32 @@ button:disabled {
   margin: 4px 0 0;
 }
 
-.history-readonly-banner,
-.conversation-entry-banner {
-  grid-area: history;
+.conversation-connect-failure {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin: 0 22px;
-  padding: 9px 0 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding: 0 24px;
 }
 
-.conversation-entry-banner[data-restore='degraded'] strong {
-  color: color-mix(in srgb, var(--warning, #e3b341) 82%, var(--text-2));
+.conversation-connect-failure .conversation-error {
+  flex: 1 1 220px;
 }
 
-.conversation-entry-banner[data-restore='unavailable'] strong {
+.conversation-retry {
+  padding: 0;
+  border: 0;
   color: var(--text-2);
-}
-
-.conversation-entry-banner p {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.history-readonly-banner strong,
-.conversation-entry-banner strong {
-  color: var(--text-2);
-  font-size: 11px;
+  background: transparent;
+  font-size: 13px;
   font-weight: 650;
+  cursor: pointer;
 }
 
-.history-readonly-banner p,
-.conversation-entry-banner p {
-  margin: 3px 0 0;
-  color: var(--text-3);
-  font-size: 10px;
-  line-height: 1.5;
-}
-
-/* 只读说明允许收缩，继续按钮只占自身宽度，避免挤出工作台边界。 */
-.history-readonly-banner > div,
-.conversation-entry-banner > div {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.history-readonly-banner .secondary-button {
-  flex: 0 0 auto;
-  width: auto;
-  max-width: 100%;
-  padding: 0 12px;
+.conversation-retry:hover {
+  color: var(--text-1);
 }
 
 .history-load-more {
@@ -1084,8 +1043,8 @@ button:disabled {
   z-index: 9;
   padding: 12px 18px 18px;
   border-top: 1px solid color-mix(in srgb, var(--border) 56%, transparent);
-  background: color-mix(in srgb, var(--surface-1) 96%, #0b1016);
-  box-shadow: 0 -16px 30px rgb(2 5 9 / 12%);
+  background: var(--app-bg);
+  box-shadow: none;
 }
 
 .capability-message {
@@ -1714,21 +1673,9 @@ kbd {
     min-width: 260px;
   }
 
-  /* 小窗藏次要事实和快捷键，保留任务切换、运行状态、输入和发送/停止。 */
-  .task-header-facts,
+  /* 小窗藏快捷键，保留任务切换、运行状态、输入和发送/停止。 */
   .composer-shortcuts {
     display: none;
-  }
-
-  .history-readonly-banner,
-  .conversation-entry-banner {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .history-readonly-banner .secondary-button {
-    align-self: flex-start;
   }
 }
 

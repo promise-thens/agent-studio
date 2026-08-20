@@ -73,6 +73,15 @@ export interface TaskHeaderFacts {
   modelReadOnly: boolean
 }
 
+/** 主路径页眉只留标题和弱状态；facts 仍可供测试/后台逻辑读取。 */
+export interface TaskHeaderMainPath {
+  title: string
+  weakStatusLine: string
+  runtimeState: string
+  executionScope: HeaderExecutionScope
+  canRetryConnect: boolean
+}
+
 /** 模型名称必须来自 Provider 真实字段，禁止拼接 Runtime 前缀。 */
 export function resolveProviderModelLabel(
   model: Pick<TurnModelSnapshot, 'modelId' | 'displayName'> | null | undefined
@@ -235,6 +244,22 @@ export function resolveTaskHeaderFacts(input: TaskHeaderFactsInput): TaskHeaderF
     viewingForeignExecution,
     runningTaskId,
     modelReadOnly
+  }
+}
+
+/** Project/Runtime/环境不再作为主路径运维芯片；侧栏已能表达项目身份。 */
+export function shouldShowTaskHeaderFacts(): boolean {
+  return false
+}
+
+/** 从完整 facts 抽出页眉主路径字段，避免模板误把运维丛当必显。 */
+export function resolveTaskHeaderMainPath(facts: TaskHeaderFacts): TaskHeaderMainPath {
+  return {
+    title: facts.title,
+    weakStatusLine: facts.weakStatusLine,
+    runtimeState: facts.runtimeState,
+    executionScope: facts.executionScope,
+    canRetryConnect: facts.canRetryConnect
   }
 }
 

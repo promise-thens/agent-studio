@@ -51,6 +51,7 @@ import {
 import {
   collectLocalComposerErrors,
   collectTurnErrorMessages,
+  resolveConversationConnectFailure,
   shouldMirrorLiveAgentErrorLocally
 } from './task-conversation-view'
 import { projectTaskHistory } from './task-history-projector'
@@ -486,6 +487,16 @@ const workbenchLoadError = computed(
     workbench.taskListLoadState.value.status === 'error' ||
     workbench.taskDetailLoadState.value.status === 'error'
 )
+/** 连接失败进对话流短错误+重试；页眉只留弱状态，避免两个主按钮。 */
+const conversationConnectFailure = computed(() =>
+  resolveConversationConnectFailure({
+    runtimeState: status.value.state,
+    runtimeMessage: status.value.message,
+    providerConfigured: Boolean(providerSummary.value?.configured),
+    hasActiveExecution: Boolean(activeExecution.value),
+    localErrors: localErrorMessages.value
+  })
+)
 
 // 查看身份变化只切换计时可见性；execution 终态按其真实 taskId 收束，不能误写当前历史 B。
 watch([hasStreamingMessage, isTurnTiming, activeTaskId, () => status.value.state], () => {
@@ -910,7 +921,7 @@ async function ensureProjectConnected(
   return connected
 }
 
-/** 页眉弱状态重试；有活动执行时不得为查看其它 Project 去抢执行槽。 */
+/** 对话流连接失败重试；有活动执行时不得为查看其它 Project 去抢执行槽。 */
 async function retryRuntimeConnect(): Promise<void> {
   if (activeExecution.value || !activeProjectId.value) return
   await ensureProjectConnected(activeProjectId.value)
@@ -1372,7 +1383,6 @@ function scrollMessagesToBottom(): void {
           :facts="taskHeaderFacts"
           :load-error="workbenchLoadError"
           @retry-load="retryWorkbenchLoad"
-          @retry-connect="retryRuntimeConnect"
         />
 
         <TaskConversation
@@ -1387,9 +1397,11 @@ function scrollMessagesToBottom(): void {
           :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
           :local-errors="localErrorMessages"
           :can-create-task="!newChatDisabled"
+          :connect-failure="conversationConnectFailure"
           @load-more-turns="loadMoreHistoryTurns"
           @load-more-events="loadMoreHistoryEvents"
           @create-task="startNewChat"
+          @retry-connect="retryRuntimeConnect"
         />
 
         <TaskComposer

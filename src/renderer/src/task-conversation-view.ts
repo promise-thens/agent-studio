@@ -132,6 +132,45 @@ export function shouldMirrorLiveAgentErrorLocally(): boolean {
   return false
 }
 
+/** 空状态只给一句短提示；输入框仍在底，不要插画墙。 */
+export const CONVERSATION_EMPTY_COPY = '问一件事'
+
+export function resolveConversationEmptyCopy(hasTurns: boolean): string {
+  return hasTurns ? '' : CONVERSATION_EMPTY_COPY
+}
+
+export interface ConversationConnectFailure {
+  message: string
+  canRetry: boolean
+  retryLabel: string
+}
+
+export interface ConversationConnectFailureInput {
+  runtimeState: string
+  runtimeMessage?: string
+  providerConfigured?: boolean
+  hasActiveExecution?: boolean
+  localErrors?: readonly string[]
+}
+
+/**
+ * 连接失败进对话流短错误行，页眉不放「连接 Grok」主按钮。
+ * 同一条 Runtime 文案若已在 localErrors，只补重试，避免双行。
+ */
+export function resolveConversationConnectFailure(
+  input: ConversationConnectFailureInput
+): ConversationConnectFailure | null {
+  if (!input.providerConfigured || input.hasActiveExecution) return null
+  if (input.runtimeState !== 'error') return null
+  const message = input.runtimeMessage?.trim() || 'Runtime 连接异常'
+  const alreadyShown = (input.localErrors ?? []).includes(message)
+  return {
+    message: alreadyShown ? '' : message,
+    canRetry: true,
+    retryLabel: '重试'
+  }
+}
+
 export function collectLocalComposerErrors(
   messages: readonly { role: string; text: string }[],
   timelineErrorTexts: readonly string[]

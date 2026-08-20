@@ -12,10 +12,12 @@ import {
   nextConversationScrollIntent,
   nextPinnedConversationScrollTop,
   nextProgrammaticFollowFlag,
+  resolveConversationEmptyCopy,
   resolveConversationScrollSource,
   shouldHoldPinnedFollow,
   timelineModelForTurn,
   turnHasCollapsibleProcess,
+  type ConversationConnectFailure,
   type ConversationScrollIntent,
   type ConversationScrollInteraction
 } from '../task-conversation-view'
@@ -34,13 +36,15 @@ const props = withDefaults(
     loadingEventTurnIds?: readonly string[]
     localErrors?: readonly string[]
     canCreateTask?: boolean
+    connectFailure?: ConversationConnectFailure | null
   }>(),
   {
     loading: false,
     hasMoreTurns: false,
     loadingMoreTurns: false,
     localErrors: () => [],
-    canCreateTask: false
+    canCreateTask: false,
+    connectFailure: null
   }
 )
 
@@ -48,6 +52,7 @@ defineEmits<{
   loadMoreTurns: []
   loadMoreEvents: [turnId: string]
   createTask: []
+  retryConnect: []
 }>()
 
 const messageList = ref<HTMLElement | null>(null)
@@ -208,7 +213,7 @@ watch(
       正在加载对话…
     </div>
     <div v-else-if="!model?.turns.length" class="conversation-empty">
-      从下面输入第一条消息，开始这一轮对话。
+      {{ resolveConversationEmptyCopy(Boolean(model?.turns.length)) }}
     </div>
 
     <article
@@ -271,5 +276,24 @@ watch(
     >
       {{ message }}
     </p>
+
+    <div
+      v-if="connectFailure && (connectFailure.message || connectFailure.canRetry)"
+      class="conversation-connect-failure"
+    >
+      <p v-if="connectFailure.message" class="conversation-error" role="status">
+        {{ connectFailure.message }}
+      </p>
+      <button
+        v-if="connectFailure.canRetry"
+        class="conversation-retry"
+        type="button"
+        title="重新连接 Runtime"
+        aria-label="重新连接 Runtime"
+        @click="$emit('retryConnect')"
+      >
+        {{ connectFailure.retryLabel }}
+      </button>
+    </div>
   </section>
 </template>
