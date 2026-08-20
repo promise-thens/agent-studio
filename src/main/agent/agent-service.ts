@@ -38,6 +38,7 @@ import {
   type TaskRecordV1
 } from './task-store'
 import type { AgentRespondPermissionRequest } from '../../shared/agent-ipc'
+import type { AgentAvailableCommandSnapshot } from '../../shared/agent-available-command'
 import type { PermissionBroker } from '../security/permission-broker'
 import { createLocalEnvironmentId } from '../security/permission-policy'
 
@@ -131,6 +132,7 @@ function mapOutcomeToExecutionState(outcome: AgentTurnOutcome): AgentExecutionSt
 export class AgentService {
   private readonly tasks = new Map<string, AgentTaskRecord>()
   private readonly allocatedTaskIds = new Set<string>()
+  private readonly availableCommands = new Map<string, AgentAvailableCommandSnapshot>()
   private readonly allocatedTurnIds = new Set<string>()
   private selectedTaskId: string | null = null
   private sessionOperationActive = false
@@ -267,7 +269,7 @@ export class AgentService {
       this.assertRuntimeReady(validatedWorkspace)
       const taskId = this.allocateTaskId()
       const session = await this.runAdapterOperation(() =>
-        this.adapter.createSession({ workspace: validatedWorkspace })
+        this.adapter.createSession({ workspace: validatedWorkspace, taskId })
       )
       this.assertOperationLeaseCurrent(lease)
       this.assertSessionRef(session, validatedWorkspace)
@@ -398,6 +400,7 @@ export class AgentService {
     await this.runExclusiveSessionOperation(async (lease) => {
       await this.runAdapterOperation(() => this.adapter.closeSession(task.session))
       this.assertOperationLeaseCurrent(lease)
+      this.availableCommands.delete(taskId)
       this.tasks.delete(taskId)
       await this.permissionBroker?.invalidateTask(taskId)
       if (this.selectedTaskId === taskId) this.selectedTaskId = null
@@ -467,6 +470,27 @@ export class AgentService {
           this.runtimePermissionRequests.delete(request.requestId)
         }
       })
+  }
+
+  /**
+   * Adapter 在无 Turn 时也会推送命令快照。未知 Task 丢弃；
+   * 只接受更新的 revision，避免乱序覆盖。
+   */
+  handleAvailableCommands(snapshot: AgentAvailableCommandSnapshot): void {
+    if (!this.tasks.has(snapshot.taskId)) return
+    const current = this.availableCommands.get(snapshot.taskId)
+    if (current && snapshot.revision <= current.revision) return
+    this.availableCommands.set(snapshot.taskId, cloneAvailableCommandSnapshot(snapshot))
+  }
+
+  /** Task 存在但尚未收到快照时返回 revision 0 空列表，供命令板显示等待/空。 */
+  getAvailableCommands(taskId: string): AgentAvailableCommandSnapshot {
+    this.requireTask(taskId)
+    const stored = this.availableCommands.get(taskId)
+    if (!stored) {
+      return { taskId, revision: 0, commands: [] }
+    }
+    return cloneAvailableCommandSnapshot(stored)
   }
 
   /** Adapter 已在本地取消 ACP Promise；这里只撤销完全匹配的 Broker 审批与 Renderer 投影。 */
@@ -632,7 +656,7 @@ export class AgentService {
     let resumeError: unknown
     if (canResume) {
       try {
-        await this.adapter.resumeSession(task.session)
+        await this.adapter.resumeSession(task.session, task.taskId)
         this.assertOperationLeaseCurrent(lease)
         if (!this.canCommitEnter(generation)) return undefined
         this.selectedTaskId = task.taskId
@@ -653,7 +677,7 @@ export class AgentService {
         throw normalizeServiceError(resumeError)
       }
       try {
-        await this.adapter.loadSession(task.session)
+        await this.adapter.loadSession(task.session, task.taskId)
         this.assertOperationLeaseCurrent(lease)
         if (!this.canCommitEnter(generation)) return undefined
         this.selectedTaskId = task.taskId
@@ -791,7 +815,7 @@ export class AgentService {
   /** 丢掉失效 RuntimeSessionRef，在同一 taskId 上 createSession 并写回 TaskStore。 */
   private async rebuildTaskSession(task: AgentTaskRecord, lease?: OperationLease): Promise<void> {
     const session = await this.runAdapterOperation(() =>
-      this.adapter.createSession({ workspace: task.workspace })
+      this.adapter.createSession({ workspace: task.workspace, taskId: task.taskId })
     )
     this.assertOperationLeaseCurrent(lease)
     this.assertSessionRef(session, task.workspace)
@@ -1093,6 +1117,20 @@ export class AgentService {
     } finally {
       if (this.historyWrites.get(key) === current) this.historyWrites.delete(key)
     }
+  }
+}
+
+function cloneAvailableCommandSnapshot(
+  snapshot: AgentAvailableCommandSnapshot
+): AgentAvailableCommandSnapshot {
+  return {
+    taskId: snapshot.taskId,
+    revision: snapshot.revision,
+    commands: snapshot.commands.map((command) =>
+      command.inputHint === undefined
+        ? { name: command.name, description: command.description }
+        : { name: command.name, description: command.description, inputHint: command.inputHint }
+    )
   }
 }
 

@@ -8,6 +8,7 @@ import type {
   AgentRuntimeStatus,
   AgentTurnOutcome
 } from '../../shared/agent'
+import type { AgentAvailableCommandSnapshot } from '../../shared/agent-available-command'
 
 /** Adapter 只向服务层暴露有限错误码，禁止夹带协议对象、stderr 或原始异常。 */
 export type AgentRuntimeAdapterErrorCode =
@@ -35,9 +36,14 @@ export interface AgentRuntimeSessionRef {
   workspace: string
 }
 
-/** 创建 Runtime session 所需的最小上下文。 */
+/**
+ * 创建 Runtime session 所需的最小上下文。
+ * taskId 是产品身份，必须在 newSession 前交给 Adapter，
+ * 因为 available_commands_update 常在 Turn 之前到达。
+ */
 export interface AgentRuntimeSessionContext {
   workspace: string
+  taskId: string
 }
 
 /** 活动 Turn 的稳定身份；取消只能作用于当前完全匹配的引用。 */
@@ -96,6 +102,11 @@ export interface AgentRuntimeAdapterSink {
   onEvent: (event: AgentEvent) => void
   onPermission: (request: AgentRuntimePermissionRequest) => void
   onPermissionCancelled: (request: AgentRuntimePermissionCancellation) => void
+  /**
+   * Session 级斜杠命令快照。无 activeTurn 也会到达；
+   * 切 session / disconnect 时 commands 为空列表。不进 Timeline。
+   */
+  onAvailableCommands: (snapshot: AgentAvailableCommandSnapshot) => void
 }
 
 /**
@@ -110,8 +121,8 @@ export interface AgentRuntimeAdapter {
   connect(workspace: string): Promise<AgentRuntimeStatus>
   disconnect(): Promise<AgentRuntimeStatus>
   createSession(context: AgentRuntimeSessionContext): Promise<AgentRuntimeSessionRef>
-  loadSession(session: AgentRuntimeSessionRef): Promise<void>
-  resumeSession(session: AgentRuntimeSessionRef): Promise<void>
+  loadSession(session: AgentRuntimeSessionRef, taskId: string): Promise<void>
+  resumeSession(session: AgentRuntimeSessionRef, taskId: string): Promise<void>
   closeSession(session: AgentRuntimeSessionRef): Promise<void>
   startTurn(context: AgentRuntimeTurnContext): Promise<AgentRuntimeTurnResult>
   cancelTurn(turn: AgentRuntimeTurnRef): Promise<void>

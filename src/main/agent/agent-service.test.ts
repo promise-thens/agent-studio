@@ -54,11 +54,14 @@ describe('AgentService Task / Turn 编排', () => {
     expect(firstTurn.turnId).not.toBe(resumedTurn.turnId)
     expect(adapter.createSession).toHaveBeenCalledTimes(2)
     expect(adapter.resumeSession).toHaveBeenCalledTimes(1)
-    expect(adapter.resumeSession).toHaveBeenCalledWith({
-      runtimeId: 'grok',
-      runtimeSessionId: 'runtime-session-1',
-      workspace: WORKSPACE
-    })
+    expect(adapter.resumeSession).toHaveBeenCalledWith(
+      {
+        runtimeId: 'grok',
+        runtimeSessionId: 'runtime-session-1',
+        workspace: WORKSPACE
+      },
+      'task-a'
+    )
     expect(adapter.loadSession).not.toHaveBeenCalled()
     expect(adapter.startTurn.mock.calls.map(([context]) => context)).toMatchObject([
       { taskId: 'task-a', turnId: 'turn-a1', runtimeSessionId: 'runtime-session-1' },
@@ -79,7 +82,8 @@ describe('AgentService Task / Turn 编排', () => {
       turnId: 'turn-a'
     })
     expect(loadAdapter.loadSession).toHaveBeenCalledWith(
-      expect.objectContaining({ runtimeSessionId: 'runtime-session-1' })
+      expect.objectContaining({ runtimeSessionId: 'runtime-session-1' }),
+      'task-a'
     )
 
     const fallbackAdapter = new FakeRuntimeAdapter({ resume: true, load: true })
@@ -92,7 +96,8 @@ describe('AgentService Task / Turn 编排', () => {
     await fallbackService.startTurn(fallbackTaskA.taskId, 'resume 失败后 load')
     expect(fallbackAdapter.resumeSession).toHaveBeenCalledTimes(1)
     expect(fallbackAdapter.loadSession).toHaveBeenCalledWith(
-      expect.objectContaining({ runtimeSessionId: 'runtime-session-1' })
+      expect.objectContaining({ runtimeSessionId: 'runtime-session-1' }),
+      'task-a'
     )
 
     const blockedAdapter = new FakeRuntimeAdapter({ resume: false, load: false })
@@ -167,10 +172,12 @@ describe('AgentService Task / Turn 编排', () => {
       })
       expect(adapter.connect).toHaveBeenCalledWith(project.canonicalRoot)
       expect(adapter.resumeSession).toHaveBeenCalledWith(
-        expect.objectContaining({ runtimeSessionId: 'persisted-session' })
+        expect.objectContaining({ runtimeSessionId: 'persisted-session' }),
+        'task-1'
       )
       expect(adapter.loadSession).toHaveBeenCalledWith(
-        expect.objectContaining({ runtimeSessionId: 'persisted-session' })
+        expect.objectContaining({ runtimeSessionId: 'persisted-session' }),
+        'task-1'
       )
     } finally {
       await rm(userDataPath, { recursive: true, force: true })
@@ -232,7 +239,8 @@ describe('AgentService Task / Turn 编排', () => {
     await service.startTurn(task.taskId, '重连后的第二轮')
 
     expect(adapter.resumeSession).toHaveBeenCalledWith(
-      expect.objectContaining({ runtimeSessionId: 'runtime-session-1' })
+      expect.objectContaining({ runtimeSessionId: 'runtime-session-1' }),
+      'task-a'
     )
   })
 
@@ -886,10 +894,93 @@ describe('AgentService Task / Turn 编排', () => {
       })
       expect(fixture.adapter.connect).toHaveBeenCalledWith(fixture.project.canonicalRoot)
       expect(fixture.adapter.resumeSession).toHaveBeenCalledWith(
-        expect.objectContaining({ runtimeSessionId: 'runtime-session-1' })
+        expect.objectContaining({ runtimeSessionId: 'runtime-session-1' }),
+        task.taskId
       )
     } finally {
       await fixture.dispose()
+    }
+  })
+
+  it('createTask 后尚未收到快照时返回 revision 0 空列表', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    const task = await service.createTask(WORKSPACE)
+
+    expect(service.getAvailableCommands(task.taskId)).toEqual({
+      taskId: 'task-a',
+      revision: 0,
+      commands: []
+    })
+  })
+
+  it('命令快照按 taskId 保存，较新 revision 覆盖、较旧或相同则忽略', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a', 'task-b'])
+    const taskA = await service.createTask(WORKSPACE)
+    const taskB = await service.createTask(WORKSPACE)
+
+    service.handleAvailableCommands({
+      taskId: taskA.taskId,
+      revision: 1,
+      commands: [{ name: 'compact', description: '压缩' }]
+    })
+    service.handleAvailableCommands({
+      taskId: taskA.taskId,
+      revision: 1,
+      commands: [{ name: 'stale-same', description: '同修订不应覆盖' }]
+    })
+    service.handleAvailableCommands({
+      taskId: taskA.taskId,
+      revision: 0,
+      commands: [{ name: 'stale-old', description: '更旧不应覆盖' }]
+    })
+    service.handleAvailableCommands({
+      taskId: taskA.taskId,
+      revision: 2,
+      commands: [{ name: 'dream', description: '整理记忆', inputHint: '主题' }]
+    })
+
+    expect(service.getAvailableCommands(taskA.taskId)).toEqual({
+      taskId: 'task-a',
+      revision: 2,
+      commands: [{ name: 'dream', description: '整理记忆', inputHint: '主题' }]
+    })
+    expect(service.getAvailableCommands(taskB.taskId)).toEqual({
+      taskId: 'task-b',
+      revision: 0,
+      commands: []
+    })
+  })
+
+  it('未知 Task 的快照推送被忽略，读取则按邻近风格拒绝', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    const task = await service.createTask(WORKSPACE)
+
+    service.handleAvailableCommands({
+      taskId: 'unknown-task',
+      revision: 1,
+      commands: [{ name: 'compact', description: '压缩' }]
+    })
+    expect(service.getAvailableCommands(task.taskId)).toEqual({
+      taskId: 'task-a',
+      revision: 0,
+      commands: []
+    })
+
+    try {
+      service.getAvailableCommands('unknown-task')
+      throw new Error('expected AgentServiceError')
+    } catch (error) {
+      expect(error).toEqual(new AgentServiceError('task-not-found', '未找到指定 Task。'))
+    }
+
+    try {
+      service.getAvailableCommands('')
+      throw new Error('expected AgentServiceError')
+    } catch (error) {
+      expect(error).toEqual(new AgentServiceError('invalid-input', 'Task ID 无效。'))
     }
   })
 })

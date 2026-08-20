@@ -211,6 +211,9 @@ async function initializeServices(
       },
       onPermissionCancelled: (request) => {
         agentService?.handlePermissionCancellation(request)
+      },
+      onAvailableCommands: (snapshot) => {
+        agentService?.handleAvailableCommands(snapshot)
       }
     },
     {

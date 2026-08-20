@@ -95,7 +95,10 @@ describe('GACP-01 剩余 Adapter 观察挂钩', () => {
     }
 
     harness.internal.selectedSession = null
-    const created = await harness.adapter.createSession({ workspace: WORKSPACE })
+    const created = await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-test'
+    })
     expect(created.runtimeSessionId).toBe('550e8400-e29b-41d4-a716-446655440000')
 
     harness.internal.selectedSession = {
@@ -198,10 +201,12 @@ describe('GACP-01 剩余 Adapter 观察挂钩', () => {
     const connection = { loadSession, resumeSession } as unknown as acp.ClientSideConnection
     const harness = createObservedHarness(connection, records)
 
-    await expect(harness.adapter.loadSession(runtimeSession())).rejects.toMatchObject({
+    await expect(harness.adapter.loadSession(runtimeSession(), 'task-test')).rejects.toMatchObject({
       code: 'session-restore-unsupported'
     })
-    await expect(harness.adapter.resumeSession(runtimeSession())).rejects.toMatchObject({
+    await expect(
+      harness.adapter.resumeSession(runtimeSession(), 'task-test')
+    ).rejects.toMatchObject({
       code: 'session-restore-unsupported'
     })
     expect(loadSession).not.toHaveBeenCalled()
@@ -216,7 +221,9 @@ describe('GACP-01 剩余 Adapter 观察挂钩', () => {
     const connection = { newSession, request } as unknown as acp.ClientSideConnection
     const harness = createObservedHarness(connection, records, false)
 
-    await expect(harness.adapter.createSession({ workspace: WORKSPACE })).rejects.toMatchObject({
+    await expect(
+      harness.adapter.createSession({ workspace: WORKSPACE, taskId: 'task-test' })
+    ).rejects.toMatchObject({
       code: 'operation-failed'
     })
     expect(records).toEqual(
@@ -295,7 +302,8 @@ function createObservedHarness(
     onStatus: () => undefined,
     onEvent: (event) => events.push(event),
     onPermission: (request) => permissions.push(request),
-    onPermissionCancelled: () => undefined
+    onPermissionCancelled: () => undefined,
+    onAvailableCommands: () => undefined
   }
   const adapter = new GrokAcpAdapter(sink, {
     userDataPath: '/tmp/agent-studio-gacp01-remaining',

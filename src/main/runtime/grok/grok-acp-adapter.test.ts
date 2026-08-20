@@ -20,6 +20,7 @@ import {
   type AgentRuntimeSessionRef,
   type AgentRuntimeTurnContext
 } from '../../agent/agent-runtime-adapter'
+import type { AgentAvailableCommandSnapshot } from '../../../shared/agent-available-command'
 import { AgentService } from '../../agent/agent-service'
 import { TaskExecutionController } from '../../agent/task-execution-controller'
 import { TaskStore } from '../../agent/task-store'
@@ -515,7 +516,10 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     } as unknown as acp.ClientSideConnection
     const harness = createAdapterHarness(connection, false)
 
-    const session = await harness.adapter.createSession({ workspace: WORKSPACE })
+    const session = await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-test'
+    })
 
     expect(newSession).toHaveBeenCalledWith({ cwd: WORKSPACE, mcpServers: [] })
     expect(request).toHaveBeenCalledWith('session/set_model', {
@@ -549,13 +553,13 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     const sessionA = runtimeSession('runtime-session-a')
     const sessionB = runtimeSession('runtime-session-b')
 
-    await harness.adapter.loadSession(sessionA)
+    await harness.adapter.loadSession(sessionA, 'task-test')
     expect(harness.adapter.getCapabilitySnapshot().capabilities['session.load']).toMatchObject({
       verification: 'verified',
       source: 'runtime'
     })
 
-    await harness.adapter.resumeSession(sessionB)
+    await harness.adapter.resumeSession(sessionB, 'task-test')
     expect(harness.adapter.getCapabilitySnapshot().capabilities['session.resume']).toMatchObject({
       verification: 'verified',
       source: 'runtime'
@@ -597,7 +601,9 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     } as unknown as acp.ClientSideConnection
     const harness = createAdapterHarness(connection, false)
 
-    await expect(harness.adapter.createSession({ workspace: WORKSPACE })).rejects.toMatchObject({
+    await expect(
+      harness.adapter.createSession({ workspace: WORKSPACE, taskId: 'task-test' })
+    ).rejects.toMatchObject({
       code: 'operation-failed'
     })
 
@@ -624,7 +630,7 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     }
 
     await expect(
-      harness.adapter.resumeSession(runtimeSession('runtime-session-a'))
+      harness.adapter.resumeSession(runtimeSession('runtime-session-a'), 'task-test')
     ).rejects.toMatchObject({ code: 'operation-failed' })
     expect(request).toHaveBeenCalledWith('session/set_model', {
       sessionId: 'runtime-session-a',
@@ -652,7 +658,7 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     const harness = createAdapterHarness(oldConnection)
     setHandshakeSnapshot(harness.internal, { loadSession: true, resume: true })
 
-    const restore = harness.adapter.resumeSession(runtimeSession('runtime-session-a'))
+    const restore = harness.adapter.resumeSession(runtimeSession('runtime-session-a'), 'task-test')
     const restoreExpectation = expect(restore).rejects.toMatchObject({ code: 'invalid-state' })
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1))
 
@@ -688,7 +694,7 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
 
     let rejection: unknown
     try {
-      await harness.adapter.resumeSession(runtimeSession('runtime-session-a'))
+      await harness.adapter.resumeSession(runtimeSession('runtime-session-a'), 'task-test')
     } catch (error) {
       rejection = error
     }
@@ -708,7 +714,7 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     const harness = createAdapterHarness(connection)
 
     await expect(
-      harness.adapter.loadSession(runtimeSession('runtime-session-old'))
+      harness.adapter.loadSession(runtimeSession('runtime-session-old'), 'task-test')
     ).rejects.toMatchObject({ code: 'session-restore-unsupported' })
     expect(connection.loadSession).not.toHaveBeenCalled()
   })
@@ -1623,6 +1629,245 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
       verification: 'unverified'
     })
   })
+
+  it('createSession 在等待 newSession 前就绑定产品 taskId', async () => {
+    let boundDuringNewSession: string | null | undefined
+    const newSession = vi.fn()
+    const request = vi.fn().mockResolvedValue({})
+    const connection = {
+      newSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+    newSession.mockImplementation(async () => {
+      boundDuringNewSession = harness.internal.boundTaskId
+      return { sessionId: 'runtime-session-new' }
+    })
+
+    await harness.adapter.createSession({ workspace: WORKSPACE, taskId: 'task-test' })
+
+    expect(boundDuringNewSession).toBe('task-test')
+    expect(harness.internal.boundTaskId).toBe('task-test')
+  })
+
+  it('session/new 后、startTurn 前收到命令列表会推送 sink，且不进 Timeline', async () => {
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-new' })
+    const request = vi.fn().mockResolvedValue({})
+    const prompt = vi.fn()
+    const connection = {
+      newSession,
+      request,
+      prompt
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+
+    const session = await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-test'
+    })
+    expect(harness.internal.activeTurn).toBeNull()
+
+    harness.internal.handleSessionUpdate(
+      {
+        sessionId: session.runtimeSessionId,
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: [
+            {
+              name: 'compact',
+              description: `压缩 ${FAKE_SECRET}`,
+              input: { hint: `范围 ${FAKE_SECRET}` }
+            }
+          ]
+        }
+      },
+      connection
+    )
+
+    expect(prompt).not.toHaveBeenCalled()
+    expect(harness.events).toEqual([])
+    expect(harness.availableCommands).toEqual([
+      {
+        taskId: 'task-test',
+        revision: 1,
+        commands: [
+          {
+            name: 'compact',
+            description: '压缩 [REDACTED]',
+            inputHint: '范围 [REDACTED]'
+          }
+        ]
+      }
+    ])
+  })
+
+  it('无 activeTurn 的 agent_message_chunk 仍被忽略', async () => {
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-new' })
+    const request = vi.fn().mockResolvedValue({})
+    const connection = {
+      newSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+
+    const session = await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-test'
+    })
+    expect(harness.internal.activeTurn).toBeNull()
+
+    harness.internal.handleSessionUpdate(
+      {
+        sessionId: session.runtimeSessionId,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: '无 Turn 的回复' }
+        }
+      },
+      connection
+    )
+
+    expect(harness.events).toEqual([])
+    expect(harness.availableCommands).toEqual([])
+  })
+
+  it('disconnect 后快照 commands 为空', async () => {
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-new' })
+    const request = vi.fn().mockResolvedValue({})
+    const connection = {
+      newSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+    harness.internal.process = { kill: vi.fn() } as unknown as ChildProcessWithoutNullStreams
+
+    const session = await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-test'
+    })
+    harness.internal.handleSessionUpdate(
+      {
+        sessionId: session.runtimeSessionId,
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: [{ name: 'compact', description: '压缩上下文' }]
+        }
+      },
+      connection
+    )
+
+    await harness.adapter.disconnect()
+
+    expect(harness.availableCommands.at(-1)).toEqual({
+      taskId: 'task-test',
+      revision: 2,
+      commands: []
+    })
+    expect(harness.internal.boundTaskId).toBeNull()
+  })
+
+  it('closeSession 当前绑定会话时清空命令快照', async () => {
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-new' })
+    const request = vi.fn().mockResolvedValue({})
+    const connection = {
+      newSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+
+    const session = await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-test'
+    })
+    harness.internal.handleSessionUpdate(
+      {
+        sessionId: session.runtimeSessionId,
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: [{ name: 'compact', description: '压缩上下文' }]
+        }
+      },
+      connection
+    )
+
+    await harness.adapter.closeSession(session)
+
+    expect(harness.availableCommands.at(-1)).toEqual({
+      taskId: 'task-test',
+      revision: 2,
+      commands: []
+    })
+    expect(harness.internal.boundTaskId).toBeNull()
+  })
+
+  it('切换到新 Task session 时先向旧 Task 推空命令列表', async () => {
+    const newSession = vi
+      .fn()
+      .mockResolvedValueOnce({ sessionId: 'runtime-session-a' })
+      .mockResolvedValueOnce({ sessionId: 'runtime-session-b' })
+    const request = vi.fn().mockResolvedValue({})
+    const connection = {
+      newSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+
+    const sessionA = await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-a'
+    })
+    harness.internal.handleSessionUpdate(
+      {
+        sessionId: sessionA.runtimeSessionId,
+        update: {
+          sessionUpdate: 'available_commands_update',
+          availableCommands: [{ name: 'compact', description: '压缩上下文' }]
+        }
+      },
+      connection
+    )
+
+    await harness.adapter.createSession({ workspace: WORKSPACE, taskId: 'task-b' })
+
+    expect(harness.availableCommands).toEqual([
+      {
+        taskId: 'task-a',
+        revision: 1,
+        commands: [{ name: 'compact', description: '压缩上下文' }]
+      },
+      {
+        taskId: 'task-a',
+        revision: 2,
+        commands: []
+      }
+    ])
+    expect(harness.internal.boundTaskId).toBe('task-b')
+  })
+
+  it('session/new 后命令快照写入已接线的 AgentService', async () => {
+    const fixture = await createInvalidPermissionIntegrationFixture()
+    try {
+      expect(fixture.internal.activeTurn).toBeNull()
+      fixture.internal.handleSessionUpdate(
+        {
+          sessionId: 'runtime-session-1',
+          update: {
+            sessionUpdate: 'available_commands_update',
+            availableCommands: [{ name: 'compact', description: '压缩上下文' }]
+          }
+        },
+        fixture.connection
+      )
+
+      expect(fixture.service.getAvailableCommands(fixture.taskId)).toEqual({
+        taskId: fixture.taskId,
+        revision: 1,
+        commands: [{ name: 'compact', description: '压缩上下文' }]
+      })
+    } finally {
+      await fixture.dispose()
+    }
+  })
 })
 
 describe('Grok Runtime 环境隔离', () => {
@@ -1683,6 +1928,8 @@ interface GrokAcpAdapterTestAccess {
   sessionOperationGeneration: number
   sessionGeneration: number
   selectedSession: AgentRuntimeSessionRef | null
+  /** 产品 Task 绑定；无 Turn 时命令快照也靠它盖章。 */
+  boundTaskId: string | null
   activeTurn: TestActiveTurn | null
   pendingPermissions: Map<string, TestPendingPermission>
   supportsCloseSession: boolean
@@ -1808,7 +2055,8 @@ async function createInvalidPermissionIntegrationFixture(): Promise<InvalidPermi
     onStatus: () => undefined,
     onEvent: (event) => serviceRef.current?.handleRuntimeEvent(event),
     onPermission: (request) => serviceRef.current?.handlePermissionRequest(request),
-    onPermissionCancelled: (request) => serviceRef.current?.handlePermissionCancellation(request)
+    onPermissionCancelled: (request) => serviceRef.current?.handlePermissionCancellation(request),
+    onAvailableCommands: (snapshot) => serviceRef.current?.handleAvailableCommands(snapshot)
   }
   const adapter = new GrokAcpAdapter(sink, {
     userDataPath,
@@ -1896,18 +2144,21 @@ function createAdapterHarness(
   permissions: AgentRuntimePermissionRequest[]
   statuses: AgentRuntimeStatus[]
   permissionCancellations: import('../../agent/agent-runtime-adapter').AgentRuntimePermissionCancellation[]
+  availableCommands: AgentAvailableCommandSnapshot[]
 } {
   const events: AgentEvent[] = []
   const permissions: AgentRuntimePermissionRequest[] = []
   const statuses: AgentRuntimeStatus[] = []
   const permissionCancellations: import('../../agent/agent-runtime-adapter').AgentRuntimePermissionCancellation[] =
     []
+  const availableCommands: AgentAvailableCommandSnapshot[] = []
   const adapter = new GrokAcpAdapter(
     {
       onStatus: (status) => statuses.push(status),
       onEvent: (event) => events.push(event),
       onPermission: (request) => permissions.push(request),
-      onPermissionCancelled: (request) => permissionCancellations.push(request)
+      onPermissionCancelled: (request) => permissionCancellations.push(request),
+      onAvailableCommands: (snapshot) => availableCommands.push(snapshot)
     },
     {
       userDataPath: '/tmp/agent-studio-test',
@@ -1929,7 +2180,15 @@ function createAdapterHarness(
     capabilitySnapshot: internal.capabilitySnapshot
   }
 
-  return { adapter, internal, events, permissions, statuses, permissionCancellations }
+  return {
+    adapter,
+    internal,
+    events,
+    permissions,
+    statuses,
+    permissionCancellations,
+    availableCommands
+  }
 }
 
 function createActiveTurn(

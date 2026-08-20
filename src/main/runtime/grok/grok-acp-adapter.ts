@@ -34,12 +34,14 @@ import {
   AGENT_STUDIO_MODEL_API_KEY_ENV,
   writeGrokProviderConfig
 } from '../../provider/grok-provider-config'
+import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
 import {
   GROK_RUNTIME_ID,
   areGrokAuthorizationSnapshotsEquivalent,
   isSafeGrokToolCallId,
   createGrokCapabilitySnapshot,
   createGrokEventBase,
+  mapGrokAvailableCommands,
   mapGrokInitializeCapabilitySnapshot,
   mapGrokPermissionRequest,
   mapGrokPromptResponse,
@@ -127,6 +129,13 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   private sessionOperationGeneration = 0
   private sessionGeneration = 0
   private selectedSession: AgentRuntimeSessionRef | null = null
+  /**
+   * 当前 Runtime session 绑定的产品 Task。
+   * 命令快照常在 startTurn 之前到达，不能从 activeTurn 或 AgentRuntimeSessionRef 读取。
+   */
+  private boundTaskId: string | null = null
+  /** 单调递增，含空列表清空；跨 disconnect 不归零，避免 Service 丢弃重连后的新快照。 */
+  private availableCommandsRevision = 0
   private activeTurn: ActiveTurn | null = null
   private pendingPermissions = new Map<string, PendingPermission>()
   private controlledTraceWrite: Promise<void> = Promise.resolve()
@@ -272,7 +281,10 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
   /** 在当前已握手连接上创建新 Runtime session，并返回主进程私有引用。 */
   async createSession(context: AgentRuntimeSessionContext): Promise<AgentRuntimeSessionRef> {
+    this.assertProductTaskId(context.taskId)
     const current = this.beginSessionOperation(context.workspace)
+    // 必须在等待 newSession 前绑定：Grok 可能在 RPC 返回前后就推 available_commands_update。
+    this.rebindProductTask(context.taskId)
 
     try {
       const response = await current.connection.newSession({
@@ -303,7 +315,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         runtimeSessionId: response.sessionId,
         workspace: context.workspace
       }
-      this.activateSession(session)
+      this.activateSession(session, context.taskId)
       this.verifyCapability('session.create', 'stable')
       return session
     } catch (error) {
@@ -314,10 +326,12 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   }
 
   /** 只在 initialize 明确声明 load 后尝试恢复，首次真实成功后再提升为 verified。 */
-  async loadSession(session: AgentRuntimeSessionRef): Promise<void> {
+  async loadSession(session: AgentRuntimeSessionRef, taskId: string): Promise<void> {
     this.assertSessionRef(session)
+    this.assertProductTaskId(taskId)
     this.assertRestoreCapability('session.load')
     const current = this.beginSessionOperation(session.workspace)
+    this.rebindProductTask(taskId)
 
     try {
       await current.connection.loadSession({
@@ -327,7 +341,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       })
       this.assertSessionOperationCurrent(current)
       await this.bindAgentStudioModel(current, session.runtimeSessionId, session.workspace)
-      this.activateSession(session)
+      this.activateSession(session, taskId)
       this.verifyCapability('session.load', 'stable')
       this.observe({
         kind: 'session-op',
@@ -350,10 +364,12 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   }
 
   /** resume 不回放历史事件，用于 Task 切回时恢复原 Grok 上下文。 */
-  async resumeSession(session: AgentRuntimeSessionRef): Promise<void> {
+  async resumeSession(session: AgentRuntimeSessionRef, taskId: string): Promise<void> {
     this.assertSessionRef(session)
+    this.assertProductTaskId(taskId)
     this.assertRestoreCapability('session.resume')
     const current = this.beginSessionOperation(session.workspace)
+    this.rebindProductTask(taskId)
 
     try {
       await current.connection.resumeSession({
@@ -363,7 +379,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       })
       this.assertSessionOperationCurrent(current)
       await this.bindAgentStudioModel(current, session.runtimeSessionId, session.workspace)
-      this.activateSession(session)
+      this.activateSession(session, taskId)
       this.verifyCapability('session.resume', 'stable')
       this.observe({
         kind: 'session-op',
@@ -418,6 +434,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     }
 
     if (this.isSelectedSession(session)) {
+      this.clearAvailableCommandSnapshot()
       this.selectedSession = null
       this.sessionGeneration += 1
       this.sessionOperationGeneration += 1
@@ -687,10 +704,34 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     })
   }
 
+  /**
+   * 命令快照走 session 旁路：连接/session 匹配即可，不要求 activeTurn。
+   * Grok 常在 session/new 之后、prompt 之前广告斜杠命令；其它 update 仍必须落在当前 Turn。
+   */
   private handleSessionUpdate(
     params: acp.SessionNotification,
     sourceConnection: acp.ClientSideConnection
   ): void {
+    if (
+      sourceConnection !== this.connection ||
+      !this.selectedSession ||
+      this.selectedSession.runtimeSessionId !== params.sessionId
+    ) {
+      return
+    }
+
+    const update = params.update
+    if (update.sessionUpdate === 'available_commands_update') {
+      this.observe(summarizeSessionUpdate(update as unknown as Record<string, unknown>))
+      if (this.boundTaskId) {
+        this.pushAvailableCommandSnapshot(
+          this.boundTaskId,
+          mapGrokAvailableCommands(update, (text) => this.safeRedact(text))
+        )
+      }
+      return
+    }
+
     const activeTurn = this.activeTurn
     if (
       !activeTurn ||
@@ -701,7 +742,6 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       return
     }
 
-    const update = params.update
     this.observe(summarizeSessionUpdate(update as unknown as Record<string, unknown>))
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       if (!isSafeGrokToolCallId(update.toolCallId)) {
@@ -905,7 +945,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     }
   }
 
-  private activateSession(session: AgentRuntimeSessionRef): void {
+  private activateSession(session: AgentRuntimeSessionRef, taskId: string): void {
+    this.rebindProductTask(taskId)
     this.selectedSession = { ...session }
     this.sessionGeneration += 1
     this.updateStatus({
@@ -914,6 +955,44 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       workspace: session.workspace,
       runtimeSessionId: session.runtimeSessionId
     })
+  }
+
+  private assertProductTaskId(taskId: string): void {
+    if (typeof taskId !== 'string' || !taskId) {
+      throw this.createError('invalid-state', '产品 Task 身份缺失。')
+    }
+  }
+
+  /**
+   * 切换绑定 Task。旧 Task 必须先收到空快照，命令板不能继续展示上一会话的广告。
+   */
+  private rebindProductTask(taskId: string): void {
+    if (this.boundTaskId === taskId) return
+    if (this.boundTaskId) {
+      this.pushAvailableCommandSnapshot(this.boundTaskId, [])
+    }
+    this.boundTaskId = taskId
+  }
+
+  /** 断开、失败或关闭当前绑定会话时清空快照；没有绑定 Task 则不推送。 */
+  private clearAvailableCommandSnapshot(): void {
+    const taskId = this.boundTaskId
+    if (!taskId) return
+    this.pushAvailableCommandSnapshot(taskId, [])
+    this.boundTaskId = null
+  }
+
+  private pushAvailableCommandSnapshot(taskId: string, commands: AgentAvailableCommand[]): void {
+    this.availableCommandsRevision += 1
+    try {
+      this.sink.onAvailableCommands({
+        taskId,
+        revision: this.availableCommandsRevision,
+        commands
+      })
+    } catch {
+      // 服务层快照通知失败不影响 ACP 连接与 Turn 路径。
+    }
   }
 
   private requireSelectedSession(context: AgentRuntimeTurnContext): acp.ClientSideConnection {
@@ -1015,6 +1094,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       })
     }
     this.cancelPendingPermissions()
+    this.clearAvailableCommandSnapshot()
 
     const process = this.process
     this.connectionGeneration += 1
@@ -1080,6 +1160,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     this.selectedSession = null
     this.supportsCloseSession = false
     this.cancelPendingPermissions()
+    this.clearAvailableCommandSnapshot()
     this.resetCapabilitySnapshot()
   }
 
