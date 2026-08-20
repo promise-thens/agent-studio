@@ -11,6 +11,7 @@ import type {
   AgentTurnOutcome,
   AgentTurnUsage
 } from '../../../shared/agent'
+import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
 import type { AgentRuntimePermissionRequest } from '../../agent/agent-runtime-adapter'
 import type { AgentEventDraft, AgentEventDraftBase } from '../../agent/event-normalizer'
 import {
@@ -246,10 +247,12 @@ export function mapGrokSessionUpdate(
           }
         }
       ]
+    case 'available_commands_update':
+      // 斜杠命令走 mapGrokAvailableCommands 旁路快照，不进 Timeline 事件流
+      return []
     case 'user_message_chunk':
     case 'plan_update':
     case 'plan_removed':
-    case 'available_commands_update':
     case 'current_mode_update':
     case 'config_option_update':
     case 'session_info_update':
@@ -265,6 +268,45 @@ export function mapGrokSessionUpdate(
         }
       ]
   }
+}
+
+/**
+ * 将 ACP available_commands_update 投影为产品命令快照项。
+ * 这是 session 旁路通道：只保留可展示字段并脱敏，不写入 AgentEvent / Timeline；
+ * 条数上限与 name 形态校验留给 Preload 的 parseAvailableCommandSnapshot。
+ */
+export function mapGrokAvailableCommands(
+  update: acp.AvailableCommandsUpdate,
+  redactText: TextRedactor
+): AgentAvailableCommand[] {
+  const rawCommands = update.availableCommands
+  if (!Array.isArray(rawCommands)) return []
+
+  const commands: AgentAvailableCommand[] = []
+  for (const item of rawCommands) {
+    if (item == null || typeof item !== 'object' || Array.isArray(item)) continue
+
+    const { name, description, input } = item as {
+      name?: unknown
+      description?: unknown
+      input?: { hint?: unknown } | null
+    }
+    if (typeof name !== 'string' || typeof description !== 'string') continue
+
+    const command: AgentAvailableCommand = {
+      name,
+      description: redactText(description)
+    }
+
+    const hint = input == null ? undefined : input.hint
+    if (typeof hint === 'string' && hint.length > 0) {
+      command.inputHint = redactText(hint)
+    }
+
+    commands.push(command)
+  }
+
+  return commands
 }
 
 /** 将 ACP PromptResponse 收敛为中性 Turn 终态，丢弃 _meta 等协议扩展字段。 */
