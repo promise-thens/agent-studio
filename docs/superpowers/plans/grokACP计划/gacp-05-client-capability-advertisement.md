@@ -2,7 +2,7 @@
 
 > **致执行者：** 这是最晚、也最容易做错的一项。只有产品真的实现了对应 Client 方法之后，才允许改 `initialize.clientCapabilities`。P0-A / P0-B 都不依赖本计划。
 >
-> **状态：** 待开始（前置：P0-15 完成且产品确认要做 Client 托管 I/O；MCP 另走 P3-04）
+> **状态：** 待开始（前置：P0-15 完成且产品确认要做 Client 托管 I/O；MCP 会话注入走 P0-10D）
 >
 > **插入点：** P0-15 之后；默认不进入 P0-A 开发序列
 
@@ -25,7 +25,7 @@
 
 - **当前正确状态就是 `clientCapabilities: {}`。** 见 `GrokAcpAdapter.initializeConnection()`。Grok 作为 Agent 自己读文件、跑命令，并不需要 Client 文件系统才能工作。
 - ACP 规范：Agent **MUST NOT** 在 Client 未广告时调用 `fs/*` 或 `terminal/*`。提前广告却没有 handler，属于协议违规。
-- 本计划不实现 MCP。`mcpServers: []` 的解除权在 P3-04。
+- 本计划不实现 MCP。Grok 会话的 `mcpServers` 由 [P0-10D](../p0-10d-grok-memory-and-mcp.md) 注入；P3-04 仍是以后的通用 Capability Host。
 - 本计划不实现 elicitation、NES、plan_update 广告。
 - 即使用户交互终端（P0-15）已经存在，也不自动等于 ACP `terminal/*`。P0-15 是用户自己的 PTY；ACP terminal 是 Agent 向 Client 申请托管命令。两者默认隔离。
 
@@ -46,7 +46,7 @@
 - P0-A 已通过（至少 GACP-01、P0-10、P0-11 完成），否则不要扩 Client 面。
 - 若广告 `terminal: true`：P0-15 已完成，并且单独设计了 **Agent 专用** 终端会话，不是用户 PTY。
 - 若广告 `fs.readTextFile` / `fs.writeTextFile`：必须先有 Task execution root 校验和 PermissionBroker 操作类型。
-- MCP 注入明确排除，见 P3-04。
+- MCP 注入明确排除，见 P0-10D；本计划不抢。
 
 **文件范围（只有开工后才创建）：**
 
@@ -71,7 +71,7 @@
 | 想让 Grok 现在就能改代码 | 不需要本计划。Grok 已经用自己的工具改磁盘，桌面端靠 permission + Timeline |
 | 想显示未保存缓冲给 Agent | 需要本计划的 `fs.readTextFile`，且先有编辑器 |
 | 想让 Agent 命令出现在工作台终端里 | 需要独立 ACP terminal 会话 + P0-11 证据，不能复用 P0-15 用户 PTY |
-| 想接 MCP | 走 P3-04，把 server 配进 `session/new` 的 `mcpServers`，不是本计划 |
+| 想接 MCP | 走 P0-10D 把 server 配进 `session/new` 的 `mcpServers`；P3-04 不是 Grok 会话注入 |
 | 只是觉得 Client 能力为空不完整 | **不要做**。空广告是诚实 |
 
 开工前必须先写一页产品确认：要广告哪些 key、对应哪个用户可见能力、权限文案是什么。没有确认不得改 initialize。

@@ -455,6 +455,7 @@ P0-01 至 P0-04 先完成统一领域、事件、能力和 IPC 基础；P0-04 �
 - 建立 Project、Task、Turn、Execution Environment 与版本化历史；
 - 建立可实施的 Permission Broker、后台生命周期和实时/历史一致时间线；
 - 完成单 Runtime Task 工作台；
+- 把 Grok Build 作为大脑可视化：斜杠命令板、插件整页、设置中的记忆与 MCP（桌面配置，Grok 执行）；
 - 建立 AppCommandRunner、Runtime 命令证据、Git 基线、Diff 和 Validation 事实链；
 - 在新 Adapter 边界上复核现有 Provider、凭据、配置和工具子进程 Secret 隔离。
 
@@ -488,7 +489,7 @@ P0+ 不共同阻塞 P0-A/P0-B；只有确实需要交互终端、HTML 或并行�
 
 P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService 边界上复核和补强；P1-06 至 P1-08 扩展模型来源和兼容深度，但不得阻塞 P0 的单 Runtime 工作台闭环。
 
-### P2：接入 Codex app-server
+### P2：接入 Codex app-server（当前暂缓，先打磨 Grok 宿主）
 
 - 使用 Agent Studio `userData` 下的独立 `CODEX_HOME` 完成 binary、schema、app-server 生命周期和 ChatGPT 账号认证，不触碰用户默认 `~/.codex`；
 - 将 Thread、Turn、Item、Plan、Usage 和原生恢复绑定到产品 Task/Turn，fork 创建新 Task 而不是覆盖原 Task；
@@ -530,6 +531,7 @@ P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService �
 - 复制 Codex、Chrome 或其他产品的私有实现；
 - 自动执行不可恢复的高风险操作；
 - 让多大脑协作阻塞单大脑的基础体验。
+- 把 Agent Studio 做成第二套 Agent：自己规划、自己跑 MCP、自己写记忆引擎。
 
 ## 13. 第一阶段成功标准
 

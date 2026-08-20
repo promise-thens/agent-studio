@@ -50,7 +50,7 @@ Agent Studio 是 ACP **Client**，Grok Build 是 ACP **Agent**。成熟度必须
 | 点进历史还要再点「继续」 | 现有 `selectTask()` 只水合本地历史，发送被只读门禁拦住 | **已纠正：** 点进就是接着聊，恢复在后台自动做 |
 | 权限要一个个点 | 每个 path / 未知 execute 都可能弹卡；grant 指纹可能过细 | **已纠正：** 能过的自动过，第一次最多点一次「本任务允许」 |
 | Grok 方言没有版本契约 | `session/set_model` 是扩展方法；绑定失败会拆整条连接 | 不能猜响应形状，也不能改成宽松透传 |
-| Client 能力面为空 | `clientCapabilities: {}`，`mcpServers: []`，Prompt 只发 text | 未实现前不得广告 `fs` / `terminal` |
+| Client 能力面为空 | `clientCapabilities: {}`，Prompt 只发 text；`available_commands_update` 现被丢弃 | 未实现前不得广告 `fs` / `terminal`；命令板由 [P0-10C](../p0-10c-grok-host-surfaces.md) 消费广告，不手写菜单；`mcpServers` 由 [P0-10D](../p0-10d-grok-memory-and-mcp.md) 注入，不在本目录做 MCP Host |
 
 ## 3. 插入顺序：从 P0-09 后面开始
 
@@ -62,7 +62,7 @@ Agent Studio 是 ACP **Client**，Grok Build 是 ACP **Agent**。成熟度必须
 2. P0-09 完成后，才有稳定 Timeline 观察真实 `session/update`、权限卡和 Turn 终态。GACP-01 需要这块观察面。
 3. 产品已确认点进历史即可接着聊。GACP-02 必须先规定自动 resume / 失败降级，P0-10 才能把侧栏做成「点进去就能打字」，而不是再做确认按钮。
 4. 产品已确认能过的权限要自动过。GACP-03 依赖 P0-11 的证据和 GACP-01 的真实 kind，不能提前用 `rawInput` 放行。
-5. fs/terminal/MCP 分别属于 P0-15 和 P3-04。未实现就广告，是 ACP 违规。
+5. fs/terminal 属于 P0-15 / GACP-05。Grok 会话的 MCP 列表由 P0-10D 注入；P3-04 仍是以后的通用 Host。未实现 fs/terminal 就广告，是 ACP 违规。
 
 ### 3.1 推荐开发顺序
 
@@ -71,6 +71,8 @@ P0-09 测试门关闭
   → GACP-01 真机协议观察与能力核实
   → GACP-02 恢复能力产品契约
   → P0-10 单 Runtime 工作台
+  → P0-10C 宿主表面（命令板 / 插件整页）
+  → P0-10D 记忆与 MCP 设置（mcpServers 注入，不是 MCP Host）
   → P0-11 Command Evidence
   → GACP-03 结构化权限证据（只消费 P0-11 与 GACP-01 已冻结字段）
   → P0-12 Git Review
@@ -87,6 +89,8 @@ P0-A 主表因此变成：
 | 5a | [GACP-01](gacp-01-real-grok-protocol-verification.md) | 5 | 已完成（受限关闭） | 2026-08-19 冻结观察表；遗留见该计划「遗留且不挡后续」 |
 | 5b | [GACP-02](gacp-02-session-restore-capability-contract.md) | 5 | 核心已落地，待手工/e2e 收口 | 点进历史即可接着聊，无二次确认；load 仍按未核实降级 |
 | 6 | P0-10 | 5 | GACP-02 后 | 工作台按「点进去就能发」来做，禁止加回继续按钮 |
+| 6b | [P0-10C](../p0-10c-grok-host-surfaces.md) | 4 | P0-10B 后 | 命令板 + 插件整页；不进 Timeline |
+| 6c | [P0-10D](../p0-10d-grok-memory-and-mcp.md) | 4 | P0-10C 后 | 设置记忆/MCP；Grok 执行 |
 | 7 | P0-11 | 5 | 仍按原依赖 | 命令证据事实源 |
 | 7a | [GACP-03](gacp-03-structured-permission-evidence.md) | 4 | P0-11 后 | 能过的自动过，不要一个个点 |
 | 8 | P0-12 | 5 | 原依赖不变 | Diff 审阅 |
@@ -101,8 +105,9 @@ P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windo
 - 不要在 P0-09 测试期间改 `mapGrokSessionUpdate()`、`projectPublicAgentEvent()` 或权限 option 选择。
 - 不要为了“ACP 看起来更完整”把 `clientCapabilities.fs/terminal` 设为 true。
 - 不要在 GACP-03 之前把 `rawInput.command` 当作 PermissionBroker 目标。
-- 不要把 MCP、Skills、浏览器、Computer Use 写进 Grok Adapter。
+- 不要把 MCP、Skills、浏览器、Computer Use 写进 Grok Adapter 当桌面自己的执行器。
 - 不要为 Codex 预留 ACP 方法；Codex 走 app-server，不是 ACP。
+- `available_commands_update` 改为 session 快照由 P0-10C 消费，**仍不得**写进 Timeline。
 
 ## 4. 和现有计划的职责切分
 
@@ -114,7 +119,9 @@ P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windo
 | P0-11 | AppCommandRunner 与 CommandExecutionEvidence | GACP-03 负责少打断；P0-11 负责事后证据 |
 | P1-05 | Provider 配置、密钥、`GROK_HOME` 隔离复核 | GACP-04 只冻结 ACP 启动方言 |
 | P0-15 | 用户交互 PTY | GACP-05 只决定何时广告 `terminal` |
-| P3-04 | MCP / Skills Host | ACP `mcpServers` 注入属于 P3，不在 GACP-05 提前做 |
+| P3-04 | 通用 Capability MCP Host（非 Grok 会话注入） | Grok 的 `mcpServers` 由 P0-10D 注入；本目录不实现 MCP 进程 |
+| P0-10C | 斜杠命令板、插件整页、`available_commands` 快照 | 不把命令写进 Timeline |
+| P0-10D | 设置里的记忆浏览与 MCP 配置 | 记忆引擎与 MCP 连接仍由 Grok 执行 |
 
 ## 5. 文档索引
 
@@ -127,6 +134,8 @@ P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windo
 | [gacp-05-client-capability-advertisement.md](gacp-05-client-capability-advertisement.md) | 只有实现后才广告的 Client 能力 |
 | [gacp-06-subagent-timeline.md](gacp-06-subagent-timeline.md) | 子 Agent 嵌套卡片；皮肤跟 P0-10A |
 | [P0-10A](../p0-10a-claude-desktop-workbench-ui.md) | 整站按 Claude Code Desktop 便捷度大修 |
+| [P0-10C](../p0-10c-grok-host-surfaces.md) | Grok 宿主表面：命令板、插件整页 |
+| [P0-10D](../p0-10d-grok-memory-and-mcp.md) | 设置：记忆浏览、MCP 交给 Grok |
 
 路线图入口见 [roadmap-index.md](../roadmap-index.md) 的 “Grok ACP 加深” 一节。
 

@@ -255,12 +255,12 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[P0-10 单 Runtime 任务工作台](docs/superpowers/plans/p0-10-single-runtime-task-workbench.md)；P0-10A 助手 Markdown 切片已接入；[P0-10B 设置弹窗与外观](docs/superpowers/plans/p0-10b-settings-dialog-and-appearance.md) 已落地代码
-- 状态：Task 4 Inspector 已改为标题栏抽屉（默认关，右侧覆盖，标签 Timeline/Changes/Terminal/Artifacts）；无「继续任务」、无伪多 Runtime 选择器。主列助手回复按安全 Markdown AST 渲染（标题/列表/代码/表格/强调/http(s) 外链）。已配置后侧栏齿轮打开设置弹窗（供应商 / 外观：深色、米白、跟随系统）；首次未配置仍全屏引导
-- 完成度：P0-01 至 P0-09、GACP-01/02 如前；P0-10 Task 1–4 已合入功能分支；P0-10A 任务 2a 已落地；P0-10B 自动验证已通过，开发版外观走查待做
-- Grok ACP 加深：评估与分计划在 [docs/superpowers/plans/grokACP计划/README.md](docs/superpowers/plans/grokACP计划/README.md)。顺序为 GACP-01（已关闭）→ GACP-02 恢复契约 → P0-10 工作台；GACP-03 在 P0-11 后，GACP-04 在 P2 前，GACP-05 默认不进 P0-A
-- 兼容边界：首版仍只有一个执行槽；应用退出后不继续运行；受控 ACP fixture 不等价于真实 Grok 黑盒；`clientCapabilities: {}` 是诚实广告，未实现 fs/terminal 前不得打开；GACP-01 未见的 `load` / 子 Agent 父子字段不得写成已验证
-- 下一步：开发版走查设置弹窗、三主题与跟随系统，以及 Markdown 表格/外链/流式半截代码块、注册项目、连续两轮、切换 Task、Inspector 标签与小窗。不要加回「继续任务」按钮
+- 当前计划：[P0-10C Grok 宿主工作台表面](docs/superpowers/plans/p0-10c-grok-host-surfaces.md)、[P0-10D 记忆与 MCP 设置](docs/superpowers/plans/p0-10d-grok-memory-and-mcp.md)（计划已立项，代码未开工）；P0-10B 已落地代码
+- 状态：桌面定位为 Grok Build ACP Client，不自己当 Agent。设置现为供应商 / 外观；记忆与 MCP 将进设置，插件为侧栏整页且不得打断运行中 Task。Inspector 仍是 Timeline/Changes/Terminal/Artifacts。P2 Codex 暂缓
+- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C/D 仅文档
+- Grok ACP 加深：顺序仍为 GACP-01 → GACP-02 → P0-10 → P0-10C/D → P0-11 → GACP-03。`available_commands_update` 将由 P0-10C 作 session 快照，不进 Timeline
+- 兼容边界：首版仍只有一个执行槽；不修改用户 `~/.grok`；`clientCapabilities: {}`；不把桌面做成 MCP Host
+- 下一步：先评审 P0-10C/D 计划再开工。开发版走查 P0-10B 外观仍待做。不要加回「继续任务」按钮
 - 最近验证：2026-08-20 P0-10B 后单元测试 570 通过，typecheck/build 通过。受控 e2e 未重跑。开发版真实 GUI 走查未跑
 
 <!-- gitnexus:start -->
