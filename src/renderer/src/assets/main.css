@@ -451,6 +451,207 @@ button:disabled {
   font-size: 13px;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.conversation-blocks {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.conversation-thought,
+.conversation-plan,
+.conversation-usage {
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.conversation-thought summary,
+.conversation-plan summary,
+.conversation-usage summary,
+.tool-row-details summary,
+.subagent-card summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.conversation-thought-body {
+  margin: 6px 0 0;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.conversation-plan {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+}
+
+.plan-checklist {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-check-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.plan-check-item[data-status='completed'] .plan-check-text {
+  color: var(--text-3);
+}
+
+.plan-check-mark {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border: 1.5px solid color-mix(in srgb, var(--text-3) 70%, transparent);
+  border-radius: 50%;
+  background: transparent;
+}
+
+.plan-check-mark[data-status='in_progress'] {
+  border-color: var(--accent);
+  border-top-color: transparent;
+  animation: spin 900ms linear infinite;
+}
+
+.plan-check-mark[data-status='completed'] {
+  position: relative;
+  border-color: transparent;
+  background: transparent;
+}
+
+.plan-check-mark[data-status='completed']::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--accent);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(0deg);
+}
+
+.tool-row {
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.tool-row-line,
+.tool-row-details summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-row-files {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 0;
+  padding-left: 18px;
+  list-style: none;
+}
+
+.conversation-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 900ms linear infinite;
+}
+
+.subagent-card {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.subagent-card[data-status='failed'] {
+  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+
+.subagent-card[data-status='failed'] .subagent-dot {
+  background: var(--danger);
+}
+
+.subagent-card summary {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.subagent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.subagent-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-tools {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding-left: 12px;
+}
+
+.conversation-availability {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.permission-inline-card.permission-dialog {
+  width: 100%;
+  max-height: none;
+  box-shadow: none;
+}
+
 .conversation-process {
   border-top: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
   color: var(--text-3);

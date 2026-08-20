@@ -1,13 +1,11 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { AgentPermissionDecision, AgentPermissionRequest } from '../../../shared/agent'
 import type { TaskTimelineViewModel, TurnTimelineViewModel } from '../task-timeline-reducer'
 import {
-  collectTurnAssistantTexts,
-  collectTurnErrorMessages,
   conversationFollowSignature,
   isActiveConversationTurn,
   isConversationPinnedToBottom,
-  isTurnProcessExpandedByDefault,
   nextConversationPinnedState,
   nextConversationScrollIntent,
   nextPinnedConversationScrollTop,
@@ -15,14 +13,12 @@ import {
   resolveConversationEmptyCopy,
   resolveConversationScrollSource,
   shouldHoldPinnedFollow,
-  timelineModelForTurn,
-  turnHasCollapsibleProcess,
   type ConversationConnectFailure,
   type ConversationScrollIntent,
   type ConversationScrollInteraction
 } from '../task-conversation-view'
-import AssistantMarkdown from './AssistantMarkdown.vue'
-import ExecutionTimeline from './ExecutionTimeline.vue'
+import ConversationTurn from './ConversationTurn.vue'
+import PermissionPrompt from './PermissionPrompt.vue'
 import TaskResultReview from './TaskResultReview.vue'
 
 const props = withDefaults(
@@ -37,6 +33,9 @@ const props = withDefaults(
     localErrors?: readonly string[]
     canCreateTask?: boolean
     connectFailure?: ConversationConnectFailure | null
+    permission?: AgentPermissionRequest | null
+    permissionPending?: boolean
+    permissionTaskTitle?: string
   }>(),
   {
     loading: false,
@@ -44,7 +43,10 @@ const props = withDefaults(
     loadingMoreTurns: false,
     localErrors: () => [],
     canCreateTask: false,
-    connectFailure: null
+    connectFailure: null,
+    permission: null,
+    permissionPending: false,
+    permissionTaskTitle: ''
   }
 )
 
@@ -53,10 +55,11 @@ defineEmits<{
   loadMoreEvents: [turnId: string]
   createTask: []
   retryConnect: []
+  respondPermission: [decision: AgentPermissionDecision]
+  cancelTurn: []
 }>()
 
 const messageList = ref<HTMLElement | null>(null)
-const processOpenByTurn = ref<Record<string, boolean>>({})
 /** 用户离开底部后不再抢滚动；切 Task 时重新贴底。 */
 let pinnedToBottom = true
 /** wheel/touchmove 预告用户滚动；pointerdown 只跟踪拖条，不得武装 pending。 */
@@ -69,15 +72,24 @@ let programmaticFollow = false
 /** 已预告但未产生 scroll 时，用双 rAF 解除 pending，避免冻住贴底。 */
 let pendingUserScrollIdleId = 0
 
-function isProcessOpen(turn: Pick<TurnTimelineViewModel, 'turnId' | 'status'>): boolean {
-  return processOpenByTurn.value[turn.turnId] ?? isTurnProcessExpandedByDefault(turn)
+/** 只把队首审批插进对应 Turn，避免每轮都复制一张权限卡。 */
+function permissionForTurn(
+  turn: Pick<TurnTimelineViewModel, 'taskId' | 'turnId'>
+): AgentPermissionRequest | null {
+  const request = props.permission
+  if (!request) return null
+  return request.taskId === turn.taskId && request.turnId === turn.turnId ? request : null
 }
 
-function rememberProcessOpen(turnId: string, event: Event): void {
-  const target = event.currentTarget
-  if (!(target instanceof HTMLDetailsElement)) return
-  processOpenByTurn.value = { ...processOpenByTurn.value, [turnId]: target.open }
-}
+/** 审批 Turn 还不在当前流里时，仍把卡挂在底部，避免全屏模态挡对话。 */
+const unmatchedPermission = computed(() => {
+  const request = props.permission
+  if (!request) return null
+  const matched = (props.model?.turns ?? []).some(
+    (turn) => turn.taskId === request.taskId && turn.turnId === request.turnId
+  )
+  return matched ? null : request
+})
 
 function applyPinSource(source: 'user-input' | 'layout-scroll'): void {
   const root = messageList.value
@@ -173,13 +185,13 @@ watch(
     cancelPendingUserScrollIdle()
     scrollIntent = { pendingUserScroll: false, pointerTracking: scrollIntent.pointerTracking }
     programmaticFollow = false
-    processOpenByTurn.value = {}
     void nextTick(scrollToLatestIfPinned)
   }
 )
 
 watch(
-  () => conversationFollowSignature(props.model, props.localErrors),
+  () =>
+    `${conversationFollowSignature(props.model, props.localErrors)}:${props.permission?.approvalId ?? ''}`,
   () => {
     void nextTick(scrollToLatestIfPinned)
   }
@@ -223,41 +235,17 @@ watch(
       :data-conversation-turn-id="turn.turnId"
       :data-active="isActiveConversationTurn(turn) ? 'true' : undefined"
     >
-      <div class="conversation-user">
-        <p>{{ turn.prompt }}</p>
-      </div>
-
-      <details
-        v-if="model && turnHasCollapsibleProcess(turn)"
-        class="conversation-process"
-        :open="isProcessOpen(turn)"
-        @toggle="rememberProcessOpen(turn.turnId, $event)"
-      >
-        <summary>执行过程</summary>
-        <ExecutionTimeline
-          :model="timelineModelForTurn(model, turn)"
-          :event-after-sequence-by-turn="eventAfterSequenceByTurn"
-          :loading-event-turn-ids="loadingEventTurnIds"
-          @load-more-events="$emit('loadMoreEvents', $event)"
-        />
-      </details>
-
-      <div
-        v-for="(text, answerIndex) in collectTurnAssistantTexts(turn)"
-        :key="`${turn.turnId}:answer:${answerIndex}`"
-        class="conversation-assistant"
-      >
-        <AssistantMarkdown :text="text" />
-      </div>
-
-      <p
-        v-for="(message, errorIndex) in collectTurnErrorMessages(turn)"
-        :key="`${turn.turnId}:error:${errorIndex}`"
-        class="conversation-error"
-        role="status"
-      >
-        {{ message }}
-      </p>
+      <ConversationTurn
+        :turn="turn"
+        :permission="permissionForTurn(turn)"
+        :permission-pending="permissionPending"
+        :permission-task-title="permissionTaskTitle"
+        :has-more-events="eventAfterSequenceByTurn?.[turn.turnId] != null"
+        :loading-more-events="loadingEventTurnIds?.includes(turn.turnId) ?? false"
+        @respond-permission="$emit('respondPermission', $event)"
+        @cancel-turn="$emit('cancelTurn')"
+        @load-more-events="$emit('loadMoreEvents', $event)"
+      />
 
       <TaskResultReview
         v-if="model && index === model.turns.length - 1"
@@ -267,6 +255,17 @@ watch(
         @create-task="$emit('createTask')"
       />
     </article>
+
+    <div v-if="unmatchedPermission" class="conversation-turn">
+      <PermissionPrompt
+        :key="`${unmatchedPermission.approvalId}:${unmatchedPermission.taskId}:${unmatchedPermission.turnId}`"
+        :request="unmatchedPermission"
+        :pending="permissionPending"
+        :task-title="permissionTaskTitle"
+        @respond="$emit('respondPermission', $event)"
+        @cancel-turn="$emit('cancelTurn')"
+      />
+    </div>
 
     <p
       v-for="(message, index) in localErrors"

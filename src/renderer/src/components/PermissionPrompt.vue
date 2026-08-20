@@ -10,6 +10,7 @@ import type {
   AgentPermissionRequest,
   AgentPermissionRisk
 } from '../../../shared/agent'
+import { resolvePermissionPrimaryAction } from '../conversation-turn-view'
 
 const props = defineProps<{
   request: AgentPermissionRequest
@@ -73,11 +74,18 @@ const expiryLabel = computed(() => {
     : '即将过期'
 })
 
+/** 主按钮文案锁死「本任务允许」；L3 没有 task 范围时才退回仅本次。 */
+const primaryAction = computed(() => resolvePermissionPrimaryAction(props.request))
+const showOnceAsSecondary = computed(
+  () =>
+    primaryAction.value.decision === 'allow-task' && props.request.allowedScopes.includes('once')
+)
+
 function respond(decision: AgentPermissionDecision): void {
   if (!props.pending) emit('respond', decision)
 }
 
-/** 审批遮罩期间仍保留真实停止入口，避免用户被迫只能允许或拒绝而无法取消整轮执行。 */
+/** 流内审批仍保留停止入口，避免用户只能允许或拒绝、看不见对话。 */
 function cancelTurn(): void {
   if (!props.pending) emit('cancelTurn')
 }
@@ -96,38 +104,11 @@ async function focusSafeAction(): Promise<void> {
   dialog.value?.focus()
 }
 
+/** 流内卡片不锁 Tab，Esc 只在焦点位于本卡时拒绝，避免挡输入框。 */
 function handleDialogKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    respond('deny')
-    return
-  }
-  if (event.key !== 'Tab') return
-  const focusable = Array.from(
-    dialog.value?.querySelectorAll<HTMLElement>(
-      'button:not(:disabled), [tabindex]:not([tabindex="-1"])'
-    ) ?? []
-  )
-  if (!focusable.length) {
-    event.preventDefault()
-    dialog.value?.focus()
-    return
-  }
-  const first = focusable[0]
-  const last = focusable.at(-1)
-  if (!focusable.includes(document.activeElement as HTMLElement)) {
-    event.preventDefault()
-    if (event.shiftKey) last?.focus()
-    else first.focus()
-    return
-  }
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault()
-    last?.focus()
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first.focus()
-  }
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  respond('deny')
 }
 
 onMounted(() => {
@@ -151,95 +132,92 @@ onBeforeUnmount(() => previouslyFocused?.focus())
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="respond('deny')">
-    <section
-      ref="dialog"
-      class="permission-dialog runtime-permission-dialog"
-      role="dialog"
-      tabindex="-1"
-      aria-modal="true"
-      :aria-busy="pending"
-      aria-labelledby="permission-title"
-      aria-describedby="permission-description permission-impact"
-      @keydown="handleDialogKeydown"
-    >
-      <header>
-        <div class="permission-icon" :data-risk="request.risk">
-          <WarningCircle v-if="request.risk === 'L3'" :size="22" weight="fill" />
-          <ShieldCheck v-else :size="22" weight="fill" />
-        </div>
-        <div>
-          <h2 id="permission-title">需要你的确认</h2>
-          <p id="permission-description">{{ request.title }}</p>
-        </div>
-        <button
-          ref="denyButton"
-          class="icon-button"
-          title="拒绝权限请求"
-          aria-label="拒绝权限请求"
-          :disabled="pending"
-          @click="respond('deny')"
-        >
-          <X :size="17" />
-        </button>
-      </header>
-
-      <div class="permission-summary">
-        <div>
-          <span>发起者</span>
-          <strong>{{ runtimeLabel }}</strong>
-        </div>
-        <div>
-          <span>Task</span>
-          <strong :title="taskTitle || request.taskId">{{ taskTitle || request.taskId }}</strong>
-        </div>
-        <div>
-          <span>操作</span>
-          <strong>{{ operationLabel }}</strong>
-        </div>
-        <div>
-          <span>风险</span>
-          <strong :data-risk="request.risk">{{ riskLabel }}</strong>
-        </div>
-        <div>
-          <span>有效至</span>
-          <strong>{{ expiryLabel }}</strong>
-        </div>
+  <section
+    ref="dialog"
+    class="permission-dialog runtime-permission-dialog permission-inline-card"
+    role="dialog"
+    tabindex="-1"
+    :aria-busy="pending"
+    aria-labelledby="permission-title"
+    aria-describedby="permission-description permission-impact"
+    @keydown="handleDialogKeydown"
+  >
+    <header>
+      <div class="permission-icon" :data-risk="request.risk">
+        <WarningCircle v-if="request.risk === 'L3'" :size="22" weight="fill" />
+        <ShieldCheck v-else :size="22" weight="fill" />
       </div>
-
-      <div class="permission-targets">
-        <strong>受限目标</strong>
-        <ul>
-          <li v-for="target in request.targets" :key="target" :title="target">{{ target }}</li>
-        </ul>
+      <div>
+        <h2 id="permission-title">需要你的确认</h2>
+        <p id="permission-description">{{ request.title }}</p>
       </div>
+      <button
+        ref="denyButton"
+        class="icon-button"
+        title="拒绝权限请求"
+        aria-label="拒绝权限请求"
+        :disabled="pending"
+        @click="respond('deny')"
+      >
+        <X :size="17" />
+      </button>
+    </header>
 
-      <p id="permission-impact" class="permission-impact">{{ request.impact }}</p>
-      <p v-if="request.risk === 'L3'" class="permission-risk-warning" role="alert">
-        这是高风险或无法准确描述的操作，只能允许本次。请确认目标和影响后再继续。
-      </p>
-
-      <div class="permission-options">
-        <button class="secondary-button" :disabled="pending" @click="cancelTurn">停止</button>
-        <button class="secondary-button" :disabled="pending" @click="respond('deny')">
-          {{ pending ? '正在提交…' : '拒绝' }}
-        </button>
-        <button
-          v-if="request.allowedScopes.includes('task')"
-          class="secondary-button"
-          :disabled="pending"
-          title="仅复用到当前 Task 内身份、目标和参数完全相同的操作；切换环境或退出应用后失效"
-          @click="respond('allow-task')"
-        >
-          允许当前 Task
-        </button>
-        <button class="primary-button" :disabled="pending" @click="respond('allow-once')">
-          {{ pending ? '正在提交…' : '仅允许这一次' }}
-        </button>
+    <div class="permission-summary">
+      <div>
+        <span>发起者</span>
+        <strong>{{ runtimeLabel }}</strong>
       </div>
-      <p v-if="pending" class="permission-submit-status" role="status" aria-live="polite">
-        正在提交权限决定…
-      </p>
-    </section>
-  </div>
+      <div>
+        <span>Task</span>
+        <strong :title="taskTitle || request.taskId">{{ taskTitle || request.taskId }}</strong>
+      </div>
+      <div>
+        <span>操作</span>
+        <strong>{{ operationLabel }}</strong>
+      </div>
+      <div>
+        <span>风险</span>
+        <strong :data-risk="request.risk">{{ riskLabel }}</strong>
+      </div>
+      <div>
+        <span>有效至</span>
+        <strong>{{ expiryLabel }}</strong>
+      </div>
+    </div>
+
+    <div class="permission-targets">
+      <strong>受限目标</strong>
+      <ul>
+        <li v-for="target in request.targets" :key="target" :title="target">{{ target }}</li>
+      </ul>
+    </div>
+
+    <p id="permission-impact" class="permission-impact">{{ request.impact }}</p>
+    <p v-if="request.risk === 'L3'" class="permission-risk-warning" role="alert">
+      这是高风险或无法准确描述的操作，只能允许本次。请确认目标和影响后再继续。
+    </p>
+
+    <div class="permission-options">
+      <button class="secondary-button" :disabled="pending" @click="cancelTurn">停止</button>
+      <button class="secondary-button" :disabled="pending" @click="respond('deny')">
+        {{ pending ? '正在提交…' : '拒绝' }}
+      </button>
+      <button
+        v-if="showOnceAsSecondary"
+        class="secondary-button"
+        :disabled="pending"
+        title="只允许这一次操作，不复用到当前 Task"
+        @click="respond('allow-once')"
+      >
+        仅允许这一次
+      </button>
+      <button class="primary-button" :disabled="pending" @click="respond(primaryAction.decision)">
+        {{ pending ? '正在提交…' : primaryAction.label }}
+      </button>
+    </div>
+    <p v-if="pending" class="permission-submit-status" role="status" aria-live="polite">
+      正在提交权限决定…
+    </p>
+  </section>
 </template>

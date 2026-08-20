@@ -392,14 +392,25 @@ function projectNodes(
       continue
     }
     previousAnonymousText = undefined
-    if (event.kind === 'plan')
-      nodes.push({
-        ...base,
-        nodeId: `${event.taskId}:${event.turnId}:plan:${event.sequence}`,
-        kind: 'plan',
-        entries: event.entries.map((entry) => ({ ...entry }))
-      })
-    else if (event.kind === 'tool-call' || event.kind === 'tool-update') {
+    if (event.kind === 'plan') {
+      // ACP plan 是整表快照：同一 Turn 只保留一张卡，后到事件原地覆盖 entries。
+      const existing = nodes.find(
+        (node): node is TimelinePlanNode =>
+          node.kind === 'plan' && node.taskId === event.taskId && node.turnId === event.turnId
+      )
+      if (existing) {
+        existing.entries = event.entries.map((entry) => ({ ...entry }))
+        existing.capabilityState = event.capabilityState
+        if (event.truncated) existing.truncated = true
+      } else {
+        nodes.push({
+          ...base,
+          nodeId: `${event.taskId}:${event.turnId}:plan`,
+          kind: 'plan',
+          entries: event.entries.map((entry) => ({ ...entry }))
+        })
+      }
+    } else if (event.kind === 'tool-call' || event.kind === 'tool-update') {
       const key = `${event.taskId}:${event.turnId}:tool:${event.toolCallId}`
       const existing = tools.get(key)
       if (existing) {

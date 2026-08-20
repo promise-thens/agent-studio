@@ -104,6 +104,12 @@ export function nextProgrammaticFollowFlag(input: {
 function nodeFollowLength(node: TurnTimelineViewModel['nodes'][number]): number {
   if ('text' in node && typeof node.text === 'string') return node.text.length
   if ('message' in node && typeof node.message === 'string') return node.message.length
+  if (node.kind === 'plan')
+    return node.entries.reduce(
+      (total, entry) => total + entry.content.length + entry.status.length,
+      0
+    )
+  if (node.kind === 'tool') return node.title.length + node.status.length
   return 0
 }
 

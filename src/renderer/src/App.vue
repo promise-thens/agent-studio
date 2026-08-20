@@ -28,7 +28,6 @@ import {
   createAgentToolKey
 } from './agent-event-consumer'
 import { unwrapDesktopIpcResult } from './desktop-ipc-result'
-import PermissionPrompt from './components/PermissionPrompt.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import TaskComposer from './components/TaskComposer.vue'
@@ -1398,10 +1397,15 @@ function scrollMessagesToBottom(): void {
           :local-errors="localErrorMessages"
           :can-create-task="!newChatDisabled"
           :connect-failure="conversationConnectFailure"
+          :permission="permission"
+          :permission-pending="permissionResponsePending"
+          :permission-task-title="permissionTaskTitle"
           @load-more-turns="loadMoreHistoryTurns"
           @load-more-events="loadMoreHistoryEvents"
           @create-task="startNewChat"
           @retry-connect="retryRuntimeConnect"
+          @respond-permission="respondPermission"
+          @cancel-turn="cancelTurn"
         />
 
         <TaskComposer
@@ -1443,16 +1447,6 @@ function scrollMessagesToBottom(): void {
         @load-more-permission-audits="taskHistory.loadMorePermissionAudits"
       />
     </div>
-
-    <PermissionPrompt
-      v-if="permission"
-      :key="`${permission.approvalId}:${permission.taskId}:${permission.turnId}`"
-      :request="permission"
-      :pending="permissionResponsePending"
-      :task-title="permissionTaskTitle"
-      @respond="respondPermission"
-      @cancel-turn="cancelTurn"
-    />
 
     <div
       v-if="historyConfirmation"
