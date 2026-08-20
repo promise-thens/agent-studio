@@ -528,13 +528,14 @@ button:disabled {
 .plan-check-mark[data-status='completed']::after {
   content: '';
   position: absolute;
+  /* 45deg 把右+底边框收成勾；0deg 会画成 L。略下移以落在 14px 圈内。 */
   left: 4px;
-  top: 1px;
+  top: 2px;
   width: 4px;
   height: 8px;
   border: solid var(--accent);
   border-width: 0 1.5px 1.5px 0;
-  transform: rotate(0deg);
+  transform: rotate(45deg);
 }
 
 .tool-row {
@@ -658,6 +659,7 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.permission-inline-origin,
 .permission-inline-meta,
 .permission-inline-impact,
 .permission-inline-warning {
@@ -666,6 +668,10 @@ button:disabled {
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.permission-inline-origin {
+  margin: 0 0 4px;
 }
 
 .permission-inline-warning {

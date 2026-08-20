@@ -7,14 +7,23 @@ import type {
 } from '../../../shared/agent'
 import {
   resolvePermissionCardPresentation,
+  resolvePermissionOriginLabel,
   resolvePermissionPrimaryAction
 } from '../conversation-turn-view'
 
-const props = defineProps<{
-  request: AgentPermissionRequest
-  pending: boolean
-  taskTitle?: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    request: AgentPermissionRequest
+    pending: boolean
+    taskTitle?: string
+    /** 贴在当前 Turn 上时保持紧凑；错位卡才露出「来自「任务名」」。 */
+    attachedToViewedTurn?: boolean
+  }>(),
+  {
+    taskTitle: '',
+    attachedToViewedTurn: true
+  }
+)
 
 const emit = defineEmits<{
   respond: [decision: AgentPermissionDecision]
@@ -22,6 +31,17 @@ const emit = defineEmits<{
 }>()
 
 const presentation = resolvePermissionCardPresentation()
+
+/** 只在查看身份与审批身份不一致时露出来源，当前 Turn 上的卡不加这一行。 */
+const originLabel = computed(() =>
+  resolvePermissionOriginLabel({
+    taskTitle: props.taskTitle,
+    attachedToViewedTurn: props.attachedToViewedTurn
+  })
+)
+const describedBy = computed(() =>
+  originLabel.value ? 'permission-origin permission-description' : 'permission-description'
+)
 
 const riskLabel = computed(() => {
   const labels: Record<AgentPermissionRisk, string> = {
@@ -92,11 +112,14 @@ function handleCardKeydown(event: KeyboardEvent): void {
     :data-density="presentation.density"
     :aria-busy="pending"
     aria-labelledby="permission-title"
-    aria-describedby="permission-description"
+    :aria-describedby="describedBy"
     @keydown="handleCardKeydown"
   >
+    <p v-if="originLabel" id="permission-origin" class="permission-inline-origin">
+      {{ originLabel }}
+    </p>
     <p id="permission-title" class="permission-inline-title">{{ request.title }}</p>
-    <p id="permission-description" class="permission-inline-meta" :title="taskTitle">
+    <p id="permission-description" class="permission-inline-meta">
       {{ compactMeta }}
     </p>
     <p v-if="request.impact" class="permission-inline-impact">{{ request.impact }}</p>

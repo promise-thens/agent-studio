@@ -136,6 +136,20 @@ export function resolvePermissionCardPresentation(): PermissionCardPresentation 
   }
 }
 
+/**
+ * 错位审批卡必须露出任务名；贴在当前 Turn 上时保持紧凑，避免重复身份。
+ * 空白标题不画「来自「」」，否则错位卡仍然没有可辨认来源。
+ */
+export function resolvePermissionOriginLabel(input: {
+  taskTitle?: string | null
+  attachedToViewedTurn: boolean
+}): string | null {
+  if (input.attachedToViewedTurn) return null
+  const title = input.taskTitle?.trim() ?? ''
+  if (!title) return null
+  return `来自「${title}」`
+}
+
 /** 有可展示的 token 数字才算有数据；NaN / 缺字段不画空壳。 */
 export function hasConversationUsageData(usage: AgentContextUsage | AgentTurnUsage): boolean {
   if (usage.scope === 'context') {

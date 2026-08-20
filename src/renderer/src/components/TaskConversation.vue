@@ -81,7 +81,7 @@ function permissionForTurn(
   return request.taskId === turn.taskId && request.turnId === turn.turnId ? request : null
 }
 
-/** 审批 Turn 还不在当前流里时，仍把卡挂在底部，避免全屏模态挡对话。 */
+/** 审批 Turn 还不在当前流里时，仍把卡挂在底部，并标「来自」以免当成当前对话的请求。 */
 const unmatchedPermission = computed(() => {
   const request = props.permission
   if (!request) return null
@@ -262,6 +262,7 @@ watch(
         :request="unmatchedPermission"
         :pending="permissionPending"
         :task-title="permissionTaskTitle"
+        :attached-to-viewed-turn="false"
         @respond="$emit('respondPermission', $event)"
         @cancel-turn="$emit('cancelTurn')"
       />

@@ -37,6 +37,11 @@ interface SessionTraceSummary {
   cancelled: number
 }
 
+/** 流内权限是 region 小卡，不再用 dialog「需要你的确认」。 */
+function permissionCard(page: Page): ReturnType<Page['locator']> {
+  return page.locator('.permission-inline-card')
+}
+
 test.describe('P0-08 Task Executor 后台生命周期 Electron E2E', () => {
   test('空闲退出：清理完成后 Main 进程必须真正结束', async () => {
     const context = await launchControlledScenario('E2E:LONG_RUNNING')
@@ -122,31 +127,35 @@ test.describe('P0-08 Task Executor 后台生命周期 Electron E2E', () => {
       const baseline = summarizeSessionTrace(await readControlledTrace(context.layout))
       expect(baseline).toEqual({ created: 2, resumed: 0, loaded: 0, cancelled: 0 })
 
-      const dialog = context.page.getByRole('dialog', { name: '需要你的确认' })
-      await expect(dialog).toContainText('写入生命周期 marker')
-      await expect(dialog.locator('.permission-summary')).toContainText(prompt)
+      const card = permissionCard(context.page)
+      await expect(card).toBeVisible()
+      await expect(card).toContainText('写入生命周期 marker')
+      await expect(card.locator('.permission-inline-origin')).toHaveCount(0)
       await expectControlledMarker(context.layout, 'unchanged\n')
 
-      // 审批弹窗是模态层；force 只用于触发底层历史导航，验证查看身份变化不会改写审批身份。
+      // 流内小卡不是模态；force 只保证侧栏点击不被其它层挡住，查看身份变化不得改写审批身份。
       await selectWorkbenchTaskByTitle(context.page, '新任务', true)
       await expect(context.page.getByRole('button', { name: '继续任务', exact: true })).toHaveCount(
         0
       )
-      await expect(dialog.locator('.permission-summary')).toContainText(prompt)
+      await expect(card).toContainText('写入生命周期 marker')
+      await expect(card.locator('.permission-inline-origin')).toHaveText(`来自「${prompt}」`)
       await expectSameExecution(context.page, waiting)
 
       await selectWorkbenchProject(context.page, context.layout.secondaryWorkspace, true)
       await expect(executionStatusLocator(context.page, 'foreign')).toBeVisible()
-      await expect(dialog.locator('.permission-summary')).toContainText(prompt)
+      await expect(card).toContainText('写入生命周期 marker')
+      await expect(card.locator('.permission-inline-origin')).toHaveText(`来自「${prompt}」`)
       await expectSameExecution(context.page, waiting)
 
       await selectWorkbenchProject(context.page, context.layout.workspace, true)
       await selectWorkbenchTaskByTitle(context.page, prompt, true)
-      await expect(dialog.locator('.permission-summary')).toContainText(prompt)
+      await expect(card).toContainText('写入生命周期 marker')
+      await expect(card.locator('.permission-inline-origin')).toHaveCount(0)
       expect(summarizeSessionTrace(await readControlledTrace(context.layout))).toEqual(baseline)
 
-      // 当前产品没有 pending-permission 查询，本场景不宣称 reload 后能重建审批弹窗。
-      await dialog.getByRole('button', { name: '仅允许这一次' }).click()
+      // 当前产品没有 pending-permission 查询，本场景不宣称 reload 后能重建审批卡。
+      await card.getByRole('button', { name: '仅允许这一次' }).click()
       await waitForFixtureTrace(context.layout, (records) =>
         records.some(
           (record) =>

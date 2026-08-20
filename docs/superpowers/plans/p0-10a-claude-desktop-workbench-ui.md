@@ -381,7 +381,7 @@ Tool    读取 package.json · in_progress
 
 **键盘 / 动画：** Enter 发送保留 IME `isComposing` / `keyCode === 229`。j/k 切对话本任务不做。`prefers-reduced-motion` 把检查器 slide、details/子 Agent 展开、spinner 的 duration 设为 `0s`（不再用 1ms 充数）。
 
-**受控 e2e：** 选择器改为 `.permission-inline-card` / `.tool-row`，不再找 `dialog` / `.conversation-process` / `.timeline-node`。**未跑 Playwright**（无桌面 GUI）。权限决策仍点「仅允许这一次」，没有把主路径改成 GACP-03 以外的政策。
+**受控 e2e：** `permission-broker.spec.ts` 与 `task-executor-background-lifecycle.spec.ts` 选择器改为 `.permission-inline-card` / `.tool-row`，不再找 `dialog`「需要你的确认」/ `.permission-summary` / `.conversation-process` / `.timeline-node`。错位卡断言可见操作标题和「来自「任务名」」。**未跑 Playwright**（无桌面 GUI）。权限决策仍点「仅允许这一次」，没有把主路径改成 GACP-03 以外的政策。
 
 **未验证：** 真实 Grok 分两个子 Agent、流式半截 Markdown、980 小窗手工、检查器开合手感。这些留给开发版有空闲端口后再走。
 

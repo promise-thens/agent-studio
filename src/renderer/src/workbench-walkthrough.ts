@@ -1,5 +1,13 @@
 import { extractCssRuleBlock } from './task-list-overflow'
 
+/**
+ * 读取计划完成勾的旋转角。完成态必须是 45deg 打勾；0deg 的两边框会画成 L。
+ */
+export function completedPlanCheckMarkRotation(css: string): string | null {
+  const block = extractCssRuleBlock(css, ".plan-check-mark[data-status='completed']::after")
+  return block.match(/transform:\s*rotate\(([^)]+)\)/)?.[1] ?? null
+}
+
 export interface WorkbenchWalkthroughFacts {
   titlebarHeight: string
   workspaceColumns: string

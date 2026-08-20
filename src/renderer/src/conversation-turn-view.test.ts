@@ -7,6 +7,7 @@ import {
   hasConversationUsageData,
   projectConversationTurn,
   resolvePermissionCardPresentation,
+  resolvePermissionOriginLabel,
   resolvePermissionPrimaryAction
 } from './conversation-turn-view'
 
@@ -233,6 +234,27 @@ describe('权限卡主按钮', () => {
       kind: 'permission',
       primaryLabel: '本任务允许'
     })
+  })
+
+  it('错位审批卡露出任务名，贴在当前 Turn 上时保持紧凑', () => {
+    expect(
+      resolvePermissionOriginLabel({
+        taskTitle: '生命周期审批任务 A',
+        attachedToViewedTurn: true
+      })
+    ).toBeNull()
+    expect(
+      resolvePermissionOriginLabel({
+        taskTitle: '生命周期审批任务 A',
+        attachedToViewedTurn: false
+      })
+    ).toBe('来自「生命周期审批任务 A」')
+    expect(
+      resolvePermissionOriginLabel({
+        taskTitle: '  ',
+        attachedToViewedTurn: false
+      })
+    ).toBeNull()
   })
 })
 

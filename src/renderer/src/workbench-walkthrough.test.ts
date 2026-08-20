@@ -6,7 +6,10 @@ import { projectConversationTurn } from './conversation-turn-view'
 import { isolateSubagentToolOwnership, shouldMountSubagentCard } from './conversation-subagent-view'
 import { evaluateTaskComposerSend } from './task-composer-actions'
 import { resolvePermissionCardPresentation } from './conversation-turn-view'
-import { collectWorkbenchWalkthroughFacts } from './workbench-walkthrough'
+import {
+  collectWorkbenchWalkthroughFacts,
+  completedPlanCheckMarkRotation
+} from './workbench-walkthrough'
 import type { TimelineToolNode, TurnTimelineViewModel } from './task-timeline-reducer'
 import type { ConversationSubagentBlock } from './conversation-turn-view'
 
@@ -173,5 +176,14 @@ describe('工作台对照走查（夹具，非桌面 GUI）', () => {
     expect(facts.twoSubagentsShareTools).toBe(false)
     expect(blocks.some(shouldMountSubagentCard)).toBe(false)
     expect(facts.enterSendsWithImeGuard).toBe(true)
+    expect(permissionSource).toContain('resolvePermissionOriginLabel')
+    expect(permissionSource).toContain('permission-inline-origin')
+    expect(permissionSource).not.toContain('role="dialog"')
+  })
+})
+
+describe('计划完成勾', () => {
+  it('completed 使用 45deg 打勾，而不是未旋转的 L', () => {
+    expect(completedPlanCheckMarkRotation(mainCss)).toBe('45deg')
   })
 })
