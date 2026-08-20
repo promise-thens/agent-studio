@@ -132,4 +132,29 @@ describe('子 Agent 第 7 节皮肤', () => {
       'task-1:turn-1:tool:child-b': ['task-1:turn-1:tool:write-auth']
     })
   })
+
+  it('子 Agent 工具行透传 Execute 详情，供折叠而不是摊在标签上', () => {
+    const command = 'ls -la && find . -maxdepth 3 -print | head -80'
+    const rows = toSubagentToolRows([
+      {
+        kind: 'tool',
+        nodeId: 'task-1:turn-1:tool:exec-1',
+        label: '跑了命令',
+        status: 'completed',
+        detail: command,
+        tools: [tool('exec-1', `Execute \`${command}\``)]
+      }
+    ])
+
+    expect(rows).toEqual([
+      {
+        key: 'task-1:turn-1:tool:exec-1',
+        label: '跑了命令',
+        status: 'completed',
+        files: [],
+        detail: command
+      }
+    ])
+    expect(rows[0]?.label).not.toContain('ls -la')
+  })
 })

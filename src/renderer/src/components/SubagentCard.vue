@@ -12,6 +12,7 @@ const props = defineProps<{
     label: string
     status: AgentToolStatus | 'unknown'
     files?: readonly string[]
+    detail?: string
   }[]
 }>()
 
@@ -36,6 +37,7 @@ const statusLabel = computed(() => subagentStatusLabel(props.status))
         :label="tool.label"
         :status="tool.status"
         :files="tool.files ?? []"
+        :detail="tool.detail"
       />
     </div>
   </details>

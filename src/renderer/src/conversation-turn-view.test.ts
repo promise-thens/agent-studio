@@ -165,6 +165,32 @@ describe('对话块投影', () => {
       '子 Agent 改登录逻辑'
     ])
   })
+
+  it('List/Execute 主列只显示短标签，长命令进 detail 供折叠', () => {
+    const command =
+      'ls -la && (test -f README.md && head -80 README.md; find . -maxdepth 3 -print | head -80)'
+    const blocks = projectConversationTurn(
+      turn('completed', [
+        tool('list-1', 'List `/Users/huyaohang/Documents/agentStudioTest`'),
+        tool('exec-1', `Execute \`${command}\``)
+      ])
+    )
+    const toolBlocks = blocks.filter((block) => block.kind === 'tool')
+
+    expect(toolBlocks).toEqual([
+      expect.objectContaining({
+        kind: 'tool',
+        label: '列目录',
+        detail: '/Users/huyaohang/Documents/agentStudioTest'
+      }),
+      expect.objectContaining({
+        kind: 'tool',
+        label: '跑了命令',
+        detail: command
+      })
+    ])
+    expect(toolBlocks[1]?.label).not.toContain('ls -la')
+  })
 })
 
 describe('权限卡主按钮', () => {

@@ -10,6 +10,7 @@ export interface SubagentToolRowView {
   label: string
   status: AgentToolStatus | 'unknown'
   files: readonly string[]
+  detail?: string
 }
 
 export interface SubagentCardView {
@@ -54,7 +55,8 @@ export function toSubagentToolRows(tools: readonly ConversationToolBlock[]): Sub
     key: tool.nodeId,
     label: tool.label,
     status: tool.status,
-    files: filesOfToolBlock(tool)
+    files: filesOfToolBlock(tool),
+    ...(tool.detail ? { detail: tool.detail } : {})
   }))
 }
 

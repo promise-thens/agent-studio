@@ -6,12 +6,15 @@ import type {
   AgentToolStatus,
   AgentTurnUsage
 } from '../../shared/agent'
+import { isReadToolTitle, presentToolTitle } from './conversation-tool-presentation'
 import { isActiveConversationTurn } from './task-conversation-view'
 import type {
   TimelineTextNode,
   TimelineToolNode,
   TurnTimelineViewModel
 } from './task-timeline-reducer'
+
+export { formatToolVerbPhrase, isReadToolTitle } from './conversation-tool-presentation'
 
 export const PERMISSION_ALLOW_TASK_LABEL = '本任务允许'
 export const THOUGHT_SUMMARY = '思考过程'
@@ -46,6 +49,8 @@ export interface ConversationToolBlock {
   status: AgentToolStatus | 'unknown'
   tools: TimelineToolNode[]
   mergedReadCount?: number
+  /** 长命令/路径，主列默认折叠，不进 summary。 */
+  detail?: string
 }
 
 export interface ConversationSubagentBlock {
@@ -109,8 +114,6 @@ export type ConversationBlock =
   | ConversationUsageBlock
   | ConversationAvailabilityBlock
 
-const READ_TITLE_RE = /^(?:读取|读了|读文件[:：]?\s*|Reading\s+|Read\s+|read\s+)/i
-
 /**
  * L1/L2 主按钮是「本任务允许」→ allow-task；L3 没有 task 范围时退回仅本次。
  * 只改展示决策，不改 Broker / IPC。
@@ -161,18 +164,6 @@ export function hasConversationUsageData(usage: AgentContextUsage | AgentTurnUsa
 export function formatUsageSummary(usage: AgentContextUsage | AgentTurnUsage): string {
   if (usage.scope === 'context') return `用量 · 上下文 ${usage.usedTokens}/${usage.limitTokens}`
   return `用量 · ${usage.totalTokens} tokens`
-}
-
-/** 连续同类读取才合并；禁止用标题里的 subagent 字符串编造分组。 */
-export function isReadToolTitle(title: string): boolean {
-  return READ_TITLE_RE.test(title.trim())
-}
-
-export function formatToolVerbPhrase(title: string): string {
-  const trimmed = title.trim()
-  if (!isReadToolTitle(trimmed)) return trimmed
-  const target = trimmed.replace(READ_TITLE_RE, '').trim()
-  return target ? `读了 ${target}` : '读了文件'
 }
 
 export function formatMergedReadLabel(count: number): string {
@@ -322,12 +313,14 @@ function toToolBlock(tools: TimelineToolNode[]): ConversationToolBlock {
       mergedReadCount: tools.length
     }
   }
+  const presented = presentToolTitle(first.title)
   return {
     kind: 'tool',
     nodeId: first.nodeId,
-    label: formatToolVerbPhrase(first.title),
+    label: presented.label,
     status: first.status,
     tools,
+    ...(presented.detail ? { detail: presented.detail } : {}),
     ...(isReadToolTitle(first.title) ? { mergedReadCount: 1 } : {})
   }
 }

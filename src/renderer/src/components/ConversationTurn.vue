@@ -92,6 +92,7 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
         :label="block.label"
         :status="block.status"
         :files="mergedReadFiles(block)"
+        :detail="block.detail"
       />
 
       <SubagentCard

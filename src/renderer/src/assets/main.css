@@ -302,6 +302,13 @@ button:disabled {
   min-width: 0;
 }
 
+/* 用户句贴阅读列右侧；助手/思考/工具仍左起，避免聊天气泡墙。 */
+.conversation-user {
+  justify-self: end;
+  width: fit-content;
+  max-width: min(100%, 72%);
+}
+
 .conversation-user p,
 .conversation-error {
   margin: 0;
@@ -558,6 +565,21 @@ button:disabled {
   margin: 6px 0 0;
   padding-left: 18px;
   list-style: none;
+}
+
+.tool-row-detail {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 12em;
+  overflow: auto;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+  color: var(--text-3);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .conversation-spinner {
