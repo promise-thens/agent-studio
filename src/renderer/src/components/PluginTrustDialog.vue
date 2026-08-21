@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { PhWarningCircle as WarningCircle } from '@phosphor-icons/vue'
 import { PLUGIN_TRUST_WARNING_COPY } from '../plugins-page'
 
 const props = defineProps<{
@@ -33,6 +34,9 @@ function confirmTrust(): void {
       @keydown.esc="!busy && emit('cancel')"
     >
       <header>
+        <div class="permission-icon">
+          <WarningCircle :size="22" weight="fill" />
+        </div>
         <div>
           <h2 id="plugin-trust-title">信任并安装</h2>
           <p id="plugin-trust-description">
@@ -70,6 +74,11 @@ function confirmTrust(): void {
 </template>
 
 <style scoped>
+/* 对齐历史确认框：第一列给 icon，警告句走 minmax(0,1fr)，避免落到全局 38px 图标列。 */
+.permission-dialog header {
+  grid-template-columns: 38px minmax(0, 1fr);
+}
+
 .trust-check {
   display: flex;
   align-items: flex-start;

@@ -312,6 +312,16 @@ describe('插件安装信任确认', () => {
     expect(pluginsPageSource).not.toContain('disconnect')
   })
 
+  it('信任框 header 不得把警告挤进全局 38px 图标列', () => {
+    const trustDialogSource = readFileSync(
+      join(rendererDir, 'components/PluginTrustDialog.vue'),
+      'utf8'
+    )
+    const hasIconColumn = trustDialogSource.includes('class="permission-icon"')
+    const hasFullWidthHeader = trustDialogSource.includes('grid-template-columns: minmax(0, 1fr)')
+    expect(hasIconColumn || hasFullWidthHeader).toBe(true)
+  })
+
   it('安装成功文案不得声称当前 Turn 已生效，空市场可添加官方源', () => {
     expect(PLUGIN_INSTALL_SUCCESS_COPY).toBe('已安装。新对话或重新进入任务后由 Grok 加载。')
     expect(PLUGIN_INSTALL_SUCCESS_COPY).not.toContain('当前 Turn')
