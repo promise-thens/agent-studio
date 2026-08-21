@@ -25,7 +25,7 @@
 - 任务支持点选进入、重命名、归档、删除；执行中仍可查看其它任务历史，但不能同时再发一条。
 - 点进历史任务就是进入这条对话：立刻看到本地消息，输入框可直接发送，没有「继续任务」按钮。后台会尝试接回 Grok session；接不上时仍留在同一条任务上，状态条会说明上下文可能不完整。
 - 首版只有 **一个执行槽**：一条任务在跑时，其它任务可以看、可以打草稿，发送会被拦住，直到当前 Turn 结束或被停止。
-- 侧栏「插件」打开主列整页，只展示 App 专属 `userData/grok-home` 里 Grok 已加载的插件摘要；切到插件页 **不会** 停止正在跑的任务，也不会清空当前选中对话。进行中或等待审批时，插件页顶部可以返回对话。
+- 侧栏「插件」打开主列整页，插件 tab 内分「已安装 / 市场」：已安装只展示 App 专属 `userData/grok-home` 里 Grok 已加载的插件摘要；市场只读同一 grok-home 的 `marketplace-cache`，货架未装项不会进已安装栏。切到插件页 **不会** 停止正在跑的任务，也不会清空当前选中对话。进行中或等待审批时，插件页顶部可以返回对话。
 - 标题栏可打开检查器抽屉（盖住右侧，不占第三列）。Timeline 显示轮次摘要；历史任务还能看权限审计。Changes / Terminal / Artifacts 目前是占位，尚未实现。
 
 ### 对话与执行
@@ -34,7 +34,7 @@
 - 流式展示助手回复、思考过程、计划和工具活动。助手正式回复按 Markdown 渲染标题、列表、代码、表格和安全外链；原始 HTML 与危险链接会降级为文本。
 - 工具调用收成短标签，长命令或路径默认折叠。
 - 输入框左下角切换模型；任务执行中禁止切换。有上下文用量时显示在模型选择器旁。
-- 输入框以 `/` 开头时打开斜杠命令板：展示当前 session 里 Grok 广告的命令，以及桌面别名 `/plugins`、`/settings`。Grok 还没广告时只显示等待/空，不会手写一份假菜单。选产品别名只做导航，不会当成 Prompt 发给 Grok。
+- 输入框以 `/` 开头时打开斜杠命令板：展示当前 session 里 Grok 广告的命令，以及桌面别名 `/plugins`、`/marketplace`、`/settings`。Grok 还没广告时只显示等待/空，不会手写一份假菜单。选产品别名只做导航，不会当成 Prompt 发给 Grok。
 - 发送任务、停止当前 Turn。Enter 发送，Shift+Enter 换行。Esc 在命令板打开时先关面板，不停止任务。
 - 轮次结束后有结果审阅摘要（用量、是否观察到 Diff / 验证 / Artifact）；未接入的能力会标明「未观察」或「尚未接入」，不会假装已经成功。
 
@@ -55,7 +55,7 @@
 
 - 只有 Grok Build Runtime；Codex 尚未接入。
 - 桌面不是 MCP Host，也不修改用户自己的 `~/.grok`。Grok 配置写在应用 `userData/grok-home`。
-- ACP 握手使用 `clientCapabilities: {}`，Prompt 只发文本。斜杠命令来自 Grok 的 `available_commands_update` session 快照，不进 Timeline。记忆浏览和 MCP 注入尚未做（见 P0-10D）。插件页不能安装/卸载，启停开关还是占位。
+- ACP 握手使用 `clientCapabilities: {}`，Prompt 只发文本。斜杠命令来自 Grok 的 `available_commands_update` session 快照，不进 Timeline。插件安装必须先确认信任，再由 `grok plugin` 写入 App `grok-home`，不读、不写用户 `~/.grok` 的插件目录。开发版 GUI 安装走查尚未跑。
 - 没有隔离 Worktree、Git Diff 审阅、用户交互终端或 Artifact 预览。
 - 不会宣称支持全部 OpenAI 兼容模型；当前验证的是 Chat Completions 的 `/models` 与 `/chat/completions`，再加上 Grok Build 作为 Agent 去实际执行。
 

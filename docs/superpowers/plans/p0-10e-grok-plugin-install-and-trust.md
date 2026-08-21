@@ -1,6 +1,6 @@
 # P0-10E Grok 插件安装与信任 实施计划
 
-> **状态：** 待开始（2026-08-20 立项：GUI 走查发现侧栏「插件」对齐的是已装列表，TUI Marketplace 的 19 项是货架；本计划把安装/信任接到桌面）。
+> **状态：** 代码已落地（2026-08-21）。自动验证已过（目标文件 ESLint、全量 vitest 99 files / 814 tests、typecheck、build、`git diff --check`）。本机 App grok-home 无 `marketplace-cache` / `installed-plugins`，开发版 GUI / 安装走查未跑。
 >
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 按任务落地。步骤使用复选框 (`- [ ]`) 跟踪。
 >
@@ -173,7 +173,7 @@ export function parseMarketplacePluginSummary(value: unknown): MarketplacePlugin
 
 禁止 `path`、`sha`、`url` 进 Renderer DTO。`sourceName` 用 config 里的 `name`（例如 `plugin-marketplace`），不是 git URL。
 
-- [ ] 测试：混入 `path`/`sha` 被丢；非法 name 跳过。
+- [x] 测试：混入 `path`/`sha` 被丢；非法 name 跳过。
 
 ---
 
@@ -187,9 +187,9 @@ export function parseMarketplacePluginSummary(value: unknown): MarketplacePlugin
 
 与已装 `registry.json` 的插件名交叉，标 `installed`。注意市场条目 `chrome-devtools` 与已装 id `chrome-devtools-mcp` 可能不同：用 registry 的 `marketplace.plugin_subdir` 或 name 前缀对齐，**不要**靠猜。测装置 chrome-devtools 这条真实对应。
 
-- [ ] 测试：cache 不存在返回 []。
-- [ ] 测试：marketplace.json 的 19 项可解析，且不含绝对路径。
-- [ ] 测试：symlink 逃出 grok-home 的 cache 项跳过。
+- [x] 测试：cache 不存在返回 []。
+- [x] 测试：marketplace.json 的 19 项可解析，且不含绝对路径。
+- [x] 测试：symlink 逃出 grok-home 的 cache 项跳过。
 
 ---
 
@@ -222,8 +222,8 @@ export async function runGrokPlugin(input: {
 
 测试用 fake binary，断言 argv 含自定义 socket、env 含 GROK_HOME、不含用户 home 的 leader.sock。
 
-- [ ] 测试：未传 trust 时 argv 不含 `--trust`。
-- [ ] 测试：错误文本不含绝对路径和 Key。
+- [x] 测试：未传 trust 时 argv 不含 `--trust`。
+- [x] 测试：错误文本不含绝对路径和 Key。
 
 ---
 
@@ -252,9 +252,9 @@ addMarketplaceSource({ gitUrl: string })
 
 GitNexus：改 IPC 注册前对 `registerAppIpcHandlers` 做 upstream impact。
 
-- [ ] 测试：静态 channel 数组含这四项，且仍无 `grok:*`。
-- [ ] 测试：name 含 `..` `/` 被拒。
-- [ ] 测试：gitUrl 带 userinfo 被拒。
+- [x] 测试：静态 channel 数组含这四项，且仍无 `grok:*`。
+- [x] 测试：name 含 `..` `/` 被拒。
+- [x] 测试：gitUrl 带 userinfo 被拒。
 
 ---
 
@@ -276,26 +276,26 @@ GitNexus：改 IPC 注册前对 `registerAppIpcHandlers` 做 upstream impact。
 
 安装成功 toast/横幅：「已安装。新对话或重新进入任务后由 Grok 加载。」不得说「当前 Turn 已生效」。
 
-- [ ] 测试：未勾选信任不能发出 `trust: true`。
-- [ ] 测试：`/marketplace` 产品别名打开市场栏且 kind 为 product。
+- [x] 测试：未勾选信任不能发出 `trust: true`。
+- [x] 测试：`/marketplace` 产品别名打开市场栏且 kind 为 product。
 
 ---
 
 ### Task 6: 验证
 
-- [ ] 目标文件 ESLint、`pnpm test`、`pnpm typecheck`、`pnpm build`、`git diff --check`
-- [ ] 开发版：插件页已安装能看到 `chrome-devtools-mcp`（若仍留在 App grok-home）
-- [ ] 开发版：市场栏能看到官方源条目；再装一个非 Google 插件（例如 `exa`）走完确认框
-- [ ] 安装前后 `~/.grok/config.toml` hash 不变
-- [ ] 进行中 Task 切到插件页安装，Turn 不 cancel
-- [ ] 保存供应商配置后 `[plugins]` / `[marketplace]` 仍在（依赖 P0-10D 合并）
+- [x] 目标文件 ESLint、`pnpm test`、`pnpm typecheck`、`pnpm build`、`git diff --check`（2026-08-21：Node v22.22.0 / pnpm 10.33.0；vitest 99 files / 814 tests；全量 ESLint 0 error，1 条既有 prettier warning 在未改的 `useTaskTimeline.test.ts`）
+- [ ] 开发版：插件页已安装能看到 `chrome-devtools-mcp`（若仍留在 App grok-home）——本机 grok-home **无** `installed-plugins`，未跑开发版 GUI
+- [ ] 开发版：市场栏能看到官方源条目；再装一个非 Google 插件（例如 `exa`）走完确认框——本机 grok-home **无** `marketplace-cache`，未跑开发版 GUI
+- [ ] 安装前后 `~/.grok/config.toml` hash 不变——未实际安装插件，未哈希用户 toml
+- [ ] 进行中 Task 切到插件页安装，Turn 不 cancel——未跑开发版 GUI；单测覆盖安装路径不 `cancelTurn` / `disconnect`
+- [ ] 保存供应商配置后 `[plugins]` / `[marketplace]` 仍在（依赖 P0-10D 合并）——未跑开发版 GUI；合并写入由 P0-10D 单测覆盖
 
 ## 验收标准
 
-- [ ] 市场与已安装是两份名单；货架未装项不得出现在已安装栏。
-- [ ] 安装必须经过信任确认；主进程在 `trust !== true` 时不传 `--trust`。
-- [ ] 安装写入 App grok-home 的 `installed-plugins/`，不写 `~/.grok`。
-- [ ] CLI 使用 grok-home 内 leader socket，不连接用户 TUI leader。
-- [ ] Renderer 看不到绝对路径、registry path、MCP command/env。
-- [ ] 无 `grok:*` IPC；`clientCapabilities` 仍为 `{}`。
-- [ ] 当前 Turn 不因安装而中断；新插件下一 session 生效。
+- [x] 市场与已安装是两份名单；货架未装项不得出现在已安装栏。（库存/货架单测；GUI 未跑）
+- [x] 安装必须经过信任确认；主进程在 `trust !== true` 时不传 `--trust`。（UI + IPC + CLI 单测）
+- [ ] 安装写入 App grok-home 的 `installed-plugins/`，不写 `~/.grok`。——CLI 单测覆盖 `GROK_HOME` 与 socket；真机写入未跑
+- [x] CLI 使用 grok-home 内 leader socket，不连接用户 TUI leader。（CLI 单测）
+- [x] Renderer 看不到绝对路径、registry path、MCP command/env。（DTO / 扫描 / preload 单测）
+- [x] 无 `grok:*` IPC；`clientCapabilities` 仍为 `{}`。（channel 单测 + Adapter 源码）
+- [ ] 当前 Turn 不因安装而中断；新插件下一 session 生效。——单测覆盖不 cancel；开发版进行中 Task 安装未跑

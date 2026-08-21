@@ -1,6 +1,6 @@
 # Grok ACP 加深计划
 
-> 状态：已立项，P0-09 真机测试门已受限关闭，GACP-01 已于 2026-08-19 受限关闭，GACP-02 核心已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；P0-10D 代码已落地（相关自动测试已过，GUI / TUI 对读未跑）。`available_commands_update` 现为 session 快照，不进 Timeline。
+> 状态：已立项，P0-09 真机测试门已受限关闭，GACP-01 已于 2026-08-19 受限关闭，GACP-02 核心已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；P0-10D 代码已落地（相关自动测试已过，GUI / TUI 对读未跑）；P0-10E 代码已落地（自动验证已过，开发版 GUI / 安装走查未跑）。下一步 P0-11。`available_commands_update` 现为 session 快照，不进 Timeline。
 > 创建日期：2026-08-18
 > 定位：在现有 `GrokAcpAdapter` 最小闭环之上，按真实 Grok ACP 方言补齐验证、恢复、审批可解释性和 Client 能力广告
 > 产品愿景仍以 [product-vision.md](../../../product-vision.md) 为准；本目录不改 Runtime × Provider × Capability 分层
@@ -91,8 +91,8 @@ P0-A 主表因此变成：
 | 5b | [GACP-02](gacp-02-session-restore-capability-contract.md) | 5 | 核心已落地，待手工/e2e 收口 | 点进历史即可接着聊，无二次确认；load 仍按未核实降级 |
 | 6 | P0-10 | 5 | GACP-02 后 | 工作台按「点进去就能发」来做，禁止加回继续按钮 |
 | 6b | [P0-10C](../p0-10c-grok-host-surfaces.md) | 4 | 代码已落地（自动验证已过，GUI 未跑） | 命令板 + 插件整页；`available_commands_update` 为 session 快照，不进 Timeline |
-| 6c | [P0-10D](../p0-10d-grok-memory-and-mcp.md) | 4 | P0-10C 后 | 设置记忆/MCP；Grok 执行 |
-| 6d | [P0-10E](../p0-10e-grok-plugin-install-and-trust.md) | 4 | P0-10D 后 | 市场安装/信任；不读 ~/.grok |
+| 6c | [P0-10D](../p0-10d-grok-memory-and-mcp.md) | 4 | 代码已落地（自动测试已过，GUI / TUI 对读未跑） | 设置记忆/MCP；Grok 执行 |
+| 6d | [P0-10E](../p0-10e-grok-plugin-install-and-trust.md) | 4 | 代码已落地（自动验证已过，GUI 未跑） | 市场安装/信任；不读 ~/.grok |
 | 7 | P0-11 | 5 | 仍按原依赖 | 命令证据事实源 |
 | 7a | [GACP-03](gacp-03-structured-permission-evidence.md) | 4 | P0-11 后 | 能过的自动过，不要一个个点 |
 | 8 | P0-12 | 5 | 原依赖不变 | Diff 审阅 |
@@ -124,6 +124,7 @@ P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windo
 | P3-04 | 通用 Capability MCP Host（非 Grok 会话注入） | Grok 的 `mcpServers` 由 P0-10D 注入；本目录不实现 MCP 进程 |
 | P0-10C | 斜杠命令板、插件整页、`available_commands` 快照（代码已落地） | 不把命令写进 Timeline |
 | P0-10D | 设置里的记忆浏览与 MCP 配置 | 记忆引擎与 MCP 连接仍由 Grok 执行 |
+| P0-10E | 插件市场货架、安装/卸载与信任确认（代码已落地；GUI 未跑） | 不读 `~/.grok`；不把桌面做成 Marketplace Host |
 
 ## 5. 文档索引
 
@@ -138,6 +139,7 @@ P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windo
 | [P0-10A](../p0-10a-claude-desktop-workbench-ui.md) | 整站按 Claude Code Desktop 便捷度大修 |
 | [P0-10C](../p0-10c-grok-host-surfaces.md) | Grok 宿主表面：命令板、插件整页 |
 | [P0-10D](../p0-10d-grok-memory-and-mcp.md) | 设置：记忆浏览、MCP 交给 Grok |
+| [P0-10E](../p0-10e-grok-plugin-install-and-trust.md) | 插件安装与信任：货架只读 cache，安装走 grok plugin CLI |
 
 路线图入口见 [roadmap-index.md](../roadmap-index.md) 的 “Grok ACP 加深” 一节。
 
