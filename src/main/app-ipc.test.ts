@@ -444,6 +444,20 @@ describe('App IPC Handler', () => {
     expect(fixture.uninstallPlugin).toHaveBeenCalledTimes(1)
   })
 
+  it('卸载拒绝把 --flag 形态的 pluginId 送进 CLI argv', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.uninstallPlugin, { pluginId: '--keep-data' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.uninstallPlugin, { pluginId: '--trust' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.uninstallPlugin, { pluginId: '-n' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.uninstallPlugin).not.toHaveBeenCalled()
+  })
+
   it('加源拒绝带 userinfo、http、query 或 hash 的 gitUrl', async () => {
     const fixture = createFixture()
     const official = 'https://github.com/xai-org/plugin-marketplace.git'

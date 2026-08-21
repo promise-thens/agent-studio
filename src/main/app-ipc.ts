@@ -301,13 +301,14 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
     return null
   })
   /**
-   * 卸载走 Grok CLI；pluginId 必须是单层标识，禁止路径穿越。
+   * 卸载走 Grok CLI；pluginId 必须同时过货架字符集，禁止前导 `-`。
+   * 否则 `--keep-data` 会进 argv，被 CLI 当成选项而不是名称。
    * 不在 IPC 层附加 --keep-data，避免残留 MCP 状态目录说不清。
    */
   register(APP_INVOKE_CHANNELS.uninstallPlugin, async (args) => {
     const request = readRequest(args, ['pluginId'])
     const pluginId = readText(request, 'pluginId')
-    if (!isRuntimePluginId(pluginId)) {
+    if (!isMarketplacePluginName(pluginId)) {
       throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
     }
     await dependencies.uninstallPlugin({ pluginId })

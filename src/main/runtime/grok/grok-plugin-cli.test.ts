@@ -6,11 +6,20 @@ import { AGENT_STUDIO_MODEL_API_KEY_ENV } from '../../provider/grok-provider-con
 import { grokPluginLeaderSocket, runGrokPlugin } from './grok-plugin-cli'
 
 const FAKE_API_KEY = 'sk-agent-studio-fake-plugin-cli-key-not-real'
+const PLANTED_NPM_TOKEN = 'planted-npm-token-not-real'
+const PLANTED_XAI_API_KEY = 'planted-xai-api-key-not-real'
+const PLANTED_GIT_SSH_COMMAND = 'ssh -i /secret/id_rsa'
+const SECRET_STDERR_PATH = '/Users/secret/project/file.ts'
+const SECRET_STDERR_URL = 'https://evil.example/repo.git'
 const SPAWN_DUMP_FILE = 'grok-plugin-spawn-dump.json'
 const USER_LEADER_SOCKET = join(homedir(), '.grok', 'leader.sock')
 
 const temporaryDirectories: string[] = []
 const originalModelApiKey = process.env[AGENT_STUDIO_MODEL_API_KEY_ENV]
+const originalNpmToken = process.env.NPM_TOKEN
+const originalXaiApiKey = process.env.XAI_API_KEY
+const originalGitSshCommand = process.env.GIT_SSH_COMMAND
+const originalGitAskpass = process.env.GIT_ASKPASS
 
 interface SpawnDump {
   argv: string[]
@@ -18,6 +27,10 @@ interface SpawnDump {
   grokHome: string | null
   hasModelApiKey: boolean
   modelApiKey: string | null
+  npmToken: string | null
+  xaiApiKey: string | null
+  gitSshCommand: string | null
+  gitAskpass: string | null
   pid: number
 }
 
@@ -27,12 +40,20 @@ async function createTemporaryDirectory(prefix: string): Promise<string> {
   return path
 }
 
-function restoreModelApiKey(): void {
-  if (originalModelApiKey === undefined) {
-    delete process.env[AGENT_STUDIO_MODEL_API_KEY_ENV]
+function restoreEnvVar(name: string, original: string | undefined): void {
+  if (original === undefined) {
+    delete process.env[name]
     return
   }
-  process.env[AGENT_STUDIO_MODEL_API_KEY_ENV] = originalModelApiKey
+  process.env[name] = original
+}
+
+function restoreHostEnvironment(): void {
+  restoreEnvVar(AGENT_STUDIO_MODEL_API_KEY_ENV, originalModelApiKey)
+  restoreEnvVar('NPM_TOKEN', originalNpmToken)
+  restoreEnvVar('XAI_API_KEY', originalXaiApiKey)
+  restoreEnvVar('GIT_SSH_COMMAND', originalGitSshCommand)
+  restoreEnvVar('GIT_ASKPASS', originalGitAskpass)
 }
 
 function isPidAlive(pid: number): boolean {
@@ -58,7 +79,7 @@ function killPidBestEffort(pid: number): void {
 }
 
 afterEach(async () => {
-  restoreModelApiKey()
+  restoreHostEnvironment()
 
   for (const directory of temporaryDirectories) {
     try {
@@ -103,6 +124,10 @@ const dump = {
     ${JSON.stringify(AGENT_STUDIO_MODEL_API_KEY_ENV)}
   ),
   modelApiKey: process.env[${JSON.stringify(AGENT_STUDIO_MODEL_API_KEY_ENV)}] ?? null,
+  npmToken: process.env.NPM_TOKEN ?? null,
+  xaiApiKey: process.env.XAI_API_KEY ?? null,
+  gitSshCommand: process.env.GIT_SSH_COMMAND ?? null,
+  gitAskpass: process.env.GIT_ASKPASS ?? null,
   pid: process.pid
 }
 writeFileSync(join(process.cwd(), ${JSON.stringify(SPAWN_DUMP_FILE)}), JSON.stringify(dump), 'utf8')
@@ -116,6 +141,10 @@ if (MODE === 'sleep') {
       String(process.env.GROK_HOME ?? '') +
       ' key=' +
       FAIL_KEY +
+      ' ' +
+      ${JSON.stringify(SECRET_STDERR_PATH)} +
+      ' ' +
+      ${JSON.stringify(SECRET_STDERR_URL)} +
       '\\n'
   )
   process.stderr.write('E'.repeat(4000) + '\\n')
@@ -189,6 +218,39 @@ describe('runGrokPlugin', () => {
     expect(JSON.stringify(dump)).not.toContain(FAKE_API_KEY)
   })
 
+  it('子进程环境走 allowlist，不继承宿主 NPM_TOKEN / XAI_API_KEY / GIT_SSH_COMMAND', async () => {
+    const { grokHome, grokBinary } = await writeFakeGrok('ok')
+    process.env[AGENT_STUDIO_MODEL_API_KEY_ENV] = FAKE_API_KEY
+    process.env.NPM_TOKEN = PLANTED_NPM_TOKEN
+    process.env.XAI_API_KEY = PLANTED_XAI_API_KEY
+    process.env.GIT_SSH_COMMAND = PLANTED_GIT_SSH_COMMAND
+    process.env.GIT_ASKPASS = '/secret/askpass'
+
+    const result = await runGrokPlugin({
+      grokHome,
+      grokBinary,
+      args: ['plugin', 'install', 'chrome-devtools'],
+      timeoutMs: 10_000
+    })
+
+    expect(result).toEqual({ ok: true, stdout: 'plugin-ok\n' })
+    expect(process.env.NPM_TOKEN).toBe(PLANTED_NPM_TOKEN)
+    expect(process.env.XAI_API_KEY).toBe(PLANTED_XAI_API_KEY)
+
+    const dump = await readSpawnDump(grokHome)
+    expect(dump.grokHome).toBe(grokHome)
+    expect(dump.hasModelApiKey).toBe(false)
+    expect(dump.modelApiKey).toBeNull()
+    expect(dump.npmToken).toBeNull()
+    expect(dump.xaiApiKey).toBeNull()
+    expect(dump.gitSshCommand).toBeNull()
+    expect(dump.gitAskpass).toBeNull()
+    expect(JSON.stringify(dump)).not.toContain(PLANTED_NPM_TOKEN)
+    expect(JSON.stringify(dump)).not.toContain(PLANTED_XAI_API_KEY)
+    expect(JSON.stringify(dump)).not.toContain(PLANTED_GIT_SSH_COMMAND)
+    expect(JSON.stringify(dump)).not.toContain(FAKE_API_KEY)
+  })
+
   it('失败输出脱敏绝对路径和 API Key，且不把 Key 传给子进程', async () => {
     const { grokHome, grokBinary } = await writeFakeGrok('fail')
     process.env[AGENT_STUDIO_MODEL_API_KEY_ENV] = FAKE_API_KEY
@@ -206,6 +268,10 @@ describe('runGrokPlugin', () => {
     expect(result.message).toContain('[REDACTED]')
     expect(result.message).not.toContain(grokHome)
     expect(result.message).not.toContain(FAKE_API_KEY)
+    expect(result.message).not.toContain(SECRET_STDERR_PATH)
+    expect(result.message).not.toContain('/Users/secret')
+    expect(result.message).not.toContain(SECRET_STDERR_URL)
+    expect(result.message).not.toContain('evil.example')
     expect(Buffer.byteLength(result.message, 'utf8')).toBeLessThanOrEqual(2048)
     expect(process.env[AGENT_STUDIO_MODEL_API_KEY_ENV]).toBe(FAKE_API_KEY)
 

@@ -392,7 +392,8 @@ function resolveGrokPluginBinary(): string {
 
 /**
  * 在 App grok-home 下跑 grok plugin CLI。
- * 失败只抛脱敏短句；成功丢弃 stdout，避免绝对路径进 Renderer。不得 cancelTurn / disconnect。
+ * 失败抛普通 Error，让 toDesktopIpcError 再跑 URL/路径正则；不得用 DesktopIpcFailure 跳过脱敏。
+ * 成功丢弃 stdout，避免绝对路径进 Renderer。不得 cancelTurn / disconnect。
  */
 async function runManagedPluginCli(args: string[]): Promise<null> {
   const result = await runGrokPlugin({
@@ -402,7 +403,7 @@ async function runManagedPluginCli(args: string[]): Promise<null> {
     timeoutMs: GROK_PLUGIN_CLI_TIMEOUT_MS
   })
   if (!result.ok) {
-    throw new DesktopIpcFailure('operation-failed', result.message)
+    throw new Error(result.message)
   }
   return null
 }

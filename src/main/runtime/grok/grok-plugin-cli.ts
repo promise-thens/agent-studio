@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { delimiter, join } from 'node:path'
 import { AGENT_STUDIO_MODEL_API_KEY_ENV } from '../../provider/grok-provider-config'
 import { redactSensitiveText } from '../../security/sensitive-redaction'
 
@@ -7,6 +8,44 @@ const LEADER_SOCKET_FILE = 'studio-plugin.sock'
 const LEADER_SOCKET_FLAG = '--leader-socket'
 const ERROR_MESSAGE_LIMIT_BYTES = 2 * 1024
 const STREAM_CAPTURE_LIMIT = 8 * 1024
+const URL_PATTERN = /\b(?:https?|file):\/\/[^\s"'<>]+/giu
+const WINDOWS_PATH_PATTERN = /\b[A-Za-z]:\\(?:[^\\\s"'<>]+\\)*[^\\\s"'<>]*/gu
+const POSIX_PATH_PATTERN = /(^|[\s"'(])\/(?:[^/\s"'<>]+\/)*[^/\s"'<>]+/gu
+const CONTROL_CHARACTER_PATTERN = /\p{Cc}/gu
+
+/**
+ * plugin CLI 只继承安装所需的宿主变量。
+ * 原因：这次 spawn 会 git clone，开发者 shell 里的 NPM_TOKEN / XAI_API_KEY / GIT_SSH_COMMAND
+ * 不得进入 clone；不得拷贝 process.env 后再只剥模型 Key。
+ * 边界：PATH/HOME/locale/proxy/Windows 根变量 + 强制 GROK_HOME；永不写入模型 Key，
+ * 也不复制 GIT_ASKPASS。https clone 靠 PATH、代理和系统 SSL。
+ */
+const PLUGIN_CLI_ENV_ALLOWLIST = [
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'SystemRoot',
+  'WINDIR',
+  'COMSPEC',
+  'PATHEXT',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'no_proxy'
+] as const
 
 /**
  * 返回桌面 plugin CLI 专用的 leader socket 路径。
@@ -20,7 +59,7 @@ export function grokPluginLeaderSocket(grokHome: string): string {
  * 在 App grok-home 下执行 `grok plugin …`。
  * 自动注入受管 `--leader-socket`，覆盖 `GROK_HOME`，不附加 `--trust`（由调用方决定）。
  * 调用方若自带 `--leader-socket` 或 `args[0]` 不是 `plugin`，拒绝 spawn。
- * 子进程环境会剥掉 `AGENT_STUDIO_MODEL_API_KEY`，且不得改写全局 `process.env`。
+ * 子进程环境按 allowlist 构造，强制 GROK_HOME，永不写入模型 Key，且不得改写全局 `process.env`。
  */
 export async function runGrokPlugin(input: {
   grokHome: string
@@ -96,20 +135,29 @@ export async function runGrokPlugin(input: {
 }
 
 /**
- * 构造 plugin CLI 子进程环境：强制 GROK_HOME 为 App grok-home，
- * 并剥离模型 Key，避免安装流程把宿主密钥写进 argv 或错误文本。
+ * 从 allowlist 构造 plugin CLI 环境，而不是浅拷贝 process.env。
+ * 原因：安装会 git clone，宿主 npm/git/模型密钥不能进入这次 spawn。
+ * 边界：PATH 前置 ~/.grok/bin 以便找到 grok；不复用会注入模型 Key 的 Runtime 环境函数。
  */
 function buildPluginCliEnvironment(
   grokHome: string,
   sourceEnvironment: NodeJS.ProcessEnv
 ): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { ...sourceEnvironment }
+  const environment: NodeJS.ProcessEnv = {}
+  for (const name of PLUGIN_CLI_ENV_ALLOWLIST) {
+    const value = sourceEnvironment[name]
+    if (value) environment[name] = value
+  }
+
+  environment.PATH = [join(homedir(), '.grok/bin'), sourceEnvironment.PATH]
+    .filter(Boolean)
+    .join(delimiter)
+  environment.GROK_HOME = grokHome
   for (const name of Object.keys(environment)) {
     if (name.toUpperCase() === AGENT_STUDIO_MODEL_API_KEY_ENV) {
       delete environment[name]
     }
   }
-  environment.GROK_HOME = grokHome
   return environment
 }
 
@@ -205,18 +253,27 @@ function collectKnownSecrets(grokHome: string): string[] {
 function failure(message: string, grokHome: string): { ok: false; message: string } {
   return {
     ok: false,
-    message: truncateUtf8(
-      redactSensitiveText(message, collectKnownSecrets(grokHome)),
-      ERROR_MESSAGE_LIMIT_BYTES
-    )
+    message: sanitizeCliFailureMessage(message, grokHome)
   }
 }
 
 function toFailureMessage(stdout: string, stderr: string, grokHome: string): string {
   const combined = [stderr.trim(), stdout.trim()].filter((part) => part.length > 0).join('\n')
-  const redacted = redactSensitiveText(combined, collectKnownSecrets(grokHome))
-  const truncated = truncateUtf8(redacted, ERROR_MESSAGE_LIMIT_BYTES).trim()
-  return truncated || 'Grok plugin 命令失败。'
+  return sanitizeCliFailureMessage(combined, grokHome)
+}
+
+/**
+ * CLI 失败文案先剥已知密钥，再走与 IPC 相同的 URL / 路径正则。
+ * 只 redacted grokHome 不够：stderr 里的用户目录和 git URL 也会进 Renderer。
+ */
+function sanitizeCliFailureMessage(message: string, grokHome: string): string {
+  const redacted = redactSensitiveText(message, collectKnownSecrets(grokHome))
+    .replace(URL_PATTERN, '[REDACTED]')
+    .replace(WINDOWS_PATH_PATTERN, '[REDACTED]')
+    .replace(POSIX_PATH_PATTERN, '$1[REDACTED]')
+    .replace(CONTROL_CHARACTER_PATTERN, ' ')
+    .trim()
+  return truncateUtf8(redacted, ERROR_MESSAGE_LIMIT_BYTES).trim() || 'Grok plugin 命令失败。'
 }
 
 function appendLimited(current: string, chunk: string, maxChars: number): string {

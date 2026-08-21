@@ -8,6 +8,7 @@ import type {
 import type { OperationLease } from './agent/operation-gate'
 import type { ProviderIpcOperations } from './provider/ipc'
 import type { ProviderRuntimeConfig } from './provider/provider-config-store'
+import { DesktopIpcFailure, toDesktopIpcError } from './security/ipc-sender-validation'
 
 type AppDeletionDependencies = {
   removeProject(projectId: string): Promise<void>
@@ -156,12 +157,14 @@ const mocks = vi.hoisted(() => {
     projectDeletionPreparation: createDeletionPreparationMock(),
     taskDeletionLease: createDeletionLeaseMock(),
     projectDeletionLease: createDeletionLeaseMock(),
-    runGrokPlugin: vi.fn<(input: GrokPluginCliInput) => Promise<{ ok: true; stdout: string }>>(
-      async () => ({
-        ok: true,
-        stdout: ''
-      })
-    ),
+    runGrokPlugin: vi.fn<
+      (
+        input: GrokPluginCliInput
+      ) => Promise<{ ok: true; stdout: string } | { ok: false; message: string }>
+    >(async () => ({
+      ok: true,
+      stdout: ''
+    })),
     permissionBroker: {
       beginProjectDeletion: vi.fn(),
       beginTaskDeletion: vi.fn(),
@@ -730,6 +733,33 @@ describe('Main 删除与权限失效编排', () => {
         timeoutMs: 120_000
       })
     )
+  })
+
+  it('CLI 失败抛普通 Error，IPC 脱敏后不含绝对路径与 URL', async () => {
+    mocks.runGrokPlugin.mockReset()
+    mocks.runGrokPlugin.mockResolvedValue({
+      ok: false,
+      message: 'clone failed /Users/secret/project/file.ts https://evil.example/repo.git'
+    })
+    const dependencies = mocks.appDeletionDependencies!
+    let caught: unknown
+    try {
+      await dependencies.installPlugin({ name: 'chrome-devtools', trust: true })
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(Error)
+    expect(caught).not.toBeInstanceOf(DesktopIpcFailure)
+
+    const ipcError = toDesktopIpcError(caught, (value) =>
+      value instanceof Error ? value.message : String(value)
+    )
+    expect(ipcError.code).toBe('operation-failed')
+    expect(ipcError.message).not.toContain('/Users/secret')
+    expect(ipcError.message).not.toContain('file.ts')
+    expect(ipcError.message).not.toContain('evil.example')
+    expect(ipcError.message).not.toContain('https://')
   })
 })
 
