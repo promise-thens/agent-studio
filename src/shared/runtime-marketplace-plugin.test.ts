@@ -54,6 +54,18 @@ describe('市场插件条目契约', () => {
     expect(
       parseMarketplacePluginSummary({
         ...validSummary,
+        sourceName: 'plugin-marketplace'
+      })
+    ).toMatchObject({ sourceName: 'plugin-marketplace' })
+    expect(
+      parseMarketplacePluginSummary({
+        ...validSummary,
+        sourceName: 'xai-official'
+      })
+    ).toMatchObject({ sourceName: 'xai-official' })
+    expect(
+      parseMarketplacePluginSummary({
+        ...validSummary,
         sourceName: 'https://github.com/xai-org/plugin-marketplace.git'
       })
     ).toBeNull()
@@ -67,6 +79,13 @@ describe('市场插件条目契约', () => {
       parseMarketplacePluginSummary({
         ...validSummary,
         sourceName: 'user:token@host'
+      })
+    ).toBeNull()
+    // scp-like host:path（无 @、无 /）也不得当作 config 源 id
+    expect(
+      parseMarketplacePluginSummary({
+        ...validSummary,
+        sourceName: 'github.com:plugin-marketplace'
       })
     ).toBeNull()
     expect(

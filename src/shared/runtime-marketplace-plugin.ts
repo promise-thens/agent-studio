@@ -7,8 +7,10 @@ import {
 /** 货架条目名：与 isRuntimePluginId 叠加的字符集与长度约束。 */
 const MARKETPLACE_PLUGIN_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9:_-]{0,63}$/
 
+/** 源 id：短标识，禁止冒号以免 scp-like host:path 混入。 */
+const MARKETPLACE_SOURCE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/
+
 const MAX_DISPLAY_NAME_LENGTH = 256
-const MAX_SOURCE_NAME_LENGTH = 128
 
 /**
  * Renderer 可展示的市场货架摘要。
@@ -66,16 +68,11 @@ function isMarketplacePluginName(value: unknown): value is string {
 }
 
 /**
- * sourceName 只接受短源 id。
- * 出现 ://、路径分隔符或 userinfo（含 @）时视为 URL/路径，整项拒绝。
+ * sourceName 只接受短源 id（如 plugin-marketplace）。
+ * 禁止 : / \ @ 与 URL 形态，避免把 git/scp 远端写成 config name。
  */
 function isSafeSourceName(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0) return false
-  if (value.length > MAX_SOURCE_NAME_LENGTH || value.includes('\0')) return false
-  if (value.includes('://') || value.includes('/') || value.includes('\\')) return false
-  // userinfo / scp-like（user@host）不得当作源 id
-  if (value.includes('@')) return false
-  return true
+  return typeof value === 'string' && MARKETPLACE_SOURCE_NAME_PATTERN.test(value)
 }
 
 function isSafeDisplayName(value: unknown): value is string {
