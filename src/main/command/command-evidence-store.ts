@@ -78,18 +78,17 @@ export class CommandEvidenceStore {
       throw new Error('transcript 字节计数无效。')
     }
 
-    const chunks = sanitizeChunks(input.chunks)
-    const availableBytes = utf8ByteLength(chunks.map((chunk) => chunk.text).join(''))
-    const truncated = input.truncated || availableBytes < input.totalBytes
+    const bounded = boundTranscriptChunks(sanitizeChunks(input.chunks), input.totalBytes)
+    const truncated = input.truncated || bounded.truncated
     const record: CommandTranscriptRecord = {
       transcriptId: input.transcriptId,
       commandId: input.commandId,
       taskId: input.taskId,
       encoding: 'utf-8',
       truncated,
-      totalBytes: Math.max(input.totalBytes, availableBytes),
-      availableBytes,
-      chunks
+      totalBytes: bounded.totalBytes,
+      availableBytes: bounded.availableBytes,
+      chunks: bounded.chunks
     }
 
     await this.writer.write(this.transcriptPath(input.taskId, input.transcriptId), {
@@ -218,6 +217,59 @@ function sanitizeChunks(value: unknown): CommandTranscriptChunk[] {
     chunks.push({ stream: item.stream, text: item.text })
   }
   return chunks
+}
+
+/**
+ * 写入侧强制执行字节/条数上限。Task 3 mapper 也会走这里，不能只依赖 runner 采集端截断。
+ */
+function boundTranscriptChunks(
+  chunks: CommandTranscriptChunk[],
+  reportedTotalBytes: number
+): {
+  chunks: CommandTranscriptChunk[]
+  availableBytes: number
+  totalBytes: number
+  truncated: boolean
+} {
+  const originalBytes = chunks.reduce((sum, chunk) => sum + utf8ByteLength(chunk.text), 0)
+  const totalBytes = Math.max(reportedTotalBytes, originalBytes)
+  const bounded: CommandTranscriptChunk[] = []
+  let storedBytes = 0
+  let truncated = false
+
+  for (const chunk of chunks) {
+    if (
+      bounded.length >= MAX_COMMAND_TRANSCRIPT_CHUNKS ||
+      storedBytes >= MAX_COMMAND_TRANSCRIPT_BYTES
+    ) {
+      truncated = true
+      break
+    }
+    const chunkBytes = utf8ByteLength(chunk.text)
+    const remaining = MAX_COMMAND_TRANSCRIPT_BYTES - storedBytes
+    if (chunkBytes <= remaining) {
+      bounded.push(chunk)
+      storedBytes += chunkBytes
+      continue
+    }
+    const text = truncateUtf8(chunk.text, remaining)
+    if (text.length > 0) {
+      bounded.push({ stream: chunk.stream, text })
+      storedBytes += utf8ByteLength(text)
+    }
+    truncated = true
+    break
+  }
+
+  if (storedBytes < totalBytes) truncated = true
+  return { chunks: bounded, availableBytes: storedBytes, totalBytes, truncated }
+}
+
+function truncateUtf8(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return ''
+  const encoded = Buffer.from(text, 'utf8')
+  if (encoded.byteLength <= maxBytes) return text
+  return encoded.subarray(0, maxBytes).toString('utf8')
 }
 
 /**

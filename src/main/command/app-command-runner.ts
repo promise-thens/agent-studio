@@ -26,7 +26,10 @@ export const MAX_COMMAND_TIMEOUT_MS = 5 * 60_000
 
 const MAX_EXECUTABLE_BYTES = 16 * 1024
 const MAX_ARG_BYTES = 64 * 1024
-const PROCESS_TEARDOWN_GRACE_MS = 1_000
+/** 超时/取消后先杀进程组并等 close；1s 后再补一刀，仍以 close 为准。 */
+const PROCESS_TEARDOWN_RETRY_MS = 1_000
+/** 仍无 close 时的最后期限，避免 runner 永久挂起；到期才允许在 pid 可能仍活着时落证据。 */
+const PROCESS_TEARDOWN_DEADLINE_MS = 5_000
 const textEncoder = new TextEncoder()
 
 export type CommandEnvPolicy = 'minimal'
@@ -244,6 +247,7 @@ export class AppCommandRunner {
       timeoutMs: input.spec.timeoutMs,
       signal: input.signal
     })
+    detachChildStreams(child)
     return finalizeCapture(collector, startedAt, new Date(this.now()).toISOString(), outcome)
   }
 
@@ -370,14 +374,17 @@ function waitForChild(
     let exitCode: number | null = null
     let signalName: string | undefined
     let stopReason: StopReason | null = null
-    let graceTimer: ReturnType<typeof setTimeout> | undefined
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined
 
     const finish = (): void => {
       if (settled) return
       settled = true
       clearTimeout(timeoutTimer)
-      if (graceTimer !== undefined) clearTimeout(graceTimer)
+      if (retryTimer !== undefined) clearTimeout(retryTimer)
+      if (deadlineTimer !== undefined) clearTimeout(deadlineTimer)
       options.signal?.removeEventListener('abort', onAbort)
+      detachChildStreams(child)
       resolve({
         spawnError,
         exitCode,
@@ -390,7 +397,24 @@ function waitForChild(
       if (settled || stopReason) return
       stopReason = reason
       killProcessGroup(child)
-      graceTimer = setTimeout(finish, PROCESS_TEARDOWN_GRACE_MS)
+      detachChildStreams(child)
+      // 1s 后再杀一次并打断 stdio，但仍等 close，不在这里提前结算证据。
+      retryTimer = setTimeout(() => {
+        if (settled) return
+        killProcessGroup(child)
+        detachChildStreams(child)
+      }, PROCESS_TEARDOWN_RETRY_MS)
+      deadlineTimer = setTimeout(() => {
+        if (settled) return
+        killProcessGroup(child)
+        detachChildStreams(child)
+        try {
+          child.unref()
+        } catch {
+          // 句柄可能已经关闭。
+        }
+        finish()
+      }, PROCESS_TEARDOWN_DEADLINE_MS)
     }
 
     const onAbort = (): void => {
@@ -407,15 +431,53 @@ function waitForChild(
     }
 
     child.once('error', (error) => {
+      if (settled || stopReason) return
       spawnError = error instanceof Error ? error : new Error('spawn failed')
       finish()
     })
     child.once('close', (code, signal) => {
       exitCode = code
       signalName = asSignal(signal)
+      const pid = child.pid
+      if (pid && stopReason) {
+        void waitUntilPidGone(pid, PROCESS_TEARDOWN_RETRY_MS).finally(finish)
+        return
+      }
       finish()
     })
   })
+}
+
+/** 打断残留 stdio，避免 close 被未消费管道拖住，并松开 collector 监听。 */
+function detachChildStreams(child: ChildProcess): void {
+  child.stdout?.removeAllListeners('data')
+  child.stderr?.removeAllListeners('data')
+  child.stdout?.destroy()
+  child.stderr?.destroy()
+}
+
+function waitUntilPidGone(pid: number, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs
+    const tick = (): void => {
+      if (!isPidAlive(pid) || Date.now() >= deadline) {
+        resolve()
+        return
+      }
+      setTimeout(tick, 20)
+    }
+    tick()
+  })
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**

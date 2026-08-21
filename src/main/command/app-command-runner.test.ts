@@ -159,7 +159,7 @@ describe('AppCommandRunner', () => {
       (await readFile(join(fixture.identity.executionRoot, 'child.pid'), 'utf8')).trim()
     )
     livePids.push(pid)
-    await waitUntil(() => !isPidAlive(pid), 1500)
+    // 证据结算时进程组必须已经退出，不能靠测试侧事后再等。
     expect(isPidAlive(pid)).toBe(false)
   }, 15_000)
 
@@ -182,7 +182,6 @@ describe('AppCommandRunner', () => {
     if (!result.ok) throw new Error('expected evidence')
     expect(result.evidence.status).toBe('cancelled')
     expect(result.evidence.timedOut).toBe(false)
-    await waitUntil(() => !isPidAlive(pid), 1500)
     expect(isPidAlive(pid)).toBe(false)
   }, 15_000)
 
@@ -403,14 +402,6 @@ async function waitForFile(path: string, timeoutMs = 3000): Promise<string> {
     }
   }
   throw new Error(`文件未在预期时间内出现: ${path}`)
-}
-
-async function waitUntil(predicate: () => boolean, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (predicate()) return
-    await delay(20)
-  }
 }
 
 function delay(ms: number): Promise<void> {

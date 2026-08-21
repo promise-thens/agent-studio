@@ -102,6 +102,31 @@ describe('CommandEvidenceStore', () => {
   it('导出的 transcript 字节上限与历史事件 256KiB 同量级', () => {
     expect(MAX_COMMAND_TRANSCRIPT_BYTES).toBe(256 * 1024)
   })
+
+  it('直接写入超长正文时仍按字节上限截断并标记 truncated', async () => {
+    const store = await createStore()
+    const oversized = MAX_COMMAND_TRANSCRIPT_BYTES + 8 * 1024
+    const transcriptRef = await store.writeTranscript({
+      transcriptId: 'transcript-oversize',
+      commandId: 'cmd-oversize',
+      taskId: 'task-1',
+      chunks: [{ stream: 'stdout', text: 'A'.repeat(oversized) }],
+      totalBytes: oversized,
+      truncated: false
+    })
+    const transcript = await store.readTranscript('task-1', 'transcript-oversize')
+    const storedBytes = Buffer.byteLength(
+      transcript?.chunks.map((chunk) => chunk.text).join('') ?? '',
+      'utf8'
+    )
+
+    expect(transcriptRef.truncated).toBe(true)
+    expect(transcriptRef.availableBytes).toBeLessThanOrEqual(MAX_COMMAND_TRANSCRIPT_BYTES)
+    expect(transcriptRef.totalBytes).toBeGreaterThan(transcriptRef.availableBytes)
+    expect(transcript?.truncated).toBe(true)
+    expect(storedBytes).toBeLessThanOrEqual(MAX_COMMAND_TRANSCRIPT_BYTES)
+    expect(storedBytes).toBe(transcriptRef.availableBytes)
+  })
 })
 
 async function createStoreRoot(): Promise<string> {
