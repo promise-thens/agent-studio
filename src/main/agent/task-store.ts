@@ -46,6 +46,8 @@ const MAX_EVENT_CHUNK_BYTES = 512 * 1024
 const MAX_EVENTS_PER_CHUNK = 50
 const MAX_RECORD_BYTES = 1024 * 1024
 const DELETE_TOKEN_TTL_MS = 5 * 60 * 1000
+/** 单个 Turn 最多绑定的 validationId 数；只约束写入路径，避免历史膨胀。 */
+const MAX_TURN_VALIDATION_IDS = 32
 
 export interface RuntimeCapabilityEvidenceV1 {
   resume: 'unsupported' | 'declared' | 'verified'
@@ -718,6 +720,57 @@ export class TaskStore {
       environment: { kind: 'local', projectId: task.projectId },
       permissionPolicy: task.permissionPolicy
     }
+  }
+
+  /**
+   * 给已有 Turn 覆盖绑定 validationIds。
+   * 身份校验只发生在写入路径：读盘仍接受历史里未校验的可选字符串数组，
+   * 避免把旧 Turn 标成 corrupt 或上调 TURN_SCHEMA_VERSION。
+   */
+  async attachTurnValidationIds(
+    taskId: string,
+    turnId: string,
+    validationIds: string[]
+  ): Promise<TurnHistoryRecord> {
+    if (!isValidIdentifier(taskId) || !isValidIdentifier(turnId)) {
+      throw new TaskStoreError('invalid-state', 'Task 或 Turn 身份无效。')
+    }
+    if (!Array.isArray(validationIds) || validationIds.length > MAX_TURN_VALIDATION_IDS) {
+      throw new TaskStoreError('invalid-state', 'validationIds 无效。')
+    }
+    const seen = new Set<string>()
+    for (const validationId of validationIds) {
+      if (!isValidIdentifier(validationId) || seen.has(validationId)) {
+        throw new TaskStoreError('invalid-state', 'validationIds 无效。')
+      }
+      seen.add(validationId)
+    }
+
+    return this.enqueueTask(taskId, async () => {
+      const task = this.requireTask(taskId)
+      if (!(await pathExists(this.turnPath(task, turnId)))) {
+        throw new TaskStoreError('history-not-found', '未找到指定 Turn 历史。')
+      }
+      const turn = await this.readTurn(task, turnId)
+      const nextTurn: TurnRecordV1 = {
+        ...turn,
+        revision: turn.revision + 1
+      }
+      if (validationIds.length === 0) {
+        delete nextTurn.validationIds
+      } else {
+        nextTurn.validationIds = [...validationIds]
+      }
+      const nextTask: TaskRecordV1 = {
+        ...task,
+        updatedAt: this.now(),
+        revision: task.revision + 1
+      }
+      await this.writer.write(this.turnPath(task, turnId), nextTurn)
+      await this.writer.write(this.taskPath(task), nextTask)
+      this.tasks.set(taskId, nextTask)
+      return stripTurnSchema(nextTurn)
+    })
   }
 
   async listTurns(taskId: string, cursor?: string, limit = 20): Promise<TurnHistoryPage> {

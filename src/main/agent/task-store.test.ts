@@ -1043,6 +1043,113 @@ describe('TaskStore', () => {
     expect(restarted.getTaskDetail('task-1').archived).toBe(true)
     expect(restarted.getTaskRecord('task-1').archivedAt).toEqual(expect.any(String))
   })
+
+  it('给已有 Turn 覆盖绑定 validationIds，并经 listTurns 往返', async () => {
+    const { store, registry, project } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '跑测试',
+      model: { modelId: 'model-1' }
+    })
+
+    const attached = await store.attachTurnValidationIds('task-1', 'turn-1', ['val-1', 'val-2'])
+    expect(attached).toMatchObject({
+      turnId: 'turn-1',
+      taskId: 'task-1',
+      validationIds: ['val-1', 'val-2']
+    })
+    expect(attached).not.toHaveProperty('schemaVersion')
+    expect((await store.listTurns('task-1')).items[0]).toMatchObject({
+      turnId: 'turn-1',
+      validationIds: ['val-1', 'val-2']
+    })
+
+    const replaced = await store.attachTurnValidationIds('task-1', 'turn-1', ['val-9'])
+    expect(replaced.validationIds).toEqual(['val-9'])
+    expect((await store.listTurns('task-1')).items[0]?.validationIds).toEqual(['val-9'])
+
+    const cleared = await store.attachTurnValidationIds('task-1', 'turn-1', [])
+    expect(cleared.validationIds).toBeUndefined()
+    expect((await store.listTurns('task-1')).items[0]?.validationIds).toBeUndefined()
+
+    const turnPath = join(
+      registry.getProjectDirectory(project.projectId),
+      'tasks/task-1/turns/turn-1/turn.json'
+    )
+    const disk = JSON.parse(await readFile(turnPath, 'utf8')) as { schemaVersion: number }
+    expect(disk.schemaVersion).toBe(2)
+  })
+
+  it('非法 validationId 或未知 Task/Turn 时拒绝写入', async () => {
+    const { store } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '跑测试',
+      model: { modelId: 'model-1' }
+    })
+
+    await expect(
+      store.attachTurnValidationIds('missing-task', 'turn-1', ['val-1'])
+    ).rejects.toMatchObject({
+      code: 'history-not-found'
+    })
+    await expect(
+      store.attachTurnValidationIds('task-1', 'missing-turn', ['val-1'])
+    ).rejects.toMatchObject({
+      code: 'history-not-found'
+    })
+    await expect(
+      store.attachTurnValidationIds('task-1', 'turn-1', ['bad/id'])
+    ).rejects.toMatchObject({
+      code: 'invalid-state'
+    })
+    await expect(
+      store.attachTurnValidationIds('task-1', 'turn-1', ['bad\\id'])
+    ).rejects.toMatchObject({
+      code: 'invalid-state'
+    })
+    await expect(
+      store.attachTurnValidationIds('task-1', 'turn-1', ['bad\0id'])
+    ).rejects.toMatchObject({
+      code: 'invalid-state'
+    })
+    await expect(store.attachTurnValidationIds('task-1', 'turn-1', [''])).rejects.toMatchObject({
+      code: 'invalid-state'
+    })
+    await expect(
+      store.attachTurnValidationIds('task-1', 'turn-1', ['val-1', 'val-1'])
+    ).rejects.toMatchObject({ code: 'invalid-state' })
+    await expect(store.attachTurnValidationIds('task-1', 'a/b', ['val-1'])).rejects.toMatchObject({
+      code: 'invalid-state'
+    })
+    expect((await store.listTurns('task-1')).items[0]?.validationIds).toBeUndefined()
+  })
+
+  it('读盘仍接受历史里未校验的 validationIds 字符串数组，不把旧 Turn 标坏', async () => {
+    const { store, registry, project } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '跑测试',
+      model: { modelId: 'model-1' }
+    })
+    const turnPath = join(
+      registry.getProjectDirectory(project.projectId),
+      'tasks/task-1/turns/turn-1/turn.json'
+    )
+    const turn = JSON.parse(await readFile(turnPath, 'utf8')) as Record<string, unknown>
+    turn.validationIds = ['legacy-id', 12, '']
+    await writeFile(turnPath, JSON.stringify(turn))
+
+    const restarted = new TaskStore({ projectRegistry: registry })
+    await restarted.initialize()
+    expect((await restarted.listTurns('task-1')).items[0]).toMatchObject({
+      turnId: 'turn-1',
+      validationIds: ['legacy-id', 12, '']
+    })
+  })
 })
 
 /** 构造无 sleep 的并发门禁，精确控制历史写入与删除提交时序。 */

@@ -1,0 +1,410 @@
+/** 命令执行来源。user-terminal 仅预留身份，本阶段不实现 PTY 执行器。 */
+export const COMMAND_EXECUTION_SOURCES = ['app-runner', 'runtime-tool', 'user-terminal'] as const
+export type CommandExecutionSource = (typeof COMMAND_EXECUTION_SOURCES)[number]
+
+/**
+ * 证据可信度。app-enforced 只允许 App 自己执行的命令；
+ * Runtime 上报不得伪装成 App 沙箱或 Broker 强制结果。
+ */
+export const COMMAND_TRUST_LEVELS = ['app-enforced', 'runtime-reported', 'unverified'] as const
+export type CommandTrustLevel = (typeof COMMAND_TRUST_LEVELS)[number]
+
+/**
+ * 命令显式终态。未知退出、仅标题、超时、取消和启动失败都必须落在这些值上，
+ * 禁止根据工具标题猜测成功。
+ */
+export const COMMAND_EXECUTION_STATUSES = [
+  'running',
+  'succeeded',
+  'failed',
+  'timed-out',
+  'cancelled',
+  'start-failed',
+  'unknown-exit',
+  'title-only'
+] as const
+export type CommandExecutionStatus = (typeof COMMAND_EXECUTION_STATUSES)[number]
+
+export const COMMAND_TRANSCRIPT_ENCODINGS = ['utf-8'] as const
+export type CommandTranscriptEncoding = (typeof COMMAND_TRANSCRIPT_ENCODINGS)[number]
+
+export const COMMAND_TRANSCRIPT_RETENTION_POLICIES = ['bounded', 'ephemeral'] as const
+export type CommandTranscriptRetentionPolicy =
+  (typeof COMMAND_TRANSCRIPT_RETENTION_POLICIES)[number]
+
+/** 应用重启后必须能区分仍在、已过期、应收但找不到。 */
+export const COMMAND_TRANSCRIPT_RETENTION_STATES = ['retained', 'expired', 'missing'] as const
+export type CommandTranscriptRetentionState = (typeof COMMAND_TRANSCRIPT_RETENTION_STATES)[number]
+
+export const VALIDATION_OUTCOMES = ['pass', 'fail', 'unknown'] as const
+export type ValidationOutcome = (typeof VALIDATION_OUTCOMES)[number]
+
+export const VALIDATION_OUTCOME_REASONS = [
+  'non-zero-exit',
+  'timed-out',
+  'cancelled',
+  'start-failed',
+  'failed-status',
+  'missing-exit-code',
+  'unknown-status'
+] as const
+export type ValidationOutcomeReason = (typeof VALIDATION_OUTCOME_REASONS)[number]
+
+/** 单字段 UTF-8 上限，避免异常长命令或身份进入 IPC。 */
+export const MAX_COMMAND_FIELD_UTF8_BYTES = 4 * 1024
+
+/** 单次验证最多引用的 commandId 数，防止结果对象膨胀。 */
+export const MAX_VALIDATION_COMMAND_IDS = 32
+
+const textEncoder = new TextEncoder()
+
+/**
+ * Renderer 只拿 transcript 身份与容量事实，禁止夹带任意文件系统路径。
+ */
+export interface CommandTranscriptRef {
+  transcriptId: string
+  availableBytes: number
+  totalBytes?: number
+  truncated: boolean
+  encoding: CommandTranscriptEncoding
+  retentionPolicy: CommandTranscriptRetentionPolicy
+  retentionState: CommandTranscriptRetentionState
+}
+
+/**
+ * 一次命令执行的可审阅事实。cwd 只记录相对 execution root 的路径，
+ * 绝对根目录不得出现在共享契约里。
+ */
+export interface CommandExecutionEvidence {
+  commandId: string
+  taskId: string
+  turnId: string
+  environmentId: string
+  source: CommandExecutionSource
+  displayCommand: string
+  cwd: string
+  startedAt: string
+  endedAt?: string
+  exitCode?: number
+  signal?: string
+  timedOut: boolean
+  status: CommandExecutionStatus
+  transcriptRef: CommandTranscriptRef
+  truncated: boolean
+  trustLevel: CommandTrustLevel
+}
+
+/**
+ * 验证结论必须引用真实 commandId。聊天文本和工具标题不能作为通过证据。
+ */
+export interface ValidationResult {
+  validationId: string
+  taskId: string
+  turnId: string
+  commandIds: string[]
+  outcome: ValidationOutcome
+  reason?: ValidationOutcomeReason
+}
+
+export function isCommandExecutionSource(value: unknown): value is CommandExecutionSource {
+  return (
+    typeof value === 'string' && (COMMAND_EXECUTION_SOURCES as readonly string[]).includes(value)
+  )
+}
+
+export function isCommandTrustLevel(value: unknown): value is CommandTrustLevel {
+  return typeof value === 'string' && (COMMAND_TRUST_LEVELS as readonly string[]).includes(value)
+}
+
+export function isCommandExecutionStatus(value: unknown): value is CommandExecutionStatus {
+  return (
+    typeof value === 'string' && (COMMAND_EXECUTION_STATUSES as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * 将未知 IPC/JSON 投影为 transcript 引用。路径字段一律丢弃；身份非法则整份拒绝。
+ */
+export function parseCommandTranscriptRef(value: unknown): CommandTranscriptRef | null {
+  if (!isPlainRecord(value)) return null
+  if (!isBoundedIdentifier(value.transcriptId)) return null
+  if (!isNonNegativeSafeInteger(value.availableBytes)) return null
+  if (typeof value.truncated !== 'boolean') return null
+  if (value.encoding !== 'utf-8') return null
+  if (
+    typeof value.retentionPolicy !== 'string' ||
+    !(COMMAND_TRANSCRIPT_RETENTION_POLICIES as readonly string[]).includes(value.retentionPolicy)
+  ) {
+    return null
+  }
+  if (
+    typeof value.retentionState !== 'string' ||
+    !(COMMAND_TRANSCRIPT_RETENTION_STATES as readonly string[]).includes(value.retentionState)
+  ) {
+    return null
+  }
+
+  const ref: CommandTranscriptRef = {
+    transcriptId: value.transcriptId,
+    availableBytes: value.availableBytes,
+    truncated: value.truncated,
+    encoding: 'utf-8',
+    retentionPolicy: value.retentionPolicy as CommandTranscriptRetentionPolicy,
+    retentionState: value.retentionState as CommandTranscriptRetentionState
+  }
+
+  if (value.totalBytes !== undefined && value.totalBytes !== null) {
+    if (!isNonNegativeSafeInteger(value.totalBytes) || value.totalBytes < value.availableBytes) {
+      return null
+    }
+    ref.totalBytes = value.totalBytes
+  }
+
+  return ref
+}
+
+/**
+ * 将未知对象投影为命令证据。结构或安全边界失败返回 null，不猜测成功。
+ */
+export function parseCommandExecutionEvidence(value: unknown): CommandExecutionEvidence | null {
+  if (!isPlainRecord(value)) return null
+  if (!isBoundedIdentifier(value.commandId)) return null
+  if (!isBoundedIdentifier(value.taskId)) return null
+  if (!isBoundedIdentifier(value.turnId)) return null
+  if (!isBoundedIdentifier(value.environmentId)) return null
+  if (!isCommandExecutionSource(value.source)) return null
+  if (!isCommandTrustLevel(value.trustLevel)) return null
+  if (!isTrustCompatible(value.source, value.trustLevel)) return null
+  if (!isDisplayCommand(value.displayCommand)) return null
+  if (!isRelativeCwd(value.cwd)) return null
+  if (!isIsoTimestamp(value.startedAt)) return null
+  if (typeof value.timedOut !== 'boolean') return null
+  if (typeof value.truncated !== 'boolean') return null
+  if (!isCommandExecutionStatus(value.status)) return null
+
+  const transcriptRef = parseCommandTranscriptRef(value.transcriptRef)
+  if (!transcriptRef) return null
+
+  const evidence: CommandExecutionEvidence = {
+    commandId: value.commandId,
+    taskId: value.taskId,
+    turnId: value.turnId,
+    environmentId: value.environmentId,
+    source: value.source,
+    displayCommand: value.displayCommand,
+    cwd: value.cwd,
+    startedAt: value.startedAt,
+    timedOut: value.timedOut,
+    status: value.status,
+    transcriptRef,
+    truncated: value.truncated,
+    trustLevel: value.trustLevel
+  }
+
+  if (value.endedAt !== undefined && value.endedAt !== null) {
+    if (!isIsoTimestamp(value.endedAt)) return null
+    evidence.endedAt = value.endedAt
+  }
+
+  if (value.exitCode !== undefined && value.exitCode !== null) {
+    if (typeof value.exitCode !== 'number' || !Number.isSafeInteger(value.exitCode)) return null
+    evidence.exitCode = value.exitCode
+  }
+
+  if (value.signal !== undefined && value.signal !== null) {
+    if (!isCommandSignal(value.signal)) return null
+    evidence.signal = value.signal
+  }
+
+  return evidence
+}
+
+/**
+ * 只根据命令证据生成验证结论。聊天文本、工具标题不是参数，因此不能单独产生 pass。
+ * fail 优先于 unknown；截断本身不阻断 pass。
+ */
+export function deriveValidationResult(
+  evidences: CommandExecutionEvidence[],
+  validationId: string
+): ValidationResult | null {
+  if (!isBoundedIdentifier(validationId)) return null
+  if (!Array.isArray(evidences) || evidences.length === 0) return null
+  if (evidences.length > MAX_VALIDATION_COMMAND_IDS) return null
+
+  const first = evidences[0]
+  if (!first) return null
+
+  const commandIds: string[] = []
+  const seen = new Set<string>()
+  let outcome: ValidationOutcome = 'pass'
+  let reason: ValidationOutcomeReason | undefined
+
+  for (const evidence of evidences) {
+    if (evidence.taskId !== first.taskId || evidence.turnId !== first.turnId) return null
+    if (!seen.has(evidence.commandId)) {
+      seen.add(evidence.commandId)
+      commandIds.push(evidence.commandId)
+    }
+
+    const classified = classifyCommandEvidence(evidence)
+    if (classified.outcome === 'fail') {
+      if (outcome !== 'fail') {
+        outcome = 'fail'
+        reason = classified.reason
+      }
+    } else if (classified.outcome === 'unknown' && outcome === 'pass') {
+      outcome = 'unknown'
+      reason = classified.reason
+    }
+  }
+
+  if (commandIds.length === 0) return null
+
+  const result: ValidationResult = {
+    validationId,
+    taskId: first.taskId,
+    turnId: first.turnId,
+    commandIds,
+    outcome
+  }
+  if (outcome !== 'pass' && reason) result.reason = reason
+  return result
+}
+
+/**
+ * Preload / IPC 入口：只保留可追溯的验证字段，丢弃聊天文案。
+ */
+export function parseValidationResult(value: unknown): ValidationResult | null {
+  if (!isPlainRecord(value)) return null
+  if (!isBoundedIdentifier(value.validationId)) return null
+  if (!isBoundedIdentifier(value.taskId)) return null
+  if (!isBoundedIdentifier(value.turnId)) return null
+  if (!Array.isArray(value.commandIds) || value.commandIds.length === 0) return null
+  if (value.commandIds.length > MAX_VALIDATION_COMMAND_IDS) return null
+  if (
+    typeof value.outcome !== 'string' ||
+    !(VALIDATION_OUTCOMES as readonly string[]).includes(value.outcome)
+  ) {
+    return null
+  }
+
+  const commandIds: string[] = []
+  const seen = new Set<string>()
+  for (const commandId of value.commandIds) {
+    if (!isBoundedIdentifier(commandId) || seen.has(commandId)) return null
+    seen.add(commandId)
+    commandIds.push(commandId)
+  }
+
+  const result: ValidationResult = {
+    validationId: value.validationId,
+    taskId: value.taskId,
+    turnId: value.turnId,
+    commandIds,
+    outcome: value.outcome as ValidationOutcome
+  }
+
+  if (
+    result.outcome !== 'pass' &&
+    typeof value.reason === 'string' &&
+    (VALIDATION_OUTCOME_REASONS as readonly string[]).includes(value.reason)
+  ) {
+    result.reason = value.reason as ValidationOutcomeReason
+  }
+
+  return result
+}
+
+function classifyCommandEvidence(evidence: CommandExecutionEvidence): {
+  outcome: ValidationOutcome
+  reason?: ValidationOutcomeReason
+} {
+  if (evidence.timedOut || evidence.status === 'timed-out') {
+    return { outcome: 'fail', reason: 'timed-out' }
+  }
+  if (evidence.status === 'cancelled') {
+    return { outcome: 'fail', reason: 'cancelled' }
+  }
+  if (evidence.status === 'start-failed') {
+    return { outcome: 'fail', reason: 'start-failed' }
+  }
+  if (typeof evidence.exitCode === 'number' && evidence.exitCode !== 0) {
+    return { outcome: 'fail', reason: 'non-zero-exit' }
+  }
+  if (evidence.status === 'failed') {
+    return { outcome: 'fail', reason: 'failed-status' }
+  }
+  if (evidence.status === 'succeeded' && evidence.exitCode === 0 && evidence.timedOut === false) {
+    return { outcome: 'pass' }
+  }
+  if (typeof evidence.exitCode !== 'number') {
+    return { outcome: 'unknown', reason: 'missing-exit-code' }
+  }
+  return { outcome: 'unknown', reason: 'unknown-status' }
+}
+
+/**
+ * App 强制执行不能套到 Runtime/用户终端来源上，避免审阅时误判沙箱边界。
+ */
+function isTrustCompatible(source: CommandExecutionSource, trustLevel: CommandTrustLevel): boolean {
+  if (source === 'user-terminal') return trustLevel === 'unverified'
+  if (trustLevel === 'app-enforced') return source === 'app-runner'
+  if (trustLevel === 'runtime-reported') return source === 'runtime-tool'
+  return true
+}
+
+/** cwd 只接受 posix 相对路径，`.` 表示 execution root。 */
+function isRelativeCwd(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) return false
+  if (utf8ByteLength(value) > MAX_COMMAND_FIELD_UTF8_BYTES) return false
+  if (value.includes('\\') || value.startsWith('/')) return false
+  if (/^[A-Za-z]:/.test(value)) return false
+  if (value === '.') return true
+  const segments = value.split('/')
+  return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
+}
+
+function isDisplayCommand(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    !value.includes('\0') &&
+    utf8ByteLength(value) <= MAX_COMMAND_FIELD_UTF8_BYTES
+  )
+}
+
+function isCommandSignal(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    !value.includes('\0') &&
+    utf8ByteLength(value) <= 32
+  )
+}
+
+function isBoundedIdentifier(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    Boolean(value.trim()) &&
+    !value.includes('\0') &&
+    !value.includes('/') &&
+    !value.includes('\\') &&
+    utf8ByteLength(value) <= MAX_COMMAND_FIELD_UTF8_BYTES
+  )
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  return typeof value === 'string' && Number.isFinite(Date.parse(value))
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function utf8ByteLength(value: string): number {
+  return textEncoder.encode(value).byteLength
+}
