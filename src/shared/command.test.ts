@@ -220,6 +220,51 @@ describe('命令执行证据契约', () => {
     expect(parseCommandExecutionEvidence(validEvidence({ status: 'success' }))).toBeNull()
   })
 
+  it('status 必须与退出码和超时事实一致，禁止把未知退出标成 succeeded', () => {
+    expect(
+      parseCommandExecutionEvidence(
+        validEvidence({
+          status: 'succeeded',
+          exitCode: undefined,
+          trustLevel: 'unverified',
+          source: 'runtime-tool'
+        })
+      )
+    ).toBeNull()
+    expect(
+      parseCommandExecutionEvidence(validEvidence({ status: 'succeeded', timedOut: true }))
+    ).toBeNull()
+    expect(
+      parseCommandExecutionEvidence(validEvidence({ status: 'succeeded', exitCode: 1 }))
+    ).toBeNull()
+    expect(
+      parseCommandExecutionEvidence(
+        validEvidence({
+          source: 'runtime-tool',
+          trustLevel: 'unverified',
+          status: 'unknown-exit',
+          exitCode: 0
+        })
+      )
+    ).toBeNull()
+    expect(
+      parseCommandExecutionEvidence(
+        validEvidence({
+          source: 'runtime-tool',
+          trustLevel: 'unverified',
+          status: 'title-only',
+          displayCommand: 'Tests passed',
+          exitCode: 0
+        })
+      )
+    ).toBeNull()
+    expect(
+      parseCommandExecutionEvidence(
+        validEvidence({ status: 'timed-out', timedOut: false, exitCode: null })
+      )
+    ).toBeNull()
+  })
+
   it('非法身份、超长字段或非对象返回 null', () => {
     expect(parseCommandExecutionEvidence(null)).toBeNull()
     expect(parseCommandExecutionEvidence('cmd')).toBeNull()
@@ -356,12 +401,13 @@ describe('ValidationResult 只能由命令证据推导', () => {
   it('缺退出码或非成功终态为 unknown；空列表、跨 Turn 或非法 validationId 返回 null', () => {
     const missingExit = parseCommandExecutionEvidence(
       validEvidence({
-        status: 'succeeded',
+        status: 'unknown-exit',
         exitCode: undefined,
         trustLevel: 'unverified',
         source: 'runtime-tool'
       })
     )
+    expect(missingExit).not.toBeNull()
     expect(deriveValidationResult([missingExit!], 'val-unknown')).toMatchObject({
       outcome: 'unknown',
       reason: 'missing-exit-code'

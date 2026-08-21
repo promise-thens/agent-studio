@@ -216,6 +216,11 @@ export function parseCommandExecutionEvidence(value: unknown): CommandExecutionE
     evidence.signal = value.signal
   }
 
+  // Timeline 可能直接展示 status；缺退出码或超时不得伪装成 succeeded。
+  if (!isStatusConsistentWithFacts(evidence.status, evidence.timedOut, evidence.exitCode)) {
+    return null
+  }
+
   return evidence
 }
 
@@ -341,6 +346,20 @@ function classifyCommandEvidence(evidence: CommandExecutionEvidence): {
     return { outcome: 'unknown', reason: 'missing-exit-code' }
   }
   return { outcome: 'unknown', reason: 'unknown-status' }
+}
+
+/**
+ * status 必须能被退出码/超时事实支撑，避免未知退出被展示成成功。
+ */
+function isStatusConsistentWithFacts(
+  status: CommandExecutionStatus,
+  timedOut: boolean,
+  exitCode: number | undefined
+): boolean {
+  if (status === 'succeeded') return exitCode === 0 && timedOut === false
+  if (status === 'unknown-exit' || status === 'title-only') return exitCode === undefined
+  if (status === 'timed-out') return timedOut === true
+  return true
 }
 
 /**
