@@ -72,7 +72,13 @@ import {
   toggleInspectorOpen,
   type InspectorTab
 } from './task-inspector'
-import { DEFAULT_PLUGIN_HUB_TAB, type PluginHubTab } from './plugins-page'
+import {
+  DEFAULT_PLUGIN_HUB_TAB,
+  DEFAULT_PLUGIN_PANE,
+  resolveProductSlashPluginTarget,
+  type PluginHubTab,
+  type PluginPane
+} from './plugins-page'
 import {
   applyResolvedAppearance,
   DEFAULT_SETTINGS_SECTION,
@@ -164,6 +170,7 @@ const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
 const showSettingsDialog = ref(false)
 const settingsSection = ref<SettingsSection>(DEFAULT_SETTINGS_SECTION)
 const pluginHubTab = ref<PluginHubTab>(DEFAULT_PLUGIN_HUB_TAB)
+const pluginHubPane = ref<PluginPane>(DEFAULT_PLUGIN_PANE)
 const appearance = ref<AppAppearanceState>({ mode: 'dark', resolved: 'dark' })
 const appearancePending = ref(false)
 const workspace = ref('')
@@ -980,23 +987,31 @@ function closeSettingsDialog(): void {
 /**
  * 产品别名只做桌面导航，必须清空草稿，避免下次 Enter 把 /plugins 发给 Runtime。
  */
-function openPluginHub(tab: PluginHubTab = DEFAULT_PLUGIN_HUB_TAB): void {
+function openPluginHub(
+  tab: PluginHubTab = DEFAULT_PLUGIN_HUB_TAB,
+  pane: PluginPane = DEFAULT_PLUGIN_PANE
+): void {
   pluginHubTab.value = tab
+  pluginHubPane.value = pane
   workbench.openPlugins()
 }
 
 function handleProductSlashAction(
   action:
     | 'open-plugins'
+    | 'open-plugins-marketplace'
     | 'open-plugins-mcp'
     | 'open-settings'
     | 'open-settings-memory'
     | 'open-settings-grok-config'
 ): void {
   prompt.value = ''
-  if (action === 'open-plugins') openPluginHub('plugins')
-  else if (action === 'open-plugins-mcp') openPluginHub('mcp')
-  else if (action === 'open-settings-memory') openSettingsSection('memory')
+  const pluginTarget = resolveProductSlashPluginTarget(action)
+  if (pluginTarget) {
+    openPluginHub(pluginTarget.tab, pluginTarget.pane)
+    return
+  }
+  if (action === 'open-settings-memory') openSettingsSection('memory')
   else if (action === 'open-settings-grok-config') openSettingsSection('grok-config')
   else openSettingsDialog()
 }
@@ -1638,7 +1653,11 @@ function scrollMessagesToBottom(): void {
             :active-execution="activeExecution"
             @return-to-conversation="workbench.returnToConversation"
           />
-          <PluginsPage :project-id="activeProjectId" :initial-tab="pluginHubTab" />
+          <PluginsPage
+            :project-id="activeProjectId"
+            :initial-tab="pluginHubTab"
+            :initial-pane="pluginHubPane"
+          />
         </template>
         <template v-else>
           <TaskHeader
@@ -1692,6 +1711,7 @@ function scrollMessagesToBottom(): void {
             @stop="cancelTurn"
             @open-plugins="handleProductSlashAction('open-plugins')"
             @open-plugins-mcp="handleProductSlashAction('open-plugins-mcp')"
+            @open-plugins-marketplace="handleProductSlashAction('open-plugins-marketplace')"
             @open-settings="handleProductSlashAction('open-settings')"
             @open-settings-memory="handleProductSlashAction('open-settings-memory')"
             @open-settings-grok-config="handleProductSlashAction('open-settings-grok-config')"

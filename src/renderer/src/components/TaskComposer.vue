@@ -50,6 +50,7 @@ const emit = defineEmits<{
   modelError: [message: string]
   'open-plugins': []
   'open-plugins-mcp': []
+  'open-plugins-marketplace': []
   'open-settings': []
   'open-settings-memory': []
   'open-settings-grok-config': []
@@ -91,6 +92,7 @@ watch(filteredCommands, (items) => {
 function emitProductAction(action: NonNullable<SlashCommandItem['productAction']>): void {
   if (action === 'open-plugins') emit('open-plugins')
   else if (action === 'open-plugins-mcp') emit('open-plugins-mcp')
+  else if (action === 'open-plugins-marketplace') emit('open-plugins-marketplace')
   else if (action === 'open-settings-memory') emit('open-settings-memory')
   else if (action === 'open-settings-grok-config') emit('open-settings-grok-config')
   else emit('open-settings')

@@ -14,6 +14,7 @@ export interface SlashCommandItem {
   // product 只允许导航，不得 startTurn。
   productAction?:
     | 'open-plugins'
+    | 'open-plugins-marketplace'
     | 'open-plugins-mcp'
     | 'open-settings'
     | 'open-settings-memory'
@@ -22,7 +23,7 @@ export interface SlashCommandItem {
 
 export const SLASH_RUNTIME_WAITING_COPY = '等待 Grok 提供命令'
 
-/** P0-10C 只提供这两项桌面导航别名；Grok 广告项不得手写进菜单。 */
+/** 桌面导航别名；同名时优先于 Grok 广告，避免 /plugins 或 /marketplace 去 startTurn。 */
 export const PRODUCT_SLASH_COMMANDS: SlashCommandItem[] = [
   {
     id: 'product:plugins',
@@ -30,6 +31,13 @@ export const PRODUCT_SLASH_COMMANDS: SlashCommandItem[] = [
     description: '打开插件页',
     source: 'product',
     productAction: 'open-plugins'
+  },
+  {
+    id: 'product:marketplace',
+    name: 'marketplace',
+    description: '打开插件市场',
+    source: 'product',
+    productAction: 'open-plugins-marketplace'
   },
   {
     id: 'product:settings',
@@ -133,7 +141,7 @@ export function resolveSlashSubmit(
 }
 
 /**
- * 发送拦截：即使没点命令板，首 token 是 `/plugins` 或 `/settings` 也只做桌面导航，
+ * 发送拦截：即使没点命令板，首 token 是产品别名（含 /marketplace）也只做桌面导航，
  * 不得把产品别名当 prompt 交给 startTurn。
  */
 export function matchProductSlashSubmit(

@@ -130,6 +130,7 @@ describe('合并与过滤', () => {
 
     expect(empty.map((item) => item.name)).toEqual([
       'plugins',
+      'marketplace',
       'settings',
       'memory',
       'mcps',
@@ -138,6 +139,7 @@ describe('合并与过滤', () => {
     ])
     expect(illegal.map((item) => item.name)).toEqual([
       'plugins',
+      'marketplace',
       'settings',
       'memory',
       'mcps',
@@ -147,6 +149,7 @@ describe('合并与过滤', () => {
     expect(empty.every((item) => item.source === 'product')).toBe(true)
     expect(PRODUCT_SLASH_COMMANDS.map((item) => item.name)).toEqual([
       'plugins',
+      'marketplace',
       'settings',
       'memory',
       'mcps',
@@ -164,6 +167,7 @@ describe('合并与过滤', () => {
 
     expect(items.map((item) => `${item.source}:${item.name}`)).toEqual([
       'product:plugins',
+      'product:marketplace',
       'product:settings',
       'product:memory',
       'product:mcps',
@@ -172,6 +176,30 @@ describe('合并与过滤', () => {
       'runtime:compact'
     ])
     expect(items.find((item) => item.name === 'plugins')?.productAction).toBe('open-plugins')
+    expect(items.find((item) => item.name === 'marketplace')?.productAction).toBe(
+      'open-plugins-marketplace'
+    )
+  })
+
+  it('/marketplace 是产品别名，Grok 同名广告不得 startTurn', () => {
+    const items = merged([
+      runtimeCommand({ name: 'marketplace', description: 'Grok 自己的市场命令' })
+    ])
+    const matched = filterSlashCommands(items, slashQuery('/marketplace'))
+
+    expect(matched).toHaveLength(1)
+    expect(matched[0]?.source).toBe('product')
+    expect(matched[0]?.name).toBe('marketplace')
+    expect(resolveSlashSubmit(matched[0]!, '/marketplace')).toEqual({
+      kind: 'product',
+      action: 'open-plugins-marketplace'
+    })
+    expect(resolveSlashSubmit(matched[0]!, '/marketplace')).not.toEqual(
+      expect.objectContaining({ kind: 'runtime' })
+    )
+    expect(
+      items.find((item) => item.source === 'runtime' && item.name === 'marketplace')
+    ).toBeUndefined()
   })
 })
 
@@ -179,6 +207,8 @@ describe('产品发送拦截', () => {
   it('首 token 是 /plugins 或 /settings 时走产品动作，即使没点命令板', () => {
     expect(matchProductSlashSubmit('/plugins')).toBe('open-plugins')
     expect(matchProductSlashSubmit('/plugins leftover')).toBe('open-plugins')
+    expect(matchProductSlashSubmit('/marketplace')).toBe('open-plugins-marketplace')
+    expect(matchProductSlashSubmit('/marketplace leftover')).toBe('open-plugins-marketplace')
     expect(matchProductSlashSubmit('/settings')).toBe('open-settings')
     expect(matchProductSlashSubmit('/plug')).toBeNull()
     expect(matchProductSlashSubmit('/compact keep auth')).toBeNull()
@@ -317,6 +347,7 @@ describe('命令板表面', () => {
     expect(composerSource).toContain("emit('open-settings')")
     expect(composerSource).toContain("emit('open-settings-memory')")
     expect(composerSource).toContain("emit('open-plugins-mcp')")
+    expect(composerSource).toContain("emit('open-plugins-marketplace')")
     expect(composerSource).toContain('matchProductSlashSubmit')
     expect(composerSource).not.toContain('继续任务')
   })
@@ -334,7 +365,10 @@ describe('命令板表面', () => {
     expect(appSource).toContain('openSettingsDialog()')
     expect(appSource).toContain('open-settings-memory')
     expect(appSource).toContain('open-settings-grok-config')
-    expect(appSource).toContain("openPluginHub('mcp')")
+    expect(appSource).toContain('openPluginHub(pluginTarget.tab, pluginTarget.pane)')
+    expect(appSource).toContain('open-plugins-marketplace')
+    expect(appSource).toContain('resolveProductSlashPluginTarget')
+    expect(appSource).toContain('initial-pane')
     expect(appSource).not.toContain("openSettingsSection('mcp')")
   })
 })
