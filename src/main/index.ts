@@ -9,6 +9,8 @@ import {
   shell,
   type MenuItemConstructorOptions
 } from 'electron'
+import { existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
@@ -71,6 +73,8 @@ import {
 import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
 import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
+import { listGrokMarketplacePlugins } from './runtime/grok/grok-marketplace-inventory'
+import { runGrokPlugin } from './runtime/grok/grok-plugin-cli'
 import { getGrokPlugin, listGrokPlugins } from './runtime/grok/grok-plugin-inventory'
 import { PermissionAuditStore } from './security/permission-audit-store'
 import { PermissionBroker } from './security/permission-broker'
@@ -378,6 +382,31 @@ async function initializeServices(
   })
 }
 
+const GROK_PLUGIN_CLI_TIMEOUT_MS = 120_000
+
+/** 与 Adapter 同源：~/.grok/bin/grok 存在则用之，否则 PATH 上的 grok。不改 Adapter.resolveBinary。 */
+function resolveGrokPluginBinary(): string {
+  const bundledPath = join(homedir(), '.grok/bin/grok')
+  return existsSync(bundledPath) ? bundledPath : 'grok'
+}
+
+/**
+ * 在 App grok-home 下跑 grok plugin CLI。
+ * 失败只抛脱敏短句；成功丢弃 stdout，避免绝对路径进 Renderer。不得 cancelTurn / disconnect。
+ */
+async function runManagedPluginCli(args: string[]): Promise<null> {
+  const result = await runGrokPlugin({
+    grokHome: getManagedGrokHome(app.getPath('userData')),
+    grokBinary: resolveGrokPluginBinary(),
+    args,
+    timeoutMs: GROK_PLUGIN_CLI_TIMEOUT_MS
+  })
+  if (!result.ok) {
+    throw new DesktopIpcFailure('operation-failed', result.message)
+  }
+  return null
+}
+
 /** 注册渲染层可调用的最小 IPC 接口。 */
 function registerIpcHandlers(): void {
   const rendererTrust = createRendererTrustOptions()
@@ -575,6 +604,16 @@ function registerIpcHandlers(): void {
         name
       })
     },
+    listMarketplacePlugins: () => listGrokMarketplacePlugins(app.getPath('userData')),
+    installPlugin: ({ name, trust }) => {
+      const args = ['plugin', 'install', name]
+      if (trust === true) args.push('--trust')
+      return runManagedPluginCli(args)
+    },
+    uninstallPlugin: ({ pluginId }) =>
+      runManagedPluginCli(['plugin', 'uninstall', pluginId, '--confirm']),
+    addMarketplaceSource: ({ gitUrl }) =>
+      runManagedPluginCli(['plugin', 'marketplace', 'add', gitUrl]),
     deleteProjectHistory: async (projectId, token) => {
       const preparation = requireTaskStore().prepareProjectHistoryDeletion(projectId, token)
       let deletionLease: Awaited<ReturnType<PermissionBroker['beginProjectDeletion']>>

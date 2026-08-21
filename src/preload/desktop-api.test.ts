@@ -53,6 +53,10 @@ describe('窄 Preload API', () => {
     await app.revealProject('project-1')
     await app.listPlugins()
     await app.getPlugin('demo-plugin')
+    await app.listMarketplacePlugins()
+    await app.installPlugin('chrome-devtools', false)
+    await app.uninstallPlugin('chrome-devtools-mcp')
+    await app.addMarketplaceSource('https://github.com/xai-org/plugin-marketplace.git')
     await task.list('project-1')
     await task.listEvents('task-1', 'turn-1', 42, 200)
     await task.listPermissionAudits('task-1')
@@ -87,6 +91,13 @@ describe('窄 Preload API', () => {
       [APP_INVOKE_CHANNELS.revealProject, { projectId: 'project-1' }],
       [APP_INVOKE_CHANNELS.listPlugins],
       [APP_INVOKE_CHANNELS.getPlugin, { pluginId: 'demo-plugin' }],
+      [APP_INVOKE_CHANNELS.listMarketplacePlugins],
+      [APP_INVOKE_CHANNELS.installPlugin, { name: 'chrome-devtools', trust: false }],
+      [APP_INVOKE_CHANNELS.uninstallPlugin, { pluginId: 'chrome-devtools-mcp' }],
+      [
+        APP_INVOKE_CHANNELS.addMarketplaceSource,
+        { gitUrl: 'https://github.com/xai-org/plugin-marketplace.git' }
+      ],
       [TASK_INVOKE_CHANNELS.list, { projectId: 'project-1' }],
       [
         TASK_INVOKE_CHANNELS.listEvents,
@@ -581,5 +592,59 @@ describe('窄 Preload API', () => {
       ok: false,
       error: { code: 'operation-failed', message: '插件详情无效。' }
     })
+  })
+
+  it('市场货架解析丢掉 path/sha/url，安装结果不回传 CLI 输出', async () => {
+    const ipcRenderer = createIpcRenderer()
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: [
+        {
+          name: 'chrome-devtools',
+          displayName: 'chrome-devtools',
+          description: 'Connect Grok to Chrome DevTools.',
+          sourceName: 'plugin-marketplace',
+          installed: false,
+          path: '/secret/marketplace-cache/chrome-devtools',
+          sha: 'deadbeef',
+          url: 'https://github.com/xai-org/plugin-marketplace.git'
+        },
+        {
+          name: 'bad/id',
+          displayName: 'Bad',
+          description: '',
+          sourceName: 'plugin-marketplace',
+          installed: false
+        }
+      ]
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { stdout: '/secret/grok-home/installed-plugins/chrome-devtools' }
+    })
+    const app = createAppDesktopApi(ipcRenderer)
+
+    const listed = await app.listMarketplacePlugins()
+    const installed = await app.installPlugin('chrome-devtools', true)
+
+    expect(listed).toEqual({
+      ok: true,
+      value: [
+        {
+          name: 'chrome-devtools',
+          displayName: 'chrome-devtools',
+          description: 'Connect Grok to Chrome DevTools.',
+          sourceName: 'plugin-marketplace',
+          installed: false
+        }
+      ]
+    })
+    expect(installed).toEqual({
+      ok: false,
+      error: { code: 'operation-failed', message: '插件安装结果无效。' }
+    })
+    expect(JSON.stringify(listed)).not.toContain('/secret')
+    expect(JSON.stringify(listed)).not.toContain('deadbeef')
+    expect(JSON.stringify(listed)).not.toContain('https://')
   })
 })

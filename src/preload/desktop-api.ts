@@ -35,6 +35,10 @@ import {
 import { parseMcpServerSummary } from '../shared/mcp-server-config'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import {
+  parseMarketplacePluginSummary,
+  type MarketplacePluginSummary
+} from '../shared/runtime-marketplace-plugin'
+import {
   parseRuntimePluginDetail,
   parseRuntimePluginSummary,
   type RuntimePluginDetail,
@@ -621,7 +625,7 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
   }
 }
 
-/** 创建只包含 Project 注册、历史清理、外观偏好和插件只读查询的 App API。 */
+/** 创建只包含 Project 注册、历史清理、外观偏好和插件查询/安装的 App API。 */
 export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopApi {
   return {
     chooseProject: () =>
@@ -804,9 +808,56 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
       ipcRenderer.invoke(APP_INVOKE_CHANNELS.deleteMcpServer, { name }) as ReturnType<
         AppDesktopApi['deleteMcpServer']
       >,
+    // Preload 再 parse：丢掉 path / sha / url，坏项静默剔除
+    listMarketplacePlugins: async () => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.listMarketplacePlugins
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      if (!Array.isArray(result.value)) {
+        return { ok: false, error: { code: 'operation-failed', message: '市场货架无效。' } }
+      }
+      const plugins: MarketplacePluginSummary[] = []
+      for (const item of result.value) {
+        const parsed = parseMarketplacePluginSummary(item)
+        if (parsed) plugins.push(parsed)
+      }
+      return { ok: true, value: plugins }
+    },
+    installPlugin: async (name, trust) => {
+      const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.installPlugin, {
+        name,
+        trust
+      })) as DesktopIpcResult<unknown>
+      return parseNullIpcResult(result, '插件安装结果无效。')
+    },
+    uninstallPlugin: async (pluginId) => {
+      const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.uninstallPlugin, {
+        pluginId
+      })) as DesktopIpcResult<unknown>
+      return parseNullIpcResult(result, '插件卸载结果无效。')
+    },
+    addMarketplaceSource: async (gitUrl) => {
+      const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.addMarketplaceSource, {
+        gitUrl
+      })) as DesktopIpcResult<unknown>
+      return parseNullIpcResult(result, '市场源添加结果无效。')
+    },
     onAppearanceChanged: (listener) =>
       subscribe(ipcRenderer, APP_PUSH_CHANNELS.appearance, listener, parseAppAppearanceState)
   }
+}
+
+/** 安装类接口只接受 null，拒绝把 CLI stdout 或绝对路径交给 Renderer。 */
+function parseNullIpcResult(
+  result: DesktopIpcResult<unknown>,
+  invalidMessage: string
+): DesktopIpcResult<null> {
+  if (!result.ok) return result
+  if (result.value !== null) {
+    return { ok: false, error: { code: 'operation-failed', message: invalidMessage } }
+  }
+  return { ok: true, value: null }
 }
 
 function parseGrokConfigDocument(value: unknown): AppGrokConfigDocument | null {

@@ -19,6 +19,10 @@ import {
   type McpServerSummary
 } from '../shared/mcp-server-config'
 import {
+  isMarketplacePluginName,
+  type MarketplacePluginSummary
+} from '../shared/runtime-marketplace-plugin'
+import {
   isRuntimePluginId,
   type RuntimePluginDetail,
   type RuntimePluginSummary
@@ -56,12 +60,17 @@ export interface AppIpcDependencies {
   listMcpServers: (projectId?: string) => Promise<McpServerSummary[]>
   upsertMcpServer: (input: McpServerInput) => Promise<McpServerSummary>
   deleteMcpServer: (name: string) => Promise<void>
+  listMarketplacePlugins: () => Promise<MarketplacePluginSummary[]>
+  installPlugin: (input: { name: string; trust: boolean }) => Promise<null>
+  uninstallPlugin: (input: { pluginId: string }) => Promise<null>
+  addMarketplaceSource: (input: { gitUrl: string }) => Promise<null>
   sanitizeError: (error: unknown) => string
 }
 
 const MAX_IDENTIFIER_BYTES = 4 * 1024
 const MAX_MEMORY_MARKDOWN_BYTES = 256 * 1024
 const MAX_PROJECT_HINT_BYTES = 256
+const MAX_MARKETPLACE_GIT_URL_BYTES = 2_048
 
 function readRequest(args: unknown[], fields: readonly string[]): Record<string, unknown> {
   if (args.length !== 1 || !args[0] || typeof args[0] !== 'object' || Array.isArray(args[0])) {
@@ -105,7 +114,7 @@ function readOptionalText(
   return readText(record, field, maxBytes)
 }
 
-/** 注册 Project 管理与外观偏好 IPC，不向 Renderer 暴露 Dialog、路径或 nativeTheme。 */
+/** 注册 Project 管理、外观偏好与插件安装 IPC，不向 Renderer 暴露 Dialog、路径、CLI 输出或 nativeTheme。 */
 export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
   const register = <T>(channel: string, operation: (args: unknown[]) => Promise<T> | T): void => {
     dependencies.ipcMain.handle(channel, (event, ...args): Promise<DesktopIpcResult<T>> =>
@@ -267,6 +276,53 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
     await dependencies.deleteMcpServer(name)
     return null
   })
+  register(APP_INVOKE_CHANNELS.listMarketplacePlugins, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.listMarketplacePlugins()
+  })
+  /**
+   * 安装只允许当前货架已列出的 name；未知或含路径的 name 一律 invalid-input。
+   * trust !== true 时把 trust:false 交给依赖，禁止附加 --trust，避免绕过确认框启用 Hooks/MCP。
+   */
+  register(APP_INVOKE_CHANNELS.installPlugin, async (args) => {
+    const request = readRequest(args, ['name', 'trust'])
+    const name = readText(request, 'name')
+    if (!isMarketplacePluginName(name)) {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    if ('trust' in request && typeof request.trust !== 'boolean') {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    const catalog = await dependencies.listMarketplacePlugins()
+    if (!catalog.some((item) => item.name === name)) {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    await dependencies.installPlugin({ name, trust: request.trust === true })
+    return null
+  })
+  /**
+   * 卸载走 Grok CLI；pluginId 必须是单层标识，禁止路径穿越。
+   * 不在 IPC 层附加 --keep-data，避免残留 MCP 状态目录说不清。
+   */
+  register(APP_INVOKE_CHANNELS.uninstallPlugin, async (args) => {
+    const request = readRequest(args, ['pluginId'])
+    const pluginId = readText(request, 'pluginId')
+    if (!isRuntimePluginId(pluginId)) {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    await dependencies.uninstallPlugin({ pluginId })
+    return null
+  })
+  /**
+   * 加源只允许 https git URL：无 userinfo，禁止 query/hash（视为 Secret）。
+   * 拒绝 http，避免把凭据或源地址走明文传输。
+   */
+  register(APP_INVOKE_CHANNELS.addMarketplaceSource, async (args) => {
+    const request = readRequest(args, ['gitUrl'])
+    const gitUrl = readMarketplaceGitUrl(readText(request, 'gitUrl', MAX_MARKETPLACE_GIT_URL_BYTES))
+    await dependencies.addMarketplaceSource({ gitUrl })
+    return null
+  })
 }
 
 function readMcpServerInput(record: Record<string, unknown>): McpServerInput {
@@ -294,6 +350,36 @@ function readMcpServerInput(record: Record<string, unknown>): McpServerInput {
   if (record.env !== undefined) input.env = readStringMap(record.env)
   if (record.headers !== undefined) input.headers = readStringMap(record.headers)
   return input
+}
+
+/**
+ * 市场源只接受 https git URL。
+ * userinfo / query / hash 与 Provider Base URL 同样视为可能的 Secret，禁止进入 CLI argv。
+ */
+function readMarketplaceGitUrl(value: string): string {
+  const gitUrl = value.trim()
+  if (gitUrl !== value || /\s/.test(gitUrl)) {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(gitUrl)
+  } catch {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  if (parsed.username || parsed.password) {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  if (parsed.search || parsed.hash) {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  if (!parsed.hostname || !parsed.pathname || parsed.pathname === '/') {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  return gitUrl
 }
 
 function readStringMap(value: unknown): Record<string, string> {

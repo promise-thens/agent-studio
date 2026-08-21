@@ -63,7 +63,7 @@ export function parseMarketplacePluginSummary(value: unknown): MarketplacePlugin
 }
 
 /** name 必须同时通过目录安全检查与货架字符集，避免命令注入或路径穿越。 */
-function isMarketplacePluginName(value: unknown): value is string {
+export function isMarketplacePluginName(value: unknown): value is string {
   return isRuntimePluginId(value) && MARKETPLACE_PLUGIN_NAME_PATTERN.test(value)
 }
 

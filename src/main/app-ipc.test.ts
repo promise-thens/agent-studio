@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { APP_INVOKE_CHANNELS } from '../shared/app-ipc'
 import type { DesktopIpcResult } from '../shared/ipc-result'
+import type { MarketplacePluginSummary } from '../shared/runtime-marketplace-plugin'
 import type { RuntimePluginDetail, RuntimePluginSummary } from '../shared/runtime-plugin'
 import type { ProjectSummary } from '../shared/task-history'
 import type { DesktopIpcHandler } from './ipc-types'
@@ -38,6 +39,14 @@ const pluginDetail: RuntimePluginDetail = {
   hookNames: []
 }
 
+const marketplacePlugin: MarketplacePluginSummary = {
+  name: 'chrome-devtools',
+  displayName: 'chrome-devtools',
+  description: 'Connect Grok to Chrome DevTools.',
+  sourceName: 'plugin-marketplace',
+  installed: false
+}
+
 function createFixture(): {
   handlers: Map<string, DesktopIpcHandler>
   chooseProject: ReturnType<typeof vi.fn>
@@ -46,6 +55,10 @@ function createFixture(): {
   setAppearance: ReturnType<typeof vi.fn>
   listPlugins: ReturnType<typeof vi.fn>
   getPlugin: ReturnType<typeof vi.fn>
+  listMarketplacePlugins: ReturnType<typeof vi.fn>
+  installPlugin: ReturnType<typeof vi.fn>
+  uninstallPlugin: ReturnType<typeof vi.fn>
+  addMarketplaceSource: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<DesktopIpcResult<T>>
 } {
   const handlers = new Map<string, DesktopIpcHandler>()
@@ -108,6 +121,10 @@ function createFixture(): {
     url: 'https://example.com/mcp'
   }))
   const deleteMcpServer = vi.fn(async () => undefined)
+  const listMarketplacePlugins = vi.fn(async () => [marketplacePlugin])
+  const installPlugin = vi.fn(async () => null)
+  const uninstallPlugin = vi.fn(async () => null)
+  const addMarketplaceSource = vi.fn(async () => null)
   registerAppIpcHandlers({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     assertTrustedSender,
@@ -133,6 +150,10 @@ function createFixture(): {
     listMcpServers,
     upsertMcpServer,
     deleteMcpServer,
+    listMarketplacePlugins,
+    installPlugin,
+    uninstallPlugin,
+    addMarketplaceSource,
     sanitizeError: (error) => (error instanceof Error ? error.message : String(error))
   })
   const invoke = async <T>(channel: string, ...args: unknown[]): Promise<DesktopIpcResult<T>> => {
@@ -148,6 +169,10 @@ function createFixture(): {
     setAppearance,
     listPlugins,
     getPlugin,
+    listMarketplacePlugins,
+    installPlugin,
+    uninstallPlugin,
+    addMarketplaceSource,
     invoke
   }
 }
@@ -310,5 +335,148 @@ describe('App IPC Handler', () => {
         enabled: false
       })
     ).toEqual({ ok: true, value: { pluginId: 'demo-plugin', enabled: false } })
+  })
+
+  it('市场货架无参列出，安装只接受当前货架 name', async () => {
+    const fixture = createFixture()
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.listMarketplacePlugins)).toEqual({
+      ok: true,
+      value: [marketplacePlugin]
+    })
+    expect(fixture.listMarketplacePlugins).toHaveBeenCalledTimes(1)
+
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.installPlugin, {
+        name: 'chrome-devtools',
+        trust: true
+      })
+    ).toEqual({ ok: true, value: null })
+    expect(fixture.installPlugin).toHaveBeenCalledWith({ name: 'chrome-devtools', trust: true })
+    expect(JSON.stringify(fixture.installPlugin.mock.calls)).not.toContain('--trust')
+
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.listMarketplacePlugins, { extra: true })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+  })
+
+  it('安装 name 含路径穿越时为 invalid-input，且不调用安装依赖', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.installPlugin, {
+        name: '../escape',
+        trust: true
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.installPlugin, {
+        name: 'chrome-devtools/../evil',
+        trust: true
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.installPlugin, { name: 'a/b', trust: false })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.installPlugin, { name: 'a\\b', trust: true })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    // 点号能过 isRuntimePluginId，但不是货架字符集，禁止进入 CLI argv
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.installPlugin, { name: 'foo.bar', trust: true })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.listMarketplacePlugins).not.toHaveBeenCalled()
+    expect(fixture.installPlugin).not.toHaveBeenCalled()
+  })
+
+  it('未知货架 name 为 invalid-input，不调用安装依赖', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.installPlugin, {
+        name: 'not-in-catalog',
+        trust: true
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.listMarketplacePlugins).toHaveBeenCalledTimes(1)
+    expect(fixture.installPlugin).not.toHaveBeenCalled()
+  })
+
+  it('trust 非 true 时安装依赖不得带 --trust', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.installPlugin, {
+        name: 'chrome-devtools',
+        trust: false
+      })
+    ).toEqual({ ok: true, value: null })
+    expect(fixture.installPlugin).toHaveBeenCalledWith({
+      name: 'chrome-devtools',
+      trust: false
+    })
+
+    fixture.installPlugin.mockClear()
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.installPlugin, { name: 'chrome-devtools' })
+    ).toEqual({ ok: true, value: null })
+    expect(fixture.installPlugin).toHaveBeenCalledWith({
+      name: 'chrome-devtools',
+      trust: false
+    })
+    expect(JSON.stringify(fixture.installPlugin.mock.calls)).not.toContain('--trust')
+  })
+
+  it('卸载只接受合法 pluginId，且不把路径交给依赖', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.uninstallPlugin, {
+        pluginId: 'chrome-devtools-mcp'
+      })
+    ).toEqual({ ok: true, value: null })
+    expect(fixture.uninstallPlugin).toHaveBeenCalledWith({ pluginId: 'chrome-devtools-mcp' })
+
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.uninstallPlugin, { pluginId: '../escape' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.uninstallPlugin, {
+        pluginId: 'chrome-devtools-mcp',
+        keepData: true
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.uninstallPlugin).toHaveBeenCalledTimes(1)
+  })
+
+  it('加源拒绝带 userinfo、http、query 或 hash 的 gitUrl', async () => {
+    const fixture = createFixture()
+    const official = 'https://github.com/xai-org/plugin-marketplace.git'
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.addMarketplaceSource, { gitUrl: official })
+    ).toEqual({ ok: true, value: null })
+    expect(fixture.addMarketplaceSource).toHaveBeenCalledWith({ gitUrl: official })
+
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.addMarketplaceSource, {
+        gitUrl: 'https://user:pass@github.com/xai-org/plugin-marketplace.git'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.addMarketplaceSource, {
+        gitUrl: 'https://user@github.com/xai-org/plugin-marketplace.git'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.addMarketplaceSource, {
+        gitUrl: 'http://github.com/xai-org/plugin-marketplace.git'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.addMarketplaceSource, {
+        gitUrl: 'https://github.com/xai-org/plugin-marketplace.git?token=secret'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.addMarketplaceSource, {
+        gitUrl: 'https://github.com/xai-org/plugin-marketplace.git#ref'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.addMarketplaceSource).toHaveBeenCalledTimes(1)
   })
 })

@@ -2,6 +2,7 @@ import type { AppAppearanceMode, AppAppearanceState } from './app-appearance'
 import type { DesktopIpcResult } from './ipc-result'
 import type { GrokMemoryDocument, GrokMemoryEnabledState, GrokMemorySummary } from './grok-memory'
 import type { McpServerInput, McpServerSummary } from './mcp-server-config'
+import type { MarketplacePluginSummary } from './runtime-marketplace-plugin'
 import type { RuntimePluginDetail, RuntimePluginSummary } from './runtime-plugin'
 import type { DeletionPreview, ProjectSummary } from './task-history'
 
@@ -27,7 +28,11 @@ export const APP_INVOKE_CHANNELS = {
   setMemoryEnabled: 'app:set-memory-enabled',
   listMcpServers: 'app:list-mcp-servers',
   upsertMcpServer: 'app:upsert-mcp-server',
-  deleteMcpServer: 'app:delete-mcp-server'
+  deleteMcpServer: 'app:delete-mcp-server',
+  listMarketplacePlugins: 'app:list-marketplace-plugins',
+  installPlugin: 'app:install-plugin',
+  uninstallPlugin: 'app:uninstall-plugin',
+  addMarketplaceSource: 'app:add-marketplace-source'
 } as const
 
 export const APP_PUSH_CHANNELS = {
@@ -86,7 +91,20 @@ export interface AppPluginEnabledState {
   enabled: boolean
 }
 
-/** Renderer 只能通过 App 域注册 Project、读写外观偏好与插件摘要，不能自行提交执行路径。 */
+export interface AppInstallPluginRequest {
+  name: string
+  trust: boolean
+}
+
+export interface AppUninstallPluginRequest {
+  pluginId: string
+}
+
+export interface AppAddMarketplaceSourceRequest {
+  gitUrl: string
+}
+
+/** Renderer 只能通过 App 域注册 Project、读写外观偏好与插件摘要，不能自行提交执行路径或 git URL 当安装源。 */
 export interface AppDesktopApi {
   chooseProject: () => Promise<DesktopIpcResult<ProjectSummary | null>>
   listProjects: () => Promise<DesktopIpcResult<ProjectSummary[]>>
@@ -116,5 +134,14 @@ export interface AppDesktopApi {
   listMcpServers: (projectId?: string) => Promise<DesktopIpcResult<McpServerSummary[]>>
   upsertMcpServer: (input: McpServerInput) => Promise<DesktopIpcResult<McpServerSummary>>
   deleteMcpServer: (name: string) => Promise<DesktopIpcResult<null>>
+  /** 列出 App grok-home 市场货架摘要，不回传 path / sha / url。 */
+  listMarketplacePlugins: () => Promise<DesktopIpcResult<MarketplacePluginSummary[]>>
+  /**
+   * 安装当前货架中的插件。trust 非 true 时主进程不得附加 --trust。
+   * 成功只回 null，不回传 CLI 输出或绝对路径。
+   */
+  installPlugin: (name: string, trust: boolean) => Promise<DesktopIpcResult<null>>
+  uninstallPlugin: (pluginId: string) => Promise<DesktopIpcResult<null>>
+  addMarketplaceSource: (gitUrl: string) => Promise<DesktopIpcResult<null>>
   onAppearanceChanged: (listener: (state: AppAppearanceState) => void) => () => void
 }

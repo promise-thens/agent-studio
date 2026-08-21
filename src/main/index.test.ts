@@ -12,6 +12,16 @@ import type { ProviderRuntimeConfig } from './provider/provider-config-store'
 type AppDeletionDependencies = {
   removeProject(projectId: string): Promise<void>
   deleteProjectHistory(projectId: string, token: string): Promise<void>
+  installPlugin(input: { name: string; trust: boolean }): Promise<null>
+  uninstallPlugin(input: { pluginId: string }): Promise<null>
+  addMarketplaceSource(input: { gitUrl: string }): Promise<null>
+}
+
+type GrokPluginCliInput = {
+  grokHome: string
+  grokBinary: string
+  args: string[]
+  timeoutMs: number
 }
 
 type TaskDeletionRuntime = {
@@ -146,6 +156,12 @@ const mocks = vi.hoisted(() => {
     projectDeletionPreparation: createDeletionPreparationMock(),
     taskDeletionLease: createDeletionLeaseMock(),
     projectDeletionLease: createDeletionLeaseMock(),
+    runGrokPlugin: vi.fn<(input: GrokPluginCliInput) => Promise<{ ok: true; stdout: string }>>(
+      async () => ({
+        ok: true,
+        stdout: ''
+      })
+    ),
     permissionBroker: {
       beginProjectDeletion: vi.fn(),
       beginTaskDeletion: vi.fn(),
@@ -382,6 +398,13 @@ vi.mock('./agent/task-execution-controller', () => ({
 vi.mock('./provider/grok-provider-config', () => ({
   clearGrokProviderConfig: vi.fn(async () => undefined),
   getManagedGrokHome: (userDataPath: string) => `${userDataPath}/grok-home`
+}))
+vi.mock('./runtime/grok/grok-plugin-cli', () => ({
+  grokPluginLeaderSocket: (grokHome: string) => `${grokHome}/studio-plugin.sock`,
+  runGrokPlugin: mocks.runGrokPlugin
+}))
+vi.mock('./runtime/grok/grok-marketplace-inventory', () => ({
+  listGrokMarketplacePlugins: vi.fn(async () => [])
 }))
 
 describe('Main 删除与权限失效编排', () => {
@@ -648,6 +671,65 @@ describe('Main 删除与权限失效编排', () => {
     })
     expect(mocks.agentService.disconnect).toHaveBeenCalledOnce()
     expect(mocks.agentService.connect).toHaveBeenCalledOnce()
+  })
+
+  it('插件安装 trust 非 true 时 CLI argv 不含 --trust，且不回传 stdout', async () => {
+    mocks.runGrokPlugin.mockReset()
+    mocks.runGrokPlugin.mockResolvedValue({
+      ok: true,
+      stdout: '/secret/grok-home/installed-plugins/chrome-devtools'
+    })
+    const dependencies = mocks.appDeletionDependencies!
+    await expect(
+      dependencies.installPlugin({ name: 'chrome-devtools', trust: false })
+    ).resolves.toBeNull()
+    expect(mocks.runGrokPlugin).toHaveBeenCalledWith({
+      grokHome: '/tmp/agent-studio-index-test/grok-home',
+      grokBinary: expect.any(String),
+      args: ['plugin', 'install', 'chrome-devtools'],
+      timeoutMs: 120_000
+    })
+    expect(mocks.runGrokPlugin.mock.calls[0]?.[0]?.args).not.toContain('--trust')
+    expect(mocks.agentService.disconnect).not.toHaveBeenCalled()
+
+    await expect(
+      dependencies.installPlugin({ name: 'chrome-devtools', trust: true })
+    ).resolves.toBeNull()
+    expect(mocks.runGrokPlugin).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        args: ['plugin', 'install', 'chrome-devtools', '--trust'],
+        timeoutMs: 120_000
+      })
+    )
+  })
+
+  it('卸载附加 --confirm 且不加 --keep-data；加源只把 gitUrl 交给 CLI', async () => {
+    mocks.runGrokPlugin.mockReset()
+    mocks.runGrokPlugin.mockResolvedValue({ ok: true, stdout: '' })
+    const dependencies = mocks.appDeletionDependencies!
+
+    await expect(
+      dependencies.uninstallPlugin({ pluginId: 'chrome-devtools-mcp' })
+    ).resolves.toBeNull()
+    expect(mocks.runGrokPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ['plugin', 'uninstall', 'chrome-devtools-mcp', '--confirm'],
+        timeoutMs: 120_000
+      })
+    )
+    expect(mocks.runGrokPlugin.mock.calls[0]?.[0]?.args).not.toContain('--keep-data')
+
+    await expect(
+      dependencies.addMarketplaceSource({
+        gitUrl: 'https://github.com/xai-org/plugin-marketplace.git'
+      })
+    ).resolves.toBeNull()
+    expect(mocks.runGrokPlugin).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        args: ['plugin', 'marketplace', 'add', 'https://github.com/xai-org/plugin-marketplace.git'],
+        timeoutMs: 120_000
+      })
+    )
   })
 })
 
