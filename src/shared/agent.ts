@@ -230,6 +230,11 @@ export interface OperationIntent {
   projectId: string
   environmentId: string
   executionRoot: string
+  /**
+   * 主进程额外信任的绝对根，例如共享记忆树。
+   * 只用于路径裁决，不得发给 Renderer。
+   */
+  trustedExternalRoots?: string[]
   operationType: AgentOperationType
   targets: AgentOperationTarget[]
   parameterFingerprint: string

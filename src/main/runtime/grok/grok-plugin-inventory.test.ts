@@ -272,6 +272,37 @@ describe('Grok 插件库存扫描', () => {
     expectNoLeak(detail, ['sk-oversize', 'sk-0', 'secret-0', 'leak'])
   })
 
+  it('清单 description 与 SKILL.md 说明进入详情，不泄漏路径', async () => {
+    const userDataPath = await createUserData()
+    const root = await pluginsRoot(userDataPath)
+    const pluginDir = join(root, 'docs-kit')
+    await mkdir(pluginDir)
+    await writeJson(join(pluginDir, 'plugin.json'), {
+      displayName: '文档工具',
+      description: 'Create and edit documents'
+    })
+    const skillDir = join(pluginDir, 'skills', 'summarize')
+    await mkdir(skillDir, { recursive: true })
+    await writeFile(
+      join(skillDir, 'SKILL.md'),
+      `---
+name: summarize
+description: 把长文压成要点
+---
+
+# summarize
+`,
+      'utf8'
+    )
+
+    const listed = await listGrokPlugins(userDataPath)
+    expect(listed[0]?.description).toBe('Create and edit documents')
+    const detail = await getGrokPlugin(userDataPath, 'docs-kit')
+    expect(detail?.skillDescriptions).toEqual({ summarize: '把长文压成要点' })
+    expectNoLeak(listed, [userDataPath, pluginDir])
+    expectNoLeak(detail, [userDataPath, pluginDir])
+  })
+
   it('逃出 grok-home 的 symlink 标为 invalid，原因不含绝对路径，且不中断其它插件', async ({
     skip
   }) => {

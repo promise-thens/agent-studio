@@ -14,9 +14,9 @@ export interface SlashCommandItem {
   // product 只允许导航，不得 startTurn。
   productAction?:
     | 'open-plugins'
+    | 'open-plugins-mcp'
     | 'open-settings'
     | 'open-settings-memory'
-    | 'open-settings-mcp'
     | 'open-settings-grok-config'
 }
 
@@ -48,16 +48,16 @@ export const PRODUCT_SLASH_COMMANDS: SlashCommandItem[] = [
   {
     id: 'product:mcps',
     name: 'mcps',
-    description: '打开 MCP 设置',
+    description: '打开插件页的 MCP',
     source: 'product',
-    productAction: 'open-settings-mcp'
+    productAction: 'open-plugins-mcp'
   },
   {
     id: 'product:mcp',
     name: 'mcp',
-    description: '打开 MCP 设置',
+    description: '打开插件页的 MCP',
     source: 'product',
-    productAction: 'open-settings-mcp'
+    productAction: 'open-plugins-mcp'
   },
   {
     id: 'product:config',

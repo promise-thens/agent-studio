@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type {
@@ -347,6 +347,42 @@ describe('AgentService Task / Turn 编排', () => {
 
     await expect(service.connect(WORKSPACE, lease)).rejects.toMatchObject({ code: 'invalid-state' })
     expect(adapter.connect).not.toHaveBeenCalled()
+  })
+
+  it('写入共享记忆树时自动允许，不弹出项目外审批', async () => {
+    const memoryRoot = await mkdtemp(join(tmpdir(), 'agent-service-memory-'))
+    await writeFile(join(memoryRoot, 'MEMORY.md'), '# Global Memory\n', 'utf8')
+    const canonicalMemory = await realpath(memoryRoot)
+    const fixture = await createPermissionServiceFixture(['task-a', 'turn-a1'], {
+      getTrustedExternalRoots: () => [canonicalMemory]
+    })
+    const turnResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockImplementationOnce(() => turnResult.promise)
+    try {
+      const execution = fixture.service.startTurn(fixture.taskId, '/remember 我叫胡大帅')
+      await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledTimes(1))
+      fixture.service.handlePermissionRequest(
+        permissionRequest(
+          fixture.taskId,
+          'turn-a1',
+          'runtime-session-1',
+          'runtime-request-memory',
+          join(canonicalMemory, 'MEMORY.md')
+        )
+      )
+      await vi.waitFor(() =>
+        expect(fixture.adapter.respondPermission).toHaveBeenCalledWith(
+          'runtime-request-memory',
+          'allow-once'
+        )
+      )
+      expect(fixture.approvals).toHaveLength(0)
+      turnResult.resolve({ outcome: 'completed' })
+      await expect(execution).resolves.toMatchObject({ outcome: 'completed' })
+    } finally {
+      await fixture.dispose()
+      await rm(memoryRoot, { recursive: true, force: true })
+    }
   })
 
   it('允许一次只转发一次，错误身份与重复响应均幂等忽略', async () => {
@@ -1269,7 +1305,10 @@ interface PermissionServiceFixture {
  * 使用真实临时 ProjectRegistry/TaskStore 绑定 Task 身份，
  * 避免用绕过 projectId 与持久化边界的假审批制造虚假绿灯。
  */
-async function createPermissionServiceFixture(ids: string[]): Promise<PermissionServiceFixture> {
+async function createPermissionServiceFixture(
+  ids: string[],
+  extra?: { getTrustedExternalRoots?: () => Promise<string[]> | string[] }
+): Promise<PermissionServiceFixture> {
   const userDataPath = await mkdtemp(join(tmpdir(), 'agent-service-permission-'))
   const projectPath = join(userDataPath, 'project')
   await mkdir(projectPath)
@@ -1329,7 +1368,10 @@ async function createPermissionServiceFixture(ids: string[]): Promise<Permission
     now: () => new Date(Date.UTC(2026, 7, 12, 0, 0, clock++)).toISOString(),
     projectRegistry: registry,
     taskStore,
-    permissionBroker: broker
+    permissionBroker: broker,
+    ...(extra?.getTrustedExternalRoots
+      ? { getTrustedExternalRoots: extra.getTrustedExternalRoots }
+      : {})
   })
   await service.connect(project.projectId)
   const task = await service.createTask(project.projectId)

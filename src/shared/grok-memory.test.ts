@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  grokMemoryTitle,
   isCurrentProjectMemoryDir,
   isGrokMemoryId,
   parseGrokMemoryId,
@@ -37,6 +38,14 @@ describe('grok memory 标识', () => {
       title: '全局',
       updatedAt: '2026-08-20T00:00:00.000Z'
     })
+  })
+
+  it('标题可用一级或二级标题，flush 摘要不再退回文件名', () => {
+    expect(grokMemoryTitle('# Global Memory\n\nhello', 'MEMORY.md')).toBe('Global Memory')
+    expect(grokMemoryTitle('## Decisions & rationale\n\n- 安装走用户 CLI', 'note.md')).toBe(
+      'Decisions & rationale'
+    )
+    expect(grokMemoryTitle('没有标题', 'note.md')).toBe('note.md')
   })
 
   it('best-effort 匹配当前项目 slug，对不上不强造目录', () => {

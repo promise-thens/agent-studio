@@ -73,6 +73,21 @@ describe('合并与过滤', () => {
     })
   })
 
+  it('/mcp 打开插件页 MCP 栏，不再进设置', () => {
+    const items = merged()
+    const matched = filterSlashCommands(items, slashQuery('/mcp'))
+    expect(matched.map((item) => item.name).sort()).toEqual(['mcp', 'mcps'])
+    expect(
+      matched.every((item) => {
+        const resolved = resolveSlashSubmit(item, '/mcp')
+        return resolved.kind === 'product' && resolved.action === 'open-plugins-mcp'
+      })
+    ).toBe(true)
+    expect(PRODUCT_SLASH_COMMANDS.find((item) => item.name === 'mcps')?.productAction).toBe(
+      'open-plugins-mcp'
+    )
+  })
+
   it('/plug 匹配产品别名 plugins，且选 plugins 不产生 runtime prompt', () => {
     const items = merged([runtimeCommand({ name: 'compact', description: '压缩上下文' })])
     const matched = filterSlashCommands(items, slashQuery('/plug'))
@@ -301,6 +316,7 @@ describe('命令板表面', () => {
     expect(composerSource).toContain("emit('open-plugins')")
     expect(composerSource).toContain("emit('open-settings')")
     expect(composerSource).toContain("emit('open-settings-memory')")
+    expect(composerSource).toContain("emit('open-plugins-mcp')")
     expect(composerSource).toContain('matchProductSlashSubmit')
     expect(composerSource).not.toContain('继续任务')
   })
@@ -318,5 +334,7 @@ describe('命令板表面', () => {
     expect(appSource).toContain('openSettingsDialog()')
     expect(appSource).toContain('open-settings-memory')
     expect(appSource).toContain('open-settings-grok-config')
+    expect(appSource).toContain("openPluginHub('mcp')")
+    expect(appSource).not.toContain("openSettingsSection('mcp')")
   })
 })

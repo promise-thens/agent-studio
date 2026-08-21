@@ -6,11 +6,14 @@ import {
   MAX_RUNTIME_PLUGIN_NAME_LENGTH,
   MAX_RUNTIME_PLUGIN_NAMES,
   isRuntimePluginId,
+  parseSkillMarkdownDescription,
+  parseSafePluginDescription,
   type RuntimePluginDetail,
   type RuntimePluginSummary
 } from '../../../shared/runtime-plugin'
 
 const MAX_JSON_BYTES = 64 * 1024
+const MAX_SKILL_MARKDOWN_BYTES = 8 * 1024
 const MAX_DISPLAY_NAME_LENGTH = 256
 const MAX_VERSION_LENGTH = 64
 
@@ -46,6 +49,7 @@ interface InstalledRegistryEntry {
 
 interface NameScan {
   names: string[]
+  descriptions?: Record<string, string>
   invalidReason?: string
 }
 
@@ -287,6 +291,7 @@ async function scanPluginContents(
   let invalidReason: string | undefined
   let displayName = pluginId
   let version: string | undefined
+  let description: string | undefined
 
   const manifest = await readPluginManifest(grokHome, pluginCanonical)
   if (manifest.kind === 'invalid') {
@@ -294,6 +299,7 @@ async function scanPluginContents(
   } else if (manifest.kind === 'ok') {
     displayName = pickDisplayName(manifest.value, pluginId)
     version = pickVersion(manifest.value)
+    description = pickDescription(manifest.value)
   }
 
   const skills = await scanSkills(grokHome, join(pluginCanonical, 'skills'))
@@ -308,14 +314,17 @@ async function scanPluginContents(
   const skillNames = capNames(skills.names)
   const mcpNames = capNames(mcp.names)
   const hookNames = capNames(hooks.names)
+  const skillDescriptions = pickSkillDescriptions(skillNames, skills.descriptions)
 
   if (invalidReason) {
     return makeInvalidDetail(pluginId, invalidReason, {
       displayName,
       version,
+      description,
       skillNames,
       mcpNames,
-      hookNames
+      hookNames,
+      skillDescriptions
     })
   }
 
@@ -332,6 +341,8 @@ async function scanPluginContents(
     hookNames
   }
   if (version) detail.version = version
+  if (description) detail.description = description
+  if (skillDescriptions) detail.skillDescriptions = skillDescriptions
   return detail
 }
 
@@ -349,6 +360,7 @@ async function scanSkills(grokHome: string, skillsPath: string): Promise<NameSca
   }
 
   const names: string[] = []
+  const descriptions: Record<string, string> = {}
   let invalidReason: string | undefined
   for (const entryName of entries) {
     if (!isAcceptableLeafName(entryName)) continue
@@ -377,9 +389,29 @@ async function scanSkills(grokHome: string, skillsPath: string): Promise<NameSca
       continue
     }
     names.push(entryName)
+    const skillDescription = await readSkillDescription(skillFile.canonical)
+    if (skillDescription) {
+      descriptions[entryName] = skillDescription
+    }
   }
 
-  return { names, invalidReason }
+  return {
+    names,
+    ...(Object.keys(descriptions).length > 0 ? { descriptions } : {}),
+    invalidReason
+  }
+}
+
+/** 只读 SKILL.md 前 8KB 取短说明，不把正文或路径带回 Renderer。 */
+async function readSkillDescription(canonical: string): Promise<string | undefined> {
+  try {
+    const stats = await fs.stat(canonical)
+    if (!stats.isFile() || stats.size > MAX_SKILL_MARKDOWN_BYTES) return undefined
+    const text = await fs.readFile(canonical, 'utf8')
+    return parseSkillMarkdownDescription(text)
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -526,6 +558,23 @@ function pickVersion(manifest: Record<string, unknown>): string | undefined {
   return asSafeLabel(manifest.version, MAX_VERSION_LENGTH)
 }
 
+function pickDescription(manifest: Record<string, unknown>): string | undefined {
+  return parseSafePluginDescription(manifest.description)
+}
+
+function pickSkillDescriptions(
+  skillNames: readonly string[],
+  descriptions: Record<string, string> | undefined
+): Record<string, string> | undefined {
+  if (!descriptions) return undefined
+  const next: Record<string, string> = {}
+  for (const name of skillNames) {
+    const description = descriptions[name]
+    if (description) next[name] = description
+  }
+  return Object.keys(next).length > 0 ? next : undefined
+}
+
 function asSafeLabel(value: unknown, maxLength: number): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
@@ -564,6 +613,7 @@ function toSummary(detail: RuntimePluginDetail): RuntimePluginSummary {
     hookCount: detail.hookCount
   }
   if (detail.version) summary.version = detail.version
+  if (detail.description) summary.description = detail.description
   return summary
 }
 
@@ -573,9 +623,11 @@ function makeInvalidDetail(
   extras?: {
     displayName?: string
     version?: string
+    description?: string
     skillNames?: string[]
     mcpNames?: string[]
     hookNames?: string[]
+    skillDescriptions?: Record<string, string>
   }
 ): RuntimePluginDetail {
   const skillNames = extras?.skillNames ?? []
@@ -595,6 +647,8 @@ function makeInvalidDetail(
     invalidReason: reason
   }
   if (extras?.version) detail.version = extras.version
+  if (extras?.description) detail.description = extras.description
+  if (extras?.skillDescriptions) detail.skillDescriptions = extras.skillDescriptions
   return detail
 }
 

@@ -1,4 +1,4 @@
-import { promises as fs } from 'node:fs'
+import { promises as fs, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
@@ -73,10 +73,11 @@ export function isAllowedMemoryCanonical(input: {
   userMemoryDir: string
   canonical: string
 }): boolean {
-  const grokHome = resolve(input.grokHome)
-  const userMemoryDir = resolve(input.userMemoryDir)
+  // 允许根也要 realpath：macOS 上 tmpdir 是 /var/folders，文件 canonical 却是 /private/var/folders。
+  const managedMemory = canonicalOrResolve(join(resolve(input.grokHome), 'memory'))
+  const userMemoryDir = canonicalOrResolve(input.userMemoryDir)
   const canonical = resolve(input.canonical)
-  return isPathInside(join(grokHome, 'memory'), canonical) || isPathInside(userMemoryDir, canonical)
+  return isPathInside(managedMemory, canonical) || isPathInside(userMemoryDir, canonical)
 }
 
 export function isPathInside(parent: string, child: string): boolean {
@@ -102,6 +103,15 @@ async function safeRealpath(path: string): Promise<string | null> {
     return await fs.realpath(path)
   } catch {
     return null
+  }
+}
+
+/** 目录存在则跟到真实路径；尚未创建时退回 resolve，避免 save 前 mkdir 被误判逃逸。 */
+function canonicalOrResolve(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return resolve(path)
   }
 }
 

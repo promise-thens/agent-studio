@@ -94,7 +94,8 @@ export function parseGrokMemoryId(memoryId: unknown): ParsedGrokMemoryId | null 
 }
 
 export function grokMemoryTitle(markdown: string, fallback: string): string {
-  const heading = /^#\s+(.+)$/m.exec(markdown)
+  // flush 摘要常用 ## 当第一节标题，只认 # 会退回文件名。
+  const heading = /^#{1,2}\s+(.+)$/m.exec(markdown)
   const title = heading?.[1]?.trim()
   return title || fallback
 }

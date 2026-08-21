@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   MANAGED_GROK_PLUGIN_SCOPE,
+  MAX_RUNTIME_PLUGIN_DESCRIPTION_LENGTH,
   MAX_RUNTIME_PLUGIN_NAME_LENGTH,
   MAX_RUNTIME_PLUGIN_NAMES,
   RUNTIME_PLUGIN_SCOPES,
@@ -10,6 +11,8 @@ import {
   isRuntimePluginStatus,
   parseRuntimePluginDetail,
   parseRuntimePluginSummary,
+  parseSafePluginDescription,
+  parseSkillMarkdownDescription,
   type RuntimePluginDetail,
   type RuntimePluginScope,
   type RuntimePluginStatus,
@@ -166,6 +169,53 @@ describe('运行时插件契约', () => {
     expect(parsed!.hookCount).toBe(MAX_RUNTIME_PLUGIN_NAMES)
     expect(parsed!.skillNames[0]).toBe('n0')
     expect(parsed!.skillNames.includes(`n${MAX_RUNTIME_PLUGIN_NAMES}`)).toBe(false)
+  })
+
+  it('摘要可带安全说明，丢弃绝对路径和 NUL', () => {
+    expect(
+      parseRuntimePluginSummary({
+        ...validSummary,
+        description: '  Create and edit documents  '
+      })
+    ).toMatchObject({ description: 'Create and edit documents' })
+    expect(
+      parseRuntimePluginSummary({
+        ...validSummary,
+        description: '/Users/me/secret.md'
+      })
+    ).toEqual(validSummary)
+    expect(parseSafePluginDescription('skills/dyp-ask.md is a helper')).toBe(
+      'skills/dyp-ask.md is a helper'
+    )
+    expect(
+      parseSafePluginDescription('x'.repeat(MAX_RUNTIME_PLUGIN_DESCRIPTION_LENGTH + 8))
+    ).toHaveLength(MAX_RUNTIME_PLUGIN_DESCRIPTION_LENGTH)
+  })
+
+  it('从 SKILL.md 取 description，不要把标题当说明', () => {
+    expect(
+      parseSkillMarkdownDescription(`---
+name: summarize
+description: 把长文压成要点
+---
+
+# summarize
+`)
+    ).toBe('把长文压成要点')
+    expect(parseSkillMarkdownDescription('# outline\n\n生成文档大纲。\n')).toBe('生成文档大纲。')
+    expect(parseSkillMarkdownDescription('# only-title\n')).toBeUndefined()
+  })
+
+  it('详情可带 skillDescriptions，且只保留已有 skillNames 的安全说明', () => {
+    const parsed = parseRuntimePluginDetail({
+      ...validDetail,
+      skillDescriptions: {
+        summarize: '把长文压成要点',
+        ghost: '不该出现',
+        '': 'empty'
+      }
+    })
+    expect(parsed?.skillDescriptions).toEqual({ summarize: '把长文压成要点' })
   })
 
   it('invalidReason 只在 status 为 invalid 时保留为短字符串', () => {

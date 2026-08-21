@@ -1911,6 +1911,93 @@ button:disabled {
   flex: 1 1 180px;
 }
 
+/* 设置/插件中心共用的 iOS 风开关，开启用产品橙而不是系统紫。 */
+.studio-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-chip);
+  background: var(--surface-3);
+  cursor: pointer;
+  transition: background-color 140ms ease;
+}
+
+.studio-switch[aria-checked='true'] {
+  background: var(--accent);
+}
+
+.studio-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 18%);
+  transition: transform 140ms ease;
+}
+
+.studio-switch[aria-checked='true']::after {
+  transform: translateX(16px);
+}
+
+.studio-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.hub-primary,
+.hub-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-chip);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.hub-primary {
+  border: 0;
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+.hub-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.hub-secondary {
+  border: 1px solid var(--border-strong);
+  color: var(--text-1);
+  background: var(--surface-2);
+}
+
+.hub-secondary:hover:not(:disabled) {
+  background: var(--hover-fill);
+}
+
+.hub-primary:disabled,
+.hub-secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-switch,
+  .studio-switch::after {
+    transition: none;
+  }
+}
+
 .spin {
   animation: spin 900ms linear infinite;
 }

@@ -15,6 +15,7 @@ const MAX_IDENTIFIER_BYTES = 4 * 1024
 const MAX_PATH_BYTES = 16 * 1024
 const MAX_DISPLAY_TEXT_BYTES = 4 * 1024
 const MAX_TARGETS = 32
+const MAX_TRUSTED_EXTERNAL_ROOTS = 8
 
 const RISK_ORDER: Record<AgentPermissionRisk, number> = {
   L0: 0,
@@ -132,6 +133,12 @@ export function evaluatePermissionPolicy(intent: OperationIntent): PermissionPol
   if (['browser', 'screen', 'clipboard'].includes(intent.operationType)) {
     return { kind: 'deny', risk, reason: 'unsupported', allowedScopes: [] }
   }
+  // 共享记忆树是 Runtime 自己的笔记，不是项目逃逸；读/写不再打断 Grok 记东西。
+  if (areAllPathTargetsInsideTrustedExternalRoots(intent) && risk !== 'L3') {
+    if (intent.operationType === 'read-project' || intent.operationType === 'write-file') {
+      return { kind: 'allow', risk: 'L0', allowedScopes: [] }
+    }
+  }
   if (risk === 'L0') return { kind: 'allow', risk, allowedScopes: [] }
   if (risk === 'L3') return { kind: 'approval', risk, allowedScopes: ['once'] }
   return { kind: 'approval', risk, allowedScopes: ['once', 'task'] }
@@ -150,6 +157,7 @@ export async function resolveOperationIntentTargets(
   if (intent.environmentId !== expectedEnvironmentId) {
     throw new PermissionPolicyError('invalid-target', 'Execution environment 与 Project 不匹配。')
   }
+  const trustedExternalRoots = await resolveTrustedExternalRoots(intent.trustedExternalRoots)
   const targets: AgentOperationTarget[] = []
 
   for (const target of intent.targets) {
@@ -161,9 +169,13 @@ export async function resolveOperationIntentTargets(
       targets.push({ ...target })
       continue
     }
-    const canonicalTarget = await resolveCanonicalTarget(canonicalRoot, target.value)
+    const canonicalTarget = await resolveCanonicalTarget(
+      canonicalRoot,
+      target.value,
+      trustedExternalRoots
+    )
     if (
-      canonicalTarget === canonicalRoot &&
+      isProtectedRootPath(canonicalTarget, canonicalRoot, trustedExternalRoots) &&
       ['write-file', 'delete-path', 'worktree-remove'].includes(intent.operationType)
     ) {
       throw new PermissionPolicyError('invalid-target', '不能对 execution root 本身执行该操作。')
@@ -171,7 +183,12 @@ export async function resolveOperationIntentTargets(
     targets.push({ kind: 'path', value: canonicalTarget })
   }
 
-  return { ...intent, executionRoot: canonicalRoot, targets }
+  return {
+    ...intent,
+    executionRoot: canonicalRoot,
+    targets,
+    ...(trustedExternalRoots.length ? { trustedExternalRoots } : {})
+  }
 }
 
 /** 授权键使用 canonical target 和参数指纹；任何身份或约束不同都不能命中。 */
@@ -207,6 +224,7 @@ export function validateOperationIntent(intent: OperationIntent): void {
   if (!isAbsolute(intent.executionRoot)) {
     throw new PermissionPolicyError('invalid-intent', 'Execution root 必须是绝对路径。')
   }
+  validateTrustedExternalRoots(intent.trustedExternalRoots)
   assertRequiredText(intent.parameterFingerprint, MAX_IDENTIFIER_BYTES, '参数约束')
   assertRequiredText(intent.title, MAX_DISPLAY_TEXT_BYTES, '操作标题')
   assertRequiredText(intent.impact, MAX_DISPLAY_TEXT_BYTES, '操作影响')
@@ -359,16 +377,77 @@ async function resolveCanonicalRoot(root: string): Promise<string> {
   }
 }
 
-async function resolveCanonicalTarget(canonicalRoot: string, value: string): Promise<string> {
+async function resolveCanonicalTarget(
+  canonicalRoot: string,
+  value: string,
+  trustedExternalRoots: string[]
+): Promise<string> {
   if (value.includes('\0') || hasParentTraversal(value)) {
     throw new PermissionPolicyError('invalid-target', '目标路径无效。')
   }
   const candidate = normalize(isAbsolute(value) ? value : resolve(canonicalRoot, value))
   const canonicalTarget = await realpathWithMissingLeaf(candidate)
-  if (!isPathInside(canonicalRoot, canonicalTarget)) {
-    throw new PermissionPolicyError('invalid-target', '目标路径超出 execution root。')
+  if (isPathInside(canonicalRoot, canonicalTarget)) return canonicalTarget
+  if (trustedExternalRoots.some((root) => isPathInside(root, canonicalTarget)))
+    return canonicalTarget
+  throw new PermissionPolicyError('invalid-target', '目标路径超出 execution root。')
+}
+
+async function resolveTrustedExternalRoots(values: string[] | undefined): Promise<string[]> {
+  if (!values?.length) return []
+  const roots: string[] = []
+  for (const value of values) {
+    try {
+      const canonical = await fs.realpath(value)
+      const stats = await fs.stat(canonical)
+      if (!stats.isDirectory()) continue
+      if (!roots.some((existing) => samePath(existing, canonical))) roots.push(canonical)
+    } catch {
+      // 缺目录的信任根不能扩大授权；记忆目录应在 ensureShare 之后存在。
+    }
   }
-  return canonicalTarget
+  return roots
+}
+
+function areAllPathTargetsInsideTrustedExternalRoots(intent: OperationIntent): boolean {
+  const roots = intent.trustedExternalRoots
+  if (!roots?.length) return false
+  const pathTargets = intent.targets.filter((target) => target.kind === 'path')
+  if (pathTargets.length === 0 || pathTargets.length !== intent.targets.length) return false
+  return pathTargets.every((target) =>
+    roots.some((root) => isPathInside(root, target.value) && target.value !== root)
+  )
+}
+
+function isProtectedRootPath(
+  canonicalTarget: string,
+  canonicalRoot: string,
+  trustedExternalRoots: string[]
+): boolean {
+  return (
+    samePath(canonicalTarget, canonicalRoot) ||
+    trustedExternalRoots.some((root) => samePath(canonicalTarget, root))
+  )
+}
+
+function validateTrustedExternalRoots(values: unknown): void {
+  if (values == null) return
+  if (!Array.isArray(values) || values.length > MAX_TRUSTED_EXTERNAL_ROOTS) {
+    throw new PermissionPolicyError('invalid-intent', '额外信任根无效。')
+  }
+  for (const value of values) {
+    assertRequiredText(value, MAX_PATH_BYTES, '额外信任根')
+    if (!isAbsolute(value) || hasParentTraversal(value)) {
+      throw new PermissionPolicyError('invalid-intent', '额外信任根必须是绝对路径。')
+    }
+  }
+}
+
+function samePath(left: string, right: string): boolean {
+  if (process.platform === 'win32') {
+    return left.toLowerCase() === right.toLowerCase()
+  }
+  return left === right
 }
 
 async function realpathWithMissingLeaf(candidate: string): Promise<string> {

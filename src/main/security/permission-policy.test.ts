@@ -282,6 +282,54 @@ describe('Permission 路径边界', () => {
       )
     ).rejects.toMatchObject({ code: 'invalid-target' } satisfies Partial<PermissionPolicyError>)
   })
+
+  it('共享记忆树内的读写视为合法目标，写入自动允许，其它家目录仍拒绝', async () => {
+    const parent = await fs.realpath(await createTemporaryDirectory('policy-memory-'))
+    const project = join(parent, 'project')
+    const grokHome = join(parent, 'fake-home', '.grok')
+    const memoryRoot = join(grokHome, 'memory')
+    await fs.mkdir(project)
+    await fs.mkdir(memoryRoot, { recursive: true })
+    await fs.writeFile(join(memoryRoot, 'MEMORY.md'), '# Global Memory\n', 'utf8')
+    await fs.writeFile(join(grokHome, 'config.toml'), 'secret = true\n', 'utf8')
+    const canonicalProject = await fs.realpath(project)
+    const canonicalMemory = await fs.realpath(memoryRoot)
+
+    const memoryWrite = await resolveOperationIntentTargets({
+      ...createIntent('write-file', canonicalProject, [
+        { kind: 'path', value: join(canonicalMemory, 'MEMORY.md') }
+      ]),
+      trustedExternalRoots: [canonicalMemory]
+    })
+    expect(memoryWrite.targets).toEqual([
+      { kind: 'path', value: join(canonicalMemory, 'MEMORY.md') }
+    ])
+    expect(evaluatePermissionPolicy(memoryWrite)).toEqual({
+      kind: 'allow',
+      risk: 'L0',
+      allowedScopes: []
+    })
+
+    await expect(
+      resolveOperationIntentTargets({
+        ...createIntent('write-file', canonicalProject, [
+          { kind: 'path', value: join(grokHome, 'config.toml') }
+        ]),
+        trustedExternalRoots: [canonicalMemory]
+      })
+    ).rejects.toMatchObject({ code: 'invalid-target' } satisfies Partial<PermissionPolicyError>)
+
+    const projectWrite = await resolveOperationIntentTargets({
+      ...createIntent('write-file', canonicalProject, [
+        { kind: 'path', value: join(canonicalProject, 'src.ts') }
+      ]),
+      trustedExternalRoots: [canonicalMemory]
+    })
+    expect(evaluatePermissionPolicy(projectWrite)).toMatchObject({
+      kind: 'approval',
+      risk: 'L1'
+    })
+  })
 })
 
 function createIntent(

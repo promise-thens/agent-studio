@@ -256,7 +256,7 @@ git diff --check
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
 - 当前计划：[P0-10E 插件安装与信任](docs/superpowers/plans/p0-10e-grok-plugin-install-and-trust.md)；[P0-10D 记忆与 MCP 设置](docs/superpowers/plans/p0-10d-grok-memory-and-mcp.md) 代码已落地（记忆整棵树与用户级 `[mcp_servers]` 与 TUI 共用，GROK_HOME/密钥/插件仍隔离）
-- 状态：桌面定位为 Grok Build ACP Client，不自己当 Agent。设置现为供应商 / 外观 / 记忆 / MCP / Grok 配置；插件为侧栏整页且不得打断运行中 Task。Inspector 仍是 Timeline/Changes/Terminal/Artifacts。P2 Codex 暂缓
+- 状态：桌面定位为 Grok Build ACP Client，不自己当 Agent。设置现为供应商 / 外观 / 记忆 / Grok 配置；插件页三栏为插件 / MCP / 技能，不得打断运行中 Task。Inspector 仍是 Timeline/Changes/Terminal/Artifacts。P2 Codex 暂缓
 - 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；库存扫描已补 `installed-plugins`；P0-10D 代码已落地（相关自动测试已过，开发版 GUI / TUI 对读未跑）；P0-10E 仅文档
 - Grok ACP 加深：顺序仍为 GACP-01 → GACP-02 → P0-10 → P0-10C/D → P0-10E → P0-11 → GACP-03。`available_commands_update` 现为 session 快照，不进 Timeline
 - 兼容边界：首版仍只有一个执行槽；GROK_HOME 仍是 App 目录；记忆整棵树 junction 到 `~/.grok/memory`；用户 toml 只允许合并/删除 `[mcp_servers.*]`；`clientCapabilities: {}`；不把桌面做成 MCP Host

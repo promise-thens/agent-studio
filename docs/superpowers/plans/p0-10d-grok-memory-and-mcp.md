@@ -1,6 +1,6 @@
 # P0-10D Grok 记忆与 MCP 设置 实施计划
 
-> **状态：** 代码已落地（2026-08-20）。自动测试覆盖合并 toml、记忆沙箱、MCP 密文、ACP 注入和斜杠别名；开发版 GUI 走查与 TUI 对读仍待做。
+> **状态：** 代码已落地（2026-08-20）。自动测试覆盖合并 toml、记忆沙箱、MCP 密文、ACP 注入和斜杠别名；开发版 GUI 走查与 TUI 对读仍待做。MCP 管理面已从设置弹窗改到侧栏插件页的 MCP 栏，与插件 / 技能并列；设置只留供应商 / 外观 / 记忆 / Grok 配置。
 >
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 按任务落地。步骤使用复选框 (`- [ ]`) 跟踪。
 >
@@ -29,7 +29,7 @@ MCP 不能整份 junction `config.toml`。用户级服务器在 TUI 的 `~/.grok
 
 - Node `>=20`，本机验证优先 22/24；pnpm 10。
 - IPC 用 `app:*` / `agent:*`，不得新增 `grok:*`。
-- **记忆目录例外：** 整个 `grok-home/memory` 接到 `~/.grok/memory`，含全局、项目 `<slug>-<hash8>`、会话摘要和索引。允许创建该目录、跟随这一条 junction、经 Grok / 设置页读写其中的 Markdown。不得只链全局文件而把项目子目录留在 App 侧。不得因此把 `GROK_HOME` 改成 `~/.grok`。
+- **记忆目录例外：** 整个 `grok-home/memory` 接到 `~/.grok/memory`，含全局、项目 `<slug>-<hash8>`、会话摘要和索引。允许创建该目录、跟随这一条 junction、经 Grok / 设置页读写其中的 Markdown。Runtime 对这棵树的 `read-project` / `write-file` 视为 L0 自动允许，不得再当项目外逃逸取消。`~/.grok/config.toml`、`plugins`、其它家目录仍拒绝。不得只链全局文件而把项目子目录留在 App 侧。不得因此把 `GROK_HOME` 改成 `~/.grok`。
 - **MCP 表例外：** 主进程可以读、合并写入用户 `~/.grok/config.toml` 里的 **`[mcp_servers.*]` 表**（含 TUI 侧 `env`/`headers`）。禁止改该文件的其它表（`[ui]` `[models]` `[cli]` `[marketplace]` `[memory]` `[privacy]` 等）。禁止把用户 toml 全文交给 Renderer 或 Grok 配置编辑器。
 - **仍禁止：** 覆盖整份 `~/.grok/config.toml`；读写 `~/.grok/plugins`、`auth.json`、`mcp_credentials.json`、leader.sock。插件、市场、模型密钥继续走 App grok-home。
 - 已保存 Secret 永不回 Renderer、日志、错误、测试快照。

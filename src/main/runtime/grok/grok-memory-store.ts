@@ -44,6 +44,25 @@ export class GrokMemoryStore {
     return this.shareStatus
   }
 
+  /**
+   * 权限策略用的记忆根。只返回真实目录，不把 ~/.grok 其它文件放进信任集。
+   */
+  async listTrustedRoots(): Promise<string[]> {
+    await this.ensureShare()
+    const roots: string[] = []
+    for (const candidate of [this.memoryRoot, this.userMemoryDir]) {
+      try {
+        const canonical = await fs.realpath(candidate)
+        const stats = await fs.stat(canonical)
+        if (!stats.isDirectory()) continue
+        if (!roots.includes(canonical)) roots.push(canonical)
+      } catch {
+        continue
+      }
+    }
+    return roots
+  }
+
   async getEnabledState(): Promise<{ enabled: boolean; shareStatus: GrokMemoryShareStatus }> {
     const shareStatus = await this.ensureShare()
     return {

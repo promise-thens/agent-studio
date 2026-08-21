@@ -14,6 +14,9 @@ export const MAX_RUNTIME_PLUGIN_NAMES = 80
 /** 单名超过 128 字符直接跳过，不截断后混入列表。 */
 export const MAX_RUNTIME_PLUGIN_NAME_LENGTH = 128
 
+/** 列表说明只留短句，避免把 SKILL.md 全文打进 IPC。 */
+export const MAX_RUNTIME_PLUGIN_DESCRIPTION_LENGTH = 160
+
 const MAX_PLUGIN_ID_LENGTH = 4 * 1024
 const MAX_DISPLAY_NAME_LENGTH = 256
 const MAX_VERSION_LENGTH = 64
@@ -28,13 +31,44 @@ export interface RuntimePluginSummary {
   mcpCount: number
   hookCount: number
   version?: string
+  description?: string
 }
 
 export interface RuntimePluginDetail extends RuntimePluginSummary {
   skillNames: string[]
   mcpNames: string[]
   hookNames: string[]
+  /** 只收录 skillNames 里出现过的安全说明，不得带绝对路径。 */
+  skillDescriptions?: Record<string, string>
   invalidReason?: string
+}
+
+/**
+ * 列表用短说明。允许相对路径字样（如 skills/foo.md），拒绝绝对路径和 NUL。
+ */
+export function parseSafePluginDescription(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const text = value.replace(/\s+/g, ' ').trim()
+  if (!text || text.includes('\0')) return undefined
+  if (/^(?:[A-Za-z]:[\\/]|\/Users\/|\/home\/|\/tmp\/|\/var\/)/i.test(text)) return undefined
+  if (text.length <= MAX_RUNTIME_PLUGIN_DESCRIPTION_LENGTH) return text
+  return text.slice(0, MAX_RUNTIME_PLUGIN_DESCRIPTION_LENGTH).trim()
+}
+
+/** 从 SKILL.md 取 frontmatter 或首段正文，标题行不当说明。 */
+export function parseSkillMarkdownDescription(markdown: string): string | undefined {
+  if (typeof markdown !== 'string' || markdown.includes('\0')) return undefined
+  const frontmatter = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---/)
+  if (frontmatter) {
+    const match = frontmatter[1].match(/^description:\s*['"]?(.+?)['"]?\s*$/m)
+    if (match) return parseSafePluginDescription(match[1])
+  }
+  for (const line of markdown.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed === '---' || trimmed.startsWith('#')) continue
+    return parseSafePluginDescription(trimmed)
+  }
+  return undefined
 }
 
 export function isRuntimePluginScope(value: unknown): value is RuntimePluginScope {
@@ -86,6 +120,8 @@ export function parseRuntimePluginSummary(value: unknown): RuntimePluginSummary 
 
   const version = parseVersion(value.version)
   if (version) summary.version = version
+  const description = parseSafePluginDescription(value.description)
+  if (description) summary.description = description
   return summary
 }
 
@@ -113,6 +149,8 @@ export function parseRuntimePluginDetail(value: unknown): RuntimePluginDetail | 
     mcpNames,
     hookNames
   }
+  const skillDescriptions = parseSkillDescriptions(value.skillDescriptions, skillNames)
+  if (skillDescriptions) detail.skillDescriptions = skillDescriptions
 
   if (summary.status === 'invalid') {
     const invalidReason = parseInvalidReason(value.invalidReason)
@@ -142,6 +180,22 @@ function parseVersion(value: unknown): string | undefined {
   const trimmed = value.trim()
   if (!trimmed || trimmed.length > MAX_VERSION_LENGTH || trimmed.includes('\0')) return undefined
   return trimmed
+}
+
+function parseSkillDescriptions(
+  value: unknown,
+  skillNames: readonly string[]
+): Record<string, string> | undefined {
+  if (!isPlainRecord(value)) return undefined
+  const allowed = new Set(skillNames)
+  const descriptions: Record<string, string> = {}
+  for (const [name, raw] of Object.entries(value)) {
+    if (!allowed.has(name)) continue
+    const description = parseSafePluginDescription(raw)
+    if (!description) continue
+    descriptions[name] = description
+  }
+  return Object.keys(descriptions).length > 0 ? descriptions : undefined
 }
 
 function parseNameList(value: unknown[]): string[] {

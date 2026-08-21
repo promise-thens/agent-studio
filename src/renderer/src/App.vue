@@ -72,6 +72,7 @@ import {
   toggleInspectorOpen,
   type InspectorTab
 } from './task-inspector'
+import { DEFAULT_PLUGIN_HUB_TAB, type PluginHubTab } from './plugins-page'
 import {
   applyResolvedAppearance,
   DEFAULT_SETTINGS_SECTION,
@@ -162,6 +163,7 @@ const providerSummary = ref<ProviderConfigSummary | null>(null)
 const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
 const showSettingsDialog = ref(false)
 const settingsSection = ref<SettingsSection>(DEFAULT_SETTINGS_SECTION)
+const pluginHubTab = ref<PluginHubTab>(DEFAULT_PLUGIN_HUB_TAB)
 const appearance = ref<AppAppearanceState>({ mode: 'dark', resolved: 'dark' })
 const appearancePending = ref(false)
 const workspace = ref('')
@@ -978,18 +980,23 @@ function closeSettingsDialog(): void {
 /**
  * 产品别名只做桌面导航，必须清空草稿，避免下次 Enter 把 /plugins 发给 Runtime。
  */
+function openPluginHub(tab: PluginHubTab = DEFAULT_PLUGIN_HUB_TAB): void {
+  pluginHubTab.value = tab
+  workbench.openPlugins()
+}
+
 function handleProductSlashAction(
   action:
     | 'open-plugins'
+    | 'open-plugins-mcp'
     | 'open-settings'
     | 'open-settings-memory'
-    | 'open-settings-mcp'
     | 'open-settings-grok-config'
 ): void {
   prompt.value = ''
-  if (action === 'open-plugins') workbench.openPlugins()
+  if (action === 'open-plugins') openPluginHub('plugins')
+  else if (action === 'open-plugins-mcp') openPluginHub('mcp')
   else if (action === 'open-settings-memory') openSettingsSection('memory')
-  else if (action === 'open-settings-mcp') openSettingsSection('mcp')
   else if (action === 'open-settings-grok-config') openSettingsSection('grok-config')
   else openSettingsDialog()
 }
@@ -1603,7 +1610,7 @@ function scrollMessagesToBottom(): void {
         :primary-view="workbench.primaryView.value"
         @new-chat="startNewChat"
         @open-settings="openSettingsDialog"
-        @open-plugins="workbench.openPlugins"
+        @open-plugins="openPluginHub('plugins')"
         @select-project="selectProject"
         @choose-project="chooseWorkspace"
         @retry-access="(projectId) => workbench.registry.retryAccess(projectId)"
@@ -1631,7 +1638,7 @@ function scrollMessagesToBottom(): void {
             :active-execution="activeExecution"
             @return-to-conversation="workbench.returnToConversation"
           />
-          <PluginsPage />
+          <PluginsPage :project-id="activeProjectId" :initial-tab="pluginHubTab" />
         </template>
         <template v-else>
           <TaskHeader
@@ -1684,9 +1691,9 @@ function scrollMessagesToBottom(): void {
             @send="sendPrompt"
             @stop="cancelTurn"
             @open-plugins="handleProductSlashAction('open-plugins')"
+            @open-plugins-mcp="handleProductSlashAction('open-plugins-mcp')"
             @open-settings="handleProductSlashAction('open-settings')"
             @open-settings-memory="handleProductSlashAction('open-settings-memory')"
-            @open-settings-mcp="handleProductSlashAction('open-settings-mcp')"
             @open-settings-grok-config="handleProductSlashAction('open-settings-grok-config')"
             @model-changed="handleModelChanged"
             @model-error="handleModelError"
@@ -1723,7 +1730,6 @@ function scrollMessagesToBottom(): void {
         Boolean(activeTaskId) && status.state === 'ready' && !activeExecution
       "
       :project-hint="workbench.selectedProject.value?.displayName"
-      :project-id="workbench.selectedProjectId.value"
       @close="closeSettingsDialog"
       @update:section="settingsSection = $event"
       @change-appearance="changeAppearance"

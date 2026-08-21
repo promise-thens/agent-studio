@@ -1,4 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, safeStorage, shell } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeTheme,
+  safeStorage,
+  shell,
+  type MenuItemConstructorOptions
+} from 'electron'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
@@ -39,6 +49,12 @@ import { ProviderConfigStore, type ProviderRuntimeConfig } from './provider/prov
 import { ProviderConnectionTester } from './provider/provider-connection-tester'
 import { ProjectRegistry, ProjectRegistryError } from './project/project-registry'
 import { GROK_CONFIG_STARTER_TOML } from '../shared/grok-config-hints'
+import {
+  nextZoomFactor,
+  resolveWindowZoomAction,
+  type WindowZoomAction
+} from '../shared/window-zoom'
+import { createStudioMenuTemplate, type StudioMenuItem } from './application-menu'
 import { isRuntimePluginId, type RuntimePluginStatus } from '../shared/runtime-plugin'
 import { clearGrokProviderConfig, getManagedGrokHome } from './provider/grok-provider-config'
 import { GrokHomeConfigController } from './runtime/grok/grok-home-config-controller'
@@ -116,11 +132,59 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // 菜单加速键在输入框里不稳定；键盘缩放走 before-input，菜单项只展示和点击。
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    const action = resolveWindowZoomAction({
+      platform: process.platform,
+      metaKey: input.meta,
+      ctrlKey: input.control,
+      altKey: input.alt,
+      key: input.key
+    })
+    if (!action) return
+    event.preventDefault()
+    applyMainWindowZoom(action)
+  })
+
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
     void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
+}
+
+/** 把规格菜单转成 Electron 模板，缩放走 click 以便统一 10% 步进。 */
+function toElectronMenuTemplate(items: StudioMenuItem[]): MenuItemConstructorOptions[] {
+  return items.map((item) => {
+    const mapped: MenuItemConstructorOptions = {}
+    if (item.role) mapped.role = item.role
+    if (item.type) mapped.type = item.type
+    if (item.label) mapped.label = item.label
+    if (item.accelerator) mapped.accelerator = item.accelerator
+    if (item.visible === false) mapped.visible = false
+    if (item.submenu) mapped.submenu = toElectronMenuTemplate(item.submenu)
+    if (item.zoomAction) {
+      const action = item.zoomAction
+      mapped.registerAccelerator = false
+      mapped.click = () => applyMainWindowZoom(action)
+    }
+    return mapped
+  })
+}
+
+/** 只缩放当前主窗口页面，不改窗口外框尺寸。 */
+function applyMainWindowZoom(action: WindowZoomAction): void {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  window.webContents.setZoomFactor(nextZoomFactor(window.webContents.getZoomFactor(), action))
+}
+
+/** 替换默认菜单：保留编辑/窗口，缩放用自己的加速键避免 role:zoomIn 吃不到 Cmd+=。 */
+function installApplicationMenu(): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(toElectronMenuTemplate(createStudioMenuTemplate(process.platform)))
+  )
 }
 
 /** safeStorage 只能在 app.whenReady() 后注入，避免模块加载阶段提前访问系统密钥库。 */
@@ -304,6 +368,7 @@ async function initializeServices(
     operationGate,
     getSessionMcpServers: async () =>
       toAgentRuntimeMcpServers(await requireMcpServerStore().listEnabledResolved()),
+    getTrustedExternalRoots: () => requireGrokMemoryStore().listTrustedRoots(),
     onEvent: (event) =>
       sendToTrustedRenderer(
         rendererTrust,
@@ -936,6 +1001,7 @@ if (hasSingleInstanceLock)
       app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
       await initializeServices(controlledAcpE2e, gacp01Observe)
       registerIpcHandlers()
+      installApplicationMenu()
       createWindow()
 
       app.on('activate', () => {

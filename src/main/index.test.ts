@@ -163,7 +163,10 @@ vi.mock('electron', () => {
     }
 
     readonly webContents = {
-      setWindowOpenHandler: vi.fn()
+      setWindowOpenHandler: vi.fn(),
+      getZoomFactor: vi.fn(() => 1),
+      setZoomFactor: vi.fn(),
+      on: vi.fn()
     }
 
     constructor(options: unknown) {
@@ -226,7 +229,11 @@ vi.mock('electron', () => {
       decryptString: vi.fn((value: Buffer) => value.toString()),
       getSelectedStorageBackend: vi.fn(() => 'keychain')
     },
-    shell: { openExternal: vi.fn(async () => undefined) }
+    shell: { openExternal: vi.fn(async () => undefined) },
+    Menu: {
+      buildFromTemplate: vi.fn((template: unknown) => template),
+      setApplicationMenu: vi.fn()
+    }
   }
 })
 

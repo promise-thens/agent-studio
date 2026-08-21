@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -51,6 +51,12 @@ describe('GrokMemoryStore', () => {
     await expect(store.get('global/../MEMORY.md')).rejects.toThrow(/标识无效/)
     await expect(store.save('global/../MEMORY.md', 'x')).rejects.toThrow(/标识无效/)
     await expect(store.delete('global/../MEMORY.md')).rejects.toThrow(/标识无效/)
+  })
+
+  it('listTrustedRoots 只返回共享记忆目录的 realpath', async () => {
+    const { store, userMemoryDir } = await createStore()
+    const roots = await store.listTrustedRoots()
+    expect(roots).toEqual([await realpath(userMemoryDir)])
   })
 
   it('junction 到临时 .grok/memory 时 list/get/save 成功，用户侧也能读到', async () => {

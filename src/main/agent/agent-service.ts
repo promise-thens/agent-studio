@@ -87,6 +87,8 @@ export interface AgentServiceOptions {
   onEvent?: (event: AgentEvent) => void
   /** 创建 / 恢复 session 时注入已校验的 MCP 描述；缺省为空。 */
   getSessionMcpServers?: () => Promise<AgentRuntimeMcpServer[]> | AgentRuntimeMcpServer[]
+  /** 共享记忆树等 Runtime 笔记根；缺省为空，写入会被当成项目外逃逸。 */
+  getTrustedExternalRoots?: () => Promise<string[]> | string[]
 }
 
 interface AgentTaskRecord extends AgentTaskRuntimeState {
@@ -161,6 +163,7 @@ export class AgentService {
   private readonly operationGate?: OperationGate
   private readonly onEvent: (event: AgentEvent) => void
   private readonly getSessionMcpServers?: AgentServiceOptions['getSessionMcpServers']
+  private readonly getTrustedExternalRoots?: AgentServiceOptions['getTrustedExternalRoots']
   private readonly historyWrites = new Map<string, Promise<void>>()
   private readonly runtimePermissionRequests = new Map<string, AgentRuntimePermissionRequest>()
 
@@ -180,6 +183,7 @@ export class AgentService {
     this.operationGate = options.operationGate
     this.onEvent = options.onEvent ?? (() => undefined)
     this.getSessionMcpServers = options.getSessionMcpServers
+    this.getTrustedExternalRoots = options.getTrustedExternalRoots
     for (const persistedTask of this.taskStore?.listTaskRecords() ?? []) {
       const task = restoreRuntimeTask(persistedTask)
       this.tasks.set(task.taskId, task)
@@ -453,21 +457,43 @@ export class AgentService {
     }
     this.runtimePermissionRequests.set(request.requestId, request)
     const environmentId = createLocalEnvironmentId(task.projectId, task.workspace)
+    void this.authorizeRuntimePermission(request, task.projectId, task.workspace, environmentId)
+  }
+
+  /**
+   * 先解析共享记忆根再授权，避免 Grok 写 MEMORY.md 被当成项目外逃逸。
+   */
+  private async authorizeRuntimePermission(
+    request: AgentRuntimePermissionRequest,
+    projectId: string,
+    workspace: string,
+    environmentId: string
+  ): Promise<void> {
+    if (!this.permissionBroker) {
+      this.releaseRuntimePermission(request, 'cancelled')
+      return
+    }
+    const trustedExternalRoots = await this.resolveTrustedExternalRoots()
+    if (!this.isRuntimePermissionActive(request)) {
+      this.releaseRuntimePermission(request, 'cancelled')
+      return
+    }
     void this.permissionBroker
       .authorizeOperation(
         {
           initiator: { kind: 'runtime', runtimeId: request.runtimeId },
           taskId: request.taskId,
           turnId: request.turnId,
-          projectId: task.projectId,
+          projectId,
           environmentId,
-          executionRoot: task.workspace,
+          executionRoot: workspace,
           operationType: request.operationType,
           targets: request.targets,
           parameterFingerprint: request.parameterFingerprint,
           title: request.title,
           impact: request.impact,
-          ...(request.minimumRisk ? { minimumRisk: request.minimumRisk } : {})
+          ...(request.minimumRisk ? { minimumRisk: request.minimumRisk } : {}),
+          ...(trustedExternalRoots.length ? { trustedExternalRoots } : {})
         },
         () => {
           if (!this.isRuntimePermissionActive(request)) throw new Error('permission-stale')
@@ -940,6 +966,25 @@ export class AgentService {
     delete task.activeTurnId
     task.updatedAt = this.now()
     void this.permissionBroker?.cancelTurn(taskId, turnId)
+  }
+
+  private async resolveTrustedExternalRoots(): Promise<string[]> {
+    try {
+      const roots = (await this.getTrustedExternalRoots?.()) ?? []
+      return Array.isArray(roots) ? roots.filter((root) => typeof root === 'string') : []
+    } catch {
+      return []
+    }
+  }
+
+  private releaseRuntimePermission(
+    request: AgentRuntimePermissionRequest,
+    resolution: 'cancelled'
+  ): void {
+    if (this.runtimePermissionRequests.get(request.requestId) === request) {
+      this.runtimePermissionRequests.delete(request.requestId)
+    }
+    this.adapter.respondPermission(request.requestId, resolution)
   }
 
   private isRuntimePermissionCurrent(request: AgentRuntimePermissionRequest): boolean {

@@ -4,7 +4,6 @@ import {
   PhBrain as Brain,
   PhCode as Code,
   PhPalette as Palette,
-  PhPlugs as Plugs,
   PhPlugsConnected as PlugsConnected,
   PhX as X
 } from '@phosphor-icons/vue'
@@ -18,7 +17,6 @@ import type {
 import { APPEARANCE_OPTIONS, SETTINGS_SECTIONS, type SettingsSection } from '../settings-dialog'
 import GrokConfigEditor from './GrokConfigEditor.vue'
 import MemorySettingsPanel from './MemorySettingsPanel.vue'
-import McpSettingsPanel from './McpSettingsPanel.vue'
 import ProviderOnboarding from './ProviderOnboarding.vue'
 
 const props = defineProps<{
@@ -32,7 +30,6 @@ const props = defineProps<{
   selectedTaskId?: string
   grokActionsAvailable?: boolean
   projectHint?: string
-  projectId?: string
 }>()
 
 const emit = defineEmits<{
@@ -65,7 +62,6 @@ onMounted(() => {
 function sectionIcon(id: SettingsSection): typeof Palette {
   if (id === 'appearance') return Palette
   if (id === 'memory') return Brain
-  if (id === 'mcp') return Plugs
   if (id === 'grok-config') return Code
   return PlugsConnected
 }
@@ -110,7 +106,10 @@ function sectionIcon(id: SettingsSection): typeof Palette {
           </button>
         </nav>
 
-        <div class="settings-pane">
+        <div
+          class="settings-pane"
+          :class="{ fill: section === 'memory' || section === 'grok-config' }"
+        >
           <div v-if="section === 'provider'" class="provider-pane">
             <h3>供应商</h3>
             <p>填写兼容 OpenAI Chat Completions 的服务信息。保存后的 Key 只显示“已保存”。</p>
@@ -161,7 +160,6 @@ function sectionIcon(id: SettingsSection): typeof Palette {
             @dirty="paneDirty = $event"
             @start-turn="emit('start-turn', $event)"
           />
-          <McpSettingsPanel v-else-if="section === 'mcp'" :project-id="projectId" />
           <GrokConfigEditor v-else-if="section === 'grok-config'" @dirty="paneDirty = $event" />
         </div>
       </div>
@@ -246,6 +244,13 @@ function sectionIcon(id: SettingsSection): typeof Palette {
   min-height: 0;
   overflow: auto;
   padding: 20px 22px 24px;
+}
+
+/* 记忆和配置编辑需要铺满右侧，避免外层滚动把内部两栏裁成一团。 */
+.settings-pane.fill {
+  display: grid;
+  overflow: hidden;
+  padding: 16px 18px 18px;
 }
 
 .provider-pane,

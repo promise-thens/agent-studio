@@ -8,11 +8,17 @@ import {
   PLUGIN_ENABLE_TOGGLE_HINT,
   applyPluginDetailIfCurrent,
   filterInstalledPlugins,
-  pluginDisplayLabel
+  filterPluginHubQuery,
+  flattenPluginMcps,
+  flattenPluginSkills,
+  pluginDisplayLabel,
+  pluginHubSubtitle,
+  resolvePluginHubTab
 } from './plugins-page'
 
 const rendererDir = dirname(fileURLToPath(import.meta.url))
 const pluginsPageSource = readFileSync(join(rendererDir, 'components/PluginsPage.vue'), 'utf8')
+const mcpPanelSource = readFileSync(join(rendererDir, 'components/McpSettingsPanel.vue'), 'utf8')
 const bannerSource = readFileSync(
   join(rendererDir, 'components/ExecutionSurfaceBanner.vue'),
   'utf8'
@@ -99,21 +105,79 @@ describe('插件页列表过滤', () => {
   })
 })
 
+describe('插件中心三栏', () => {
+  it('未知 tab 回到插件，合法值原样保留', () => {
+    expect(resolvePluginHubTab('plugins')).toBe('plugins')
+    expect(resolvePluginHubTab('mcp')).toBe('mcp')
+    expect(resolvePluginHubTab('skills')).toBe('skills')
+    expect(resolvePluginHubTab('marketplace')).toBe('plugins')
+    expect(resolvePluginHubTab(null)).toBe('plugins')
+  })
+
+  it('技能与插件 MCP 从详情摊平，搜索命中名称或说明', () => {
+    const details = [
+      {
+        ...plugin({ pluginId: 'docs-kit', displayName: '文档工具', skillCount: 2, mcpCount: 1 }),
+        skillNames: ['summarize', 'outline'],
+        skillDescriptions: { summarize: '把长文压成要点' },
+        mcpNames: ['docs'],
+        hookNames: []
+      },
+      {
+        ...plugin({
+          pluginId: 'browser',
+          displayName: 'Browser',
+          status: 'disabled' as const,
+          skillCount: 0,
+          mcpCount: 1
+        }),
+        skillNames: [],
+        mcpNames: ['computer-use'],
+        hookNames: []
+      }
+    ]
+
+    const skills = flattenPluginSkills(details)
+    expect(skills.map((item) => item.skillKey)).toEqual(['docs-kit:outline', 'docs-kit:summarize'])
+    expect(skills.find((item) => item.name === 'summarize')?.description).toBe('把长文压成要点')
+    expect(skills.find((item) => item.name === 'outline')?.pluginLabel).toBe('文档工具')
+    expect(filterPluginHubQuery(skills, '要点').map((item) => item.name)).toEqual(['summarize'])
+
+    const pluginMcps = flattenPluginMcps(details)
+    expect(pluginMcps.map((item) => item.name)).toEqual(['computer-use', 'docs'])
+    expect(pluginMcps.find((item) => item.name === 'computer-use')?.enabled).toBe(false)
+  })
+
+  it('插件副标题只用计数，不合成 Runtime 前缀', () => {
+    expect(
+      pluginHubSubtitle(plugin({ pluginId: 'docs-kit', skillCount: 2, mcpCount: 1, hookCount: 0 }))
+    ).toBe('技能 2 · MCP 1')
+    expect(pluginHubSubtitle(plugin({ pluginId: 'empty' }))).toBe('未包含技能或 MCP')
+    expect(
+      pluginHubSubtitle(plugin({ pluginId: 'docs-kit', displayName: 'Docs', skillCount: 1 }))
+    ).not.toMatch(/Grok\s·/)
+  })
+})
+
 describe('插件主列表面', () => {
   it('空状态文案固定，启停开关调用 IPC 且失败不得乐观打勾', () => {
     expect(PLUGIN_EMPTY_COPY).toBe(
       '还没有已安装的插件。插件由 Grok Build 加载，本页只展示已安装项。'
     )
-    expect(pluginsPageSource).toContain(PLUGIN_EMPTY_COPY)
+    expect(pluginsPageSource).toContain('PLUGIN_EMPTY_COPY')
     expect(pluginsPageSource).toContain('window.app.listPlugins()')
     expect(pluginsPageSource).toContain('window.app.getPlugin')
-    expect(pluginsPageSource).toContain('applyPluginDetailIfCurrent')
+    expect(pluginsPageSource).toContain('McpSettingsPanel')
+    expect(mcpPanelSource).toContain('window.app.listMcpServers')
     expect(pluginsPageSource).toContain('window.app.setPluginEnabled')
     expect(pluginsPageSource).toContain('togglePlugin')
     expect(pluginsPageSource).toContain('PLUGIN_ENABLE_TOGGLE_HINT')
     expect(PLUGIN_ENABLE_TOGGLE_HINT).toContain('下一 session')
+    expect(pluginsPageSource).toContain('role="tablist"')
+    expect(pluginsPageSource).toContain('技能')
     expect(pluginsPageSource).not.toContain('absolutePath')
     expect(pluginsPageSource).not.toContain('Grok ·')
+    expect(pluginsPageSource).not.toContain('浏览目录')
   })
 
   it('插件页不渲染对话输入框，执行条返回对话不取消', () => {

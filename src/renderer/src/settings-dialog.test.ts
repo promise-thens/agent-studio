@@ -19,8 +19,10 @@ describe('设置弹窗与外观应用', () => {
     expect(resolveSettingsSection('appearance')).toBe('appearance')
     expect(resolveSettingsSection('grok-config')).toBe('grok-config')
     expect(resolveSettingsSection('memory')).toBe('memory')
-    expect(resolveSettingsSection('mcp')).toBe('mcp')
+    expect(resolveSettingsSection('mcp')).toBe(DEFAULT_SETTINGS_SECTION)
     expect(resolveSettingsSection('fonts')).toBe(DEFAULT_SETTINGS_SECTION)
+    expect(settingsSource).not.toContain("section === 'mcp'")
+    expect(settingsSource).not.toContain('McpSettingsPanel')
   })
 
   it('解析后的主题写到 document dataset 和 color-scheme', () => {

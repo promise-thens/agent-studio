@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ensureSharedGrokMemory } from './grok-shared-memory'
+import { ensureSharedGrokMemory, isAllowedMemoryCanonical } from './grok-shared-memory'
 
 describe('ensureSharedGrokMemory', () => {
   const dirs: string[] = []
@@ -40,6 +40,20 @@ describe('ensureSharedGrokMemory', () => {
     expect(await readFile(join(userMemoryDir, 'demo-deadbeef', 'MEMORY.md'), 'utf8')).toBe(
       'project-note'
     )
+  })
+
+  it('isAllowedMemoryCanonical 用 realpath 对齐 /var 与 /private/var', async () => {
+    const { grokHome, userMemoryDir } = await fixture()
+    await ensureSharedGrokMemory({ grokHome, userMemoryDir })
+    await writeFile(join(userMemoryDir, 'MEMORY.md'), 'note', 'utf8')
+    const canonicalFile = await realpath(join(userMemoryDir, 'MEMORY.md'))
+    expect(
+      isAllowedMemoryCanonical({
+        grokHome,
+        userMemoryDir,
+        canonical: canonicalFile
+      })
+    ).toBe(true)
   })
 
   it('managed memory 里已有非空文件时返回 skipped-existing 且文件还在', async () => {
