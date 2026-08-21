@@ -37,6 +37,7 @@ import {
   writeGrokProviderConfig
 } from '../../provider/grok-provider-config'
 import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
+import type { CommandEvidenceStore } from '../../command/command-evidence-store'
 import {
   GROK_RUNTIME_ID,
   areGrokAuthorizationSnapshotsEquivalent,
@@ -51,6 +52,13 @@ import {
   mergeGrokToolCallAuthorizationPatch,
   type GrokToolCallAuthorizationSnapshot
 } from './grok-acp-mappers'
+import {
+  accumulateGrokCommandToolFacts,
+  isGrokCommandEvidenceCandidate,
+  mapGrokCommandEvidence,
+  type GrokCommandEvidenceMapping,
+  type GrokCommandToolFacts
+} from './grok-command-evidence-mapper'
 import {
   CONTROLLED_ACP_E2E_DIRECTORIES,
   CONTROLLED_ACP_E2E_FIXTURE_FILE,
@@ -88,6 +96,8 @@ interface ActiveTurn {
   rejectAllToolPermissions: boolean
   cancelRequested: boolean
   outcome?: AgentTurnOutcome
+  /** 当前 Turn 内命令证据累积；测试夹具可能缺省，读取时必须惰性创建。 */
+  commandEvidenceByToolCallId?: Map<string, GrokCommandToolFacts>
 }
 
 interface CurrentConnection {
@@ -118,6 +128,16 @@ export interface GrokAcpAdapterOptions {
   getMcpServers?: () => Promise<readonly AgentRuntimeMcpServer[]> | readonly AgentRuntimeMcpServer[]
   /** 缺省视为开启，避免宿主 GROK_MEMORY=0 把桌面记忆关掉。 */
   isMemoryEnabled?: () => Promise<boolean> | boolean
+  /**
+   * 可选命令证据仓库。缺省时跳过持久化，避免既有测试与无存储组装路径失败。
+   * Runtime 命令只记上报事实，不得改走 AppCommandRunner。
+   */
+  commandEvidenceStore?: CommandEvidenceStore
+  /** 由组装层提供 Task environmentId；缺失则不落盘，禁止 Adapter 自造环境身份。 */
+  resolveCommandEvidenceContext?: (
+    taskId: string,
+    turnId: string
+  ) => { environmentId: string } | null
 }
 
 /**
@@ -148,6 +168,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   private supportsCloseSession = false
   private capabilitySnapshot: AgentRuntimeCapabilitySnapshot
   private status: AgentRuntimeStatus
+  private commandEvidenceWrites: Promise<void> = Promise.resolve()
 
   constructor(
     private readonly sink: AgentRuntimeAdapterSink,
@@ -502,7 +523,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       toolCallAuthorizationSnapshots: new Map(),
       terminalToolCallIds: new Set(),
       rejectAllToolPermissions: false,
-      cancelRequested: false
+      cancelRequested: false,
+      commandEvidenceByToolCallId: new Map()
     }
     this.activeTurn = activeTurn
     this.updateStatus({
@@ -720,6 +742,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         ...(rejectOnceOptionId ? { rejectOnceOptionId } : {}),
         resolve
       })
+      // 只有真正挂起的 ACP 权限请求才关联 approvalId，禁止伪造 Broker 已授权。
+      this.queueCommandEvidenceFromTool(activeTurn, params.toolCall, id)
       // E2E trace 只记录固定 ToolCall 身份；不会写入 Prompt、选项、路径或 Provider 数据。
       this.recordControlledFixtureTrace('adapter-permission-pending', params.toolCall.toolCallId)
       try {
@@ -775,6 +799,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         this.rejectAllToolPermissions(activeTurn)
       } else if (update.status === 'completed' || update.status === 'failed') {
         this.markToolCallTerminal(activeTurn, update.toolCallId)
+        this.queueCommandEvidenceFromTool(activeTurn, update)
       } else if (
         !activeTurn.rejectAllToolPermissions &&
         !activeTurn.terminalToolCallIds.has(update.toolCallId)
@@ -790,12 +815,82 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
           // title、status 等展示更新不撤销审批；真实授权事实变化才使旧审批失效。
           this.cancelPendingPermissionsForToolCall(activeTurn, update.toolCallId)
         }
+        this.queueCommandEvidenceFromTool(activeTurn, update)
+      } else {
+        this.queueCommandEvidenceFromTool(activeTurn, update)
       }
     }
 
     for (const draft of mapGrokSessionUpdate(params, (text) => this.safeRedact(text))) {
       this.emitDraft(activeTurn, draft)
     }
+  }
+
+  /**
+   * Runtime 命令证据只记录已验证上报字段，不走 AppCommandRunner。
+   * 未注入 store 或 environmentId 时静默跳过，避免影响既有协议测试。
+   */
+  private queueCommandEvidenceFromTool(
+    activeTurn: ActiveTurn,
+    patch: acp.ToolCallUpdate,
+    approvalId?: string
+  ): void {
+    const store = this.options.commandEvidenceStore
+    if (!store) return
+    const context = this.options.resolveCommandEvidenceContext?.(
+      activeTurn.taskId,
+      activeTurn.turnId
+    )
+    if (!context?.environmentId) return
+
+    const accumulators = this.commandEvidenceAccumulators(activeTurn)
+    const facts = accumulateGrokCommandToolFacts(accumulators.get(patch.toolCallId), patch, {
+      taskId: activeTurn.taskId,
+      turnId: activeTurn.turnId,
+      environmentId: context.environmentId,
+      nowIso: new Date().toISOString(),
+      ...(approvalId ? { approvalId } : {})
+    })
+    accumulators.set(patch.toolCallId, facts)
+    if (!isGrokCommandEvidenceCandidate(facts)) return
+
+    const mapping = mapGrokCommandEvidence(facts, (text) => this.safeRedact(text))
+    if (!mapping) return
+    this.commandEvidenceWrites = this.commandEvidenceWrites
+      .then(() => this.writeMappedCommandEvidence(store, mapping))
+      .catch(() => undefined)
+  }
+
+  private commandEvidenceAccumulators(activeTurn: ActiveTurn): Map<string, GrokCommandToolFacts> {
+    if (!activeTurn.commandEvidenceByToolCallId) {
+      activeTurn.commandEvidenceByToolCallId = new Map()
+    }
+    return activeTurn.commandEvidenceByToolCallId
+  }
+
+  private async writeMappedCommandEvidence(
+    store: CommandEvidenceStore,
+    mapping: GrokCommandEvidenceMapping
+  ): Promise<void> {
+    const transcriptRef = await store.writeTranscript({
+      transcriptId: mapping.evidence.transcriptRef.transcriptId,
+      commandId: mapping.evidence.commandId,
+      taskId: mapping.evidence.taskId,
+      chunks: mapping.chunks,
+      totalBytes:
+        mapping.evidence.transcriptRef.totalBytes ?? mapping.evidence.transcriptRef.availableBytes,
+      truncated: mapping.evidence.truncated
+    })
+    await store.writeEvidence({
+      ...mapping.evidence,
+      transcriptRef,
+      truncated: mapping.evidence.truncated || transcriptRef.truncated
+    })
+  }
+
+  /** 等待命令证据落盘。测试在断言 store 前调用；生产路径不依赖此接口。 */
+  async waitForCommandEvidenceWrites(): Promise<void> {
+    await this.commandEvidenceWrites
   }
 
   /**

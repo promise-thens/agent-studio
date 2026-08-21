@@ -280,6 +280,33 @@ describe('命令执行证据契约', () => {
     expect(parseCommandExecutionEvidence(validEvidence({ exitCode: 1.5 }))).toBeNull()
   })
 
+  it('白名单保留可选 toolCallId/approvalId/inconsistency，拒绝路径身份', () => {
+    expect(
+      parseCommandExecutionEvidence(
+        validEvidence({
+          source: 'runtime-tool',
+          trustLevel: 'runtime-reported',
+          status: 'failed',
+          exitCode: 1,
+          toolCallId: 'tool-1',
+          approvalId: 'permission-1',
+          inconsistency: 'title-success-nonzero-exit',
+          outputFileNotIngested: true
+        })
+      )
+    ).toMatchObject({
+      toolCallId: 'tool-1',
+      approvalId: 'permission-1',
+      inconsistency: 'title-success-nonzero-exit',
+      outputFileNotIngested: true
+    })
+    expect(parseCommandExecutionEvidence(validEvidence({ toolCallId: '/tmp/tool' }))).toBeNull()
+    expect(parseCommandExecutionEvidence(validEvidence({ approvalId: '..' }))).toBeNull()
+    expect(
+      parseCommandExecutionEvidence(validEvidence({ inconsistency: 'looks-successful-from-title' }))
+    ).toBeNull()
+  })
+
   it('transcript 引用区分 retained/expired/missing，且不接受文件路径当身份', () => {
     expect(parseCommandTranscriptRef(validTranscriptRef({ retentionState: 'expired' }))).toEqual({
       transcriptId: 'transcript-1',

@@ -9,7 +9,7 @@ import {
   shell,
   type MenuItemConstructorOptions
 } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -72,6 +72,7 @@ import {
 } from './mcp/grok-user-mcp-sync'
 import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
+import { CommandEvidenceStore } from './command/command-evidence-store'
 import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
 import { listGrokMarketplacePlugins } from './runtime/grok/grok-marketplace-inventory'
 import { runGrokPlugin } from './runtime/grok/grok-plugin-cli'
@@ -300,6 +301,10 @@ async function initializeServices(
   }).catch(() => undefined)
 
   const rendererTrust = createRendererTrustOptions()
+  // 命令证据根放在 userData 下并尽量 0700；store 模块不调用 app.getPath。
+  const commandEvidenceRoot = join(app.getPath('userData'), 'command-evidence')
+  await fs.mkdir(commandEvidenceRoot, { recursive: true, mode: 0o700 })
+  const commandEvidenceStore = new CommandEvidenceStore({ rootDir: commandEvidenceRoot })
   const adapter = new GrokAcpAdapter(
     {
       onStatus: (status) =>
@@ -332,6 +337,17 @@ async function initializeServices(
       getMcpServers: async () =>
         toAgentRuntimeMcpServers(await requireMcpServerStore().listEnabledResolved()),
       isMemoryEnabled: async () => (await requireGrokMemoryStore().getEnabledState()).enabled,
+      commandEvidenceStore,
+      resolveCommandEvidenceContext: (taskId) => {
+        // Adapter 不得自造 environmentId；查不到 Task 就跳过落盘。
+        try {
+          const task = requireTaskStore().getTaskRecord(taskId)
+          if (task.environment.kind !== 'local') return null
+          return { environmentId: task.environment.environmentId }
+        } catch {
+          return null
+        }
+      },
       ...(controlledE2e ? { controlledFixture: controlledE2e.fixture } : {}),
       ...(gacp01Observe
         ? { protocolObserver: createGrokAcpFileObserver(gacp01Observe.observationFilePath) }

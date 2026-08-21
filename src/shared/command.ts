@@ -50,6 +50,17 @@ export const VALIDATION_OUTCOME_REASONS = [
 ] as const
 export type ValidationOutcomeReason = (typeof VALIDATION_OUTCOME_REASONS)[number]
 
+/**
+ * Runtime 标题/ACP status 与结构化退出事实冲突时的显式标记。
+ * 不得根据标题把 status 改写成 succeeded。
+ */
+export const COMMAND_EVIDENCE_INCONSISTENCIES = [
+  'title-success-nonzero-exit',
+  'title-success-timed-out',
+  'title-failure-zero-exit'
+] as const
+export type CommandEvidenceInconsistency = (typeof COMMAND_EVIDENCE_INCONSISTENCIES)[number]
+
 /** 单字段 UTF-8 上限，避免异常长命令或身份进入 IPC。 */
 export const MAX_COMMAND_FIELD_UTF8_BYTES = 4 * 1024
 
@@ -92,6 +103,14 @@ export interface CommandExecutionEvidence {
   transcriptRef: CommandTranscriptRef
   truncated: boolean
   trustLevel: CommandTrustLevel
+  /** Runtime 工具身份；禁止放文件系统路径。 */
+  toolCallId?: string
+  /** 仅在确实见过 ACP permission request 时记录，禁止伪造 Broker 授权。 */
+  approvalId?: string
+  /** 标题/ACP status 与 exit/timeout 冲突；结构化事实仍是 source of truth。 */
+  inconsistency?: CommandEvidenceInconsistency
+  /** Runtime 声明了 output_file 但 App 未摄入文件内容。 */
+  outputFileNotIngested?: true
 }
 
 /**
@@ -114,6 +133,15 @@ export function isCommandExecutionSource(value: unknown): value is CommandExecut
 
 export function isCommandTrustLevel(value: unknown): value is CommandTrustLevel {
   return typeof value === 'string' && (COMMAND_TRUST_LEVELS as readonly string[]).includes(value)
+}
+
+export function isCommandEvidenceInconsistency(
+  value: unknown
+): value is CommandEvidenceInconsistency {
+  return (
+    typeof value === 'string' &&
+    (COMMAND_EVIDENCE_INCONSISTENCIES as readonly string[]).includes(value)
+  )
 }
 
 export function isCommandExecutionStatus(value: unknown): value is CommandExecutionStatus {
@@ -214,6 +242,26 @@ export function parseCommandExecutionEvidence(value: unknown): CommandExecutionE
   if (value.signal !== undefined && value.signal !== null) {
     if (!isCommandSignal(value.signal)) return null
     evidence.signal = value.signal
+  }
+
+  if (value.toolCallId !== undefined && value.toolCallId !== null) {
+    if (!isOptionalEvidenceIdentity(value.toolCallId)) return null
+    evidence.toolCallId = value.toolCallId
+  }
+
+  if (value.approvalId !== undefined && value.approvalId !== null) {
+    if (!isOptionalEvidenceIdentity(value.approvalId)) return null
+    evidence.approvalId = value.approvalId
+  }
+
+  if (value.inconsistency !== undefined && value.inconsistency !== null) {
+    if (!isCommandEvidenceInconsistency(value.inconsistency)) return null
+    evidence.inconsistency = value.inconsistency
+  }
+
+  if (value.outputFileNotIngested !== undefined && value.outputFileNotIngested !== null) {
+    if (value.outputFileNotIngested !== true) return null
+    evidence.outputFileNotIngested = true
   }
 
   // Timeline 可能直接展示 status；缺退出码或超时不得伪装成 succeeded。
@@ -410,6 +458,11 @@ function isBoundedIdentifier(value: unknown): value is string {
     !value.includes('\\') &&
     utf8ByteLength(value) <= MAX_COMMAND_FIELD_UTF8_BYTES
   )
+}
+
+/** 可选关联身份额外拒绝 `.` / `..`，避免被当成路径片段。 */
+function isOptionalEvidenceIdentity(value: unknown): value is string {
+  return isBoundedIdentifier(value) && value !== '.' && value !== '..'
 }
 
 function isIsoTimestamp(value: unknown): value is string {

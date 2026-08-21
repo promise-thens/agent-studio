@@ -1,9 +1,9 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as acp from '@agentclientprotocol/sdk'
-import { describe, expect, it, vi, type MockInstance } from 'vitest'
+import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type {
   AgentCapabilityId,
   AgentCapabilityMaturity,
@@ -32,8 +32,11 @@ import {
 } from '../../provider/grok-provider-config'
 import { PermissionAuditStore } from '../../security/permission-audit-store'
 import { PermissionBroker } from '../../security/permission-broker'
+import { parseCommandExecutionEvidence } from '../../../shared/command'
+import { CommandEvidenceStore } from '../../command/command-evidence-store'
 import { createLocalEnvironmentId } from '../../security/permission-policy'
 import { GrokAcpAdapter, buildGrokRuntimeEnvironment } from './grok-acp-adapter'
+import { deriveGrokRuntimeCommandId } from './grok-command-evidence-mapper'
 import {
   createGrokCapabilitySnapshot,
   createGrokEventBase,
@@ -2092,6 +2095,170 @@ describe('Grok Runtime 环境隔离', () => {
   })
 })
 
+describe('Grok Runtime 命令证据持久化', () => {
+  const evidenceRoots: string[] = []
+
+  afterEach(async () => {
+    await Promise.all(
+      evidenceRoots.splice(0).map((path) => rm(path, { recursive: true, force: true }))
+    )
+  })
+
+  async function createEvidenceHarness(
+    connection: acp.ClientSideConnection
+  ): Promise<ReturnType<typeof createAdapterHarness> & { store: CommandEvidenceStore }> {
+    const rootDir = await realpath(await mkdtemp(join(tmpdir(), 'grok-runtime-command-evidence-')))
+    evidenceRoots.push(rootDir)
+    const store = new CommandEvidenceStore({ rootDir })
+    const harness = createAdapterHarness(connection, true, {
+      commandEvidenceStore: store,
+      resolveCommandEvidenceContext: () => ({ environmentId: 'env-1' })
+    })
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+    return { ...harness, store }
+  }
+
+  it('把成功的 execute 工具写入 runtime-tool 证据，且不经 AppCommandRunner', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const { adapter, internal, store } = await createEvidenceHarness(connection)
+    internal.handleSessionUpdate(
+      notification({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool-bash-1',
+        title: 'Run tests',
+        kind: 'execute',
+        status: 'completed',
+        rawInput: { command: 'pnpm test' },
+        rawOutput: { exit_code: 0, timed_out: false, output: 'ok' }
+      }),
+      connection
+    )
+    await adapter.waitForCommandEvidenceWrites()
+
+    const commandId = deriveGrokRuntimeCommandId('task-current', 'turn-current', 'tool-bash-1')
+    const evidence = await store.readEvidence('task-current', commandId)
+    expect(parseCommandExecutionEvidence(evidence)).toMatchObject({
+      source: 'runtime-tool',
+      trustLevel: 'runtime-reported',
+      status: 'succeeded',
+      exitCode: 0,
+      displayCommand: 'pnpm test',
+      toolCallId: 'tool-bash-1'
+    })
+    expect(evidence?.approvalId).toBeUndefined()
+  })
+
+  it('未见 ACP permission request 时不发明 approvalId', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const { adapter, internal, store } = await createEvidenceHarness(connection)
+    internal.handleSessionUpdate(
+      notification({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tool-no-permission',
+        kind: 'execute',
+        status: 'completed',
+        rawInput: { command: 'ls' },
+        rawOutput: { exit_code: 1, timed_out: false }
+      }),
+      connection
+    )
+    await adapter.waitForCommandEvidenceWrites()
+    const commandId = deriveGrokRuntimeCommandId(
+      'task-current',
+      'turn-current',
+      'tool-no-permission'
+    )
+    const evidence = await store.readEvidence('task-current', commandId)
+    expect(evidence?.status).toBe('failed')
+    expect(evidence?.approvalId).toBeUndefined()
+    expect(JSON.stringify(evidence)).not.toContain('approvalId')
+  })
+
+  it('见过 ACP permission request 后把 requestId 记为 approvalId', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const { adapter, internal, store, permissions } = await createEvidenceHarness(connection)
+    const responsePromise = internal.requestPermission(
+      permissionRequest({
+        optionId: 'allow-once',
+        toolCallId: 'tool-approved',
+        kind: 'execute'
+      }),
+      connection
+    )
+    expect(permissions[0]?.requestId).toBeTruthy()
+    internal.handleSessionUpdate(
+      notification({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tool-approved',
+        kind: 'execute',
+        status: 'completed',
+        rawInput: { command: 'ls' },
+        rawOutput: { exit_code: 0, timed_out: false, output: '' }
+      }),
+      connection
+    )
+    adapter.respondPermission(permissions[0].requestId, 'allow-once')
+    await responsePromise
+    await adapter.waitForCommandEvidenceWrites()
+
+    const commandId = deriveGrokRuntimeCommandId('task-current', 'turn-current', 'tool-approved')
+    const evidence = await store.readEvidence('task-current', commandId)
+    expect(evidence).toMatchObject({
+      approvalId: permissions[0].requestId,
+      source: 'runtime-tool',
+      status: 'succeeded'
+    })
+  })
+
+  it('output_file 不作为路径写入 transcript 引用', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const { adapter, internal, store } = await createEvidenceHarness(connection)
+    const leakedPath = '/tmp/grok-output-file-must-not-appear.log'
+    internal.handleSessionUpdate(
+      notification({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool-output-file',
+        title: 'Run tests',
+        kind: 'execute',
+        status: 'completed',
+        rawInput: { command: 'pnpm test' },
+        rawOutput: { exit_code: 0, timed_out: false, output_file: leakedPath }
+      }),
+      connection
+    )
+    await adapter.waitForCommandEvidenceWrites()
+    const commandId = deriveGrokRuntimeCommandId('task-current', 'turn-current', 'tool-output-file')
+    const evidence = await store.readEvidence('task-current', commandId)
+    const transcript = evidence
+      ? await store.readTranscript('task-current', evidence.transcriptRef.transcriptId)
+      : null
+    expect(evidence).toMatchObject({ truncated: true, outputFileNotIngested: true })
+    expect(JSON.stringify(evidence)).not.toContain(leakedPath)
+    expect(JSON.stringify(transcript)).not.toContain(leakedPath)
+    expect(evidence?.transcriptRef).not.toHaveProperty('path')
+  })
+
+  it('未注入 store 时跳过持久化，既有协议路径不受影响', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+    harness.internal.handleSessionUpdate(
+      notification({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool-no-store',
+        title: 'ls',
+        kind: 'execute',
+        status: 'completed',
+        rawInput: { command: 'ls' },
+        rawOutput: { exit_code: 0, timed_out: false }
+      }),
+      connection
+    )
+    await harness.adapter.waitForCommandEvidenceWrites()
+    expect(harness.events.some((event) => event.kind === 'tool-call')).toBe(true)
+  })
+})
+
 interface TestActiveTurn {
   taskId: string
   turnId: string
@@ -2330,7 +2497,11 @@ function deferred<T>(): Deferred<T> {
 
 function createAdapterHarness(
   connection: acp.ClientSideConnection = {} as acp.ClientSideConnection,
-  selected = true
+  selected = true,
+  extraOptions: {
+    commandEvidenceStore?: CommandEvidenceStore
+    resolveCommandEvidenceContext?: () => { environmentId: string } | null
+  } = {}
 ): {
   adapter: GrokAcpAdapter
   internal: GrokAcpAdapterTestAccess
@@ -2357,7 +2528,8 @@ function createAdapterHarness(
     {
       userDataPath: '/tmp/agent-studio-test',
       getProviderConfig: () => providerConfig(),
-      redactText: redactFakeText
+      redactText: redactFakeText,
+      ...extraOptions
     }
   )
   const internal = adapter as unknown as GrokAcpAdapterTestAccess
