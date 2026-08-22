@@ -11,6 +11,7 @@ import {
   PLUGIN_ENABLE_TOGGLE_HINT,
   PLUGIN_GO_TO_MARKETPLACE_COPY,
   PLUGIN_INSTALL_SUCCESS_COPY,
+  PLUGIN_INSTALLING_HINT_COPY,
   PLUGIN_PAGE_INTRO_COPY,
   PLUGIN_TRUST_WARNING_COPY,
   applyPluginDetailIfCurrent,
@@ -298,7 +299,7 @@ describe('插件安装信任确认', () => {
     )
     expect(trustDialogSource).toContain('PLUGIN_TRUST_WARNING_COPY')
     expect(trustDialogSource).toContain('type="checkbox"')
-    expect(trustDialogSource).toContain(':disabled="!trusted"')
+    expect(trustDialogSource).toContain(':disabled="!trusted || busy"')
     expect(trustDialogSource).toContain('sourceName')
     expect(trustDialogSource).not.toContain('gitUrl')
     expect(trustDialogSource).not.toContain('trust: false')
@@ -323,7 +324,14 @@ describe('插件安装信任确认', () => {
   })
 
   it('安装成功文案不得声称当前 Turn 已生效，空市场可添加官方源', () => {
+    const trustDialogSource = readFileSync(
+      join(rendererDir, 'components/PluginTrustDialog.vue'),
+      'utf8'
+    )
     expect(PLUGIN_INSTALL_SUCCESS_COPY).toBe('已安装。新对话或重新进入任务后由 Grok 加载。')
+    expect(PLUGIN_INSTALLING_HINT_COPY).toBe('正在拉取插件仓库，网速慢时可能需要几分钟。')
+    expect(pluginsPageSource).toContain('PLUGIN_INSTALLING_HINT_COPY')
+    expect(trustDialogSource).toContain('PLUGIN_INSTALLING_HINT_COPY')
     expect(PLUGIN_INSTALL_SUCCESS_COPY).not.toContain('当前 Turn')
     expect(PLUGIN_INSTALL_SUCCESS_COPY).not.toContain('已生效')
     expect(PLUGIN_ADD_OFFICIAL_MARKETPLACE_COPY).toBe('添加官方市场')

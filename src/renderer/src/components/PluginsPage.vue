@@ -17,6 +17,7 @@ import {
   PLUGIN_ENABLE_TOGGLE_HINT,
   PLUGIN_GO_TO_MARKETPLACE_COPY,
   PLUGIN_INSTALL_SUCCESS_COPY,
+  PLUGIN_INSTALLING_HINT_COPY,
   PLUGIN_PAGE_INTRO_COPY,
   buildPluginUninstallRequest,
   buildTrustedPluginInstallRequest,
@@ -337,6 +338,9 @@ onMounted(() => {
         </div>
 
         <p v-if="actionStatus" class="plugins-banner" role="status">{{ actionStatus }}</p>
+        <p v-if="addingSource || installingName" class="plugins-banner" role="status">
+          {{ PLUGIN_INSTALLING_HINT_COPY }}
+        </p>
         <p v-if="actionError" class="plugins-banner is-error" role="alert">{{ actionError }}</p>
 
         <template v-if="pane === 'installed'">

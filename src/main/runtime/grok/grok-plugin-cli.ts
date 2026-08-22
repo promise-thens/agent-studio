@@ -6,6 +6,8 @@ import { redactSensitiveText } from '../../security/sensitive-redaction'
 
 const LEADER_SOCKET_FILE = 'studio-plugin.sock'
 const LEADER_SOCKET_FLAG = '--leader-socket'
+/** 安装/加源要 git clone。本机 GitHub 约 20–45 KiB/s 时 10MB 仓库需数分钟，120s 会杀掉进行中的 clone。 */
+export const GROK_PLUGIN_CLI_TIMEOUT_MS = 15 * 60 * 1000
 const ERROR_MESSAGE_LIMIT_BYTES = 2 * 1024
 const STREAM_CAPTURE_LIMIT = 8 * 1024
 const URL_PATTERN = /\b(?:https?|file):\/\/[^\s"'<>]+/giu
@@ -115,7 +117,7 @@ export async function runGrokPlugin(input: {
 
     const outcome = await waitForPluginProcess(child, input.timeoutMs)
     if (outcome.timedOut) {
-      return failure('Grok plugin 命令超时。', grokHome)
+      return failure(timeoutFailureMessage(input.args), grokHome)
     }
     if (outcome.spawnError) {
       return failure('无法启动 Grok plugin 命令。', grokHome)
@@ -132,6 +134,50 @@ export async function runGrokPlugin(input: {
   } catch {
     return failure('Grok plugin 命令失败。', grokHome)
   }
+}
+
+type GrokPluginCliResult = Awaited<ReturnType<typeof runGrokPlugin>>
+
+/**
+ * 添加市场 git 源；已写入 config 时改刷新 cache，而不是把重复配置当失败。
+ * 原因：Grok `marketplace add` 在 [[marketplace.sources]] 已存在时非 0 退出，
+ * 即使 marketplace-cache 缺失也不会补齐。桌面空货架按钮会因此卡死。
+ * 边界：update 按源 name 查找；把 git URL 传给 update 会报 not found。
+ * list --json 只在主进程解析，URL 不得进 Renderer。
+ */
+export async function ensureGrokMarketplaceSource(input: {
+  grokHome: string
+  grokBinary: string
+  gitUrl: string
+  timeoutMs: number
+}): Promise<GrokPluginCliResult> {
+  const added = await runGrokPlugin({
+    grokHome: input.grokHome,
+    grokBinary: input.grokBinary,
+    args: ['plugin', 'marketplace', 'add', input.gitUrl],
+    timeoutMs: input.timeoutMs
+  })
+  if (added.ok || !isMarketplaceSourceAlreadyConfigured(added.message)) {
+    return added
+  }
+
+  const listed = await runGrokPlugin({
+    grokHome: input.grokHome,
+    grokBinary: input.grokBinary,
+    args: ['plugin', 'marketplace', 'list', '--json'],
+    timeoutMs: input.timeoutMs
+  })
+  const sourceName = listed.ok ? marketplaceSourceNameForGitUrl(listed.stdout, input.gitUrl) : null
+  const updateArgs = sourceName
+    ? ['plugin', 'marketplace', 'update', sourceName]
+    : ['plugin', 'marketplace', 'update']
+
+  return runGrokPlugin({
+    grokHome: input.grokHome,
+    grokBinary: input.grokBinary,
+    args: updateArgs,
+    timeoutMs: input.timeoutMs
+  })
 }
 
 /**
@@ -153,6 +199,8 @@ function buildPluginCliEnvironment(
     .filter(Boolean)
     .join(delimiter)
   environment.GROK_HOME = grokHome
+  // 强制无 TTY 失败，避免 git 在 stdin=ignore 时卡住等凭据；不继承宿主 GIT_ASKPASS。
+  environment.GIT_TERMINAL_PROMPT = '0'
   for (const name of Object.keys(environment)) {
     if (name.toUpperCase() === AGENT_STUDIO_MODEL_API_KEY_ENV) {
       delete environment[name]
@@ -294,4 +342,51 @@ function isNonEmptyPath(value: unknown): value is string {
 
 function isSafeCliArg(value: unknown): value is string {
   return typeof value === 'string' && !value.includes('\0')
+}
+
+/** 安装、更新和加源都会 git clone；超时文案指向网络拉取，而不是笼统的命令失败。 */
+function isCloneHeavyPluginCommand(args: readonly string[]): boolean {
+  return (
+    args.includes('install') ||
+    args.includes('update') ||
+    (args.includes('marketplace') && args.includes('add'))
+  )
+}
+
+function timeoutFailureMessage(args: readonly string[]): string {
+  if (isCloneHeavyPluginCommand(args)) {
+    return '拉取插件仓库超时，请检查网络后重试。'
+  }
+  return 'Grok plugin 命令超时。'
+}
+
+/** 匹配 Grok 脱敏前后的 already configured 句式；URL 已被替换成 [REDACTED] 也能认。 */
+function isMarketplaceSourceAlreadyConfigured(message: string): boolean {
+  return /marketplace source already configured/i.test(message)
+}
+
+/**
+ * 从 `marketplace list --json` 取出与 gitUrl 精确对应的源 name。
+ * 名称不得以 `-` 开头，避免变成 CLI 选项。
+ */
+function marketplaceSourceNameForGitUrl(stdout: string, gitUrl: string): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stdout)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(parsed)) return null
+
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const record = item as Record<string, unknown>
+    if (typeof record.name !== 'string' || record.name.length === 0) continue
+    if (!isSafeCliArg(record.name) || record.name.startsWith('-')) continue
+    const source = record.source
+    if (!source || typeof source !== 'object' || Array.isArray(source)) continue
+    if ((source as Record<string, unknown>).url !== gitUrl) continue
+    return record.name
+  }
+  return null
 }

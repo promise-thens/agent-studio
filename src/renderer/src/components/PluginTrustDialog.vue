@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { PhWarningCircle as WarningCircle } from '@phosphor-icons/vue'
-import { PLUGIN_TRUST_WARNING_COPY } from '../plugins-page'
+import { PLUGIN_INSTALLING_HINT_COPY, PLUGIN_TRUST_WARNING_COPY } from '../plugins-page'
 
 const props = defineProps<{
   name: string
@@ -48,6 +48,7 @@ function confirmTrust(): void {
         <input v-model="trusted" type="checkbox" :disabled="busy" />
         我信任该插件，并允许它以我的用户权限运行
       </label>
+      <p v-if="busy" class="install-wait" role="status">{{ PLUGIN_INSTALLING_HINT_COPY }}</p>
       <div class="permission-options">
         <button
           class="secondary-button"
@@ -61,12 +62,14 @@ function confirmTrust(): void {
         <button
           class="primary-button"
           type="button"
-          :disabled="!trusted"
+          :disabled="!trusted || busy"
           :aria-busy="busy ? 'true' : 'false'"
-          :title="busy ? '正在安装' : trusted ? '信任并安装' : '勾选信任后才能安装'"
+          :title="
+            busy ? PLUGIN_INSTALLING_HINT_COPY : trusted ? '信任并安装' : '勾选信任后才能安装'
+          "
           @click="confirmTrust"
         >
-          {{ busy ? '正在安装…' : '信任并安装' }}
+          {{ busy ? '正在拉取…' : '信任并安装' }}
         </button>
       </div>
     </section>
@@ -91,6 +94,13 @@ function confirmTrust(): void {
 
 .trust-check input {
   margin-top: 2px;
+}
+
+.install-wait {
+  margin: 12px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .permission-options {

@@ -14,6 +14,8 @@ export const PLUGIN_ADD_OFFICIAL_MARKETPLACE_COPY = '添加官方市场'
 
 export const PLUGIN_INSTALL_SUCCESS_COPY = '已安装。新对话或重新进入任务后由 Grok 加载。'
 
+export const PLUGIN_INSTALLING_HINT_COPY = '正在拉取插件仓库，网速慢时可能需要几分钟。'
+
 export const PLUGIN_TRUST_WARNING_COPY =
   '信任后将启用该插件的 Hooks、MCP 与 LSP，并以你的用户权限运行。'
 

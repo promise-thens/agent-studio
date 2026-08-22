@@ -165,6 +165,14 @@ const mocks = vi.hoisted(() => {
       ok: true,
       stdout: ''
     })),
+    ensureGrokMarketplaceSource: vi.fn<
+      (
+        input: GrokPluginCliInput & { gitUrl: string }
+      ) => Promise<{ ok: true; stdout: string } | { ok: false; message: string }>
+    >(async () => ({
+      ok: true,
+      stdout: ''
+    })),
     permissionBroker: {
       beginProjectDeletion: vi.fn(),
       beginTaskDeletion: vi.fn(),
@@ -404,7 +412,9 @@ vi.mock('./provider/grok-provider-config', () => ({
 }))
 vi.mock('./runtime/grok/grok-plugin-cli', () => ({
   grokPluginLeaderSocket: (grokHome: string) => `${grokHome}/studio-plugin.sock`,
-  runGrokPlugin: mocks.runGrokPlugin
+  GROK_PLUGIN_CLI_TIMEOUT_MS: 900_000,
+  runGrokPlugin: mocks.runGrokPlugin,
+  ensureGrokMarketplaceSource: mocks.ensureGrokMarketplaceSource
 }))
 vi.mock('./runtime/grok/grok-marketplace-inventory', () => ({
   listGrokMarketplacePlugins: vi.fn(async () => [])
@@ -690,7 +700,7 @@ describe('Main 删除与权限失效编排', () => {
       grokHome: '/tmp/agent-studio-index-test/grok-home',
       grokBinary: expect.any(String),
       args: ['plugin', 'install', 'chrome-devtools'],
-      timeoutMs: 120_000
+      timeoutMs: 900_000
     })
     expect(mocks.runGrokPlugin.mock.calls[0]?.[0]?.args).not.toContain('--trust')
     expect(mocks.agentService.disconnect).not.toHaveBeenCalled()
@@ -701,15 +711,18 @@ describe('Main 删除与权限失效编排', () => {
     expect(mocks.runGrokPlugin).toHaveBeenLastCalledWith(
       expect.objectContaining({
         args: ['plugin', 'install', 'chrome-devtools', '--trust'],
-        timeoutMs: 120_000
+        timeoutMs: 900_000
       })
     )
   })
 
-  it('卸载附加 --confirm 且不加 --keep-data；加源只把 gitUrl 交给 CLI', async () => {
+  it('卸载附加 --confirm 且不加 --keep-data；加源走幂等 ensure 而不是直接 add', async () => {
     mocks.runGrokPlugin.mockReset()
     mocks.runGrokPlugin.mockResolvedValue({ ok: true, stdout: '' })
+    mocks.ensureGrokMarketplaceSource.mockReset()
+    mocks.ensureGrokMarketplaceSource.mockResolvedValue({ ok: true, stdout: '' })
     const dependencies = mocks.appDeletionDependencies!
+    const official = 'https://github.com/xai-org/plugin-marketplace.git'
 
     await expect(
       dependencies.uninstallPlugin({ pluginId: 'chrome-devtools-mcp' })
@@ -717,22 +730,22 @@ describe('Main 删除与权限失效编排', () => {
     expect(mocks.runGrokPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
         args: ['plugin', 'uninstall', 'chrome-devtools-mcp', '--confirm'],
-        timeoutMs: 120_000
+        timeoutMs: 900_000
       })
     )
     expect(mocks.runGrokPlugin.mock.calls[0]?.[0]?.args).not.toContain('--keep-data')
 
-    await expect(
-      dependencies.addMarketplaceSource({
-        gitUrl: 'https://github.com/xai-org/plugin-marketplace.git'
-      })
-    ).resolves.toBeNull()
-    expect(mocks.runGrokPlugin).toHaveBeenLastCalledWith(
+    await expect(dependencies.addMarketplaceSource({ gitUrl: official })).resolves.toBeNull()
+    expect(mocks.ensureGrokMarketplaceSource).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ['plugin', 'marketplace', 'add', 'https://github.com/xai-org/plugin-marketplace.git'],
-        timeoutMs: 120_000
+        grokHome: '/tmp/agent-studio-index-test/grok-home',
+        gitUrl: official,
+        timeoutMs: 900_000
       })
     )
+    expect(
+      mocks.runGrokPlugin.mock.calls.some((call) => call[0]?.args?.includes('marketplace'))
+    ).toBe(false)
   })
 
   it('CLI 失败抛普通 Error，IPC 脱敏后不含绝对路径与 URL', async () => {

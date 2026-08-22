@@ -75,7 +75,11 @@ import { validateProviderConfigInput } from './provider/provider-validation'
 import { CommandEvidenceStore } from './command/command-evidence-store'
 import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
 import { listGrokMarketplacePlugins } from './runtime/grok/grok-marketplace-inventory'
-import { runGrokPlugin } from './runtime/grok/grok-plugin-cli'
+import {
+  ensureGrokMarketplaceSource,
+  GROK_PLUGIN_CLI_TIMEOUT_MS,
+  runGrokPlugin
+} from './runtime/grok/grok-plugin-cli'
 import { getGrokPlugin, listGrokPlugins } from './runtime/grok/grok-plugin-inventory'
 import { PermissionAuditStore } from './security/permission-audit-store'
 import { PermissionBroker } from './security/permission-broker'
@@ -400,8 +404,6 @@ async function initializeServices(
   })
 }
 
-const GROK_PLUGIN_CLI_TIMEOUT_MS = 120_000
-
 /** 与 Adapter 同源：~/.grok/bin/grok 存在则用之，否则 PATH 上的 grok。不改 Adapter.resolveBinary。 */
 function resolveGrokPluginBinary(): string {
   const bundledPath = join(homedir(), '.grok/bin/grok')
@@ -418,6 +420,22 @@ async function runManagedPluginCli(args: string[]): Promise<null> {
     grokHome: getManagedGrokHome(app.getPath('userData')),
     grokBinary: resolveGrokPluginBinary(),
     args,
+    timeoutMs: GROK_PLUGIN_CLI_TIMEOUT_MS
+  })
+  if (!result.ok) {
+    throw new Error(result.message)
+  }
+  return null
+}
+
+/**
+ * 加源走幂等封装：config 已有该 git URL 时刷新 cache，而不是把 already configured 抛给 UI。
+ */
+async function runManagedMarketplaceAdd(gitUrl: string): Promise<null> {
+  const result = await ensureGrokMarketplaceSource({
+    grokHome: getManagedGrokHome(app.getPath('userData')),
+    grokBinary: resolveGrokPluginBinary(),
+    gitUrl,
     timeoutMs: GROK_PLUGIN_CLI_TIMEOUT_MS
   })
   if (!result.ok) {
@@ -631,8 +649,7 @@ function registerIpcHandlers(): void {
     },
     uninstallPlugin: ({ pluginId }) =>
       runManagedPluginCli(['plugin', 'uninstall', pluginId, '--confirm']),
-    addMarketplaceSource: ({ gitUrl }) =>
-      runManagedPluginCli(['plugin', 'marketplace', 'add', gitUrl]),
+    addMarketplaceSource: ({ gitUrl }) => runManagedMarketplaceAdd(gitUrl),
     deleteProjectHistory: async (projectId, token) => {
       const preparation = requireTaskStore().prepareProjectHistoryDeletion(projectId, token)
       let deletionLease: Awaited<ReturnType<PermissionBroker['beginProjectDeletion']>>

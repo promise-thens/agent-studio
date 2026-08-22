@@ -1,6 +1,6 @@
 # P0-10E Grok 插件安装与信任 实施计划
 
-> **状态：** 代码已落地（2026-08-21）。自动验证已过（目标文件 ESLint、全量 vitest 99 files / 814 tests、typecheck、build、`git diff --check`）。本机 App grok-home 无 `marketplace-cache` / `installed-plugins`，开发版 GUI / 安装走查未跑。
+> **状态：** 代码已落地（2026-08-21）。自动验证已过。跟进：① already configured 时按源 name 刷新 cache；② 安装超时从 120s 改为 15 分钟，因本机 GitHub clone 约 20–45 KiB/s 时 120s 会杀掉半截 `chrome-devtools-mcp` 仓库。开发版 GUI / 完整安装走查未跑。
 >
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 按任务落地。步骤使用复选框 (`- [ ]`) 跟踪。
 >
@@ -83,6 +83,10 @@ grok plugin --leader-socket <grok-home>/studio-plugin.sock install chrome-devtoo
 添加市场源
   → 只允许 https git URL，无 userinfo，query/hash 不得像 Secret
   → grok plugin marketplace add <url>
+  → 若 CLI 报 `Marketplace source already configured`：主进程解析 `marketplace list --json`，
+    用源 **name** 跑 `grok plugin marketplace update <name>` 补 `marketplace-cache`。
+    Grok 的 update 按 name 查找，把 git URL 传进去会 `not found`；list 失败则 `marketplace update` 刷新全部源。
+    不得把 list JSON 里的 url/path 回给 Renderer。
 ```
 
 无 `activeTurn` 时仍允许安装：改的是 grok-home 文件，不是当前 Turn。正在跑的 Task 继续用旧 session 的插件集。
@@ -217,7 +221,7 @@ export async function runGrokPlugin(input: {
 2. 自动注入 `--leader-socket` = `join(grokHome, 'studio-plugin.sock')`。
 3. `env.GROK_HOME` 覆盖为 grokHome；不得把 `~/.grok` 设回去。
 4. cwd 不得是用户项目根以外的随意目录；建议 grokHome。
-5. timeout 默认 120s（git clone）。
+5. timeout 默认 15 分钟（git clone）。120s 会在 GitHub 慢速拉取时杀掉进行中的 clone，只留下半截 `installed-plugins/<id>/.git`。
 6. 非 0 退出：脱敏 stdout/stderr，截断 2 KiB。
 
 测试用 fake binary，断言 argv 含自定义 socket、env 含 GROK_HOME、不含用户 home 的 leader.sock。
