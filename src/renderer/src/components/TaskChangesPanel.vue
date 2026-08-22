@@ -311,13 +311,13 @@ function durationLabel(durationMs: number | undefined): string {
       </section>
 
       <section class="changes-restore" aria-label="撤销边界">
+        <p v-if="restoreMessage" class="changes-muted" role="status">{{ restoreMessage }}</p>
+        <p v-if="restoreError" class="changes-risk" role="alert">{{ restoreError }}</p>
         <p v-if="!canRestore" class="changes-risk" role="status" aria-label="不可一键撤销">
           {{ revertibleText }}
         </p>
         <template v-else>
           <p class="changes-muted" role="status">{{ revertibleText }}</p>
-          <p v-if="restoreMessage" class="changes-muted" role="status">{{ restoreMessage }}</p>
-          <p v-if="restoreError" class="changes-risk" role="alert">{{ restoreError }}</p>
           <div v-if="restorePreview" class="changes-restore-preview">
             <p>{{ restorePreviewSummary(restorePreview) }}</p>
             <ul>

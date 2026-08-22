@@ -16,6 +16,7 @@ import type {
 } from '../../../shared/git-review'
 import type { DesktopIpcResult } from '../../../shared/ipc-result'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
+import { restoreAppliedNotice } from '../task-changes-presentation'
 
 export interface TaskChangesQueryApi {
   getChangeSet: (taskId: string) => Promise<DesktopIpcResult<TaskChangeSetQueryResult>>
@@ -270,13 +271,15 @@ export function useTaskChanges(
     restoreError.value = ''
     try {
       const result = unwrapDesktopIpcResult(await restoreApi(id))
+      const notice = restoreAppliedNotice(result)
+      restorePreview.value = null
       if (!result.ok) {
-        restoreError.value = result.message
+        if (result.appliedPaths?.length) await reload()
+        restoreError.value = notice
         return
       }
-      restoreMessage.value = result.message
-      restorePreview.value = null
       await reload()
+      restoreMessage.value = notice
     } catch (error) {
       restoreError.value = readErrorMessage(error)
     } finally {

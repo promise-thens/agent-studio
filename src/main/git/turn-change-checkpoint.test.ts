@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { TurnChangeCheckpoint } from '../../shared/git-review'
-import { TurnChangeCheckpointStore } from './turn-change-checkpoint'
+import { MAX_CHECKPOINT_LIST_ITEMS, TurnChangeCheckpointStore } from './turn-change-checkpoint'
 
 const temporaryDirectories: string[] = []
 
@@ -38,9 +38,27 @@ describe('TurnChangeCheckpointStore', () => {
       status: 'complete'
     })
     const listed = await store.list('task-1')
-    expect(listed.map((item) => item.turnId)).toEqual(['turn-1', 'turn-2'])
+    expect(listed.truncated).toBe(false)
+    expect(listed.items.map((item) => item.turnId)).toEqual(['turn-1', 'turn-2'])
     expect(JSON.stringify(listed)).not.toContain('/Users/')
     expect(JSON.stringify(listed)).not.toContain('fingerprint')
+  })
+
+  it('触达 list 上限时标记 truncated，不得把截断结果当成完整最新链', async () => {
+    const store = new TurnChangeCheckpointStore({ rootDir: await createTemporaryDirectory() })
+    for (let index = 0; index <= MAX_CHECKPOINT_LIST_ITEMS; index += 1) {
+      const hour = String(Math.floor(index / 60)).padStart(2, '0')
+      const minute = String(index % 60).padStart(2, '0')
+      await store.put(
+        sampleCheckpoint({
+          turnId: `turn-${String(index).padStart(3, '0')}`,
+          capturedBeforeAt: `2026-08-21T${hour}:${minute}:00.000Z`
+        })
+      )
+    }
+    const listed = await store.list('task-1')
+    expect(listed.truncated).toBe(true)
+    expect(listed.items.length).toBeLessThanOrEqual(MAX_CHECKPOINT_LIST_ITEMS)
   })
 
   it('拒绝路径穿越身份', async () => {

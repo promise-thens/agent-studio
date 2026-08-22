@@ -255,13 +255,13 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[P0-12 项目 Git 基线与变更审阅](docs/superpowers/plans/p0-12-project-git-change-review.md) Task 4 代码已落地（仅最新完整写入型 Turn 可一键撤销：漂移检查 + Permission Broker；禁止 git reset/checkout/clean/stash）。Task 1–3 仍在本分支。P0-11 已合入 main（自动验证已过，开发版 GUI 走查未跑）
+- 当前计划：[P0-12 项目 Git 基线与变更审阅](docs/superpowers/plans/p0-12-project-git-change-review.md) Task 1–4 代码已落地（仅最新完整写入型 Turn 可一键撤销：漂移检查 + Permission Broker；禁止 git reset/checkout/clean/stash）。整枝修复：忙检测含 admission/lease、recovery 快照 fail-closed、checkpoint list 截断拒撤。P0-11 已合入 main（自动验证已过，开发版 GUI 走查未跑）
 - 状态：桌面定位为 Grok Build ACP Client，不自己当 Agent。设置现为供应商 / 外观 / 记忆 / Grok 配置；插件页三栏为插件 / MCP / 技能，插件 tab 内分已安装 / 市场，不得打断运行中 Task。Inspector 仍是 Timeline/Changes/Terminal/Artifacts。P2 Codex 暂缓
-- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；库存扫描已补 `installed-plugins`；P0-10D 代码已落地（相关自动测试已过，开发版 GUI / TUI 对读未跑）；P0-10E 代码已落地（自动验证已过；already-configured 加源已修，开发版 GUI / 安装走查未跑）；P0-11 Task 1–4 已合入 main（自动验证已过，开发版 GUI 走查未跑）；P0-12 Task 1–4 代码已落地（自动验证已过，开发版 GUI 走查未跑）
+- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；库存扫描已补 `installed-plugins`；P0-10D 代码已落地（相关自动测试已过，开发版 GUI / TUI 对读未跑）；P0-10E 代码已落地（自动验证已过；already-configured 加源已修，开发版 GUI / 安装走查未跑）；P0-11 Task 1–4 已合入 main（自动验证已过，开发版 GUI 走查未跑）；P0-12 Task 1–4 代码已落地（整枝修复已做；聚焦测试 + typecheck 已过，开发版 GUI 走查未跑）
 - Grok ACP 加深：顺序仍为 GACP-01 → GACP-02 → P0-10 → P0-10C/D → P0-10E → P0-11 → GACP-03。`available_commands_update` 现为 session 快照，不进 Timeline。命令证据走 `task:list-command-evidence` 等只读查询，不进交互终端。变更审阅走 `task:get-change-set` / `task:get-file-diff` / `task:list-turn-checkpoints`；撤销走 `task:preview-latest-turn-restore` / `task:restore-latest-turn`
 - 兼容边界：首版仍只有一个执行槽；GROK_HOME 仍是 App 目录；记忆整棵树 junction 到 `~/.grok/memory`；用户 toml 只允许合并/删除 `[mcp_servers.*]`；`clientCapabilities: {}`；不把桌面做成 MCP Host 或 Marketplace Host。自动撤销仅 latest-turn 且无漂移；检查点只存哈希，禁止 git reset/checkout
 - 下一步：开发版走查 P0-10B 外观、P0-10C GUI、P0-10D 记忆/MCP/TUI 对读、P0-10E 安装走查、P0-11 Timeline/ResultReview 与 P0-12 Changes/撤销仍待做。不要加回「继续任务」按钮
-- 最近验证：2026-08-22 P0-12 Task 4 聚焦测试已过。开发版 GUI 走查未跑。受控 e2e 未重跑
+- 最近验证：2026-08-22 P0-12 整枝修复（restore 忙检测 / recovery fail-closed / list 截断拒撤）。开发版 GUI 走查未跑。受控 e2e 未重跑
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

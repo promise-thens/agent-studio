@@ -133,9 +133,9 @@
 
 ## 验收标准
 
-- [ ] 每个 Task 都有明确 execution root 和变化基线；用户已有修改、本 Task 修改和未知重叠不会混为一类。
-- [ ] 每个写入型 Turn 都有前后 hash/revision 检查点；只能自动撤销最新且无外部漂移的 Turn，更早轮次或漂移后只提供手工 Diff/patch。
-- [ ] Changes 面板可按需审阅受限 Diff、验证结果和风险；每条 ValidationResult 都引用真实 commandId，缺失/截断/二进制/unknown 状态清晰可见。
-- [ ] 不自动 stage、commit、push、reset、stash、clean 或覆盖不确定内容；不可证明安全时只提供手工审阅。
-- [ ] Diff 和 Git IPC 无法读取 execution root 外文件，所有写操作经过 Permission Broker。
-- [ ] 目标 ESLint、相关 Vitest/组件测试、`pnpm typecheck`、`pnpm build`、`git diff --check` 通过，并完成干净、脏、非 Git 和外部编辑场景走查。
+- [x] 每个 Task 都有明确 execution root 和变化基线；用户已有修改、本 Task 修改和未知重叠不会混为一类。
+- [x] 每个写入型 Turn 都有前后 hash/revision 检查点；只能自动撤销最新且无外部漂移的 Turn，更早轮次或漂移后只提供手工 Diff/patch。
+- [x] Changes 面板可按需审阅受限 Diff、验证结果和风险；每条 ValidationResult 都引用真实 commandId，缺失/截断/二进制/unknown 状态清晰可见。
+- [x] 不自动 stage、commit、push、reset、stash、clean 或覆盖不确定内容；不可证明安全时只提供手工审阅。
+- [x] Diff 和 Git IPC 无法读取 execution root 外文件，所有写操作经过 Permission Broker。
+- [ ] 目标 ESLint、相关 Vitest/组件测试、`pnpm typecheck`、`pnpm build`、`git diff --check` 通过，并完成干净、脏、非 Git 和外部编辑场景走查。自动验证已过；开发版 GUI 走查未跑。

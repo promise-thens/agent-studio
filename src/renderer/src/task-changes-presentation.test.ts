@@ -20,6 +20,7 @@ import {
   canRestoreLatestTurn,
   revertibleNotice,
   restoreActionLabel,
+  restoreAppliedNotice,
   restorePreviewSummary,
   shouldRenderUnifiedDiff,
   unverifiedTaskPaths,
@@ -167,6 +168,13 @@ describe('基线失效与不可撤销', () => {
         willLosePaths: ['README.md']
       })
     ).toMatch(/将丢失|丢弃/)
+    expect(
+      restoreAppliedNotice({
+        message: '待删除路径在写回后已漂移，已停止删除。',
+        appliedPaths: ['README.md', 'notes.txt']
+      })
+    ).toMatch(/README\.md.*notes\.txt/)
+    expect(restoreAppliedNotice({ message: '已拒绝。' })).toBe('已拒绝。')
   })
 })
 
@@ -285,6 +293,7 @@ describe('Changes 面板源码约束', () => {
     expect(panel).toContain('formatCommandDuration')
     expect(panel).toContain('撤销最新一轮')
     expect(panel).toContain('canRestoreLatestTurn')
+    expect(panel).toContain('restoreMessage')
     expect(panel).not.toContain('继续任务')
     expect(panel).not.toMatch(/emit\('revert/)
     expect(viewer).toContain('fileDiffBanner')

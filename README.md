@@ -26,7 +26,7 @@
 - 点进历史任务就是进入这条对话：立刻看到本地消息，输入框可直接发送，没有「继续任务」按钮。后台会尝试接回 Grok session；接不上时仍留在同一条任务上，状态条会说明上下文可能不完整。
 - 首版只有 **一个执行槽**：一条任务在跑时，其它任务可以看、可以打草稿，发送会被拦住，直到当前 Turn 结束或被停止。
 - 侧栏「插件」打开主列整页，插件 tab 内分「已安装 / 市场」：已安装只展示 App 专属 `userData/grok-home` 里 Grok 已加载的插件摘要；市场只读同一 grok-home 的 `marketplace-cache`，货架未装项不会进已安装栏。切到插件页 **不会** 停止正在跑的任务，也不会清空当前选中对话。进行中或等待审批时，插件页顶部可以返回对话。
-- 标题栏可打开检查器抽屉（盖住右侧，不占第三列）。Timeline 显示轮次摘要；历史任务还能看权限审计。Changes 可只读审阅 Git 基线、文件分组、受限 Diff 和验证摘要（无一键撤销）；Terminal / Artifacts 目前仍是占位。
+- 标题栏可打开检查器抽屉（盖住右侧，不占第三列）。Timeline 显示轮次摘要；历史任务还能看权限审计。Changes 可审阅 Git 基线、文件分组、受限 Diff 和验证摘要。仅最新完整写入型 Turn 在无漂移且经 Permission Broker 确认后可一键撤销；更早轮次只提供只读 Diff。不会执行 git reset / checkout / clean / stash。Terminal / Artifacts 目前仍是占位。
 
 ### 对话与执行
 
@@ -56,7 +56,7 @@
 - 只有 Grok Build Runtime；Codex 尚未接入。
 - 桌面不是 MCP Host，也不修改用户自己的 `~/.grok`。Grok 配置写在应用 `userData/grok-home`。
 - ACP 握手使用 `clientCapabilities: {}`，Prompt 只发文本。斜杠命令来自 Grok 的 `available_commands_update` session 快照，不进 Timeline。插件安装必须先确认信任，再由 `grok plugin` 写入 App `grok-home`，不读、不写用户 `~/.grok` 的插件目录。开发版 GUI 安装走查尚未跑。
-- 没有隔离 Worktree、Git Diff 审阅、用户交互终端或 Artifact 预览。
+- 没有隔离 Worktree、用户交互终端或 Artifact 预览。Git 变更审阅已接入 Changes；一键撤销仅覆盖最新完整写入型 Turn。
 - 不会宣称支持全部 OpenAI 兼容模型；当前验证的是 Chat Completions 的 `/models` 与 `/chat/completions`，再加上 Grok Build 作为 Agent 去实际执行。
 
 ## 环境要求

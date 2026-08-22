@@ -133,7 +133,7 @@ export class GitReviewService {
 
   async listTurnCheckpoints(taskId: string): Promise<TurnChangeCheckpoint[]> {
     this.deps.getTaskIdentity(taskId)
-    return await this.deps.checkpointStore.list(taskId)
+    return (await this.deps.checkpointStore.list(taskId)).items
   }
 
   /** 只读预览。主进程重新计算 predicate，不信任 UI 缓存的 revertible。 */
@@ -205,7 +205,8 @@ export class GitReviewService {
     const availability = await this.safeProjectAvailability(identity.projectId)
     const baselineUsable = await this.isBaselineUsable(baseline, resolved, availability, gitOptions)
     const snapshot = await snapshotWorkingTree(resolved, gitOptions, MAX_CHANGE_SET_PATHS)
-    const checkpoints = await this.deps.checkpointStore.list(identity.taskId)
+    const listed = await this.deps.checkpointStore.list(identity.taskId)
+    const checkpoints = listed.items
     const lastComplete = findLastCompleteCheckpoint(checkpoints)
     const lastCompleteAfter = lastComplete?.afterPaths
     const attributed = attributeWorkingTreePaths({
@@ -216,7 +217,8 @@ export class GitReviewService {
       currentUsable: !snapshot.unavailable,
       maxPaths: MAX_CHANGE_SET_PATHS
     })
-    const truncated = snapshot.truncated || attributed.truncated || snapshot.unavailable
+    const truncated =
+      snapshot.truncated || attributed.truncated || snapshot.unavailable || listed.truncated
     const changeSet: import('../../shared/git-review').TaskChangeSet = {
       taskId: identity.taskId,
       environmentId: identity.environmentId,
@@ -252,7 +254,8 @@ export class GitReviewService {
       lastCompleteAfter,
       checkpoints,
       truncated,
-      unavailable: snapshot.unavailable
+      unavailable: snapshot.unavailable,
+      checkpointsTruncated: listed.truncated
     }
   }
 
@@ -271,7 +274,7 @@ export class GitReviewService {
       timeoutMs: DEFAULT_GIT_TIMEOUT_MS
     })
     const snapshot = await snapshotWorkingTree(resolved, this.gitOptions(), MAX_CHANGE_SET_PATHS)
-    const previous = (await this.deps.checkpointStore.list(input.taskId)).at(-1)
+    const previous = (await this.deps.checkpointStore.list(input.taskId)).items.at(-1)
     const checkpoint: TurnChangeCheckpoint = {
       schemaVersion: 1,
       taskId: input.taskId,
@@ -502,6 +505,9 @@ export class GitReviewService {
   ): Promise<RestoreEvaluation> {
     if (this.deps.hasActiveExecution?.() === true) {
       return refuseRestore('active-turn', '当前有活动 Turn，不能自动撤销。')
+    }
+    if (computed.checkpointsTruncated) {
+      return refuseRestore('incomplete', '检查点列表被截断，不能确定最新一轮，不能自动撤销。')
     }
     if (computed.unavailable || computed.truncated || computed.changeSet.truncated) {
       return refuseRestore('incomplete', '变更列表不完整，不能自动撤销。')
@@ -793,19 +799,26 @@ export class GitReviewService {
       computed.checkpoints.at(-1)?.capturedBeforeAt ??
       this.now()
     const capturedAt = laterTimestamp(lastTime)
-    const recovery: TurnChangeCheckpoint = {
-      schemaVersion: 1,
+    const recoveryBase = {
+      schemaVersion: 1 as const,
       taskId: identity.taskId,
       turnId: recoveryId,
       environmentId: identity.environmentId,
       previousCheckpointId: evaluation.turnId,
       capturedBeforeAt: capturedAt,
-      capturedAfterAt: capturedAt,
-      status: 'complete',
       beforePaths: evaluation.checkpoint.afterPaths ?? [],
-      afterPaths: afterSnapshot.paths,
       affectedPaths: [...evaluation.paths]
     }
+    // git status 失败不得把空 after 写成 complete，否则归因会把文件当成全消失。
+    const recovery: TurnChangeCheckpoint =
+      afterSnapshot.unavailable || afterSnapshot.truncated
+        ? { ...recoveryBase, status: 'incomplete' }
+        : {
+            ...recoveryBase,
+            capturedAfterAt: capturedAt,
+            status: 'complete',
+            afterPaths: afterSnapshot.paths
+          }
     await this.deps.checkpointStore.put(recovery)
     return {
       taskId: identity.taskId,
@@ -1576,6 +1589,7 @@ interface ComputedChangeSet {
   checkpoints: TurnChangeCheckpoint[]
   truncated: boolean
   unavailable: boolean
+  checkpointsTruncated: boolean
 }
 
 type RestoreRefuse = { refuse: RestoreRefusalReason; reason: string }

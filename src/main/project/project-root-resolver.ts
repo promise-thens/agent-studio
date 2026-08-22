@@ -86,6 +86,21 @@ export async function resolveProjectRoot(
 }
 
 /**
+ * 只读 git 子进程环境。LC_ALL=C 固定英文 stderr，missing-blob 判定才不会被系统 locale 打乱。
+ */
+function buildReadOnlyGitEnvironment(options: ReadOnlyGitOptions): NodeJS.ProcessEnv {
+  const env = buildCommandEnvironment(options.sourceEnvironment ?? process.env)
+  env.GIT_OPTIONAL_LOCKS = '0'
+  env.GIT_TERMINAL_PROMPT = '0'
+  env.GIT_CONFIG_NOSYSTEM = '1'
+  env.LC_ALL = 'C'
+  if (options.ceilingDir) {
+    env.GIT_CEILING_DIRECTORIES = options.ceilingDir
+  }
+  return env
+}
+
+/**
  * 只读 git：固定可执行文件 + 参数数组 + cwd + 最小环境，不走 Shell，也不走 AppCommandRunner。
  * 写操作（add/commit/push/reset/stash/clean/merge）直接拒绝。
  */
@@ -104,13 +119,7 @@ export async function runReadOnlyGit(
     return { ok: false, unavailable: false, stdout: '' }
   }
 
-  const env = buildCommandEnvironment(options.sourceEnvironment ?? process.env)
-  env.GIT_OPTIONAL_LOCKS = '0'
-  env.GIT_TERMINAL_PROMPT = '0'
-  env.GIT_CONFIG_NOSYSTEM = '1'
-  if (options.ceilingDir) {
-    env.GIT_CEILING_DIRECTORIES = options.ceilingDir
-  }
+  const env = buildReadOnlyGitEnvironment(options)
 
   return await new Promise((resolveResult) => {
     execFile(
@@ -162,13 +171,7 @@ export async function runReadOnlyGitBytes(
     return { ok: false, unavailable: false, stdout: Buffer.alloc(0), stderr: '' }
   }
 
-  const env = buildCommandEnvironment(options.sourceEnvironment ?? process.env)
-  env.GIT_OPTIONAL_LOCKS = '0'
-  env.GIT_TERMINAL_PROMPT = '0'
-  env.GIT_CONFIG_NOSYSTEM = '1'
-  if (options.ceilingDir) {
-    env.GIT_CEILING_DIRECTORIES = options.ceilingDir
-  }
+  const env = buildReadOnlyGitEnvironment(options)
 
   return await new Promise((resolveResult) => {
     execFile(

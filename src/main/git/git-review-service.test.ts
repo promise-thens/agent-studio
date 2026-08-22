@@ -54,7 +54,12 @@ describe('runReadOnlyGit diff 边界', () => {
       await runReadOnlyGit(canonical, ['show', 'HEAD:README.md'], { allowedRoot: canonical })
     ).toEqual(expect.objectContaining({ ok: true }))
     const missing = await runReadOnlyGitBytes(canonical, ['show', 'HEAD:missing.txt'], {
-      allowedRoot: canonical
+      allowedRoot: canonical,
+      sourceEnvironment: {
+        ...(process.env.PATH ? { PATH: process.env.PATH } : {}),
+        LC_ALL: 'zh_CN.UTF-8',
+        LANG: 'zh_CN.UTF-8'
+      }
     })
     expect(missing).toEqual(
       expect.objectContaining({ ok: false, unavailable: false, exitCode: 128 })

@@ -208,8 +208,14 @@ export class TaskExecutor {
     await active.completionPromise
   }
 
+  /**
+   * 忙检测包含 admission / execution lease，不限于 this.active。
+   * 基线与 before 快照在 this.active 赋值前就会跑；若此处仍为 false，restore 会与下一 Turn 抢写。
+   */
   hasActiveExecution(): boolean {
-    return this.active !== null
+    if (this.active !== null) return true
+    const state = this.operationGate.getState()
+    return state === 'admitting-execution' || state === 'execution-active'
   }
 
   async start(input: TaskExecutorStartInput): Promise<TaskExecutionSnapshot> {

@@ -84,6 +84,8 @@ describe('TaskExecutor', () => {
 
     const first = fixture.executor.start(fixture.input)
     await turnWriteStarted.promise
+    expect(fixture.executor.hasActiveExecution()).toBe(true)
+    expect(fixture.executor.getActiveIdentity()).toBeNull()
     await expect(fixture.executor.start(fixture.input)).rejects.toMatchObject({
       code: 'invalid-state'
     })
@@ -596,7 +598,8 @@ describe('TaskExecutor', () => {
 
     const firstStart = fixture.executor.start(fixture.input)
     await hookStarted.promise
-    expect(fixture.executor.hasActiveExecution()).toBe(false)
+    expect(fixture.executor.hasActiveExecution()).toBe(true)
+    expect(fixture.executor.getActiveIdentity()).toBeNull()
     await expect(fixture.executor.start(fixture.input)).rejects.toMatchObject({
       code: 'invalid-state'
     })
@@ -653,13 +656,17 @@ describe('TaskExecutor', () => {
     expect(unavailable.adapter.startTurn).toHaveBeenCalledOnce()
   })
 
-  it('recordTurnChangeCheckpoint：before 在 active 之前，after 在终态提交之后；抛错不让 Turn 失败', async () => {
+  it('recordTurnChangeCheckpoint：before 时 this.active 仍为空，但忙检测已为真；after 在终态之后，抛错不让 Turn 失败', async () => {
     const phases: string[] = []
     let sawActiveDuringBefore = false
+    let identityDuringBefore: ReturnType<TaskExecutor['getActiveIdentity']> = null
     const fixture = await createFixture({
       recordTurnChangeCheckpoint: async (input) => {
         phases.push(`${input.phase}:${input.turnId}`)
-        if (input.phase === 'before') sawActiveDuringBefore = fixture.executor.hasActiveExecution()
+        if (input.phase === 'before') {
+          sawActiveDuringBefore = fixture.executor.hasActiveExecution()
+          identityDuringBefore = fixture.executor.getActiveIdentity()
+        }
         if (input.phase === 'after') throw new Error('模拟 after 检查点失败')
       }
     })
@@ -667,10 +674,32 @@ describe('TaskExecutor', () => {
     await fixture.executor.start(fixture.input)
     await fixture.executor.waitForTerminal()
     expect(phases).toEqual(['before:turn-1', 'after:turn-1'])
-    expect(sawActiveDuringBefore).toBe(false)
+    expect(sawActiveDuringBefore).toBe(true)
+    expect(identityDuringBefore).toBeNull()
     expect(fixture.executor.getSnapshot()).toMatchObject({
       execution: { state: 'completed', turnId: 'turn-1' }
     })
+  })
+
+  it('ensureChangeBaseline 等待期间 hasActiveExecution 为真，this.active 尚未赋值', async () => {
+    const baselineStarted = deferred<void>()
+    const releaseBaseline = deferred<void>()
+    const fixture = await createFixture({
+      ensureChangeBaseline: async () => {
+        baselineStarted.resolve()
+        await releaseBaseline.promise
+      }
+    })
+    fixture.adapter.startTurn.mockResolvedValue({ outcome: 'completed' })
+    const started = fixture.executor.start(fixture.input)
+    await baselineStarted.promise
+    expect(fixture.executor.hasActiveExecution()).toBe(true)
+    expect(fixture.executor.getActiveIdentity()).toBeNull()
+    expect(fixture.gate.getState()).toBe('execution-active')
+    releaseBaseline.resolve()
+    await started
+    await fixture.executor.waitForTerminal()
+    expect(fixture.executor.hasActiveExecution()).toBe(false)
   })
 })
 

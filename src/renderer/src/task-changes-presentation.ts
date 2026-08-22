@@ -3,6 +3,7 @@ import type {
   FileDiffResult,
   FileDiffStatus,
   LatestTurnRestorePreview,
+  LatestTurnRestoreResult,
   ProjectGitPresence,
   RestorePlanItem,
   TaskChangeAttribution,
@@ -185,6 +186,14 @@ export function restorePreviewSummary(preview: LatestTurnRestorePreview): string
   }
   const lose = preview.willLosePaths.length
   return `将撤销最新一轮 ${preview.revertible.turnId}，涉及 ${preview.revertible.paths.length} 个文件；当前这些内容会被丢弃：${lose} 个路径。`
+}
+
+/** 半恢复时把已改写路径写进提示，避免用户以为什么都没动。 */
+export function restoreAppliedNotice(
+  result: Pick<LatestTurnRestoreResult, 'message' | 'appliedPaths'>
+): string {
+  if (!result.appliedPaths?.length) return result.message
+  return `${result.message} 已改写：${result.appliedPaths.join('、')}`
 }
 
 export function attributionLabel(attribution: TaskChangeAttribution): string {

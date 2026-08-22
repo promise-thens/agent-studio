@@ -196,7 +196,8 @@ describe('useTaskChanges', () => {
         ok: true,
         message: '已撤销最新一轮写入，历史检查点仍保留。',
         recoveryCheckpointId: 'recovery_1',
-        restoredPaths: ['README.md']
+        restoredPaths: ['README.md'],
+        appliedPaths: ['README.md']
       })
     )
     const api = createApi({ previewLatestTurnRestore, restoreLatestTurn })
@@ -208,6 +209,42 @@ describe('useTaskChanges', () => {
     expect(controller.restorePreview.value?.revertible.kind).toBe('latest-turn')
     await controller.confirmRestore()
     expect(restoreLatestTurn).toHaveBeenCalledWith('task-1')
+    expect(api.getChangeSet).toHaveBeenCalledTimes(2)
+    expect(controller.restoreMessage.value).toMatch(/README\.md/)
+  })
+
+  it('半恢复把 appliedPaths 写入提示并刷新变更', async () => {
+    const previewLatestTurnRestore = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        revertible: {
+          kind: 'latest-turn' as const,
+          turnId: 'turn-1',
+          paths: ['README.md', 'notes.txt'],
+          restorePlan: [
+            { path: 'README.md', action: 'write' as const, from: 'head' as const },
+            { path: 'notes.txt', action: 'delete' as const, from: 'absent' as const }
+          ]
+        },
+        willLosePaths: ['README.md', 'notes.txt']
+      })
+    )
+    const restoreLatestTurn = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        ok: false,
+        reason: 'drift' as const,
+        message: '待删除路径在写回后已漂移，已停止删除。',
+        appliedPaths: ['README.md']
+      })
+    )
+    const api = createApi({ previewLatestTurnRestore, restoreLatestTurn })
+    const controller = useTaskChanges(ref('task-1'), api)
+    await waitUntilIdle(controller.loading)
+    await controller.openRestorePreview()
+    await controller.confirmRestore()
+    expect(restoreLatestTurn).toHaveBeenCalledWith('task-1')
+    expect(controller.restoreError.value).toMatch(/README\.md/)
     expect(api.getChangeSet).toHaveBeenCalledTimes(2)
   })
 

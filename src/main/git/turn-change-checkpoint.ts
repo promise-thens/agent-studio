@@ -6,7 +6,13 @@ import { AtomicJsonWriter } from '../storage/atomic-json-file'
 
 const MAX_CHECKPOINT_FILE_BYTES = 1024 * 1024
 const MAX_IDENTIFIER_BYTES = 4 * 1024
-const MAX_LIST_ITEMS = 100
+/** list 触达此上限即视为截断；调用方必须拒绝自动撤销，不能把 readdir 前 100 条当成最新一轮。 */
+export const MAX_CHECKPOINT_LIST_ITEMS = 100
+
+export interface TurnChangeCheckpointListResult {
+  items: TurnChangeCheckpoint[]
+  truncated: boolean
+}
 
 export interface TurnChangeCheckpointStoreOptions {
   /** 注入的存储根；测试传入 tmpdir，生产由组装层注入 userData/git-review/checkpoints。 */
@@ -42,29 +48,35 @@ export class TurnChangeCheckpointStore {
     }
   }
 
-  async list(taskId: string): Promise<TurnChangeCheckpoint[]> {
+  async list(taskId: string): Promise<TurnChangeCheckpointListResult> {
     assertStoreIdentity(taskId)
     let names: string[]
     try {
       names = await fs.readdir(this.taskDir(taskId))
     } catch {
-      return []
+      return { items: [], truncated: false }
     }
-    const items: TurnChangeCheckpoint[] = []
+    const turnIds: string[] = []
     for (const name of names) {
       if (name.startsWith('.') || !name.endsWith('.json')) continue
       const turnId = name.slice(0, -'.json'.length)
       if (!isStoreIdentity(turnId)) continue
+      turnIds.push(turnId)
+    }
+    // 先数完全部候选再截断，避免把 readdir 前 100 条误当成完整最新链。
+    const truncated = turnIds.length > MAX_CHECKPOINT_LIST_ITEMS
+    const selected = truncated ? turnIds.slice(0, MAX_CHECKPOINT_LIST_ITEMS) : turnIds
+    const items: TurnChangeCheckpoint[] = []
+    for (const turnId of selected) {
       const checkpoint = await this.get(taskId, turnId)
       if (checkpoint) items.push(checkpoint)
-      if (items.length >= MAX_LIST_ITEMS) break
     }
     items.sort(
       (left, right) =>
         left.capturedBeforeAt.localeCompare(right.capturedBeforeAt) ||
         left.turnId.localeCompare(right.turnId)
     )
-    return items
+    return { items, truncated }
   }
 
   async put(checkpoint: TurnChangeCheckpoint): Promise<TurnChangeCheckpoint> {

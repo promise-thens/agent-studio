@@ -9,7 +9,7 @@ import { resolveProjectRoot } from '../project/project-root-resolver'
 import type { PermissionBroker } from '../security/permission-broker'
 import { captureTaskChangeBaseline, TaskChangeBaselineStore } from './task-change-baseline'
 import { GitReviewService, type GitReviewTaskIdentity } from './git-review-service'
-import { TurnChangeCheckpointStore } from './turn-change-checkpoint'
+import { MAX_CHECKPOINT_LIST_ITEMS, TurnChangeCheckpointStore } from './turn-change-checkpoint'
 
 const execFile = promisify(execFileCallback)
 const temporaryDirectories: string[] = []
@@ -45,7 +45,7 @@ describe('最新一轮受控恢复', () => {
     expect(restored.ok).toBe(true)
     expect(restored.recoveryCheckpointId).toMatch(/^recovery_/)
     expect(await readFile(join(repo, 'README.md'), 'utf8')).toBe('hello\n')
-    const checkpoints = await fixture.checkpointStore.list('task-1')
+    const checkpoints = (await fixture.checkpointStore.list('task-1')).items
     expect(checkpoints.some((item) => item.turnId === 'turn-1' && item.status === 'complete')).toBe(
       true
     )
@@ -128,7 +128,7 @@ describe('最新一轮受控恢复', () => {
     const restored = await fixture.service.restoreLatestTurn('task-1')
     expect(restored.ok).toBe(false)
     expect(await readFile(join(repo, 'README.md'), 'utf8')).toBe('second\n')
-    const checkpoints = await fixture.checkpointStore.list('task-1')
+    const checkpoints = (await fixture.checkpointStore.list('task-1')).items
     expect(checkpoints.find((item) => item.turnId === 'turn-1')?.status).toBe('complete')
     expect(checkpoints.find((item) => item.turnId === 'turn-2')?.status).toBe('complete')
   })
@@ -354,6 +354,66 @@ describe('最新一轮受控恢复', () => {
     expect(await readFile(join(root, 'outside.txt'), 'utf8')).toBe('OUTSIDE\n')
     expect(JSON.stringify(listed)).not.toContain('OUTSIDE')
   })
+
+  it('恢复后工作树快照 unavailable 时 recovery 为 incomplete，不写空 after 的 complete', async () => {
+    const repo = await createGitRepo()
+    const failFlag = join(await createTemporaryDirectory(), 'fail-status')
+    const stub = await writeGitStatusFailureAfterFlagStub(failFlag)
+    const fixture = await createRestoreFixture(repo, {
+      gitExecutable: stub,
+      broker: {
+        authorizeOperation: async (intent, execute) => {
+          const value = await execute({
+            ...intent,
+            executionRoot: intent.executionRoot,
+            targets: intent.targets
+          })
+          await writeFile(failFlag, '1')
+          return { ok: true, value, reason: 'user-allowed', scope: 'once' }
+        }
+      }
+    })
+    await recordWriteTurn(fixture, 'turn-1', async () => {
+      await writeFile(join(repo, 'README.md'), 'agent-edit\n')
+    })
+
+    const restored = await fixture.service.restoreLatestTurn('task-1')
+    expect(restored.ok).toBe(true)
+    expect(await readFile(join(repo, 'README.md'), 'utf8')).toBe('hello\n')
+    const recovery = (await fixture.checkpointStore.list('task-1')).items.find((item) =>
+      item.turnId.startsWith('recovery_')
+    )
+    expect(recovery?.status).toBe('incomplete')
+    expect(recovery?.afterPaths).toBeUndefined()
+    await rm(failFlag)
+    const listed = await fixture.service.getChangeSet('task-1')
+    expect(listed.paths.some((item) => item.attribution === 'task-deleted')).toBe(false)
+  })
+
+  it('检查点 list 触达上限时拒绝自动撤销，文件保持现状', async () => {
+    const repo = await createGitRepo()
+    const fixture = await createRestoreFixture(repo)
+    await recordWriteTurn(fixture, 'turn-latest', async () => {
+      await writeFile(join(repo, 'README.md'), 'agent-edit\n')
+    })
+    const latest = await fixture.checkpointStore.get('task-1', 'turn-latest')
+    if (!latest) throw new Error('缺少最新检查点。')
+    for (let index = 0; index < MAX_CHECKPOINT_LIST_ITEMS; index += 1) {
+      const hour = String(Math.floor(index / 60)).padStart(2, '0')
+      const minute = String(index % 60).padStart(2, '0')
+      await fixture.checkpointStore.put({
+        ...latest,
+        turnId: `turn-pad-${String(index).padStart(3, '0')}`,
+        capturedBeforeAt: `2026-08-21T${hour}:${minute}:00.000Z`
+      })
+    }
+
+    expect((await fixture.checkpointStore.list('task-1')).truncated).toBe(true)
+    const restored = await fixture.service.restoreLatestTurn('task-1')
+    expect(restored.ok).toBe(false)
+    expect(restored.reason).toBe('incomplete')
+    expect(await readFile(join(repo, 'README.md'), 'utf8')).toBe('agent-edit\n')
+  })
 })
 
 async function recordWriteTurn(
@@ -470,6 +530,27 @@ async function initGitRepo(dir: string): Promise<void> {
   await runGit(dir, ['config', 'user.email', 'restore-test@example.test'])
   await runGit(dir, ['config', 'user.name', 'Restore Test'])
   await runGit(dir, ['config', 'commit.gpgsign', 'false'])
+}
+
+async function writeGitStatusFailureAfterFlagStub(failFlag: string): Promise<string> {
+  const dir = await createTemporaryDirectory()
+  const stub = join(dir, 'git-stub.mjs')
+  await writeFile(
+    stub,
+    [
+      '#!/usr/bin/env node',
+      "import { existsSync } from 'node:fs'",
+      "import { spawnSync } from 'node:child_process'",
+      'const args = process.argv.slice(2)',
+      `if (args.includes('status') && existsSync(${JSON.stringify(failFlag)})) process.exit(128)`,
+      'const result = spawnSync("git", args, { encoding: "utf8", cwd: process.cwd(), env: process.env })',
+      'if (result.stdout) process.stdout.write(result.stdout)',
+      'if (result.stderr) process.stderr.write(result.stderr)',
+      'process.exit(result.status ?? 1)'
+    ].join('\n')
+  )
+  await chmod(stub, 0o755)
+  return stub
 }
 
 async function writeGitShowFailureStub(): Promise<string> {
