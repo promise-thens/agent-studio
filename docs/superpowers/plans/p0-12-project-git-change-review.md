@@ -65,19 +65,19 @@
 **前置依赖：**
 - 依赖任务 1 的可靠基线。
 
-- [ ] **第 1 步: 计算变化归因**
+- [x] **第 1 步: 计算变化归因**
 说明：比较 baseline 与当前状态，将路径分类为 pre-existing、task-added、task-modified、task-deleted、overlap-unknown、user-changed-after-task；二进制和超大文件只返回摘要。
 预期：存在重叠或无法证明归因时使用 unknown，不将其标记为可安全撤销。
 
-- [ ] **第 2 步: 保存 TurnChangeCheckpoint**
+- [x] **第 2 步: 保存 TurnChangeCheckpoint**
 说明：写入型 Turn 启动前保存 before revision/hash，终态后保存 after revision/hash、受影响路径、归因摘要、外部漂移状态和前一个 checkpoint 引用；不复制完整项目树或无限文件内容。读取型 Turn 只记录无变化摘要。
 预期：每轮变化可以与 taskId、turnId、environmentId 和前后状态唯一对应；崩溃或缺少 after 状态时标记 incomplete，不伪造可撤销。
 
-- [ ] **第 3 步: 提供受限 Diff 查询**
+- [x] **第 3 步: 提供受限 Diff 查询**
 说明：按 taskId/environmentId/file path 请求 unified diff；主进程验证路径、类型和大小，并对截断、二进制、未跟踪文件返回明确状态。
 预期：Renderer 不能借 Diff API 读取项目外任意文件，长 Diff 不拖垮 IPC 和 UI。
 
-- [ ] **第 4 步: 关联验证结果**
+- [x] **第 4 步: 关联验证结果**
 说明：消费 P0-11 的 `CommandExecutionEvidence` 和 `CommandTranscriptRef`，按真实 commandId、退出码、超时与信任级别生成 pass/fail/unknown；不得根据聊天声明、工具标题或缺失退出码生成通过状态。
 预期：Changes 面板的每条验证结论都能跳转到命令证据；未运行、字段缺失、输出截断和 Runtime 上报事实均明确标记。
 

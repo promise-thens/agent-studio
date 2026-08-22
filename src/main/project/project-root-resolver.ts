@@ -353,6 +353,17 @@ function isReadOnlyGitArgs(args: string[]): boolean {
     index += 2
   }
   const command = args[index]
+  const rest = args.slice(index + 1)
+  if (rest.some((arg) => arg.includes('\0'))) return false
+  if (command === 'diff') {
+    // --output 会写文件，禁止经只读入口进入。
+    return rest.every(
+      (arg) => arg !== '--output' && !arg.startsWith('--output=') && arg !== '--ext-diff'
+    )
+  }
+  if (command === 'ls-files') {
+    return rest.every((arg) => arg !== '--stdin' && !arg.startsWith('--out'))
+  }
   return (
     command === 'rev-parse' ||
     command === 'status' ||

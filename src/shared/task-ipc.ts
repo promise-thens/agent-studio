@@ -4,6 +4,7 @@ import type {
   CommandExecutionEvidence,
   CommandTranscriptPage
 } from './command'
+import type { FileDiffResult, TaskChangeSetQueryResult, TurnChangeCheckpoint } from './git-review'
 import type { DesktopIpcResult } from './ipc-result'
 import type {
   DeletionPreview,
@@ -27,7 +28,10 @@ export const TASK_INVOKE_CHANNELS = {
   archive: 'task:archive',
   listCommandEvidence: 'task:list-command-evidence',
   getCommandEvidence: 'task:get-command-evidence',
-  getCommandTranscript: 'task:get-command-transcript'
+  getCommandTranscript: 'task:get-command-transcript',
+  getChangeSet: 'task:get-change-set',
+  getFileDiff: 'task:get-file-diff',
+  listTurnCheckpoints: 'task:list-turn-checkpoints'
 } as const
 
 export interface PublicAgentEventPage {
@@ -70,6 +74,9 @@ export interface TaskDesktopApi {
     offset?: number,
     limit?: number
   ) => Promise<DesktopIpcResult<CommandTranscriptPage>>
+  getChangeSet: (taskId: string) => Promise<DesktopIpcResult<TaskChangeSetQueryResult>>
+  getFileDiff: (taskId: string, path: string) => Promise<DesktopIpcResult<FileDiffResult>>
+  listTurnCheckpoints: (taskId: string) => Promise<DesktopIpcResult<TurnChangeCheckpoint[]>>
   resume: (taskId: string) => Promise<DesktopIpcResult<RuntimeResumeSummary>>
   previewDelete: (taskId: string) => Promise<DesktopIpcResult<DeletionPreview>>
   delete: (taskId: string, token: string) => Promise<DesktopIpcResult<null>>

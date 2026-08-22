@@ -255,13 +255,13 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[P0-11 Command Runner 与执行证据](docs/superpowers/plans/p0-11-command-execution-evidence.md) 已合入 main（自动验证已过，开发版 GUI 走查未跑）；[P0-10E 插件安装与信任](docs/superpowers/plans/p0-10e-grok-plugin-install-and-trust.md) 代码已落地（自动验证已过；官方源 already configured 时改为按 name 刷新 cache；clone 超时 15 分钟）
+- 当前计划：[P0-12 项目 Git 基线与变更审阅](docs/superpowers/plans/p0-12-project-git-change-review.md) Task 2 代码已落地（归因 / Turn 检查点 / 受限 Diff / 验证摘要；无 UI、无一键撤销）；Task 1 基线仍在本分支。P0-11 已合入 main（自动验证已过，开发版 GUI 走查未跑）
 - 状态：桌面定位为 Grok Build ACP Client，不自己当 Agent。设置现为供应商 / 外观 / 记忆 / Grok 配置；插件页三栏为插件 / MCP / 技能，插件 tab 内分已安装 / 市场，不得打断运行中 Task。Inspector 仍是 Timeline/Changes/Terminal/Artifacts。P2 Codex 暂缓
-- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；库存扫描已补 `installed-plugins`；P0-10D 代码已落地（相关自动测试已过，开发版 GUI / TUI 对读未跑）；P0-10E 代码已落地（自动验证已过；already-configured 加源已修，开发版 GUI / 安装走查未跑）；P0-11 Task 1–4 已合入 main（自动验证已过，开发版 GUI 走查未跑）
-- Grok ACP 加深：顺序仍为 GACP-01 → GACP-02 → P0-10 → P0-10C/D → P0-10E → P0-11 → GACP-03。`available_commands_update` 现为 session 快照，不进 Timeline。命令证据走 `task:list-command-evidence` 等只读查询，不进交互终端
-- 兼容边界：首版仍只有一个执行槽；GROK_HOME 仍是 App 目录；记忆整棵树 junction 到 `~/.grok/memory`；用户 toml 只允许合并/删除 `[mcp_servers.*]`；`clientCapabilities: {}`；不把桌面做成 MCP Host 或 Marketplace Host
-- 下一步：GACP-03。开发版走查 P0-10B 外观、P0-10C GUI、P0-10D 记忆/MCP/TUI 对读、P0-10E 安装走查与 P0-11 Timeline/ResultReview 仍待做。不要加回「继续任务」按钮
-- 最近验证：2026-08-22 P0-11 合入 main 后 vitest 106 files / 902 tests 通过。P0-10E 跟进：already-configured 按 name 刷新 cache、clone 超时 15 分钟。开发版 GUI 走查未跑。受控 e2e 未重跑
+- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；库存扫描已补 `installed-plugins`；P0-10D 代码已落地（相关自动测试已过，开发版 GUI / TUI 对读未跑）；P0-10E 代码已落地（自动验证已过；already-configured 加源已修，开发版 GUI / 安装走查未跑）；P0-11 Task 1–4 已合入 main（自动验证已过，开发版 GUI 走查未跑）；P0-12 Task 1–2 代码已落地（自动验证已过，开发版 GUI 走查未跑）
+- Grok ACP 加深：顺序仍为 GACP-01 → GACP-02 → P0-10 → P0-10C/D → P0-10E → P0-11 → GACP-03。`available_commands_update` 现为 session 快照，不进 Timeline。命令证据走 `task:list-command-evidence` 等只读查询，不进交互终端。变更审阅走 `task:get-change-set` / `task:get-file-diff` / `task:list-turn-checkpoints`
+- 兼容边界：首版仍只有一个执行槽；GROK_HOME 仍是 App 目录；记忆整棵树 junction 到 `~/.grok/memory`；用户 toml 只允许合并/删除 `[mcp_servers.*]`；`clientCapabilities: {}`；不把桌面做成 MCP Host 或 Marketplace Host。Task 2 的 `revertible` 一律 none
+- 下一步：P0-12 Task 3 Changes 审阅界面。开发版走查 P0-10B 外观、P0-10C GUI、P0-10D 记忆/MCP/TUI 对读、P0-10E 安装走查与 P0-11 Timeline/ResultReview 仍待做。不要加回「继续任务」按钮
+- 最近验证：2026-08-22 P0-12 Task 2 聚焦测试已过。开发版 GUI 走查未跑。受控 e2e 未重跑
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

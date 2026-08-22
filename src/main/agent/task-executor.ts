@@ -62,6 +62,18 @@ export interface TaskExecutorOptions {
     environmentId: string
     executionRoot: string
   }) => Promise<void>
+  /**
+   * 基线之后、this.active 之前写 before 快照；终态持久化成功之后写 after。
+   * 缺省为 no-op；抛错不得让 Turn 失败。
+   */
+  recordTurnChangeCheckpoint?: (input: {
+    taskId: string
+    turnId: string
+    projectId: string
+    environmentId: string
+    executionRoot: string
+    phase: 'before' | 'after'
+  }) => Promise<void>
 }
 
 interface ActiveExecution {
@@ -121,6 +133,7 @@ export class TaskExecutor {
   private readonly clearScheduledTimeout: NonNullable<TaskExecutorOptions['clearScheduledTimeout']>
   private readonly onCancelTimeout: NonNullable<TaskExecutorOptions['onCancelTimeout']>
   private readonly ensureChangeBaseline?: TaskExecutorOptions['ensureChangeBaseline']
+  private readonly recordTurnChangeCheckpoint?: TaskExecutorOptions['recordTurnChangeCheckpoint']
   private executionRevision = 0
   private active: ActiveExecution | null = null
   private lastExecution: TaskExecutionDto | null = null
@@ -141,6 +154,7 @@ export class TaskExecutor {
     this.clearScheduledTimeout = options.clearScheduledTimeout ?? clearTimeout
     this.onCancelTimeout = options.onCancelTimeout ?? (() => Promise.resolve())
     this.ensureChangeBaseline = options.ensureChangeBaseline
+    this.recordTurnChangeCheckpoint = options.recordTurnChangeCheckpoint
   }
 
   getSnapshot(): TaskExecutionSnapshot {
@@ -262,6 +276,20 @@ export class TaskExecutor {
           })
         } catch {
           // 基线捕获失败不得拒绝 Turn；后续只读审阅会看到 missing/unavailable。
+        }
+      }
+      if (this.recordTurnChangeCheckpoint) {
+        try {
+          await this.recordTurnChangeCheckpoint({
+            taskId: input.taskId,
+            turnId,
+            projectId: input.projectId,
+            environmentId: input.environmentId,
+            executionRoot: input.resolvedExecutionRoot,
+            phase: 'before'
+          })
+        } catch {
+          // before 检查点失败不得拒绝 Turn；崩溃时保持 incomplete。
         }
       }
       const completion = deferredCompletion()
@@ -490,6 +518,20 @@ export class TaskExecutor {
         ) {
           active.dto = terminal
           this.publish(terminal)
+          if (this.recordTurnChangeCheckpoint) {
+            try {
+              await this.recordTurnChangeCheckpoint({
+                taskId: active.identity.taskId,
+                turnId: active.identity.turnId,
+                projectId: active.dto.projectId,
+                environmentId: active.dto.environment.environmentId,
+                executionRoot: active.resolvedExecutionRoot,
+                phase: 'after'
+              })
+            } catch {
+              // after 检查点失败不得回滚已提交终态，检查点保持 incomplete。
+            }
+          }
           if (this.active === active) {
             this.active = null
             active.lease.release()

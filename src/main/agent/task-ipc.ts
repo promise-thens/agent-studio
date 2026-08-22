@@ -14,6 +14,11 @@ import type {
   TaskHistoryPage,
   TurnHistoryPage
 } from '../../shared/task-history'
+import type {
+  FileDiffResult,
+  TaskChangeSetQueryResult,
+  TurnChangeCheckpoint
+} from '../../shared/git-review'
 import type { PublicAgentEventPage } from '../../shared/task-ipc'
 import { TASK_INVOKE_CHANNELS } from '../../shared/task-ipc'
 import type { CommandEvidenceStore } from '../command/command-evidence-store'
@@ -58,6 +63,12 @@ export interface TaskIpcDependencies {
     CommandEvidenceStore,
     'listEvidence' | 'readEvidence' | 'readTranscript' | 'waitForWrites' | 'hasPersistIncomplete'
   > | null
+  /** 只读 Git 审阅；不得暴露写 git / Broker。 */
+  getGitReview?: () => {
+    getChangeSet(taskId: string): Promise<TaskChangeSetQueryResult>
+    getFileDiff(taskId: string, path: string): Promise<FileDiffResult>
+    listTurnCheckpoints(taskId: string): Promise<TurnChangeCheckpoint[]>
+  } | null
   sanitizeError: (error: unknown) => string
 }
 
@@ -269,6 +280,45 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
     const evidence = requireScopedEvidence(await store.readEvidence(taskId, commandId), taskId)
     return readCommandTranscriptPage(store, evidence, offset, limit)
   })
+
+  /**
+   * 只读返回当前 Task 的归因摘要与相对路径列表。不含绝对路径、fingerprint 或 porcelain。
+   */
+  register(TASK_INVOKE_CHANNELS.getChangeSet, async (args) => {
+    const request = readRequest(args, ['taskId'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    requireExistingTask(dependencies.getHistory, taskId)
+    return requireGitReview(dependencies.getGitReview).getChangeSet(taskId)
+  })
+
+  /**
+   * 只读单文件 Diff。path 必须是相对路径；越界由服务返回 escaped，不读外部文件。
+   */
+  register(TASK_INVOKE_CHANNELS.getFileDiff, async (args) => {
+    const request = readRequest(args, ['taskId', 'path'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    const path = readText(request, 'path')!
+    requireExistingTask(dependencies.getHistory, taskId)
+    return requireGitReview(dependencies.getGitReview).getFileDiff(taskId, path)
+  })
+
+  /** 只读列出 Turn 检查点摘要，供审阅链使用。 */
+  register(TASK_INVOKE_CHANNELS.listTurnCheckpoints, async (args) => {
+    const request = readRequest(args, ['taskId'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    requireExistingTask(dependencies.getHistory, taskId)
+    return requireGitReview(dependencies.getGitReview).listTurnCheckpoints(taskId)
+  })
+}
+
+function requireGitReview(getGitReview: TaskIpcDependencies['getGitReview']): {
+  getChangeSet(taskId: string): Promise<TaskChangeSetQueryResult>
+  getFileDiff(taskId: string, path: string): Promise<FileDiffResult>
+  listTurnCheckpoints(taskId: string): Promise<TurnChangeCheckpoint[]>
+} {
+  const review = getGitReview?.() ?? null
+  if (!review) throw new DesktopIpcFailure('runtime-unavailable', 'Git 审阅服务尚未初始化。')
+  return review
 }
 
 /**

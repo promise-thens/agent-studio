@@ -652,6 +652,26 @@ describe('TaskExecutor', () => {
     await unavailable.executor.waitForTerminal()
     expect(unavailable.adapter.startTurn).toHaveBeenCalledOnce()
   })
+
+  it('recordTurnChangeCheckpoint：before 在 active 之前，after 在终态提交之后；抛错不让 Turn 失败', async () => {
+    const phases: string[] = []
+    let sawActiveDuringBefore = false
+    const fixture = await createFixture({
+      recordTurnChangeCheckpoint: async (input) => {
+        phases.push(`${input.phase}:${input.turnId}`)
+        if (input.phase === 'before') sawActiveDuringBefore = fixture.executor.hasActiveExecution()
+        if (input.phase === 'after') throw new Error('模拟 after 检查点失败')
+      }
+    })
+    fixture.adapter.startTurn.mockResolvedValue({ outcome: 'completed' })
+    await fixture.executor.start(fixture.input)
+    await fixture.executor.waitForTerminal()
+    expect(phases).toEqual(['before:turn-1', 'after:turn-1'])
+    expect(sawActiveDuringBefore).toBe(false)
+    expect(fixture.executor.getSnapshot()).toMatchObject({
+      execution: { state: 'completed', turnId: 'turn-1' }
+    })
+  })
 })
 
 async function createFixture(
@@ -667,6 +687,7 @@ async function createFixture(
       turnId: string
     }) => Promise<void>
     ensureChangeBaseline?: TaskExecutorOptions['ensureChangeBaseline']
+    recordTurnChangeCheckpoint?: TaskExecutorOptions['recordTurnChangeCheckpoint']
   } = {}
 ): Promise<{
   store: TaskStore
@@ -714,7 +735,10 @@ async function createFixture(
     scheduleTimeout: options.scheduleTimeout,
     clearScheduledTimeout: options.clearScheduledTimeout,
     onCancelTimeout: options.onCancelTimeout,
-    ...(options.ensureChangeBaseline ? { ensureChangeBaseline: options.ensureChangeBaseline } : {})
+    ...(options.ensureChangeBaseline ? { ensureChangeBaseline: options.ensureChangeBaseline } : {}),
+    ...(options.recordTurnChangeCheckpoint
+      ? { recordTurnChangeCheckpoint: options.recordTurnChangeCheckpoint }
+      : {})
   })
   const input = startInput({
     projectId: project.projectId,

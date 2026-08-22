@@ -53,6 +53,11 @@ import {
   type CommandEvidencePage,
   type CommandExecutionEvidence
 } from '../shared/command'
+import {
+  parseFileDiffResult,
+  parseTaskChangeSetQueryResult,
+  parseTurnChangeCheckpointList
+} from '../shared/git-review'
 import { TASK_INVOKE_CHANNELS, type TaskDesktopApi } from '../shared/task-ipc'
 
 export interface NarrowIpcRenderer {
@@ -962,6 +967,43 @@ export function createTaskDesktopApi(ipcRenderer: NarrowIpcRenderer): TaskDeskto
         return { ok: false, error: { code: 'operation-failed', message: '命令输出无效。' } }
       }
       return { ok: true, value: page }
+    },
+    getChangeSet: async (taskId) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getChangeSet, {
+        taskId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const parsed = parseTaskChangeSetQueryResult(result.value)
+      if (!parsed || parsed.taskId !== taskId) {
+        return { ok: false, error: { code: 'operation-failed', message: '变更摘要无效。' } }
+      }
+      return { ok: true, value: parsed }
+    },
+    getFileDiff: async (taskId, path) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getFileDiff, {
+        taskId,
+        path
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const parsed = parseFileDiffResult(result.value)
+      if (!parsed || parsed.taskId !== taskId) {
+        return { ok: false, error: { code: 'operation-failed', message: '文件差异无效。' } }
+      }
+      return { ok: true, value: parsed }
+    },
+    listTurnCheckpoints: async (taskId) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.listTurnCheckpoints, {
+        taskId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const parsed = parseTurnChangeCheckpointList(result.value)
+      if (!parsed) {
+        return { ok: false, error: { code: 'operation-failed', message: '检查点列表无效。' } }
+      }
+      if (parsed.some((item) => item.taskId !== taskId)) {
+        return { ok: false, error: { code: 'operation-failed', message: '检查点列表无效。' } }
+      }
+      return { ok: true, value: parsed }
     },
     resume: (taskId) =>
       ipcRenderer.invoke(TASK_INVOKE_CHANNELS.resume, { taskId }) as ReturnType<

@@ -8,6 +8,11 @@ import type { DesktopIpcResult } from '../../shared/ipc-result'
 import type { CommandEvidenceStore } from '../command/command-evidence-store'
 import type { DesktopIpcHandler } from '../ipc-types'
 import { DesktopIpcFailure, type TrustedIpcInvokeEvent } from '../security/ipc-sender-validation'
+import type {
+  FileDiffResult,
+  TaskChangeSetQueryResult,
+  TurnChangeCheckpoint
+} from '../../shared/git-review'
 import { registerTaskIpcHandlers, type TaskHistoryIpcRuntime } from './task-ipc'
 
 const event = {} as TrustedIpcInvokeEvent
@@ -53,6 +58,11 @@ function createFixture(
     CommandEvidenceStore,
     'listEvidence' | 'readEvidence' | 'readTranscript' | 'waitForWrites' | 'hasPersistIncomplete'
   >
+  gitReview: {
+    getChangeSet: ReturnType<typeof vi.fn>
+    getFileDiff: ReturnType<typeof vi.fn>
+    listTurnCheckpoints: ReturnType<typeof vi.fn>
+  }
   assertTrustedSender: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, request: unknown) => Promise<DesktopIpcResult<T>>
 } {
@@ -133,17 +143,41 @@ function createFixture(
     waitForWrites: vi.fn(async () => undefined),
     hasPersistIncomplete: vi.fn(() => false)
   }
+  const gitReview = {
+    getChangeSet: vi.fn(async (taskId: string): Promise<TaskChangeSetQueryResult> => ({
+      taskId,
+      environmentId: 'local:testenv',
+      baselineStatus: 'captured',
+      gitPresence: 'git',
+      generatedAt: '2026-08-22T12:00:00.000Z',
+      preExistingCount: 0,
+      taskChangedCount: 1,
+      unknownCount: 0,
+      validations: [],
+      paths: [{ path: 'README.md', attribution: 'task-modified' }],
+      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' }
+    })),
+    getFileDiff: vi.fn(async (taskId: string, path: string): Promise<FileDiffResult> => {
+      if (path.includes('..') || path.startsWith('/')) {
+        return { taskId, path, status: 'escaped' }
+      }
+      return { taskId, path, status: 'ok', unifiedDiff: '--- a/README.md\n+++ b/README.md\n' }
+    }),
+    listTurnCheckpoints: vi.fn(async (): Promise<TurnChangeCheckpoint[]> => [])
+  }
   registerTaskIpcHandlers({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     assertTrustedSender,
     getHistory: () => (historyAvailable ? history : null),
     getCommandEvidenceStore: () => (commandStoreAvailable ? commandStore : null),
+    getGitReview: () => gitReview,
     sanitizeError: (error) => (error instanceof Error ? error.message : String(error))
   })
   return {
     handlers,
     history,
     commandStore,
+    gitReview,
     assertTrustedSender,
     invoke: async <T>(channel: string, request: unknown): Promise<DesktopIpcResult<T>> => {
       const handler = handlers.get(channel)
@@ -451,5 +485,56 @@ describe('Task 命令证据只读 IPC', () => {
       }
     })
     expect(JSON.stringify(result)).not.toContain('path')
+  })
+})
+
+describe('Task 变更审阅只读 IPC', () => {
+  it('change-set / file-diff 不含绝对路径，未知 Task 当 not-found', async () => {
+    const fixture = createFixture()
+    const listed = await fixture.invoke(TASK_INVOKE_CHANNELS.getChangeSet, { taskId: 'task-1' })
+    expect(listed).toMatchObject({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        paths: [{ path: 'README.md', attribution: 'task-modified' }]
+      }
+    })
+    expect(JSON.stringify(listed)).not.toContain('/Users/')
+    expect(JSON.stringify(listed)).not.toContain('fingerprint')
+
+    const missing = await fixture.invoke(TASK_INVOKE_CHANNELS.getChangeSet, {
+      taskId: 'missing-task'
+    })
+    expect(missing).toMatchObject({ ok: false, error: { code: 'history-not-found' } })
+    expect(fixture.gitReview.getChangeSet).toHaveBeenCalledTimes(1)
+
+    const escaped = await fixture.invoke(TASK_INVOKE_CHANNELS.getFileDiff, {
+      taskId: 'task-1',
+      path: '../outside'
+    })
+    expect(escaped).toMatchObject({
+      ok: true,
+      value: { status: 'escaped', path: '../outside' }
+    })
+    expect(JSON.stringify(escaped)).not.toContain('/etc/')
+  })
+
+  it('跨 Task 的 command/diff 当 not-found，拒绝额外字段', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.getFileDiff, {
+        taskId: 'missing-task',
+        path: 'README.md'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'history-not-found' } })
+    expect(fixture.gitReview.getFileDiff).not.toHaveBeenCalled()
+
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.getFileDiff, {
+        taskId: 'task-1',
+        path: 'README.md',
+        commandId: 'cmd-other-task'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
   })
 })

@@ -743,4 +743,54 @@ describe('窄 Preload API', () => {
       }
     })
   })
+
+  it('变更审阅 API 丢掉绝对路径、fingerprint 和 porcelain', async () => {
+    const ipcRenderer = createIpcRenderer()
+    const task = createTaskDesktopApi(ipcRenderer)
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        environmentId: 'local:testenv',
+        baselineStatus: 'captured',
+        gitPresence: 'git',
+        generatedAt: '2026-08-22T12:00:00.000Z',
+        preExistingCount: 0,
+        taskChangedCount: 1,
+        unknownCount: 0,
+        validations: [],
+        paths: [{ path: 'README.md', attribution: 'task-modified' }],
+        revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' },
+        executionRoot: '/Users/secret/project',
+        fingerprint: '1:2:/Users/secret/project',
+        porcelainSummary: '1 .M ... /Users/secret/project/README.md'
+      }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        path: 'README.md',
+        status: 'ok',
+        unifiedDiff: '--- a/README.md\n+++ b/README.md\n',
+        filePath: '/Users/secret/project/README.md'
+      }
+    })
+
+    const changeSet = await task.getChangeSet('task-1')
+    const diff = await task.getFileDiff('task-1', 'README.md')
+    expect(ipcRenderer.invoke.mock.calls).toEqual([
+      [TASK_INVOKE_CHANNELS.getChangeSet, { taskId: 'task-1' }],
+      [TASK_INVOKE_CHANNELS.getFileDiff, { taskId: 'task-1', path: 'README.md' }]
+    ])
+    expect(changeSet.ok && changeSet.value.paths[0]?.path).toBe('README.md')
+    expect(JSON.stringify(changeSet)).not.toContain('/Users/secret')
+    expect(JSON.stringify(changeSet)).not.toContain('fingerprint')
+    expect(JSON.stringify(changeSet)).not.toContain('porcelain')
+    expect(JSON.stringify(diff)).not.toContain('/Users/secret')
+    expect(diff).toMatchObject({
+      ok: true,
+      value: { path: 'README.md', status: 'ok' }
+    })
+  })
 })

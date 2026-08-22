@@ -74,6 +74,8 @@ import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
 import { CommandEvidenceStore } from './command/command-evidence-store'
 import { createEnsureTaskChangeBaseline, TaskChangeBaselineStore } from './git/task-change-baseline'
+import { createRecordTurnChangeCheckpoint, GitReviewService } from './git/git-review-service'
+import { TurnChangeCheckpointStore } from './git/turn-change-checkpoint'
 import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
 import { listGrokMarketplacePlugins } from './runtime/grok/grok-marketplace-inventory'
 import {
@@ -316,6 +318,35 @@ async function initializeServices(
   const gitReviewRoot = join(app.getPath('userData'), 'git-review')
   await fs.mkdir(gitReviewRoot, { recursive: true, mode: 0o700 })
   const taskChangeBaselineStore = new TaskChangeBaselineStore({ rootDir: gitReviewRoot })
+  const turnChangeCheckpointStore = new TurnChangeCheckpointStore({
+    rootDir: join(gitReviewRoot, 'checkpoints')
+  })
+  const gitReviewService = new GitReviewService({
+    baselineStore: taskChangeBaselineStore,
+    checkpointStore: turnChangeCheckpointStore,
+    getTaskIdentity: (taskId) => {
+      const task = requireTaskStore().getTaskRecord(taskId)
+      return {
+        taskId: task.taskId,
+        projectId: task.projectId,
+        environmentId: task.environment.environmentId,
+        executionRoot: task.environment.rootSnapshot
+      }
+    },
+    getProjectAvailability: async (projectId) => {
+      try {
+        return (await requireProjectRegistry().getSummary(projectId)).availability
+      } catch {
+        return { state: 'unavailable', message: 'Project 当前不可用。' }
+      }
+    },
+    listCommandEvidence: (taskId) => evidenceStore.listEvidence(taskId),
+    hasPersistIncomplete: (taskId) => evidenceStore.hasPersistIncomplete(taskId),
+    waitForEvidenceWrites: () => evidenceStore.waitForWrites(),
+    attachTurnValidationIds: (taskId, turnId, validationIds) =>
+      requireTaskStore().attachTurnValidationIds(taskId, turnId, validationIds),
+    sourceEnvironment: process.env
+  })
   const adapter = new GrokAcpAdapter(
     {
       onStatus: (status) =>
@@ -392,7 +423,8 @@ async function initializeServices(
         }
       },
       sourceEnvironment: process.env
-    })
+    }),
+    recordTurnChangeCheckpoint: createRecordTurnChangeCheckpoint(gitReviewService)
   })
   agentService = new AgentService(adapter, new TaskExecutionController(), {
     projectRegistry,
@@ -693,6 +725,7 @@ function registerIpcHandlers(): void {
     ipcMain: desktopIpcMain,
     assertTrustedSender,
     getCommandEvidenceStore: () => commandEvidenceStore,
+    getGitReview: () => gitReviewService,
     getHistory: () => {
       const store = taskStore
       const service = agentService
