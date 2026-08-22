@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { formatCommandDuration } from '../command-evidence-presentation'
+import { commandInconsistencyLabel, formatCommandDuration } from '../command-evidence-presentation'
 import type { TaskResultReviewModel, TimelineCommandEvidenceView } from '../task-timeline-reducer'
 
 defineProps<{
@@ -41,6 +41,12 @@ function exitCodeLabel(command: TimelineCommandEvidenceView): string {
 
 function durationLabel(command: TimelineCommandEvidenceView): string {
   return command.durationMs === undefined ? '未记录' : formatCommandDuration(command.durationMs)
+}
+
+function inconsistencyLabel(command: TimelineCommandEvidenceView): string {
+  if (!command.inconsistency) return ''
+  const label = commandInconsistencyLabel(command.inconsistency)
+  return command.exitCode === undefined ? label : `${label}（退出码 ${command.exitCode}）`
 }
 </script>
 
@@ -113,6 +119,9 @@ function durationLabel(command: TimelineCommandEvidenceView): string {
             <dd>{{ command.truncated ? '是' : '否' }}</dd>
           </div>
         </dl>
+        <p v-if="command.inconsistency" class="command-evidence-incomplete" role="status">
+          {{ inconsistencyLabel(command) }}
+        </p>
         <p v-if="command.logIncomplete" class="command-evidence-incomplete" role="status">
           {{ command.logIncompleteReason ?? '日志不完整' }}
         </p>

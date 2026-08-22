@@ -245,6 +245,62 @@ describe('useTaskTimeline', () => {
     }
   })
 
+  it('refreshCommandEvidence 必须消费 truncated，截断列表不得让验证假通过', async () => {
+    const listCommandEvidence = vi.fn(async () => ({
+      ok: true as const,
+      value: {
+        truncated: true as const,
+        items: [
+          {
+            commandId: 'cmd-old-ok',
+            taskId: 'task-1',
+            turnId: 'turn-1',
+            environmentId: 'env-1',
+            source: 'app-runner' as const,
+            displayCommand: 'pnpm test',
+            cwd: '.',
+            startedAt: '2026-08-18T00:00:00.000Z',
+            endedAt: '2026-08-18T00:00:01.000Z',
+            exitCode: 0,
+            timedOut: false,
+            status: 'succeeded' as const,
+            transcriptRef: {
+              transcriptId: 'tx-1',
+              availableBytes: 2,
+              truncated: false,
+              encoding: 'utf-8' as const,
+              retentionPolicy: 'bounded' as const,
+              retentionState: 'retained' as const
+            },
+            truncated: false,
+            trustLevel: 'app-enforced' as const
+          }
+        ]
+      }
+    }))
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { task: { listCommandEvidence } }
+    })
+    try {
+      const controller = useTaskTimeline({ manageSubscriptions: false })
+      controller.hydrateHistory(historyDetail, [historyTurn], { [historyTurn.turnId]: [event] }, [])
+      await controller.refreshCommandEvidence('task-1')
+      expect(controller.activeTimeline.value?.resultReview.validations).toMatchObject({
+        availability: 'observed',
+        outcome: 'unknown',
+        reason: 'incomplete-list'
+      })
+      expect(
+        controller.activeTimeline.value?.resultReview.warnings.some((warning) =>
+          warning.includes('不完整')
+        )
+      ).toBe(true)
+    } finally {
+      Reflect.deleteProperty(globalThis, 'window')
+    }
+  })
+
   it('再次水合历史分页后会把新增事件投影到 Timeline', () => {
     const controller = useTaskTimeline({
       getSnapshot: async () => snapshot,

@@ -202,6 +202,37 @@ describe('对话块投影', () => {
     expect(blocks.some((block) => block.kind === 'message')).toBe(false)
   })
 
+  it('标题成功但退出码非 0 时主列按证据失败态展示并露出冲突警告', () => {
+    const blocks = projectConversationTurn(
+      turn('completed', [
+        tool('bash-1', 'Tests passed', 'completed', {
+          commandId: 'rt-cmd',
+          displayCommand: 'pnpm test',
+          source: 'runtime-tool',
+          sourceLabel: 'Runtime 上报命令',
+          cwd: '.',
+          cwdLabel: 'Runtime 未冻结工作目录（相对路径 .，并非 App 沙箱）',
+          exitCode: 2,
+          timedOut: false,
+          truncated: false,
+          trustLevel: 'runtime-reported',
+          trustLabel: 'Runtime 上报事实',
+          status: 'failed',
+          logIncomplete: false,
+          inconsistency: 'title-success-nonzero-exit'
+        })
+      ])
+    )
+    const toolBlock = blocks.find((block) => block.kind === 'tool')
+    expect(toolBlock).toMatchObject({
+      kind: 'tool',
+      status: 'failed',
+      warning: expect.stringMatching(/不一致|退出码/)
+    })
+    expect(toolBlock && 'status' in toolBlock ? toolBlock.status : '').not.toBe('completed')
+    expect(toolBlock && 'warning' in toolBlock ? toolBlock.warning : '').toContain('2')
+  })
+
   it('List/Execute 主列只显示短标签，长命令进 detail 供折叠', () => {
     const command =
       'ls -la && (test -f README.md && head -80 README.md; find . -maxdepth 3 -print | head -80)'

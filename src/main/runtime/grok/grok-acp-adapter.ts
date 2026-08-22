@@ -858,9 +858,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
     const mapping = mapGrokCommandEvidence(facts, (text) => this.safeRedact(text))
     if (!mapping) return
-    this.commandEvidenceWrites = this.commandEvidenceWrites
-      .then(() => this.writeMappedCommandEvidence(store, mapping))
-      .catch(() => undefined)
+    // 终态写盘失败不得静默丢：留下 Task 级缺口，直播 list 会等这条链。
+    const write = store.scheduleWrite(() => this.writeMappedCommandEvidence(store, mapping))
+    this.commandEvidenceWrites = write.catch(() => {
+      store.markPersistIncomplete(activeTurn.taskId)
+    })
   }
 
   private commandEvidenceAccumulators(activeTurn: ActiveTurn): Map<string, GrokCommandToolFacts> {
@@ -890,9 +892,10 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     })
   }
 
-  /** 等待命令证据落盘。测试在断言 store 前调用；生产路径不依赖此接口。 */
+  /** 等待命令证据落盘。查询与测试都必须等这条链，不能在 write 完成前读列表。 */
   async waitForCommandEvidenceWrites(): Promise<void> {
     await this.commandEvidenceWrites
+    await this.options.commandEvidenceStore?.waitForWrites()
   }
 
   /**

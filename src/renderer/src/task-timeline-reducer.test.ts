@@ -405,6 +405,111 @@ describe('Task Timeline reducer', () => {
     ])
   })
 
+  it('命令证据列表 truncated 时验证只能 unknown，不得在旧成功项上 pass', () => {
+    const successEvidence: CommandExecutionEvidence = {
+      commandId: 'old-ok',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      environmentId: 'env-1',
+      source: 'runtime-tool',
+      displayCommand: 'pnpm test',
+      cwd: '.',
+      startedAt: '2026-08-18T00:00:01.000Z',
+      endedAt: '2026-08-18T00:00:02.000Z',
+      exitCode: 0,
+      timedOut: false,
+      status: 'succeeded',
+      toolCallId: 'tool-1',
+      transcriptRef: {
+        transcriptId: 'tx-1',
+        availableBytes: 2,
+        truncated: false,
+        encoding: 'utf-8',
+        retentionPolicy: 'bounded',
+        retentionState: 'retained'
+      },
+      truncated: false,
+      trustLevel: 'runtime-reported'
+    }
+    const withEvents = reduceTaskTimelineFacts(
+      reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+        type: 'turns/upsert',
+        turns: [TURN]
+      }),
+      { type: 'events/ingest-public', events: EVENTS }
+    )
+    const completeWindow = reduceTaskTimelineFacts(withEvents, {
+      type: 'command-evidence/replace',
+      evidences: [successEvidence]
+    })
+    expect(
+      selectTaskTimeline(completeWindow, { executionSnapshot: snapshot() }).resultReview.validations
+    ).toMatchObject({ outcome: 'pass' })
+
+    const truncatedWindow = reduceTaskTimelineFacts(withEvents, {
+      type: 'command-evidence/replace',
+      evidences: [successEvidence],
+      truncated: true
+    })
+    const truncatedReview = selectTaskTimeline(truncatedWindow, {
+      executionSnapshot: snapshot()
+    }).resultReview
+    expect(truncatedReview.validations).toMatchObject({
+      availability: 'observed',
+      outcome: 'unknown',
+      reason: 'incomplete-list'
+    })
+    expect(truncatedReview.warnings.some((warning) => warning.includes('不完整'))).toBe(true)
+  })
+
+  it('标题与退出事实不一致时结果审阅必须画出冲突', () => {
+    const inconsistent: CommandExecutionEvidence = {
+      commandId: 'rt-cmd',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      environmentId: 'env-1',
+      source: 'runtime-tool',
+      displayCommand: 'pnpm test',
+      cwd: '.',
+      startedAt: '2026-08-18T00:00:01.000Z',
+      endedAt: '2026-08-18T00:00:02.000Z',
+      exitCode: 2,
+      timedOut: false,
+      status: 'failed',
+      toolCallId: 'tool-1',
+      inconsistency: 'title-success-nonzero-exit',
+      transcriptRef: {
+        transcriptId: 'tx-1',
+        availableBytes: 2,
+        truncated: false,
+        encoding: 'utf-8',
+        retentionPolicy: 'bounded',
+        retentionState: 'retained'
+      },
+      truncated: false,
+      trustLevel: 'runtime-reported'
+    }
+    const withEvidence = reduceTaskTimelineFacts(
+      reduceTaskTimelineFacts(
+        reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+          type: 'turns/upsert',
+          turns: [TURN]
+        }),
+        { type: 'events/ingest-public', events: EVENTS }
+      ),
+      { type: 'command-evidence/replace', evidences: [inconsistent] }
+    )
+    const view = selectTaskTimeline(withEvidence, { executionSnapshot: snapshot() })
+    const tool = view.turns[0]?.nodes.find((node) => node.kind === 'tool')
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      command: { inconsistency: 'title-success-nonzero-exit', exitCode: 2, status: 'failed' }
+    })
+    expect(view.resultReview.validations.outcome).toBe('fail')
+    expect(view.resultReview.warnings.some((warning) => warning.includes('不一致'))).toBe(true)
+    expect(view.resultReview.commands[0]?.inconsistency).toBe('title-success-nonzero-exit')
+  })
+
   it('没有命令证据时即使工具标题写通过也不产生 pass', () => {
     const state = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
       type: 'events/ingest-public',

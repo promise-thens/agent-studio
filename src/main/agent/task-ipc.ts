@@ -1,8 +1,7 @@
 import {
   DEFAULT_COMMAND_TRANSCRIPT_PAGE_LIMIT,
-  MAX_COMMAND_EVIDENCE_LIST_ITEMS,
   MAX_COMMAND_TRANSCRIPT_PAGE_LIMIT,
-  type CommandEvidencePage,
+  takeLatestCommandEvidencePage,
   type CommandExecutionEvidence,
   type CommandTranscriptPage
 } from '../../shared/command'
@@ -57,7 +56,7 @@ export interface TaskIpcDependencies {
   /** 只读命令证据；不得把 store 的写/执行入口暴露给 Renderer。 */
   getCommandEvidenceStore: () => Pick<
     CommandEvidenceStore,
-    'listEvidence' | 'readEvidence' | 'readTranscript'
+    'listEvidence' | 'readEvidence' | 'readTranscript' | 'waitForWrites' | 'hasPersistIncomplete'
   > | null
   sanitizeError: (error: unknown) => string
 }
@@ -70,7 +69,10 @@ function requireHistory(getHistory: TaskIpcDependencies['getHistory']): TaskHist
 
 function requireCommandEvidenceStore(
   getStore: TaskIpcDependencies['getCommandEvidenceStore']
-): Pick<CommandEvidenceStore, 'listEvidence' | 'readEvidence' | 'readTranscript'> {
+): Pick<
+  CommandEvidenceStore,
+  'listEvidence' | 'readEvidence' | 'readTranscript' | 'waitForWrites' | 'hasPersistIncomplete'
+> {
   const store = getStore()
   if (!store) throw new DesktopIpcFailure('runtime-unavailable', '命令证据服务尚未初始化。')
   return store
@@ -220,19 +222,18 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
 
   /**
    * 只读列出当前 Task 的命令证据摘要。Renderer 不得提交 executable/cwd/env 或 transcript 路径。
+   * 查询前等待落盘，并只保留最新 N 条，避免最旧窗口把最近失败丢掉后假通过。
    */
   register(TASK_INVOKE_CHANNELS.listCommandEvidence, async (args) => {
     const request = readRequest(args, ['taskId'])
     const taskId = readCommandIdentity(request, 'taskId')
     requireExistingTask(dependencies.getHistory, taskId)
-    const listed = await requireCommandEvidenceStore(
-      dependencies.getCommandEvidenceStore
-    ).listEvidence(taskId)
+    const store = requireCommandEvidenceStore(dependencies.getCommandEvidenceStore)
+    await store.waitForWrites()
+    const listed = await store.listEvidence(taskId)
     const scoped = listed.filter((item) => item.taskId === taskId)
-    const page: CommandEvidencePage = {
-      items: scoped.slice(0, MAX_COMMAND_EVIDENCE_LIST_ITEMS)
-    }
-    if (scoped.length > MAX_COMMAND_EVIDENCE_LIST_ITEMS) page.truncated = true
+    const page = takeLatestCommandEvidencePage(scoped)
+    if (store.hasPersistIncomplete(taskId)) page.persistIncomplete = true
     return page
   })
 

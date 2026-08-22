@@ -89,6 +89,7 @@ describe('工具行折叠皮肤', () => {
       expect(summary).not.toContain('{{ detail }}')
     }
     expect(conversationTurnSource).toContain(':detail="block.detail"')
+    expect(conversationTurnSource).toContain(':warning="block.warning"')
     expect(subagentCardSource).toContain(':detail="tool.detail"')
   })
 })

@@ -713,6 +713,21 @@ describe('窄 Preload API', () => {
       trustLevel: 'runtime-reported'
     })
     expect(JSON.stringify(listed)).not.toContain('/tmp/secret.log')
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        items: [evidence],
+        truncated: true,
+        persistIncomplete: true,
+        path: '/tmp/secret.log'
+      }
+    })
+    const incomplete = await task.listCommandEvidence('task-1')
+    expect(incomplete).toMatchObject({
+      ok: true,
+      value: { truncated: true, persistIncomplete: true }
+    })
+    expect(JSON.stringify(incomplete)).not.toContain('/tmp/secret.log')
     expect(JSON.stringify(got)).not.toContain('filePath')
     expect(transcript).toEqual({
       ok: true,

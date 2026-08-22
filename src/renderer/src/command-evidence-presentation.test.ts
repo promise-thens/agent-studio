@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { CommandExecutionEvidence } from '../../shared/command'
 import {
   commandCwdLabel,
+  commandInconsistencyLabel,
   commandSourceLabel,
   commandTrustLabel,
   presentCommandEvidenceSummary,
@@ -101,6 +102,22 @@ describe('命令证据展示文案', () => {
     expect(source).toContain('command.timedOut')
     expect(source).toContain('command.truncated')
     expect(source).toContain('command.logIncomplete')
+    expect(source).toContain('command.inconsistency')
     expect(source).not.toContain('继续任务')
+  })
+
+  it('标题与退出事实冲突时摘要和审阅都要写出不一致', () => {
+    const view = toCommandEvidenceView(
+      evidence({
+        source: 'runtime-tool',
+        trustLevel: 'runtime-reported',
+        status: 'failed',
+        exitCode: 2,
+        inconsistency: 'title-success-nonzero-exit'
+      })
+    )
+    expect(view.inconsistency).toBe('title-success-nonzero-exit')
+    expect(commandInconsistencyLabel('title-success-nonzero-exit')).toMatch(/不一致|退出/)
+    expect(presentCommandEvidenceSummary(view)).toMatch(/不一致|退出码 2/)
   })
 })

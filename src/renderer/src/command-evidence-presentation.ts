@@ -41,6 +41,20 @@ export function commandTrustLabel(trustLevel: CommandTrustLevel): string {
   return '未验证'
 }
 
+/** 标题/ACP status 与结构化退出事实冲突时的可见警告，不得只藏在折叠详情里。 */
+export function commandInconsistencyLabel(inconsistency: CommandEvidenceInconsistency): string {
+  if (inconsistency === 'title-success-nonzero-exit') return '标题显示成功，但退出码非 0'
+  if (inconsistency === 'title-success-timed-out') return '标题显示成功，但命令已超时'
+  return '标题显示失败，但退出码为 0'
+}
+
+export function presentCommandEvidenceInconsistency(view: TimelineCommandEvidenceView): string {
+  if (!view.inconsistency) return ''
+  const label = commandInconsistencyLabel(view.inconsistency)
+  if (view.exitCode !== undefined) return `${label}（退出码 ${view.exitCode}）`
+  return label
+}
+
 /**
  * cwd `.` 对 App 命令表示执行根；对 Runtime 命令只表示未冻结，不得暗示沙箱。
  */
@@ -114,6 +128,7 @@ export function presentCommandEvidenceSummary(view: TimelineCommandEvidenceView)
   if (view.exitCode !== undefined) lines.push(`退出码 ${view.exitCode}`)
   if (view.durationMs !== undefined) lines.push(`耗时 ${formatCommandDuration(view.durationMs)}`)
   if (view.timedOut) lines.push('已超时')
+  if (view.inconsistency) lines.push(presentCommandEvidenceInconsistency(view))
   if (view.logIncompleteReason) lines.push(view.logIncompleteReason)
   return lines.join('\n')
 }

@@ -896,6 +896,7 @@ function parseCommandEvidencePageResult(
   }
   const page: CommandEvidencePage = { items }
   if (value.truncated === true) page.truncated = true
+  if (value.persistIncomplete === true) page.persistIncomplete = true
   return { ok: true, value: page }
 }
 

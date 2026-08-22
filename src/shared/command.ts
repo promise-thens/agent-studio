@@ -46,7 +46,8 @@ export const VALIDATION_OUTCOME_REASONS = [
   'start-failed',
   'failed-status',
   'missing-exit-code',
-  'unknown-status'
+  'unknown-status',
+  'incomplete-list'
 ] as const
 export type ValidationOutcomeReason = (typeof VALIDATION_OUTCOME_REASONS)[number]
 
@@ -149,6 +150,8 @@ export interface CommandExecutionEvidence {
 export interface CommandEvidencePage {
   items: CommandExecutionEvidence[]
   truncated?: true
+  /** 终态落盘失败留下的缺口；有此标记时验证不得 pass。 */
+  persistIncomplete?: true
 }
 
 /**
@@ -372,12 +375,21 @@ export function parseCommandExecutionEvidence(value: unknown): CommandExecutionE
 }
 
 /**
+ * 列表截断或落盘缺口时，验证不得在不完整窗口上 pass。
+ * 单条输出 truncated 仍不单独阻断 pass。
+ */
+export interface DeriveValidationOptions {
+  listIncomplete?: boolean
+}
+
+/**
  * 只根据命令证据生成验证结论。聊天文本、工具标题不是参数，因此不能单独产生 pass。
- * fail 优先于 unknown；截断本身不阻断 pass。
+ * fail 优先于 unknown；列表不完整时禁止 pass。
  */
 export function deriveValidationResult(
   evidences: CommandExecutionEvidence[],
-  validationId: string
+  validationId: string,
+  options?: DeriveValidationOptions
 ): ValidationResult | null {
   if (!isBoundedIdentifier(validationId)) return null
   if (!Array.isArray(evidences) || evidences.length === 0) return null
@@ -412,6 +424,12 @@ export function deriveValidationResult(
 
   if (commandIds.length === 0) return null
 
+  // 列表被截断或落盘缺口时，可见成功项不能代表整轮结果。
+  if (options?.listIncomplete && outcome === 'pass') {
+    outcome = 'unknown'
+    reason = 'incomplete-list'
+  }
+
   const result: ValidationResult = {
     validationId,
     taskId: first.taskId,
@@ -421,6 +439,21 @@ export function deriveValidationResult(
   }
   if (outcome !== 'pass' && reason) result.reason = reason
   return result
+}
+
+/**
+ * 只保留最新 N 条。升序列表若 slice(0, N) 会丢掉最近失败，让审阅假通过。
+ */
+export function takeLatestCommandEvidencePage(
+  items: CommandExecutionEvidence[]
+): CommandEvidencePage {
+  if (!Array.isArray(items) || items.length <= MAX_COMMAND_EVIDENCE_LIST_ITEMS) {
+    return { items: Array.isArray(items) ? items : [] }
+  }
+  return {
+    items: items.slice(-MAX_COMMAND_EVIDENCE_LIST_ITEMS),
+    truncated: true
+  }
 }
 
 /**

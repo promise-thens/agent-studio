@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { CommandExecutionEvidence } from '../../shared/command'
+import {
+  MAX_COMMAND_EVIDENCE_LIST_ITEMS,
+  type CommandExecutionEvidence
+} from '../../shared/command'
 import { TASK_INVOKE_CHANNELS } from '../../shared/task-ipc'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
 import type { CommandEvidenceStore } from '../command/command-evidence-store'
@@ -46,7 +49,10 @@ function createFixture(
 ): {
   handlers: Map<string, DesktopIpcHandler>
   history: TaskHistoryIpcRuntime
-  commandStore: Pick<CommandEvidenceStore, 'listEvidence' | 'readEvidence' | 'readTranscript'>
+  commandStore: Pick<
+    CommandEvidenceStore,
+    'listEvidence' | 'readEvidence' | 'readTranscript' | 'waitForWrites' | 'hasPersistIncomplete'
+  >
   assertTrustedSender: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, request: unknown) => Promise<DesktopIpcResult<T>>
 } {
@@ -119,11 +125,13 @@ function createFixture(
   const assertTrustedSender = vi.fn()
   const commandStore: Pick<
     CommandEvidenceStore,
-    'listEvidence' | 'readEvidence' | 'readTranscript'
+    'listEvidence' | 'readEvidence' | 'readTranscript' | 'waitForWrites' | 'hasPersistIncomplete'
   > = {
     listEvidence: vi.fn(async () => []),
     readEvidence: vi.fn(async () => null),
-    readTranscript: vi.fn(async () => null)
+    readTranscript: vi.fn(async () => null),
+    waitForWrites: vi.fn(async () => undefined),
+    hasPersistIncomplete: vi.fn(() => false)
   }
   registerTaskIpcHandlers({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
@@ -297,6 +305,69 @@ describe('Task 命令证据只读 IPC', () => {
       await fixture.invoke(TASK_INVOKE_CHANNELS.listCommandEvidence, { taskId: 'task-1' })
     ).toEqual({ ok: true, value: { items: [evidence] } })
     expect(JSON.stringify(evidence)).not.toContain('filePath')
+  })
+
+  it('列出证据前等待落盘，并保留最新 N 条而不是最旧 N 条', async () => {
+    const fixture = createFixture()
+    const order: string[] = []
+    const oldest = sampleEvidence({
+      commandId: 'cmd-oldest',
+      startedAt: '2026-08-22T09:00:00.000Z',
+      endedAt: '2026-08-22T09:00:01.000Z'
+    })
+    const newestFail = sampleEvidence({
+      commandId: 'cmd-newest-fail',
+      startedAt: '2026-08-22T12:00:00.000Z',
+      endedAt: '2026-08-22T12:00:01.000Z',
+      status: 'failed',
+      exitCode: 2
+    })
+    const middle = Array.from({ length: MAX_COMMAND_EVIDENCE_LIST_ITEMS - 1 }, (_, index) =>
+      sampleEvidence({
+        commandId: `cmd-mid-${index + 1}`,
+        startedAt: new Date(Date.parse('2026-08-22T10:00:00.000Z') + index * 1000).toISOString()
+      })
+    )
+    vi.mocked(fixture.commandStore.waitForWrites).mockImplementation(async () => {
+      order.push('wait')
+    })
+    vi.mocked(fixture.commandStore.listEvidence).mockImplementation(async () => {
+      order.push('list')
+      return [oldest, ...middle, newestFail]
+    })
+
+    const result = await fixture.invoke(TASK_INVOKE_CHANNELS.listCommandEvidence, {
+      taskId: 'task-1'
+    })
+
+    expect(order).toEqual(['wait', 'list'])
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        truncated: true,
+        items: expect.any(Array)
+      }
+    })
+    const items =
+      result.ok && result.value && typeof result.value === 'object' && 'items' in result.value
+        ? (result.value.items as CommandExecutionEvidence[])
+        : []
+    expect(items).toHaveLength(MAX_COMMAND_EVIDENCE_LIST_ITEMS)
+    expect(items[0]?.commandId).not.toBe('cmd-oldest')
+    expect(items.at(-1)?.commandId).toBe('cmd-newest-fail')
+    expect(items.some((item) => item.status === 'failed' && item.exitCode === 2)).toBe(true)
+  })
+
+  it('落盘缺口会随列表一起返回 persistIncomplete', async () => {
+    const fixture = createFixture()
+    vi.mocked(fixture.commandStore.hasPersistIncomplete).mockReturnValueOnce(true)
+    vi.mocked(fixture.commandStore.listEvidence).mockResolvedValueOnce([sampleEvidence()])
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.listCommandEvidence, { taskId: 'task-1' })
+    ).toEqual({
+      ok: true,
+      value: { items: [sampleEvidence()], persistIncomplete: true }
+    })
   })
 
   it('跨 Task 的 evidence.taskId 不得被查询接口返回', async () => {

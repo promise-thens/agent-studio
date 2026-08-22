@@ -9,15 +9,20 @@ const props = withDefaults(
     files?: readonly string[]
     /** 长命令或路径，默认折叠；summary 只留短标签。 */
     detail?: string
+    /** 标题与退出事实冲突时主列可见。 */
+    warning?: string
   }>(),
-  { files: () => [], detail: '' }
+  { files: () => [], detail: '', warning: '' }
 )
 
 const busy = computed(() => props.status === 'in_progress' || props.status === 'pending')
 const hint = computed(() => props.detail || props.label)
-const accessibleLabel = computed(() =>
-  props.detail ? `${props.label}，点开查看详情` : props.label
-)
+const accessibleLabel = computed(() => {
+  const parts = [props.label]
+  if (props.warning) parts.push(props.warning)
+  if (props.detail) parts.push('点开查看详情')
+  return parts.join('，')
+})
 </script>
 
 <template>
@@ -32,6 +37,7 @@ const accessibleLabel = computed(() =>
       <summary>
         <span v-if="busy" class="conversation-spinner" aria-hidden="true" />
         <span>▸ {{ label }}</span>
+        <span v-if="warning" class="tool-row-warning">{{ warning }}</span>
       </summary>
       <ul class="tool-row-files">
         <li v-for="file in files" :key="file">{{ file }}</li>
@@ -41,12 +47,14 @@ const accessibleLabel = computed(() =>
       <summary>
         <span v-if="busy" class="conversation-spinner" aria-hidden="true" />
         <span>▸ {{ label }}</span>
+        <span v-if="warning" class="tool-row-warning">{{ warning }}</span>
       </summary>
       <pre class="tool-row-detail">{{ detail }}</pre>
     </details>
     <div v-else class="tool-row-line">
       <span v-if="busy" class="conversation-spinner" aria-hidden="true" />
       <span>▸ {{ label }}</span>
+      <span v-if="warning" class="tool-row-warning">{{ warning }}</span>
     </div>
   </div>
 </template>

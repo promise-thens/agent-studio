@@ -2238,6 +2238,72 @@ describe('Grok Runtime 命令证据持久化', () => {
     expect(evidence?.transcriptRef).not.toHaveProperty('path')
   })
 
+  it('终态写盘失败会留下 persistIncomplete，不得静默丢弃', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const { adapter, internal, store } = await createEvidenceHarness(connection)
+    vi.spyOn(store, 'writeEvidence').mockRejectedValueOnce(new Error('disk-full'))
+    internal.handleSessionUpdate(
+      notification({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool-persist-fail',
+        title: 'Run tests',
+        kind: 'execute',
+        status: 'completed',
+        rawInput: { command: 'pnpm test' },
+        rawOutput: { exit_code: 2, timed_out: false, output: 'failed' }
+      }),
+      connection
+    )
+    await adapter.waitForCommandEvidenceWrites()
+    expect(store.hasPersistIncomplete('task-current')).toBe(true)
+    const commandId = deriveGrokRuntimeCommandId(
+      'task-current',
+      'turn-current',
+      'tool-persist-fail'
+    )
+    expect(await store.readEvidence('task-current', commandId)).toBeNull()
+  })
+
+  it('落盘未完成时 waitForCommandEvidenceWrites 不会提前结束', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const { adapter, internal, store } = await createEvidenceHarness(connection)
+    const originalWrite = store.writeEvidence.bind(store)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.spyOn(store, 'writeEvidence').mockImplementation(async (evidence) => {
+      await gate
+      return originalWrite(evidence)
+    })
+    internal.handleSessionUpdate(
+      notification({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool-slow-write',
+        title: 'ls',
+        kind: 'execute',
+        status: 'completed',
+        rawInput: { command: 'ls' },
+        rawOutput: { exit_code: 0, timed_out: false }
+      }),
+      connection
+    )
+    let settled = false
+    const waiting = adapter.waitForCommandEvidenceWrites().then(() => {
+      settled = true
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    release()
+    await waiting
+    const commandId = deriveGrokRuntimeCommandId('task-current', 'turn-current', 'tool-slow-write')
+    expect(await store.readEvidence('task-current', commandId)).toMatchObject({
+      status: 'succeeded',
+      exitCode: 0
+    })
+  })
+
   it('未注入 store 时跳过持久化，既有协议路径不受影响', async () => {
     const connection = {} as acp.ClientSideConnection
     const harness = createAdapterHarness(connection)

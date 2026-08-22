@@ -103,6 +103,39 @@ describe('CommandEvidenceStore', () => {
     expect(MAX_COMMAND_TRANSCRIPT_BYTES).toBe(256 * 1024)
   })
 
+  it('listEvidence 会等待未完成的写入，落盘缺口可查询', async () => {
+    const store = await createStore()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const pending = store.scheduleWrite(async () => {
+      await gate
+      await store.writeTranscript({
+        transcriptId: 'transcript-1',
+        commandId: 'cmd-1',
+        taskId: 'task-1',
+        chunks: [{ stream: 'stdout', text: 'ok' }],
+        totalBytes: 2,
+        truncated: false
+      })
+      await store.writeEvidence(sampleEvidence())
+    })
+    let listedBeforeWrite = false
+    const listing = store.listEvidence('task-1').then((items) => {
+      listedBeforeWrite = true
+      return items
+    })
+    await Promise.resolve()
+    expect(listedBeforeWrite).toBe(false)
+    release()
+    await pending
+    const items = await listing
+    expect(items).toHaveLength(1)
+    store.markPersistIncomplete('task-1')
+    expect(store.hasPersistIncomplete('task-1')).toBe(true)
+  })
+
   it('直接写入超长正文时仍按字节上限截断并标记 truncated', async () => {
     const store = await createStore()
     const oversized = MAX_COMMAND_TRANSCRIPT_BYTES + 8 * 1024

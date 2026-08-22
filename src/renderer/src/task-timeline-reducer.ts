@@ -76,6 +76,8 @@ export interface TaskTimelineFacts {
   task: VersionedFactSlot<TaskHistoryDetail>
   turnsById: Record<string, TimelineTurnFacts>
   commandEvidenceById: Record<string, CommandExecutionEvidence>
+  commandEvidenceListTruncated?: true
+  commandEvidencePersistIncomplete?: true
   integrityIssuesByKey: Record<string, TimelineIntegrityIssue>
 }
 
@@ -85,7 +87,12 @@ export type TaskTimelineFactAction =
   | { type: 'turns/upsert'; turns: readonly TurnHistoryRecord[] }
   | { type: 'events/ingest-public'; events: readonly PublicAgentEvent[] }
   | { type: 'permission-audits/merge'; audits: readonly PermissionAuditRecord[] }
-  | { type: 'command-evidence/replace'; evidences: readonly CommandExecutionEvidence[] }
+  | {
+      type: 'command-evidence/replace'
+      evidences: readonly CommandExecutionEvidence[]
+      truncated?: true
+      persistIncomplete?: true
+    }
 
 export type TaskTimelineNode =
   | TimelineTextNode
@@ -282,6 +289,10 @@ export function reduceTaskTimelineFacts(
   }
   if (action.type === 'command-evidence/replace') {
     next.commandEvidenceById = {}
+    if (action.truncated) next.commandEvidenceListTruncated = true
+    else delete next.commandEvidenceListTruncated
+    if (action.persistIncomplete) next.commandEvidencePersistIncomplete = true
+    else delete next.commandEvidencePersistIncomplete
     for (const evidence of action.evidences) {
       if (evidence.taskId !== state.taskId) {
         addIssue(next, {
@@ -664,6 +675,15 @@ function selectTaskResultReview(
   if (uniqueCommands.some((view) => view.logIncomplete)) {
     warnings.push('部分命令日志不完整。')
   }
+  if (facts.commandEvidenceListTruncated) {
+    warnings.push('命令证据列表不完整，仅保留最新条目。')
+  }
+  if (facts.commandEvidencePersistIncomplete) {
+    warnings.push('部分命令证据写入失败，审阅不完整。')
+  }
+  if (uniqueCommands.some((view) => view.inconsistency)) {
+    warnings.push('部分命令的标题与退出事实不一致。')
+  }
   return {
     status: { value: status, source: latest?.statusProvisional ? 'execution' : 'turn-record' },
     usage: latest?.usage.turnUsage ?? { availability: 'not-observed' },
@@ -673,7 +693,11 @@ function selectTaskResultReview(
           availability: 'observed'
         }
       : { count: 0, availability: 'not-observed' },
-    validations: selectValidationReview(latest, latestEvidences),
+    validations: selectValidationReview(latest, latestEvidences, {
+      listIncomplete: Boolean(
+        facts.commandEvidenceListTruncated || facts.commandEvidencePersistIncomplete
+      )
+    }),
     artifacts: turnRecord?.artifactIds?.length
       ? {
           count: turnRecord.artifactIds.length,
@@ -688,18 +712,36 @@ function selectTaskResultReview(
 
 /**
  * 验证只能来自真实命令证据。没有命令时保持 not-observed，聊天/标题不能产生 pass。
+ * 列表截断或落盘缺口时只能 unknown，避免旧成功项假通过。
  */
 function selectValidationReview(
   latest: TurnTimelineViewModel | undefined,
-  evidences: CommandExecutionEvidence[]
+  evidences: CommandExecutionEvidence[],
+  options: { listIncomplete?: boolean } = {}
 ): TaskResultReviewModel['validations'] {
   if (evidences.length === 0) {
+    if (options.listIncomplete) {
+      return {
+        count: 0,
+        availability: 'observed',
+        outcome: 'unknown',
+        reason: 'incomplete-list'
+      }
+    }
     return { count: 0, availability: 'not-observed' }
   }
   const derived = latest
-    ? deriveValidationResult(evidences, `val_${latest.taskId}_${latest.turnId}`)
+    ? deriveValidationResult(evidences, `val_${latest.taskId}_${latest.turnId}`, options)
     : null
   if (!derived) {
+    if (options.listIncomplete) {
+      return {
+        count: evidences.length,
+        availability: 'observed',
+        outcome: 'unknown',
+        reason: 'incomplete-list'
+      }
+    }
     return { count: evidences.length, availability: 'not-observed' }
   }
   return {

@@ -7,10 +7,13 @@ import {
   COMMAND_TRANSCRIPT_RETENTION_STATES,
   COMMAND_TRUST_LEVELS,
   deriveValidationResult,
+  MAX_COMMAND_EVIDENCE_LIST_ITEMS,
   parseCommandExecutionEvidence,
   parseCommandTranscriptPage,
   parseCommandTranscriptRef,
   parseValidationResult,
+  takeLatestCommandEvidencePage,
+  VALIDATION_OUTCOME_REASONS,
   VALIDATION_OUTCOMES,
   type CommandExecutionEvidence,
   type CommandExecutionSource,
@@ -77,6 +80,7 @@ describe('命令执行证据契约', () => {
     expect(COMMAND_TRANSCRIPT_RETENTION_POLICIES).toEqual(['bounded', 'ephemeral'])
     expect(COMMAND_TRANSCRIPT_ENCODINGS).toEqual(['utf-8'])
     expect(VALIDATION_OUTCOMES).toEqual(['pass', 'fail', 'unknown'])
+    expect(VALIDATION_OUTCOME_REASONS).toContain('incomplete-list')
 
     expectTypeOf<CommandExecutionSource>().extract<'user-terminal'>().not.toBeNever()
     expectTypeOf<CommandTrustLevel>().extract<'app-enforced'>().not.toBeNever()
@@ -451,6 +455,44 @@ describe('ValidationResult 只能由命令证据推导', () => {
         'val-1'
       )
     ).toBeNull()
+  })
+
+  it('列表截断时保留最新 N 条，且 truncated 时即使窗口内全成功也只能 unknown', () => {
+    const oldest = parseCommandExecutionEvidence(validEvidence({ commandId: 'cmd-oldest' }))!
+    const newestFail = parseCommandExecutionEvidence(
+      validEvidence({
+        commandId: 'cmd-newest-fail',
+        startedAt: '2026-08-21T11:00:00.000Z',
+        endedAt: '2026-08-21T11:00:02.000Z',
+        status: 'failed',
+        exitCode: 2
+      })
+    )!
+    const middle = Array.from({ length: MAX_COMMAND_EVIDENCE_LIST_ITEMS - 1 }, (_, index) =>
+      parseCommandExecutionEvidence(
+        validEvidence({
+          commandId: `cmd-mid-${index + 1}`,
+          startedAt: new Date(Date.parse(timestamp) + (index + 1) * 1000).toISOString()
+        })
+      )!
+    )
+    const page = takeLatestCommandEvidencePage([oldest, ...middle, newestFail])
+    expect(page.truncated).toBe(true)
+    expect(page.items).toHaveLength(MAX_COMMAND_EVIDENCE_LIST_ITEMS)
+    expect(page.items[0]?.commandId).not.toBe('cmd-oldest')
+    expect(page.items.at(-1)?.commandId).toBe('cmd-newest-fail')
+
+    const visibleSuccesses = [
+      parseCommandExecutionEvidence(validEvidence({ commandId: 'cmd-old-1' }))!,
+      parseCommandExecutionEvidence(validEvidence({ commandId: 'cmd-old-2' }))!
+    ]
+    expect(deriveValidationResult(visibleSuccesses, 'val-old-window')?.outcome).toBe('pass')
+    expect(
+      deriveValidationResult(visibleSuccesses, 'val-truncated', { listIncomplete: true })
+    ).toMatchObject({
+      outcome: 'unknown',
+      reason: 'incomplete-list'
+    })
   })
 
   it('解析 ValidationResult 时拒绝空 commandIds，并丢弃聊天文案字段', () => {

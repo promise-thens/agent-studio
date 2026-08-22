@@ -578,6 +578,15 @@ button:disabled {
   gap: 6px;
 }
 
+.tool-row-warning {
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.tool-row[data-status='failed'] {
+  color: var(--danger);
+}
+
 .tool-row-files {
   display: grid;
   gap: 4px;

@@ -61,6 +61,10 @@ export interface CommandEvidenceStoreOptions {
 export class CommandEvidenceStore {
   readonly rootDir: string
   private readonly writer: AtomicJsonWriter
+  /** 串行化落盘，供直播 list 等待，避免查询抢在 write 完成前只看到旧成功项。 */
+  private writeChain: Promise<void> = Promise.resolve()
+  /** 终态写盘失败的 Task；进程内可审阅，禁止据此 pass。 */
+  private persistIncompleteTaskIds = new Set<string>()
 
   constructor(options: CommandEvidenceStoreOptions) {
     if (!isNonEmptyPath(options.rootDir)) {
@@ -68,6 +72,32 @@ export class CommandEvidenceStore {
     }
     this.rootDir = options.rootDir
     this.writer = options.writer ?? new AtomicJsonWriter()
+  }
+
+  /**
+   * 把证据写入排进同一条链。失败由调用方标记缺口；链本身不得中断后续写入。
+   */
+  scheduleWrite(work: () => Promise<void>): Promise<void> {
+    const next = this.writeChain.then(work)
+    this.writeChain = next.then(
+      () => undefined,
+      () => undefined
+    )
+    return next
+  }
+
+  async waitForWrites(): Promise<void> {
+    await this.writeChain
+  }
+
+  /** 终态落盘失败必须留下缺口，不能只靠 catch 吞掉后假装列表完整。 */
+  markPersistIncomplete(taskId: string): void {
+    if (!isStoreIdentity(taskId)) return
+    this.persistIncompleteTaskIds.add(taskId)
+  }
+
+  hasPersistIncomplete(taskId: string): boolean {
+    return this.persistIncompleteTaskIds.has(taskId)
   }
 
   /** 先落有界 transcript，再生成不含路径的引用。 */
@@ -136,6 +166,8 @@ export class CommandEvidenceStore {
    */
   async listEvidence(taskId: string): Promise<CommandExecutionEvidence[]> {
     assertStoreIdentity(taskId)
+    // 直播刷新与 IPC 查询都必须等链上的终态写入，避免失败命令尚未落盘。
+    await this.waitForWrites()
     let names: string[]
     try {
       names = await fs.readdir(this.commandsDir(taskId))

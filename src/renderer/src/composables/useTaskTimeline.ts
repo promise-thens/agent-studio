@@ -48,7 +48,11 @@ export interface TaskTimelineController {
     audits: readonly import('../../../shared/task-history').PermissionAuditRecord[],
     commandEvidences?: readonly CommandExecutionEvidence[]
   ): void
-  acceptCommandEvidence(taskId: string, evidences: readonly CommandExecutionEvidence[]): void
+  acceptCommandEvidence(
+    taskId: string,
+    evidences: readonly CommandExecutionEvidence[],
+    flags?: { truncated?: true; persistIncomplete?: true }
+  ): void
   refreshCommandEvidence(taskId: string): Promise<void>
   setActiveTask(taskId: string): void
   removeTask(taskId: string): void
@@ -174,23 +178,29 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
 
   function acceptCommandEvidence(
     taskId: string,
-    evidences: readonly CommandExecutionEvidence[]
+    evidences: readonly CommandExecutionEvidence[],
+    flags: { truncated?: true; persistIncomplete?: true } = {}
   ): void {
     if (disposed || !taskId) return
     dispatch(taskId, {
       type: 'command-evidence/replace',
-      evidences: cloneTimelineInput([...evidences])
+      evidences: cloneTimelineInput([...evidences]),
+      ...(flags.truncated ? { truncated: true as const } : {}),
+      ...(flags.persistIncomplete ? { persistIncomplete: true as const } : {})
     })
   }
 
-  /** 只读拉取当前 Task 证据；失败不得拆掉已有 Timeline。 */
+  /** 只读拉取当前 Task 证据；失败不得拆掉已有 Timeline。truncated 必须进入 reducer。 */
   async function refreshCommandEvidence(taskId: string): Promise<void> {
     const list = typeof window === 'undefined' ? undefined : window.task?.listCommandEvidence
     if (disposed || !taskId || typeof list !== 'function') return
     try {
       const page = unwrapDesktopIpcResult(await list(taskId))
       if (disposed) return
-      acceptCommandEvidence(taskId, page.items)
+      acceptCommandEvidence(taskId, page.items, {
+        ...(page.truncated ? { truncated: true as const } : {}),
+        ...(page.persistIncomplete ? { persistIncomplete: true as const } : {})
+      })
     } catch {
       // 查询失败时保留已有 Timeline，不把证据通道错误提升成整页失败。
     }

@@ -7,7 +7,10 @@ import type {
   AgentTurnUsage
 } from '../../shared/agent'
 import type { CommandExecutionStatus } from '../../shared/command'
-import { presentCommandEvidenceSummary } from './command-evidence-presentation'
+import {
+  presentCommandEvidenceInconsistency,
+  presentCommandEvidenceSummary
+} from './command-evidence-presentation'
 import { isReadToolTitle, presentToolTitle } from './conversation-tool-presentation'
 import { isActiveConversationTurn } from './task-conversation-view'
 import type {
@@ -53,6 +56,8 @@ export interface ConversationToolBlock {
   mergedReadCount?: number
   /** 长命令/路径，主列默认折叠，不进 summary。 */
   detail?: string
+  /** 标题与退出事实冲突时主列可见，不得只藏在折叠详情里。 */
+  warning?: string
 }
 
 export interface ConversationSubagentBlock {
@@ -328,22 +333,27 @@ function toToolBlock(tools: TimelineToolNode[]): ConversationToolBlock {
     }
   }
   const presented = presentToolTitle(first.title)
-  const evidenceSummary = first.command ? presentCommandEvidenceSummary(first.command) : undefined
+  const evidence = first.command
+  const evidenceSummary = evidence ? presentCommandEvidenceSummary(evidence) : undefined
   const detail = [presented.detail, evidenceSummary].filter(Boolean).join('\n')
+  const warning = evidence?.inconsistency
+    ? presentCommandEvidenceInconsistency(evidence)
+    : undefined
   return {
     kind: 'tool',
     nodeId: first.nodeId,
     label: presented.label,
-    status: first.status,
+    status: evidence ? commandStatusToToolStatus(evidence.status) : first.status,
     tools,
     ...(detail ? { detail } : {}),
+    ...(warning ? { warning } : {}),
     ...(isReadToolTitle(first.title) ? { mergedReadCount: 1 } : {})
   }
 }
 
 function commandStatusToToolStatus(status: CommandExecutionStatus): AgentToolStatus | 'unknown' {
   if (status === 'succeeded') return 'completed'
-  if (status === 'failed' || status === 'start-failed') return 'failed'
+  if (status === 'failed' || status === 'start-failed' || status === 'timed-out') return 'failed'
   if (status === 'cancelled') return 'cancelled'
   if (status === 'running') return 'in_progress'
   return 'unknown'
