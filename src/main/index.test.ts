@@ -36,6 +36,11 @@ type DeletionPreparation = {
 
 type TaskDeletionDependencies = {
   getHistory(): TaskDeletionRuntime | null
+  getGitReview?: () => {
+    getChangeSet(taskId: string): Promise<unknown>
+    getFileDiff(taskId: string, path: string): Promise<unknown>
+    listTurnCheckpoints(taskId: string): Promise<unknown>
+  } | null
 }
 
 type DeletionLease = {
@@ -488,6 +493,14 @@ describe('Main 删除与权限失效编排', () => {
       state: 'idle',
       message: 'idle'
     })
+  })
+
+  it('组装层把 GitReviewService 交给 task:* 只读审阅 IPC', () => {
+    const review = mocks.taskDeletionDependencies?.getGitReview?.()
+    expect(review).toBeTruthy()
+    expect(typeof review?.getChangeSet).toBe('function')
+    expect(typeof review?.getFileDiff).toBe('function')
+    expect(typeof review?.listTurnCheckpoints).toBe('function')
   })
 
   it('Task 删除成功后才失效授权，token 校验失败时保持原授权', async () => {

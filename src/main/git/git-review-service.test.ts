@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -171,6 +171,21 @@ describe('GitReviewService 归因', () => {
     expect(link.unifiedDiff).toBeUndefined()
   })
 
+  it('基线时 git mv 的源路径不得标成 task-deleted', async () => {
+    const repo = await createGitRepo()
+    const fixture = await createReviewFixture(repo)
+    await runGit(repo, ['mv', 'README.md', 'NOTES.md'])
+
+    const result = await fixture.service.getChangeSet('task-1')
+    expect(
+      result.paths.some((item) => item.path === 'README.md' && item.attribution === 'task-deleted')
+    ).toBe(false)
+    expect(result.paths.find((item) => item.path === 'NOTES.md')?.attribution).not.toBe(
+      'task-deleted'
+    )
+    expect(result.paths.every((item) => item.attribution !== 'task-deleted')).toBe(true)
+  })
+
   it('已完成检查点后再改同一文件 → user-changed-after-task', async () => {
     const repo = await createGitRepo()
     const fixture = await createReviewFixture(repo)
@@ -251,6 +266,46 @@ describe('TurnChangeCheckpoint', () => {
     expect(second?.status).toBe('no-change')
     expect(second?.previousCheckpointId).toBe('turn-1')
     expect(second?.affectedPaths).toEqual([])
+  })
+
+  it('工作树快照 unavailable 时检查点保持 incomplete，getChangeSet 不把文件当成全消失', async () => {
+    const repo = await createGitRepo()
+    const fixture = await createReviewFixture(repo)
+    await fixture.service.recordTurnCheckpoint({
+      ...fixture.identity,
+      turnId: 'turn-1',
+      phase: 'before'
+    })
+    await writeFile(join(repo, 'README.md'), 'agent-edit\n')
+    await fixture.service.recordTurnCheckpoint({
+      ...fixture.identity,
+      turnId: 'turn-1',
+      phase: 'after'
+    })
+    expect((await fixture.checkpointStore.get('task-1', 'turn-1'))?.status).toBe('complete')
+
+    const stub = await writeGitStatusFailureStub()
+    const failing = createService(fixture, { gitExecutable: stub })
+    const listed = await failing.getChangeSet('task-1')
+    expect(listed.truncated).toBe(true)
+    expect(listed.paths).toEqual([])
+    expect(listed.paths.some((item) => item.attribution === 'user-changed-after-task')).toBe(false)
+    expect(listed.paths.some((item) => item.attribution === 'task-deleted')).toBe(false)
+
+    await failing.recordTurnCheckpoint({
+      ...fixture.identity,
+      turnId: 'turn-2',
+      phase: 'before'
+    })
+    await writeFile(join(repo, 'README.md'), 'second-edit\n')
+    await failing.recordTurnCheckpoint({
+      ...fixture.identity,
+      turnId: 'turn-2',
+      phase: 'after'
+    })
+    const incomplete = await fixture.checkpointStore.get('task-1', 'turn-2')
+    expect(incomplete?.status).toBe('incomplete')
+    expect(incomplete?.afterPaths).toBeUndefined()
   })
 })
 
@@ -352,6 +407,7 @@ async function createReviewFixture(
   service: GitReviewService
   identity: GitReviewTaskIdentity
   checkpointStore: TurnChangeCheckpointStore
+  baselineStore: TaskChangeBaselineStore
 }> {
   const canonical = await realpath(repo)
   const identity: GitReviewTaskIdentity = {
@@ -366,19 +422,54 @@ async function createReviewFixture(
   })
   const resolved = await resolveProjectRoot({ ...identity, environmentKind: 'local' })
   await baselineStore.put(await captureTaskChangeBaseline(resolved))
+  const service = createService(
+    { identity, baselineStore, checkpointStore },
+    { evidence: options.evidence }
+  )
+  return { service, identity, checkpointStore, baselineStore }
+}
+
+function createService(
+  fixture: {
+    identity: GitReviewTaskIdentity
+    baselineStore: TaskChangeBaselineStore
+    checkpointStore: TurnChangeCheckpointStore
+  },
+  options: { evidence?: CommandExecutionEvidence[]; gitExecutable?: string } = {}
+): GitReviewService {
   const evidence = options.evidence ?? []
-  const service = new GitReviewService({
-    baselineStore,
-    checkpointStore,
+  return new GitReviewService({
+    baselineStore: fixture.baselineStore,
+    checkpointStore: fixture.checkpointStore,
     getTaskIdentity: (taskId) => {
-      if (taskId !== identity.taskId) throw new Error('未找到指定 Task 历史。')
-      return identity
+      if (taskId !== fixture.identity.taskId) throw new Error('未找到指定 Task 历史。')
+      return fixture.identity
     },
     getProjectAvailability: async () => ({ state: 'available' }),
     listCommandEvidence: async (taskId) => evidence.filter((item) => item.taskId === taskId),
-    now: () => '2026-08-22T12:00:00.000Z'
+    now: () => '2026-08-22T12:00:00.000Z',
+    ...(options.gitExecutable ? { gitExecutable: options.gitExecutable } : {})
   })
-  return { service, identity, checkpointStore }
+}
+
+async function writeGitStatusFailureStub(): Promise<string> {
+  const dir = await createTemporaryDirectory()
+  const stub = join(dir, 'git-stub.mjs')
+  await writeFile(
+    stub,
+    [
+      '#!/usr/bin/env node',
+      "import { spawnSync } from 'node:child_process'",
+      'const args = process.argv.slice(2)',
+      'if (args.includes("status")) process.exit(128)',
+      'const result = spawnSync("git", args, { encoding: "utf8", cwd: process.cwd(), env: process.env })',
+      'if (result.stdout) process.stdout.write(result.stdout)',
+      'if (result.stderr) process.stderr.write(result.stderr)',
+      'process.exit(result.status ?? 1)'
+    ].join('\n')
+  )
+  await chmod(stub, 0o755)
+  return stub
 }
 
 async function createTemporaryDirectory(): Promise<string> {

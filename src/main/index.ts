@@ -112,6 +112,8 @@ let grokHomeConfig: GrokHomeConfigController | null = null
 let grokMemoryStore: GrokMemoryStore | null = null
 let mcpServerStore: McpServerStore | null = null
 let commandEvidenceStore: CommandEvidenceStore | null = null
+/** 与 commandEvidenceStore 一样提升到模块作用域，供 registerIpcHandlers 闭包读取。 */
+let gitReviewService: GitReviewService | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -321,7 +323,7 @@ async function initializeServices(
   const turnChangeCheckpointStore = new TurnChangeCheckpointStore({
     rootDir: join(gitReviewRoot, 'checkpoints')
   })
-  const gitReviewService = new GitReviewService({
+  const reviewService = new GitReviewService({
     baselineStore: taskChangeBaselineStore,
     checkpointStore: turnChangeCheckpointStore,
     getTaskIdentity: (taskId) => {
@@ -347,6 +349,7 @@ async function initializeServices(
       requireTaskStore().attachTurnValidationIds(taskId, turnId, validationIds),
     sourceEnvironment: process.env
   })
+  gitReviewService = reviewService
   const adapter = new GrokAcpAdapter(
     {
       onStatus: (status) =>
@@ -424,7 +427,7 @@ async function initializeServices(
       },
       sourceEnvironment: process.env
     }),
-    recordTurnChangeCheckpoint: createRecordTurnChangeCheckpoint(gitReviewService)
+    recordTurnChangeCheckpoint: createRecordTurnChangeCheckpoint(reviewService)
   })
   agentService = new AgentService(adapter, new TaskExecutionController(), {
     projectRegistry,

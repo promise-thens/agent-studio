@@ -158,6 +158,7 @@ export class GitReviewService {
       baseline,
       lastCompleteAfter,
       baselineUsable,
+      currentUsable: !snapshot.unavailable,
       maxPaths: MAX_CHANGE_SET_PATHS
     })
     const truncated = snapshot.truncated || attributed.truncated || snapshot.unavailable
@@ -237,6 +238,27 @@ export class GitReviewService {
       timeoutMs: DEFAULT_GIT_TIMEOUT_MS
     })
     const snapshot = await snapshotWorkingTree(resolved, this.gitOptions(), MAX_CHANGE_SET_PATHS)
+    // git status 失败不得把空 after 写成 complete/no-change，否则会当成文件全消失。
+    if (snapshot.unavailable) {
+      const incomplete: TurnChangeCheckpoint = {
+        schemaVersion: 1,
+        taskId: input.taskId,
+        turnId: input.turnId,
+        environmentId: input.environmentId,
+        capturedBeforeAt: existing?.capturedBeforeAt ?? this.now(),
+        status: 'incomplete',
+        beforePaths: existing?.beforePaths ?? [],
+        affectedPaths: existing?.affectedPaths ?? []
+      }
+      if (existing?.previousCheckpointId) {
+        incomplete.previousCheckpointId = existing.previousCheckpointId
+      }
+      const drift = await this.detectDrift(input, resolved)
+      if (drift) incomplete.drift = drift
+      else if (existing?.drift) incomplete.drift = existing.drift
+      await this.deps.checkpointStore.put(incomplete)
+      return
+    }
     const beforePaths = existing?.beforePaths ?? []
     const capturedBeforeAt = existing?.capturedBeforeAt ?? this.now()
     const affectedPaths = diffSnapshotPaths(beforePaths, snapshot.paths)
@@ -515,8 +537,13 @@ export function attributeWorkingTreePaths(input: {
   baseline: TaskChangeBaseline | null
   lastCompleteAfter?: TaskChangePathSnapshot[]
   baselineUsable: boolean
+  /** 当前工作树快照失败时不得把空列表当成文件全消失。 */
+  currentUsable?: boolean
   maxPaths?: number
 }): { paths: TaskChangePath[]; truncated: boolean } {
+  if (input.currentUsable === false) {
+    return { paths: [], truncated: true }
+  }
   const maxPaths = input.maxPaths ?? MAX_CHANGE_SET_PATHS
   const currentByPath = new Map(input.current.map((item) => [item.path, item]))
   const baselineByPath = new Map(
@@ -884,9 +911,9 @@ function parsePorcelainV2(stdout: string): PorcelainEntry[] {
     }
     const renamed = line.match(/^2 (\S+) \S+ \S+ \S+ \S+ \S+ \S+ \S+ (.*)$/u)
     if (renamed?.[1] && renamed[2]) {
-      const [dest, source] = renamed[2].split('\t')
+      // 只收 dest，与 Task 1 一致。rename 源未在基线出现时不得假装 task-deleted。
+      const [dest] = renamed[2].split('\t')
       if (dest) entries.push({ path: dest, kind: 'tracked', statusCode: renamed[1] })
-      if (source) entries.push({ path: source, kind: 'tracked', statusCode: `${renamed[1]}D` })
       continue
     }
     const unmerged = line.match(/^u (\S+) \S+ \S+ \S+ \S+ \S+ \S+ \S+ \S+ (.*)$/u)
