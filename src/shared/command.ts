@@ -82,6 +82,38 @@ export interface CommandTranscriptRef {
   retentionState: CommandTranscriptRetentionState
 }
 
+/** 单次 list 最多返回的证据条数，防止把整个 Task 的命令摘要一次打满 IPC。 */
+export const MAX_COMMAND_EVIDENCE_LIST_ITEMS = 128
+
+/** transcript chunk 分页：Renderer 只拿窗口，不能指定文件路径。 */
+export const MAX_COMMAND_TRANSCRIPT_PAGE_LIMIT = 64
+export const DEFAULT_COMMAND_TRANSCRIPT_PAGE_LIMIT = 32
+
+export const COMMAND_TRANSCRIPT_STREAMS = ['stdout', 'stderr'] as const
+export type CommandTranscriptStream = (typeof COMMAND_TRANSCRIPT_STREAMS)[number]
+
+/** 有界 transcript 片段。禁止夹带 path。 */
+export interface CommandTranscriptChunkView {
+  stream: CommandTranscriptStream
+  text: string
+}
+
+/**
+ * 按 commandId 查询的 transcript 窗口。缺失文件时 retentionState 为 missing/expired，
+ * 不得回传文件系统路径。
+ */
+export interface CommandTranscriptPage {
+  taskId: string
+  commandId: string
+  transcriptId: string
+  offset: number
+  limit: number
+  nextOffset?: number
+  truncated: boolean
+  retentionState: CommandTranscriptRetentionState
+  chunks: CommandTranscriptChunkView[]
+}
+
 /**
  * 一次命令执行的可审阅事实。cwd 只记录相对 execution root 的路径，
  * 绝对根目录不得出现在共享契约里。
@@ -111,6 +143,12 @@ export interface CommandExecutionEvidence {
   inconsistency?: CommandEvidenceInconsistency
   /** Runtime 声明了 output_file 但 App 未摄入文件内容。 */
   outputFileNotIngested?: true
+}
+
+/** 只读证据列表。truncated 表示达到条数上限后还有未返回项。 */
+export interface CommandEvidencePage {
+  items: CommandExecutionEvidence[]
+  truncated?: true
 }
 
 /**
@@ -189,6 +227,67 @@ export function parseCommandTranscriptRef(value: unknown): CommandTranscriptRef 
   }
 
   return ref
+}
+
+/**
+ * 将未知 IPC 载荷投影为 transcript 分页。路径字段一律丢弃；身份非法则整份拒绝。
+ */
+export function parseCommandTranscriptPage(value: unknown): CommandTranscriptPage | null {
+  if (!isPlainRecord(value)) return null
+  if (!isBoundedIdentifier(value.taskId)) return null
+  if (!isBoundedIdentifier(value.commandId)) return null
+  if (!isBoundedIdentifier(value.transcriptId)) return null
+  if (!isNonNegativeSafeInteger(value.offset)) return null
+  if (!isPositiveSafeInteger(value.limit) || value.limit > MAX_COMMAND_TRANSCRIPT_PAGE_LIMIT) {
+    return null
+  }
+  if (typeof value.truncated !== 'boolean') return null
+  if (
+    typeof value.retentionState !== 'string' ||
+    !(COMMAND_TRANSCRIPT_RETENTION_STATES as readonly string[]).includes(value.retentionState)
+  ) {
+    return null
+  }
+  if (!Array.isArray(value.chunks) || value.chunks.length > MAX_COMMAND_TRANSCRIPT_PAGE_LIMIT) {
+    return null
+  }
+
+  const chunks: CommandTranscriptChunkView[] = []
+  for (const item of value.chunks) {
+    const chunk = parseCommandTranscriptChunkView(item)
+    if (!chunk) return null
+    chunks.push(chunk)
+  }
+
+  const page: CommandTranscriptPage = {
+    taskId: value.taskId,
+    commandId: value.commandId,
+    transcriptId: value.transcriptId,
+    offset: value.offset,
+    limit: value.limit,
+    truncated: value.truncated,
+    retentionState: value.retentionState as CommandTranscriptRetentionState,
+    chunks
+  }
+  if (value.nextOffset !== undefined && value.nextOffset !== null) {
+    if (!isNonNegativeSafeInteger(value.nextOffset) || value.nextOffset <= value.offset) {
+      return null
+    }
+    page.nextOffset = value.nextOffset
+  }
+  return page
+}
+
+function parseCommandTranscriptChunkView(value: unknown): CommandTranscriptChunkView | null {
+  if (!isPlainRecord(value)) return null
+  if (value.stream !== 'stdout' && value.stream !== 'stderr') return null
+  if (typeof value.text !== 'string' || value.text.includes('\0')) return null
+  if (utf8ByteLength(value.text) > MAX_COMMAND_FIELD_UTF8_BYTES * 64) return null
+  return { stream: value.stream, text: value.text }
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
 /**

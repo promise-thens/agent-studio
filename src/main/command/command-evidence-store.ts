@@ -1,3 +1,4 @@
+import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import {
   parseCommandExecutionEvidence,
@@ -129,6 +130,35 @@ export class CommandEvidenceStore {
     })
   }
 
+  /**
+   * 列出单个 Task 下已通过契约校验的证据。身份必须是单段标识。
+   * 临时文件、坏 JSON 和跨 Task 串入项一律跳过，不把路径交给调用方。
+   */
+  async listEvidence(taskId: string): Promise<CommandExecutionEvidence[]> {
+    assertStoreIdentity(taskId)
+    let names: string[]
+    try {
+      names = await fs.readdir(this.commandsDir(taskId))
+    } catch {
+      return []
+    }
+
+    const items: CommandExecutionEvidence[] = []
+    for (const name of names) {
+      if (name.startsWith('.') || !name.endsWith('.json')) continue
+      const commandId = name.slice(0, -'.json'.length)
+      if (!isStoreIdentity(commandId)) continue
+      const evidence = await this.readEvidence(taskId, commandId)
+      if (evidence && evidence.taskId === taskId) items.push(evidence)
+    }
+    items.sort(
+      (left, right) =>
+        left.startedAt.localeCompare(right.startedAt) ||
+        left.commandId.localeCompare(right.commandId)
+    )
+    return items
+  }
+
   async readEvidence(taskId: string, commandId: string): Promise<CommandExecutionEvidence | null> {
     assertStoreIdentity(taskId)
     assertStoreIdentity(commandId)
@@ -161,8 +191,12 @@ export class CommandEvidenceStore {
     }
   }
 
+  private commandsDir(taskId: string): string {
+    return join(this.rootDir, taskId, 'commands')
+  }
+
   private evidencePath(taskId: string, commandId: string): string {
-    return join(this.rootDir, taskId, 'commands', `${commandId}.json`)
+    return join(this.commandsDir(taskId), `${commandId}.json`)
   }
 
   private transcriptPath(taskId: string, transcriptId: string): string {

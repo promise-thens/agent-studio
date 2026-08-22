@@ -14,7 +14,8 @@ import {
 function tool(
   toolCallId: string,
   title: string,
-  status: TimelineToolNode['status'] = 'completed'
+  status: TimelineToolNode['status'] = 'completed',
+  command?: TimelineToolNode['command']
 ): TimelineToolNode {
   return {
     nodeId: `task-1:turn-1:tool:${toolCallId}`,
@@ -24,7 +25,8 @@ function tool(
     kind: 'tool',
     toolCallId,
     title,
-    status
+    status,
+    ...(command ? { command } : {})
   }
 }
 
@@ -164,6 +166,40 @@ describe('对话块投影', () => {
       'subagent 探查测试结构',
       '子 Agent 改登录逻辑'
     ])
+  })
+
+  it('工具证据摘要进入折叠详情，不把 transcript 写进 Markdown', () => {
+    const blocks = projectConversationTurn(
+      turn('completed', [
+        tool('bash-1', 'Execute `pnpm test`', 'completed', {
+          commandId: 'rt-cmd',
+          displayCommand: 'pnpm test',
+          source: 'runtime-tool',
+          sourceLabel: 'Runtime 上报命令',
+          cwd: '.',
+          cwdLabel: 'Runtime 未冻结工作目录（相对路径 .，并非 App 沙箱）',
+          exitCode: 0,
+          durationMs: 1200,
+          timedOut: false,
+          truncated: true,
+          trustLevel: 'runtime-reported',
+          trustLabel: 'Runtime 上报事实',
+          status: 'succeeded',
+          logIncomplete: true,
+          logIncompleteReason: '输出已截断，日志不完整'
+        })
+      ])
+    )
+    const toolBlock = blocks.find((block) => block.kind === 'tool')
+    expect(toolBlock).toMatchObject({
+      kind: 'tool',
+      label: '跑了命令',
+      detail: expect.stringContaining('Runtime 上报命令')
+    })
+    expect(toolBlock && 'detail' in toolBlock ? toolBlock.detail : '').toContain('并非 App 沙箱')
+    expect(toolBlock && 'detail' in toolBlock ? toolBlock.detail : '').toContain('日志不完整')
+    expect(toolBlock && 'detail' in toolBlock ? toolBlock.detail : '').not.toContain('stdout')
+    expect(blocks.some((block) => block.kind === 'message')).toBe(false)
   })
 
   it('List/Execute 主列只显示短标签，长命令进 detail 供折叠', () => {

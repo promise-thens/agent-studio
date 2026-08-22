@@ -647,4 +647,85 @@ describe('窄 Preload API', () => {
     expect(JSON.stringify(listed)).not.toContain('deadbeef')
     expect(JSON.stringify(listed)).not.toContain('https://')
   })
+
+  it('命令证据查询只走 task:* 只读 channel，并丢掉 path/filePath', async () => {
+    const ipcRenderer = createIpcRenderer()
+    const task = createTaskDesktopApi(ipcRenderer)
+    const evidence = {
+      commandId: 'cmd-1',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      environmentId: 'env-1',
+      source: 'runtime-tool',
+      displayCommand: 'pnpm test',
+      cwd: '.',
+      startedAt: '2026-08-22T10:00:00.000Z',
+      endedAt: '2026-08-22T10:00:01.000Z',
+      exitCode: 0,
+      timedOut: false,
+      status: 'succeeded',
+      transcriptRef: {
+        transcriptId: 'transcript-1',
+        availableBytes: 2,
+        totalBytes: 2,
+        truncated: false,
+        encoding: 'utf-8',
+        retentionPolicy: 'bounded',
+        retentionState: 'retained'
+      },
+      truncated: false,
+      trustLevel: 'runtime-reported',
+      path: '/tmp/secret.log',
+      filePath: '/tmp/secret.log'
+    }
+    ipcRenderer.invoke.mockResolvedValueOnce({ ok: true, value: { items: [evidence] } })
+    ipcRenderer.invoke.mockResolvedValueOnce({ ok: true, value: evidence })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        commandId: 'cmd-1',
+        transcriptId: 'transcript-1',
+        offset: 0,
+        limit: 32,
+        truncated: false,
+        retentionState: 'retained',
+        path: '/tmp/secret.log',
+        chunks: [{ stream: 'stdout', text: 'ok', filePath: '/tmp/chunk' }]
+      }
+    })
+
+    const listed = await task.listCommandEvidence('task-1')
+    const got = await task.getCommandEvidence('task-1', 'cmd-1')
+    const transcript = await task.getCommandTranscript('task-1', 'cmd-1', 0, 32)
+
+    expect(ipcRenderer.invoke.mock.calls).toEqual([
+      [TASK_INVOKE_CHANNELS.listCommandEvidence, { taskId: 'task-1' }],
+      [TASK_INVOKE_CHANNELS.getCommandEvidence, { taskId: 'task-1', commandId: 'cmd-1' }],
+      [
+        TASK_INVOKE_CHANNELS.getCommandTranscript,
+        { taskId: 'task-1', commandId: 'cmd-1', offset: 0, limit: 32 }
+      ]
+    ])
+    expect(listed.ok && listed.value.items[0]).toMatchObject({
+      commandId: 'cmd-1',
+      source: 'runtime-tool',
+      trustLevel: 'runtime-reported'
+    })
+    expect(JSON.stringify(listed)).not.toContain('/tmp/secret.log')
+    expect(JSON.stringify(got)).not.toContain('filePath')
+    expect(transcript).toEqual({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        commandId: 'cmd-1',
+        transcriptId: 'transcript-1',
+        offset: 0,
+        limit: 32,
+        truncated: false,
+        retentionState: 'retained',
+        chunks: [{ stream: 'stdout', text: 'ok' }]
+      }
+    })
+  })
 })

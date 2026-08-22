@@ -1,4 +1,9 @@
 import type { PublicAgentEvent } from './agent-event'
+import type {
+  CommandEvidencePage,
+  CommandExecutionEvidence,
+  CommandTranscriptPage
+} from './command'
 import type { DesktopIpcResult } from './ipc-result'
 import type {
   DeletionPreview,
@@ -19,7 +24,10 @@ export const TASK_INVOKE_CHANNELS = {
   previewDelete: 'task:preview-delete',
   delete: 'task:delete',
   rename: 'task:rename',
-  archive: 'task:archive'
+  archive: 'task:archive',
+  listCommandEvidence: 'task:list-command-evidence',
+  getCommandEvidence: 'task:get-command-evidence',
+  getCommandTranscript: 'task:get-command-transcript'
 } as const
 
 export interface PublicAgentEventPage {
@@ -51,6 +59,17 @@ export interface TaskDesktopApi {
     cursor?: string,
     limit?: number
   ) => Promise<DesktopIpcResult<PermissionAuditPage>>
+  listCommandEvidence: (taskId: string) => Promise<DesktopIpcResult<CommandEvidencePage>>
+  getCommandEvidence: (
+    taskId: string,
+    commandId: string
+  ) => Promise<DesktopIpcResult<CommandExecutionEvidence>>
+  getCommandTranscript: (
+    taskId: string,
+    commandId: string,
+    offset?: number,
+    limit?: number
+  ) => Promise<DesktopIpcResult<CommandTranscriptPage>>
   resume: (taskId: string) => Promise<DesktopIpcResult<RuntimeResumeSummary>>
   previewDelete: (taskId: string) => Promise<DesktopIpcResult<DeletionPreview>>
   delete: (taskId: string, token: string) => Promise<DesktopIpcResult<null>>

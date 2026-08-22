@@ -345,6 +345,7 @@ describe('对话滚动与折叠', () => {
         changedPaths: { count: 0, availability: 'not-observed' },
         validations: { count: 0, availability: 'not-observed' },
         artifacts: { count: 0, availability: 'not-observed' },
+        commands: [],
         warnings: []
       },
       integrityIssues: []

@@ -104,6 +104,7 @@ let appearanceController: AppearanceController | null = null
 let grokHomeConfig: GrokHomeConfigController | null = null
 let grokMemoryStore: GrokMemoryStore | null = null
 let mcpServerStore: McpServerStore | null = null
+let commandEvidenceStore: CommandEvidenceStore | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -304,7 +305,8 @@ async function initializeServices(
   // 命令证据根放在 userData 下并尽量 0700；store 模块不调用 app.getPath。
   const commandEvidenceRoot = join(app.getPath('userData'), 'command-evidence')
   await fs.mkdir(commandEvidenceRoot, { recursive: true, mode: 0o700 })
-  const commandEvidenceStore = new CommandEvidenceStore({ rootDir: commandEvidenceRoot })
+  const evidenceStore = new CommandEvidenceStore({ rootDir: commandEvidenceRoot })
+  commandEvidenceStore = evidenceStore
   const adapter = new GrokAcpAdapter(
     {
       onStatus: (status) =>
@@ -337,7 +339,7 @@ async function initializeServices(
       getMcpServers: async () =>
         toAgentRuntimeMcpServers(await requireMcpServerStore().listEnabledResolved()),
       isMemoryEnabled: async () => (await requireGrokMemoryStore().getEnabledState()).enabled,
-      commandEvidenceStore,
+      commandEvidenceStore: evidenceStore,
       resolveCommandEvidenceContext: (taskId) => {
         // Adapter 不得自造 environmentId；查不到 Task 就跳过落盘。
         try {
@@ -657,6 +659,7 @@ function registerIpcHandlers(): void {
   registerTaskIpcHandlers({
     ipcMain: desktopIpcMain,
     assertTrustedSender,
+    getCommandEvidenceStore: () => commandEvidenceStore,
     getHistory: () => {
       const store = taskStore
       const service = agentService

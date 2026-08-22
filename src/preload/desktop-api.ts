@@ -47,6 +47,12 @@ import {
 import type { TaskExecutionSnapshot } from '../shared/task-execution'
 import type { ProviderDesktopApi } from '../shared/provider'
 import type { ConversationEntryState } from '../shared/task-history'
+import {
+  parseCommandExecutionEvidence,
+  parseCommandTranscriptPage,
+  type CommandEvidencePage,
+  type CommandExecutionEvidence
+} from '../shared/command'
 import { TASK_INVOKE_CHANNELS, type TaskDesktopApi } from '../shared/task-ipc'
 
 export interface NarrowIpcRenderer {
@@ -869,6 +875,30 @@ function parseGrokConfigDocument(value: unknown): AppGrokConfigDocument | null {
   return document
 }
 
+/**
+ * 证据必须重新 parse：丢掉 path/filePath，身份对不上则整份拒绝。
+ */
+function parsePublicCommandEvidence(value: unknown): CommandExecutionEvidence | null {
+  return parseCommandExecutionEvidence(value)
+}
+
+function parseCommandEvidencePageResult(
+  value: unknown,
+  taskId: string
+): DesktopIpcResult<CommandEvidencePage> {
+  if (!isPlainRecord(value) || !Array.isArray(value.items)) {
+    return { ok: false, error: { code: 'operation-failed', message: '命令证据列表无效。' } }
+  }
+  const items: CommandExecutionEvidence[] = []
+  for (const item of value.items) {
+    const parsed = parsePublicCommandEvidence(item)
+    if (parsed && parsed.taskId === taskId) items.push(parsed)
+  }
+  const page: CommandEvidencePage = { items }
+  if (value.truncated === true) page.truncated = true
+  return { ok: true, value: page }
+}
+
 /** 创建不暴露存储路径的 Task 历史 API。 */
 export function createTaskDesktopApi(ipcRenderer: NarrowIpcRenderer): TaskDesktopApi {
   return {
@@ -899,6 +929,39 @@ export function createTaskDesktopApi(ipcRenderer: NarrowIpcRenderer): TaskDeskto
         ...(cursor === undefined ? {} : { cursor }),
         ...(limit === undefined ? {} : { limit })
       }) as ReturnType<TaskDesktopApi['listPermissionAudits']>,
+    listCommandEvidence: async (taskId) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.listCommandEvidence, {
+        taskId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      return parseCommandEvidencePageResult(result.value, taskId)
+    },
+    getCommandEvidence: async (taskId, commandId) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getCommandEvidence, {
+        taskId,
+        commandId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const evidence = parsePublicCommandEvidence(result.value)
+      if (!evidence || evidence.taskId !== taskId || evidence.commandId !== commandId) {
+        return { ok: false, error: { code: 'operation-failed', message: '命令证据无效。' } }
+      }
+      return { ok: true, value: evidence }
+    },
+    getCommandTranscript: async (taskId, commandId, offset, limit) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getCommandTranscript, {
+        taskId,
+        commandId,
+        ...(offset === undefined ? {} : { offset }),
+        ...(limit === undefined ? {} : { limit })
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const page = parseCommandTranscriptPage(result.value)
+      if (!page || page.taskId !== taskId || page.commandId !== commandId) {
+        return { ok: false, error: { code: 'operation-failed', message: '命令输出无效。' } }
+      }
+      return { ok: true, value: page }
+    },
     resume: (taskId) =>
       ipcRenderer.invoke(TASK_INVOKE_CHANNELS.resume, { taskId }) as ReturnType<
         TaskDesktopApi['resume']

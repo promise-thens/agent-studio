@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
+import type { DesktopIpcResult } from '../../../shared/ipc-result'
 import type { PublicAgentEvent } from '../../../shared/agent-event'
 import type { TaskExecutionSnapshot } from '../../../shared/task-execution'
 import type {
@@ -65,6 +66,10 @@ const permissionAudit: PermissionAuditRecord = {
   reason: 'user-allowed',
   scope: 'once',
   createdAt: '2026-08-18T00:00:00.000Z'
+}
+
+function ok<T>(items: T[]): DesktopIpcResult<{ items: T[] }> {
+  return { ok: true, value: { items } }
 }
 
 describe('useTaskTimeline', () => {
@@ -154,9 +159,7 @@ describe('useTaskTimeline', () => {
       acceptedAt: '2026-08-18T00:00:00.000Z'
     })
 
-    expect(controller.activeTimeline.value?.turns[0]?.prompt).toBe(
-      '阅读 README.md，列出三条要点'
-    )
+    expect(controller.activeTimeline.value?.turns[0]?.prompt).toBe('阅读 README.md，列出三条要点')
     expect(controller.activeTimeline.value?.turns[0]?.nodes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -189,6 +192,57 @@ describe('useTaskTimeline', () => {
         expect.objectContaining({ kind: 'permission-audit', audit: permissionAudit })
       ])
     )
+  })
+
+  it('refreshCommandEvidence 只读拉取并写入 facts，不提交 executable', async () => {
+    const listCommandEvidence = vi.fn(async () =>
+      ok([
+        {
+          commandId: 'cmd-1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          environmentId: 'env-1',
+          source: 'app-runner' as const,
+          displayCommand: 'pnpm test',
+          cwd: '.',
+          startedAt: '2026-08-18T00:00:00.000Z',
+          endedAt: '2026-08-18T00:00:01.000Z',
+          exitCode: 0,
+          timedOut: false,
+          status: 'succeeded' as const,
+          transcriptRef: {
+            transcriptId: 'tx-1',
+            availableBytes: 2,
+            truncated: false,
+            encoding: 'utf-8' as const,
+            retentionPolicy: 'bounded' as const,
+            retentionState: 'retained' as const
+          },
+          truncated: false,
+          trustLevel: 'app-enforced' as const
+        }
+      ])
+    )
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { task: { listCommandEvidence } }
+    })
+    try {
+      const controller = useTaskTimeline({ manageSubscriptions: false })
+      controller.hydrateHistory(historyDetail, [historyTurn], { [historyTurn.turnId]: [event] }, [])
+      await controller.refreshCommandEvidence('task-1')
+      expect(listCommandEvidence).toHaveBeenCalledWith('task-1')
+      expect(controller.activeTimeline.value?.resultReview.commands[0]).toMatchObject({
+        source: 'app-runner',
+        sourceLabel: 'App 自有命令'
+      })
+      expect(controller.activeTimeline.value?.resultReview.validations).toMatchObject({
+        availability: 'observed',
+        outcome: 'pass'
+      })
+    } finally {
+      Reflect.deleteProperty(globalThis, 'window')
+    }
   })
 
   it('再次水合历史分页后会把新增事件投影到 Timeline', () => {

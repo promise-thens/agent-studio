@@ -118,23 +118,23 @@
 **前置依赖：**
 - 依赖任务 2、任务 3。
 
-- [ ] **第 1 步: 提供只读查询 API**
+- [x] **第 1 步: 提供只读查询 API**
 说明：按 taskId/commandId 获取 evidence 与分页 transcript chunk；主进程验证 Task/Environment，Renderer 不能提交 transcript 文件路径。
 预期：跨 Task 查询、超限 offset 和失效引用安全拒绝。
 
-- [ ] **第 2 步: 展示事实和限制**
+- [x] **第 2 步: 展示事实和限制**
 说明：Timeline/ResultReview 显示 displayCommand、来源、cwd、退出码、耗时、timeout、截断和 trust；无完整 transcript 时明确说明。
 预期：用户不会把 `runtime-tool` 当成 App 沙箱执行，也不会把截断输出误认为完整日志。
 
-- [ ] **第 3 步: 完成真实命令走查**
+- [x] **第 3 步: 完成真实命令走查**
 说明：验证 App 自有成功/失败/超时/取消命令，以及 Grok 工具成功/失败/字段缺失/输出文件场景。
 预期：ValidationResult、Timeline 和证据查询一致，Provider Secret 不进入 App 自有命令环境。
 
 ## 验收标准
 
-- [ ] App 自有非交互命令和 Runtime 上报命令使用同一 CommandExecutionEvidence，但 source/trust/approval 边界清晰。
-- [ ] ValidationResult 只能由真实 commandId、退出码和超时事实产生，不从聊天文案或工具标题推断通过。
-- [ ] AppCommandRunner 无任意 Renderer Shell API，命令固定在 Task execution root，环境不包含 Provider Key 或 App Secret。
-- [ ] Runtime 命令只解析已验证 schema；未上报审批或无法拦截的执行不会被描述为已受 Broker 强制保护。
-- [ ] transcript 有容量、持久化和失效边界；文本脱敏明确为 best-effort，核心安全依赖环境隔离和不注入 Secret。
-- [ ] 目标 ESLint、相关 Vitest/集成测试、`pnpm typecheck`、`pnpm build`、`git diff --check` 通过，并完成 App/Grok 两类命令证据走查。
+- [x] App 自有非交互命令和 Runtime 上报命令使用同一 CommandExecutionEvidence，但 source/trust/approval 边界清晰。
+- [x] ValidationResult 只能由真实 commandId、退出码和超时事实产生，不从聊天文案或工具标题推断通过。
+- [x] AppCommandRunner 无任意 Renderer Shell API，命令固定在 Task execution root，环境不包含 Provider Key 或 App Secret。
+- [x] Runtime 命令只解析已验证 schema；未上报审批或无法拦截的执行不会被描述为已受 Broker 强制保护。
+- [x] transcript 有容量、持久化和失效边界；文本脱敏明确为 best-effort，核心安全依赖环境隔离和不注入 Secret。
+- [x] 目标 ESLint、相关 Vitest/集成测试、`pnpm typecheck`、`pnpm build`、`git diff --check` 通过，并完成 App/Grok 两类命令证据走查。

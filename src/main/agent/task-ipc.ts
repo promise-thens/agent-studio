@@ -1,3 +1,12 @@
+import {
+  DEFAULT_COMMAND_TRANSCRIPT_PAGE_LIMIT,
+  MAX_COMMAND_EVIDENCE_LIST_ITEMS,
+  MAX_COMMAND_TRANSCRIPT_PAGE_LIMIT,
+  type CommandEvidencePage,
+  type CommandExecutionEvidence,
+  type CommandTranscriptPage
+} from '../../shared/command'
+import type { DesktopIpcResult } from '../../shared/ipc-result'
 import type {
   DeletionPreview,
   PermissionAuditPage,
@@ -8,7 +17,7 @@ import type {
 } from '../../shared/task-history'
 import type { PublicAgentEventPage } from '../../shared/task-ipc'
 import { TASK_INVOKE_CHANNELS } from '../../shared/task-ipc'
-import type { DesktopIpcResult } from '../../shared/ipc-result'
+import type { CommandEvidenceStore } from '../command/command-evidence-store'
 import type { DesktopIpcMain } from '../ipc-types'
 import {
   DesktopIpcFailure,
@@ -45,6 +54,11 @@ export interface TaskIpcDependencies {
   ipcMain: DesktopIpcMain
   assertTrustedSender: (event: TrustedIpcInvokeEvent) => void
   getHistory: () => TaskHistoryIpcRuntime | null
+  /** 只读命令证据；不得把 store 的写/执行入口暴露给 Renderer。 */
+  getCommandEvidenceStore: () => Pick<
+    CommandEvidenceStore,
+    'listEvidence' | 'readEvidence' | 'readTranscript'
+  > | null
   sanitizeError: (error: unknown) => string
 }
 
@@ -52,6 +66,37 @@ function requireHistory(getHistory: TaskIpcDependencies['getHistory']): TaskHist
   const history = getHistory()
   if (!history) throw new DesktopIpcFailure('runtime-unavailable', 'Task 历史服务尚未初始化。')
   return history
+}
+
+function requireCommandEvidenceStore(
+  getStore: TaskIpcDependencies['getCommandEvidenceStore']
+): Pick<CommandEvidenceStore, 'listEvidence' | 'readEvidence' | 'readTranscript'> {
+  const store = getStore()
+  if (!store) throw new DesktopIpcFailure('runtime-unavailable', '命令证据服务尚未初始化。')
+  return store
+}
+
+/**
+ * 查询前必须证明 Task 存在。失败统一成 history-not-found，避免把 Store 堆栈或路径回给 Renderer。
+ */
+function requireExistingTask(getHistory: TaskIpcDependencies['getHistory'], taskId: string): void {
+  try {
+    requireHistory(getHistory).getTaskDetail(taskId)
+  } catch (error) {
+    if (error instanceof DesktopIpcFailure) throw error
+    throw new DesktopIpcFailure('history-not-found', '未找到指定 Task。')
+  }
+}
+
+/**
+ * 命令证据身份只能是单段标识。禁止 `/` `\` `.` `..`，避免被当成路径片段。
+ */
+function readCommandIdentity(request: Record<string, unknown>, field: string): string {
+  const value = readText(request, field)!
+  if (value.includes('/') || value.includes('\\') || value === '.' || value === '..') {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  return value
 }
 
 function readRequest(args: unknown[], allowed: readonly string[]): Record<string, unknown> {
@@ -172,4 +217,116 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
     const request = readRequest(args, ['taskId'])
     return requireHistory(dependencies.getHistory).archiveTask(readText(request, 'taskId')!)
   })
+
+  /**
+   * 只读列出当前 Task 的命令证据摘要。Renderer 不得提交 executable/cwd/env 或 transcript 路径。
+   */
+  register(TASK_INVOKE_CHANNELS.listCommandEvidence, async (args) => {
+    const request = readRequest(args, ['taskId'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    requireExistingTask(dependencies.getHistory, taskId)
+    const listed = await requireCommandEvidenceStore(
+      dependencies.getCommandEvidenceStore
+    ).listEvidence(taskId)
+    const scoped = listed.filter((item) => item.taskId === taskId)
+    const page: CommandEvidencePage = {
+      items: scoped.slice(0, MAX_COMMAND_EVIDENCE_LIST_ITEMS)
+    }
+    if (scoped.length > MAX_COMMAND_EVIDENCE_LIST_ITEMS) page.truncated = true
+    return page
+  })
+
+  /**
+   * 按 commandId 取单条证据。跨 Task 身份一律当不存在，禁止把另一 Task 的事实拼过来。
+   */
+  register(TASK_INVOKE_CHANNELS.getCommandEvidence, async (args) => {
+    const request = readRequest(args, ['taskId', 'commandId'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    const commandId = readCommandIdentity(request, 'commandId')
+    requireExistingTask(dependencies.getHistory, taskId)
+    const evidence = await requireCommandEvidenceStore(
+      dependencies.getCommandEvidenceStore
+    ).readEvidence(taskId, commandId)
+    return requireScopedEvidence(evidence, taskId)
+  })
+
+  /**
+   * 按 commandId 读取有界 transcript chunk。offset 是 chunk 下标；超限拒绝。
+   * 文件缺失时只返回 missing/expired，永不回传路径。
+   */
+  register(TASK_INVOKE_CHANNELS.getCommandTranscript, async (args) => {
+    const request = readRequest(args, ['taskId', 'commandId', 'offset', 'limit'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    const commandId = readCommandIdentity(request, 'commandId')
+    const offset = readInteger(request, 'offset') ?? 0
+    const limit = readInteger(request, 'limit') ?? DEFAULT_COMMAND_TRANSCRIPT_PAGE_LIMIT
+    if (limit < 1 || limit > MAX_COMMAND_TRANSCRIPT_PAGE_LIMIT) {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    requireExistingTask(dependencies.getHistory, taskId)
+    const store = requireCommandEvidenceStore(dependencies.getCommandEvidenceStore)
+    const evidence = requireScopedEvidence(await store.readEvidence(taskId, commandId), taskId)
+    return readCommandTranscriptPage(store, evidence, offset, limit)
+  })
+}
+
+/**
+ * 证据必须属于请求的 Task；否则当成不存在，避免跨 Task 探测。
+ */
+function requireScopedEvidence(
+  evidence: CommandExecutionEvidence | null,
+  taskId: string
+): CommandExecutionEvidence {
+  if (!evidence || evidence.taskId !== taskId) {
+    throw new DesktopIpcFailure('not-found', '未找到命令证据。')
+  }
+  return evidence
+}
+
+/**
+ * 只切片已持久化的 chunk。transcript 丢失时保留 identity，把 retentionState 降为 missing/expired。
+ */
+async function readCommandTranscriptPage(
+  store: Pick<CommandEvidenceStore, 'readTranscript'>,
+  evidence: CommandExecutionEvidence,
+  offset: number,
+  limit: number
+): Promise<CommandTranscriptPage> {
+  const transcript = await store.readTranscript(
+    evidence.taskId,
+    evidence.transcriptRef.transcriptId
+  )
+  const scoped =
+    transcript &&
+    transcript.taskId === evidence.taskId &&
+    transcript.commandId === evidence.commandId
+      ? transcript
+      : null
+  const chunks = scoped?.chunks ?? []
+  if (offset > chunks.length) {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  const window = chunks.slice(offset, offset + limit).map((chunk) => ({
+    stream: chunk.stream,
+    text: chunk.text
+  }))
+  const nextIndex = offset + window.length
+  const retentionState = scoped
+    ? evidence.transcriptRef.retentionState
+    : evidence.transcriptRef.retentionState === 'expired'
+      ? 'expired'
+      : 'missing'
+  const page: CommandTranscriptPage = {
+    taskId: evidence.taskId,
+    commandId: evidence.commandId,
+    transcriptId: evidence.transcriptRef.transcriptId,
+    offset,
+    limit,
+    truncated:
+      evidence.truncated || evidence.transcriptRef.truncated || retentionState !== 'retained',
+    retentionState,
+    chunks: window
+  }
+  if (nextIndex < chunks.length) page.nextOffset = nextIndex
+  return page
 }

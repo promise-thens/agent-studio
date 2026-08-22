@@ -1,5 +1,6 @@
 import { computed, onBeforeUnmount, ref, toRaw, type ComputedRef, type Ref } from 'vue'
 import type { PublicAgentEvent } from '../../../shared/agent-event'
+import type { CommandExecutionEvidence } from '../../../shared/command'
 import type { TaskExecutionSnapshot } from '../../../shared/task-execution'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import { createTaskExecutionConsumer } from '../task-execution-consumer'
@@ -44,8 +45,11 @@ export interface TaskTimelineController {
     detail: import('../../../shared/task-history').TaskHistoryDetail,
     turns: readonly import('../../../shared/task-history').TurnHistoryRecord[],
     eventsByTurn: Record<string, readonly PublicAgentEvent[]>,
-    audits: readonly import('../../../shared/task-history').PermissionAuditRecord[]
+    audits: readonly import('../../../shared/task-history').PermissionAuditRecord[],
+    commandEvidences?: readonly CommandExecutionEvidence[]
   ): void
+  acceptCommandEvidence(taskId: string, evidences: readonly CommandExecutionEvidence[]): void
+  refreshCommandEvidence(taskId: string): Promise<void>
   setActiveTask(taskId: string): void
   removeTask(taskId: string): void
   dispose(): void
@@ -54,6 +58,12 @@ export interface TaskTimelineController {
 /** 将响应式历史输入转为纯可序列化数据，避免 Vue Proxy 进入 Timeline reducer。 */
 function cloneTimelineInput<T>(value: T): T {
   return structuredClone(toRaw(value))
+}
+
+function shouldRefreshCommandEvidence(event: PublicAgentEvent): boolean {
+  if (event.kind === 'turn-complete') return true
+  if (event.kind !== 'tool-call' && event.kind !== 'tool-update') return false
+  return event.status === 'completed' || event.status === 'failed' || event.status === 'cancelled'
 }
 
 /** 将历史查询、实时事件和执行快照编排到纯 Timeline facts；组件不直接访问 IPC。 */
@@ -121,6 +131,7 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
     ) {
       flushPendingEvents()
       dispatch(event.taskId, { type: 'events/ingest-public', events: [event] })
+      if (shouldRefreshCommandEvidence(event)) void refreshCommandEvidence(event.taskId)
       return
     }
     ;(pendingEventsByTaskId[event.taskId] ??= []).push(event)
@@ -138,7 +149,8 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
     detail: import('../../../shared/task-history').TaskHistoryDetail,
     turns: readonly import('../../../shared/task-history').TurnHistoryRecord[],
     eventsByTurn: Record<string, readonly PublicAgentEvent[]>,
-    audits: readonly import('../../../shared/task-history').PermissionAuditRecord[]
+    audits: readonly import('../../../shared/task-history').PermissionAuditRecord[],
+    commandEvidences: readonly CommandExecutionEvidence[] = []
   ): void {
     const historyDetail = cloneTimelineInput(detail)
     const historyTurns = cloneTimelineInput(turns)
@@ -154,7 +166,34 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
         events: historyEventsByTurn[turn.turnId] ?? []
       })
     }
+    if (commandEvidences.length) {
+      acceptCommandEvidence(historyDetail.taskId, commandEvidences)
+    }
     activeTaskId.value = historyDetail.taskId
+  }
+
+  function acceptCommandEvidence(
+    taskId: string,
+    evidences: readonly CommandExecutionEvidence[]
+  ): void {
+    if (disposed || !taskId) return
+    dispatch(taskId, {
+      type: 'command-evidence/replace',
+      evidences: cloneTimelineInput([...evidences])
+    })
+  }
+
+  /** 只读拉取当前 Task 证据；失败不得拆掉已有 Timeline。 */
+  async function refreshCommandEvidence(taskId: string): Promise<void> {
+    const list = typeof window === 'undefined' ? undefined : window.task?.listCommandEvidence
+    if (disposed || !taskId || typeof list !== 'function') return
+    try {
+      const page = unwrapDesktopIpcResult(await list(taskId))
+      if (disposed) return
+      acceptCommandEvidence(taskId, page.items)
+    } catch {
+      // 查询失败时保留已有 Timeline，不把证据通道错误提升成整页失败。
+    }
   }
 
   function removeTask(taskId: string): void {
@@ -206,6 +245,7 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
         afterSequenceByTurn[turn.turnId] = page.nextAfterSequence ?? null
         watermarkByTurn[turn.turnId] = page.watermark
       }
+      await refreshCommandEvidence(taskId)
       coordinators.value = {
         ...coordinators.value,
         [taskId]: {
@@ -268,6 +308,8 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
     acceptLiveEvent,
     acceptExecutionSnapshot,
     hydrateHistory,
+    acceptCommandEvidence,
+    refreshCommandEvidence,
     setActiveTask: (taskId) => {
       activeTaskId.value = taskId
     },

@@ -1,35 +1,75 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { CommandExecutionEvidence } from '../../shared/command'
 import { TASK_INVOKE_CHANNELS } from '../../shared/task-ipc'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
+import type { CommandEvidenceStore } from '../command/command-evidence-store'
 import type { DesktopIpcHandler } from '../ipc-types'
 import { DesktopIpcFailure, type TrustedIpcInvokeEvent } from '../security/ipc-sender-validation'
 import { registerTaskIpcHandlers, type TaskHistoryIpcRuntime } from './task-ipc'
 
 const event = {} as TrustedIpcInvokeEvent
 
-function createFixture(historyAvailable = true): {
+function sampleEvidence(
+  overrides: Partial<CommandExecutionEvidence> = {}
+): CommandExecutionEvidence {
+  return {
+    commandId: 'cmd-1',
+    taskId: 'task-1',
+    turnId: 'turn-1',
+    environmentId: 'env-1',
+    source: 'app-runner',
+    displayCommand: 'node -e process.stdout.write("ok")',
+    cwd: '.',
+    startedAt: '2026-08-22T10:00:00.000Z',
+    endedAt: '2026-08-22T10:00:01.000Z',
+    exitCode: 0,
+    timedOut: false,
+    status: 'succeeded',
+    transcriptRef: {
+      transcriptId: 'transcript-1',
+      availableBytes: 2,
+      totalBytes: 2,
+      truncated: false,
+      encoding: 'utf-8',
+      retentionPolicy: 'bounded',
+      retentionState: 'retained'
+    },
+    truncated: false,
+    trustLevel: 'app-enforced',
+    ...overrides
+  }
+}
+
+function createFixture(
+  historyAvailable = true,
+  commandStoreAvailable = true
+): {
   handlers: Map<string, DesktopIpcHandler>
   history: TaskHistoryIpcRuntime
+  commandStore: Pick<CommandEvidenceStore, 'listEvidence' | 'readEvidence' | 'readTranscript'>
   assertTrustedSender: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, request: unknown) => Promise<DesktopIpcResult<T>>
 } {
   const handlers = new Map<string, DesktopIpcHandler>()
   const history: TaskHistoryIpcRuntime = {
     listTasks: vi.fn(async () => ({ items: [] })),
-    getTaskDetail: vi.fn(() => ({
-      taskId: 'task-1',
-      projectId: 'project-1',
-      runtimeId: 'grok' as const,
-      title: '测试',
-      state: 'completed' as const,
-      turnCount: 1,
-      resumable: true,
-      createdAt: '2026-08-12T00:00:00.000Z',
-      updatedAt: '2026-08-12T00:00:00.000Z',
-      revision: 1,
-      environment: { kind: 'local' as const, projectId: 'project-1' },
-      permissionPolicy: { kind: 'legacy-runtime' as const }
-    })),
+    getTaskDetail: vi.fn((taskId: string) => {
+      if (taskId === 'missing-task') throw new Error('未找到指定 Task 历史。')
+      return {
+        taskId,
+        projectId: 'project-1',
+        runtimeId: 'grok' as const,
+        title: '测试',
+        state: 'completed' as const,
+        turnCount: 1,
+        resumable: true,
+        createdAt: '2026-08-12T00:00:00.000Z',
+        updatedAt: '2026-08-12T00:00:00.000Z',
+        revision: 1,
+        environment: { kind: 'local' as const, projectId: 'project-1' },
+        permissionPolicy: { kind: 'legacy-runtime' as const }
+      }
+    }),
     listTurns: vi.fn(async () => ({ items: [] })),
     listEvents: vi.fn(async () => ({ items: [], watermark: 0 })),
     listPermissionAudits: vi.fn(async () => ({ items: [] })),
@@ -77,15 +117,25 @@ function createFixture(historyAvailable = true): {
     }))
   }
   const assertTrustedSender = vi.fn()
+  const commandStore: Pick<
+    CommandEvidenceStore,
+    'listEvidence' | 'readEvidence' | 'readTranscript'
+  > = {
+    listEvidence: vi.fn(async () => []),
+    readEvidence: vi.fn(async () => null),
+    readTranscript: vi.fn(async () => null)
+  }
   registerTaskIpcHandlers({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     assertTrustedSender,
     getHistory: () => (historyAvailable ? history : null),
+    getCommandEvidenceStore: () => (commandStoreAvailable ? commandStore : null),
     sanitizeError: (error) => (error instanceof Error ? error.message : String(error))
   })
   return {
     handlers,
     history,
+    commandStore,
     assertTrustedSender,
     invoke: async <T>(channel: string, request: unknown): Promise<DesktopIpcResult<T>> => {
       const handler = handlers.get(channel)
@@ -211,5 +261,124 @@ describe('Task 历史 IPC', () => {
       })
     ).toEqual({ ok: true, value: { items: [] } })
     expect(fixture.history.listPermissionAudits).toHaveBeenCalledWith('task-1', 'audit-1', 20)
+  })
+})
+
+describe('Task 命令证据只读 IPC', () => {
+  it('不注册 execute/run/spawn channel，并拒绝 Renderer 提交 executable/cwd/env', async () => {
+    const fixture = createFixture()
+    const channels = Object.values(TASK_INVOKE_CHANNELS)
+    expect(channels.every((channel) => !channel.startsWith('grok:'))).toBe(true)
+    expect(channels.some((channel) => /execute|run|spawn/i.test(channel))).toBe(false)
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.listCommandEvidence, {
+        taskId: 'task-1',
+        executable: '/bin/sh',
+        cwd: '/tmp',
+        env: { XAI_API_KEY: 'planted' }
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.commandStore.listEvidence).not.toHaveBeenCalled()
+  })
+
+  it('列出证据前校验 Task 存在，未知 Task 安全拒绝', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.listCommandEvidence, { taskId: 'missing-task' })
+    ).toMatchObject({ ok: false, error: { code: 'history-not-found' } })
+    expect(fixture.commandStore.listEvidence).not.toHaveBeenCalled()
+  })
+
+  it('按 taskId 返回证据摘要且不含路径', async () => {
+    const fixture = createFixture()
+    const evidence = sampleEvidence()
+    vi.mocked(fixture.commandStore.listEvidence).mockResolvedValueOnce([evidence])
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.listCommandEvidence, { taskId: 'task-1' })
+    ).toEqual({ ok: true, value: { items: [evidence] } })
+    expect(JSON.stringify(evidence)).not.toContain('filePath')
+  })
+
+  it('跨 Task 的 evidence.taskId 不得被查询接口返回', async () => {
+    const fixture = createFixture()
+    vi.mocked(fixture.commandStore.readEvidence).mockResolvedValueOnce(
+      sampleEvidence({ taskId: 'task-2' })
+    )
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.getCommandEvidence, {
+        taskId: 'task-1',
+        commandId: 'cmd-1'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'not-found' } })
+  })
+
+  it('拒绝非法身份、路径字段和超限 offset', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.getCommandEvidence, {
+        taskId: '../escape',
+        commandId: 'cmd-1'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.getCommandTranscript, {
+        taskId: 'task-1',
+        commandId: 'cmd-1',
+        path: '/tmp/out.log'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    vi.mocked(fixture.commandStore.readEvidence).mockResolvedValue(sampleEvidence())
+    vi.mocked(fixture.commandStore.readTranscript).mockResolvedValue({
+      transcriptId: 'transcript-1',
+      commandId: 'cmd-1',
+      taskId: 'task-1',
+      encoding: 'utf-8',
+      truncated: false,
+      totalBytes: 2,
+      availableBytes: 2,
+      chunks: [{ stream: 'stdout', text: 'ok' }]
+    })
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.getCommandTranscript, {
+        taskId: 'task-1',
+        commandId: 'cmd-1',
+        offset: 9
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+  })
+
+  it('缺失 transcript 返回 missing 而不回传文件路径', async () => {
+    const fixture = createFixture()
+    vi.mocked(fixture.commandStore.readEvidence).mockResolvedValueOnce(
+      sampleEvidence({
+        transcriptRef: {
+          transcriptId: 'transcript-1',
+          availableBytes: 2,
+          truncated: true,
+          encoding: 'utf-8',
+          retentionPolicy: 'bounded',
+          retentionState: 'retained'
+        }
+      })
+    )
+    vi.mocked(fixture.commandStore.readTranscript).mockResolvedValueOnce(null)
+    const result = await fixture.invoke(TASK_INVOKE_CHANNELS.getCommandTranscript, {
+      taskId: 'task-1',
+      commandId: 'cmd-1'
+    })
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        commandId: 'cmd-1',
+        transcriptId: 'transcript-1',
+        offset: 0,
+        limit: 32,
+        truncated: true,
+        retentionState: 'missing',
+        chunks: []
+      }
+    })
+    expect(JSON.stringify(result)).not.toContain('path')
   })
 })

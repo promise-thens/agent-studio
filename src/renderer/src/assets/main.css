@@ -1025,6 +1025,58 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.command-evidence-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.command-evidence-item {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-1) 48%, transparent);
+}
+
+.command-evidence-command {
+  margin: 0 0 8px;
+  color: var(--text-1);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.command-evidence-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 6px 10px;
+  margin: 0;
+}
+
+.command-evidence-facts dt {
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.command-evidence-facts dd {
+  margin: 2px 0 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.command-evidence-incomplete {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 .result-warnings {
   display: grid;
   gap: 4px;

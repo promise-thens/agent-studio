@@ -124,6 +124,7 @@ describe('Inspector 占位文案', () => {
         changedPaths: { count: 0, availability: 'not-observed' },
         validations: { count: 0, availability: 'not-observed' },
         artifacts: { count: 0, availability: 'not-observed' },
+        commands: [],
         warnings: []
       },
       integrityIssues: []

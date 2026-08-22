@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -126,6 +126,43 @@ describe('CommandEvidenceStore', () => {
     expect(transcript?.truncated).toBe(true)
     expect(storedBytes).toBeLessThanOrEqual(MAX_COMMAND_TRANSCRIPT_BYTES)
     expect(storedBytes).toBe(transcriptRef.availableBytes)
+  })
+
+  it('按 taskId 列出证据，跳过临时文件并不泄漏其它 Task', async () => {
+    const store = await createStore()
+    await store.writeEvidence(
+      sampleEvidence({ commandId: 'cmd-b', startedAt: '2026-08-22T10:00:02.000Z' })
+    )
+    await store.writeEvidence(
+      sampleEvidence({ commandId: 'cmd-a', startedAt: '2026-08-22T10:00:01.000Z' })
+    )
+    await store.writeEvidence(
+      sampleEvidence({
+        taskId: 'task-2',
+        commandId: 'cmd-other',
+        transcriptRef: {
+          transcriptId: 'transcript-other',
+          availableBytes: 0,
+          truncated: false,
+          encoding: 'utf-8',
+          retentionPolicy: 'bounded',
+          retentionState: 'retained'
+        }
+      })
+    )
+    const commandsDir = join(store.rootDir, 'task-1', 'commands')
+    await writeFile(join(commandsDir, '.pending.json.tmp'), '{"schemaVersion":1}\n')
+
+    const listed = await store.listEvidence('task-1')
+    expect(listed.map((item) => item.commandId)).toEqual(['cmd-a', 'cmd-b'])
+    expect(listed.every((item) => item.taskId === 'task-1')).toBe(true)
+    expect(JSON.stringify(listed)).not.toContain(store.rootDir)
+  })
+
+  it('拒绝把路径穿越身份用于 listEvidence', async () => {
+    const store = await createStore()
+    await expect(store.listEvidence('../escape')).rejects.toThrow()
+    await expect(store.listEvidence('.')).rejects.toThrow()
   })
 })
 

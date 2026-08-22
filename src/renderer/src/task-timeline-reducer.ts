@@ -6,6 +6,8 @@ import type {
   AgentTurnUsage
 } from '../../shared/agent'
 import type { PublicAgentEvent } from '../../shared/agent-event'
+import type { CommandExecutionEvidence, ValidationOutcome } from '../../shared/command'
+import { deriveValidationResult } from '../../shared/command'
 import type { TaskExecutionSnapshot, TaskExecutionState } from '../../shared/task-execution'
 import type {
   PermissionAuditRecord,
@@ -13,6 +15,12 @@ import type {
   TurnHistoryRecord,
   TurnModelSnapshot
 } from '../../shared/task-history'
+import {
+  toCommandEvidenceView,
+  type TimelineCommandEvidenceView
+} from './command-evidence-presentation'
+
+export type { TimelineCommandEvidenceView }
 
 export interface AdmittedTurnFact {
   taskId: string
@@ -67,6 +75,7 @@ export interface TaskTimelineFacts {
   taskId: string
   task: VersionedFactSlot<TaskHistoryDetail>
   turnsById: Record<string, TimelineTurnFacts>
+  commandEvidenceById: Record<string, CommandExecutionEvidence>
   integrityIssuesByKey: Record<string, TimelineIntegrityIssue>
 }
 
@@ -76,11 +85,13 @@ export type TaskTimelineFactAction =
   | { type: 'turns/upsert'; turns: readonly TurnHistoryRecord[] }
   | { type: 'events/ingest-public'; events: readonly PublicAgentEvent[] }
   | { type: 'permission-audits/merge'; audits: readonly PermissionAuditRecord[] }
+  | { type: 'command-evidence/replace'; evidences: readonly CommandExecutionEvidence[] }
 
 export type TaskTimelineNode =
   | TimelineTextNode
   | TimelinePlanNode
   | TimelineToolNode
+  | TimelineCommandNode
   | TimelinePermissionNode
   | TimelineDiffNode
   | TimelineUsageNode
@@ -93,7 +104,7 @@ interface TimelineNodeBase {
   taskId: string
   turnId: string
   firstSequence?: number
-  source: 'turn-record' | 'agent-event' | 'permission-audit' | 'admission'
+  source: 'turn-record' | 'agent-event' | 'permission-audit' | 'admission' | 'command-evidence'
   capabilityState?: AgentCapabilityState
   truncated?: true
 }
@@ -113,6 +124,12 @@ export interface TimelineToolNode extends TimelineNodeBase {
   toolCallId: string
   title: string
   status: AgentToolStatus | 'unknown'
+  command?: TimelineCommandEvidenceView
+}
+
+export interface TimelineCommandNode extends TimelineNodeBase {
+  kind: 'command-evidence'
+  command: TimelineCommandEvidenceView
 }
 
 export interface TimelinePermissionNode extends TimelineNodeBase {
@@ -180,8 +197,14 @@ export interface TaskResultReviewModel {
   status: { value: TaskExecutionState | 'pending'; source: 'turn-record' | 'execution' }
   usage: TurnUsageViewModel['turnUsage'] | { availability: 'not-observed' }
   changedPaths: { count: number; availability: 'observed' | 'not-observed' }
-  validations: { count: number; availability: 'unavailable' | 'not-observed'; reason?: string }
+  validations: {
+    count: number
+    availability: 'observed' | 'unavailable' | 'not-observed'
+    outcome?: ValidationOutcome
+    reason?: string
+  }
   artifacts: { count: number; availability: 'unavailable' | 'not-observed'; reason?: string }
+  commands: TimelineCommandEvidenceView[]
   warnings: string[]
 }
 
@@ -198,7 +221,13 @@ export interface TimelineSelectorContext {
 }
 
 export function createTaskTimelineFacts(taskId: string): TaskTimelineFacts {
-  return { taskId, task: { kind: 'empty' }, turnsById: {}, integrityIssuesByKey: {} }
+  return {
+    taskId,
+    task: { kind: 'empty' },
+    turnsById: {},
+    commandEvidenceById: {},
+    integrityIssuesByKey: {}
+  }
 }
 
 export function reduceTaskTimelineFacts(
@@ -249,6 +278,21 @@ export function reduceTaskTimelineFacts(
   }
   if (action.type === 'events/ingest-public') {
     for (const event of action.events) ingestEvent(next, event)
+    return next
+  }
+  if (action.type === 'command-evidence/replace') {
+    next.commandEvidenceById = {}
+    for (const evidence of action.evidences) {
+      if (evidence.taskId !== state.taskId) {
+        addIssue(next, {
+          code: 'identity-mismatch',
+          taskId: state.taskId,
+          turnId: evidence.turnId
+        })
+        continue
+      }
+      next.commandEvidenceById[evidence.commandId] = structuredClone(evidence)
+    }
     return next
   }
   for (const audit of action.audits) ingestAudit(next, audit)
@@ -310,7 +354,10 @@ function selectTurnTimeline(
       turnId: turn.turnId
     })
   }
-  const nodes = projectNodes(turn, trustedEvents, record)
+  const commands = Object.values(facts.commandEvidenceById).filter(
+    (evidence) => evidence.turnId === turn.turnId
+  )
+  const nodes = projectNodes(turn, trustedEvents, record, commands)
   const status = selectTurnStatus(turn, context.executionSnapshot)
   return {
     taskId: turn.taskId,
@@ -333,7 +380,8 @@ function selectTurnTimeline(
 function projectNodes(
   turn: TimelineTurnFacts,
   events: PublicAgentEvent[],
-  record?: TurnHistoryRecord
+  record: TurnHistoryRecord | undefined,
+  commands: CommandExecutionEvidence[]
 ): TaskTimelineNode[] {
   const nodes: TaskTimelineNode[] = []
   const prompt = record?.promptDisplayText ?? turn.admission?.promptDisplayText
@@ -416,6 +464,8 @@ function projectNodes(
       if (existing) {
         if (event.title) existing.title = event.title
         if (event.status) existing.status = event.status
+        const matched = matchCommandEvidence(commands, event.toolCallId)
+        if (matched) existing.command = toCommandEvidenceView(matched)
       } else {
         const node: TimelineToolNode = {
           ...base,
@@ -425,6 +475,8 @@ function projectNodes(
           title: event.title ?? event.toolCallId,
           status: event.status ?? 'unknown'
         }
+        const matched = matchCommandEvidence(commands, event.toolCallId)
+        if (matched) node.command = toCommandEvidenceView(matched)
         tools.set(key, node)
         nodes.push(node)
       }
@@ -474,6 +526,28 @@ function projectNodes(
         kind: 'permission-audit',
         audit: structuredClone(slot.audit)
       })
+  const attachedToolCallIds = new Set(
+    [...tools.values()].map((node) => node.command?.commandId).filter(Boolean)
+  )
+  for (const evidence of commands) {
+    if (attachedToolCallIds.has(evidence.commandId)) continue
+    if (
+      evidence.toolCallId &&
+      tools.has(`${turn.taskId}:${turn.turnId}:tool:${evidence.toolCallId}`)
+    ) {
+      continue
+    }
+    nodes.push({
+      nodeId: `${turn.taskId}:${turn.turnId}:command:${evidence.commandId}`,
+      taskId: turn.taskId,
+      turnId: turn.turnId,
+      source: 'command-evidence',
+      kind: 'command-evidence',
+      // 无 ACP sequence 的 App 命令放在工具事件之后，避免插到用户指令前面。
+      firstSequence: Number.MAX_SAFE_INTEGER,
+      command: toCommandEvidenceView(evidence)
+    })
+  }
   if (record?.historyTruncated)
     nodes.push({
       nodeId: `${turn.taskId}:${turn.turnId}:history-truncated`,
@@ -578,6 +652,18 @@ function selectTaskResultReview(
   const warnings: string[] = []
   if (latest?.historyTruncated) warnings.push('部分执行历史不可用。')
   if (latest?.statusConflict) warnings.push('实时执行状态与持久化状态不一致。')
+  const commandViews = (latest?.nodes ?? []).flatMap((node) => {
+    if (node.kind === 'command-evidence') return [node.command]
+    if (node.kind === 'tool' && node.command) return [node.command]
+    return []
+  })
+  const uniqueCommands = dedupeCommandViews(commandViews)
+  const latestEvidences = uniqueCommands
+    .map((view) => facts.commandEvidenceById[view.commandId])
+    .filter((item): item is CommandExecutionEvidence => Boolean(item))
+  if (uniqueCommands.some((view) => view.logIncomplete)) {
+    warnings.push('部分命令日志不完整。')
+  }
   return {
     status: { value: status, source: latest?.statusProvisional ? 'execution' : 'turn-record' },
     usage: latest?.usage.turnUsage ?? { availability: 'not-observed' },
@@ -587,13 +673,7 @@ function selectTaskResultReview(
           availability: 'observed'
         }
       : { count: 0, availability: 'not-observed' },
-    validations: turnRecord?.validationIds?.length
-      ? {
-          count: turnRecord.validationIds.length,
-          availability: 'unavailable',
-          reason: 'Validation 服务尚未接入。'
-        }
-      : { count: 0, availability: 'not-observed' },
+    validations: selectValidationReview(latest, latestEvidences),
     artifacts: turnRecord?.artifactIds?.length
       ? {
           count: turnRecord.artifactIds.length,
@@ -601,8 +681,51 @@ function selectTaskResultReview(
           reason: 'Artifact 服务尚未接入。'
         }
       : { count: 0, availability: 'not-observed' },
+    commands: uniqueCommands,
     warnings
   }
+}
+
+/**
+ * 验证只能来自真实命令证据。没有命令时保持 not-observed，聊天/标题不能产生 pass。
+ */
+function selectValidationReview(
+  latest: TurnTimelineViewModel | undefined,
+  evidences: CommandExecutionEvidence[]
+): TaskResultReviewModel['validations'] {
+  if (evidences.length === 0) {
+    return { count: 0, availability: 'not-observed' }
+  }
+  const derived = latest
+    ? deriveValidationResult(evidences, `val_${latest.taskId}_${latest.turnId}`)
+    : null
+  if (!derived) {
+    return { count: evidences.length, availability: 'not-observed' }
+  }
+  return {
+    count: derived.commandIds.length,
+    availability: 'observed',
+    outcome: derived.outcome,
+    ...(derived.reason ? { reason: derived.reason } : {})
+  }
+}
+
+function matchCommandEvidence(
+  commands: CommandExecutionEvidence[],
+  toolCallId: string
+): CommandExecutionEvidence | undefined {
+  return commands.find((evidence) => evidence.toolCallId === toolCallId)
+}
+
+function dedupeCommandViews(views: TimelineCommandEvidenceView[]): TimelineCommandEvidenceView[] {
+  const seen = new Set<string>()
+  const unique: TimelineCommandEvidenceView[] = []
+  for (const view of views) {
+    if (seen.has(view.commandId)) continue
+    seen.add(view.commandId)
+    unique.push(view)
+  }
+  return unique
 }
 
 function ensureTurn(state: TaskTimelineFacts, turnId: string): TimelineTurnFacts {

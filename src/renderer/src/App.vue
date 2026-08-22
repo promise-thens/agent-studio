@@ -791,6 +791,7 @@ async function selectTask(taskId: string): Promise<void> {
       taskHistory.eventsByTurn.value,
       taskHistory.permissionAudits.value
     )
+    void taskTimeline.refreshCommandEvidence(taskId)
     reconcilePermissionQueue(taskId, detail.projectId)
     conversationEntry.value = {
       taskId,
@@ -1385,6 +1386,7 @@ function refreshOpenedHistoryProjection(): void {
     taskHistory.eventsByTurn.value,
     taskHistory.permissionAudits.value
   )
+  void taskTimeline.refreshCommandEvidence(taskId)
 }
 
 async function loadMoreHistoryTurns(): Promise<void> {

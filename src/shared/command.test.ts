@@ -8,6 +8,7 @@ import {
   COMMAND_TRUST_LEVELS,
   deriveValidationResult,
   parseCommandExecutionEvidence,
+  parseCommandTranscriptPage,
   parseCommandTranscriptRef,
   parseValidationResult,
   VALIDATION_OUTCOMES,
@@ -495,5 +496,70 @@ describe('ValidationResult 只能由命令证据推导', () => {
       commandIds: ['cmd-1'],
       outcome: 'pass'
     })
+  })
+})
+
+describe('命令 transcript 分页契约', () => {
+  it('重建分页对象并丢弃 path/filePath', () => {
+    const parsed = parseCommandTranscriptPage({
+      taskId: 'task-1',
+      commandId: 'cmd-1',
+      transcriptId: 'transcript-1',
+      offset: 0,
+      limit: 32,
+      nextOffset: 1,
+      truncated: false,
+      retentionState: 'retained',
+      path: '/tmp/secret.log',
+      filePath: 'C:\\\\repo\\\\out.log',
+      chunks: [
+        { stream: 'stdout', text: 'ok', path: '/tmp/chunk' },
+        { stream: 'stderr', text: 'warn' }
+      ]
+    })
+    expect(parsed).toEqual({
+      taskId: 'task-1',
+      commandId: 'cmd-1',
+      transcriptId: 'transcript-1',
+      offset: 0,
+      limit: 32,
+      nextOffset: 1,
+      truncated: false,
+      retentionState: 'retained',
+      chunks: [
+        { stream: 'stdout', text: 'ok' },
+        { stream: 'stderr', text: 'warn' }
+      ]
+    })
+    expect(parsed).not.toHaveProperty('path')
+    expect(parsed).not.toHaveProperty('filePath')
+    expect(JSON.stringify(parsed)).not.toContain('/tmp')
+  })
+
+  it('缺失 transcript 时允许空 chunks 和 missing/expired，拒绝非法身份', () => {
+    expect(
+      parseCommandTranscriptPage({
+        taskId: 'task-1',
+        commandId: 'cmd-1',
+        transcriptId: 'transcript-1',
+        offset: 0,
+        limit: 32,
+        truncated: true,
+        retentionState: 'missing',
+        chunks: []
+      })
+    ).toMatchObject({ retentionState: 'missing', chunks: [] })
+    expect(
+      parseCommandTranscriptPage({
+        taskId: 'task-1',
+        commandId: 'cmd-1',
+        transcriptId: '/tmp/out.log',
+        offset: 0,
+        limit: 32,
+        truncated: false,
+        retentionState: 'retained',
+        chunks: []
+      })
+    ).toBeNull()
   })
 })

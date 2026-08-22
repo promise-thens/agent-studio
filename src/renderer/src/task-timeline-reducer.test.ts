@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PublicAgentEvent } from '../../shared/agent-event'
+import type { CommandExecutionEvidence } from '../../shared/command'
 import type { TaskExecutionSnapshot } from '../../shared/task-execution'
 import type { PermissionAuditRecord, TurnHistoryRecord } from '../../shared/task-history'
 import {
@@ -309,5 +310,120 @@ describe('Task Timeline reducer', () => {
     expect(planNodes[0]?.nodeId).not.toContain(':plan:1')
     expect(planNodes[0]?.nodeId).not.toContain(':plan:2')
     expect(planNodes[0]?.nodeId).not.toContain(':plan:3')
+  })
+
+  it('把命令证据挂到匹配的工具节点，并只用证据推导验证结果', () => {
+    const runtimeEvidence: CommandExecutionEvidence = {
+      commandId: 'rt-cmd',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      environmentId: 'env-1',
+      source: 'runtime-tool',
+      displayCommand: 'pnpm test',
+      cwd: '.',
+      startedAt: '2026-08-18T00:00:01.000Z',
+      endedAt: '2026-08-18T00:00:02.000Z',
+      exitCode: 0,
+      timedOut: false,
+      status: 'succeeded',
+      toolCallId: 'tool-1',
+      transcriptRef: {
+        transcriptId: 'tx-1',
+        availableBytes: 2,
+        truncated: false,
+        encoding: 'utf-8',
+        retentionPolicy: 'bounded',
+        retentionState: 'retained'
+      },
+      truncated: false,
+      trustLevel: 'runtime-reported'
+    }
+    const appEvidence: CommandExecutionEvidence = {
+      commandId: 'app-cmd',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      environmentId: 'env-1',
+      source: 'app-runner',
+      displayCommand: 'node -e process.stdout.write("ok")',
+      cwd: '.',
+      startedAt: '2026-08-18T00:00:01.000Z',
+      endedAt: '2026-08-18T00:00:02.000Z',
+      exitCode: 0,
+      timedOut: false,
+      status: 'succeeded',
+      transcriptRef: {
+        transcriptId: 'tx-2',
+        availableBytes: 2,
+        truncated: false,
+        encoding: 'utf-8',
+        retentionPolicy: 'bounded',
+        retentionState: 'retained'
+      },
+      truncated: false,
+      trustLevel: 'app-enforced'
+    }
+    const withEvents = reduceTaskTimelineFacts(
+      reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+        type: 'turns/upsert',
+        turns: [TURN]
+      }),
+      { type: 'events/ingest-public', events: EVENTS }
+    )
+    const emptyReview = selectTaskTimeline(withEvents, {
+      executionSnapshot: snapshot()
+    }).resultReview
+    expect(emptyReview.validations).toEqual({ count: 0, availability: 'not-observed' })
+    expect(emptyReview.commands).toEqual([])
+
+    const withEvidence = reduceTaskTimelineFacts(withEvents, {
+      type: 'command-evidence/replace',
+      evidences: [runtimeEvidence, appEvidence]
+    })
+    const view = selectTaskTimeline(withEvidence, { executionSnapshot: snapshot() })
+    const tool = view.turns[0]?.nodes.find((node) => node.kind === 'tool')
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      command: {
+        commandId: 'rt-cmd',
+        source: 'runtime-tool',
+        sourceLabel: 'Runtime 上报命令',
+        cwdLabel: 'Runtime 未冻结工作目录（相对路径 .，并非 App 沙箱）'
+      }
+    })
+    expect(tool && 'command' in tool ? tool.command?.sourceLabel : '').not.toMatch(
+      /沙箱执行|Broker 强制/
+    )
+    expect(view.turns[0]?.nodes.some((node) => node.kind === 'command-evidence')).toBe(true)
+    expect(view.resultReview.validations).toMatchObject({
+      availability: 'observed',
+      outcome: 'pass',
+      count: 2
+    })
+    expect(view.resultReview.commands.map((item) => item.source)).toEqual([
+      'runtime-tool',
+      'app-runner'
+    ])
+  })
+
+  it('没有命令证据时即使工具标题写通过也不产生 pass', () => {
+    const state = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+      type: 'events/ingest-public',
+      events: [
+        {
+          ...BASE,
+          sequence: 1,
+          kind: 'tool-call',
+          toolCallId: 'tool-pass',
+          title: 'Tests passed',
+          status: 'completed'
+        }
+      ]
+    })
+    expect(
+      selectTaskTimeline(state, { executionSnapshot: snapshot() }).resultReview.validations
+    ).toEqual({
+      count: 0,
+      availability: 'not-observed'
+    })
   })
 })

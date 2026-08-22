@@ -6,6 +6,8 @@ import type {
   AgentToolStatus,
   AgentTurnUsage
 } from '../../shared/agent'
+import type { CommandExecutionStatus } from '../../shared/command'
+import { presentCommandEvidenceSummary } from './command-evidence-presentation'
 import { isReadToolTitle, presentToolTitle } from './conversation-tool-presentation'
 import { isActiveConversationTurn } from './task-conversation-view'
 import type {
@@ -193,6 +195,18 @@ export function projectConversationTurn(
   let index = 0
   while (index < rest.length) {
     const node = rest[index]
+    if (node.kind === 'command-evidence') {
+      blocks.push({
+        kind: 'tool',
+        nodeId: node.nodeId,
+        label: node.command.sourceLabel,
+        status: commandStatusToToolStatus(node.command.status),
+        tools: [],
+        detail: presentCommandEvidenceSummary(node.command)
+      })
+      index += 1
+      continue
+    }
     if (node.kind === 'tool') {
       const run: TimelineToolNode[] = [node]
       if (isReadToolTitle(node.title)) {
@@ -314,15 +328,25 @@ function toToolBlock(tools: TimelineToolNode[]): ConversationToolBlock {
     }
   }
   const presented = presentToolTitle(first.title)
+  const evidenceSummary = first.command ? presentCommandEvidenceSummary(first.command) : undefined
+  const detail = [presented.detail, evidenceSummary].filter(Boolean).join('\n')
   return {
     kind: 'tool',
     nodeId: first.nodeId,
     label: presented.label,
     status: first.status,
     tools,
-    ...(presented.detail ? { detail: presented.detail } : {}),
+    ...(detail ? { detail } : {}),
     ...(isReadToolTitle(first.title) ? { mergedReadCount: 1 } : {})
   }
+}
+
+function commandStatusToToolStatus(status: CommandExecutionStatus): AgentToolStatus | 'unknown' {
+  if (status === 'succeeded') return 'completed'
+  if (status === 'failed' || status === 'start-failed') return 'failed'
+  if (status === 'cancelled') return 'cancelled'
+  if (status === 'running') return 'in_progress'
+  return 'unknown'
 }
 
 function groupToolStatus(tools: TimelineToolNode[]): AgentToolStatus | 'unknown' {

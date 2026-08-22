@@ -68,7 +68,10 @@ describe('桌面 IPC 静态契约', () => {
       'task:preview-delete',
       'task:delete',
       'task:rename',
-      'task:archive'
+      'task:archive',
+      'task:list-command-evidence',
+      'task:get-command-evidence',
+      'task:get-command-transcript'
     ])
   })
 
