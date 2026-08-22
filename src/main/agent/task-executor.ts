@@ -52,6 +52,16 @@ export interface TaskExecutorOptions {
   clearScheduledTimeout?: (timer: ReturnType<typeof setTimeout>) => void
   /** cancel deadline 到期时先撤销属于该 Turn 的主进程审批，再强制断开 Runtime。 */
   onCancelTimeout?: (identity: ExecutionIdentity) => Promise<void>
+  /**
+   * 身份校验与 admit 成功之后、dispatch 之前捕获变更基线。
+   * 缺省为 no-op；抛错不得让 Turn 失败。
+   */
+  ensureChangeBaseline?: (input: {
+    taskId: string
+    projectId: string
+    environmentId: string
+    executionRoot: string
+  }) => Promise<void>
 }
 
 interface ActiveExecution {
@@ -110,6 +120,7 @@ export class TaskExecutor {
   private readonly scheduleTimeout: NonNullable<TaskExecutorOptions['scheduleTimeout']>
   private readonly clearScheduledTimeout: NonNullable<TaskExecutorOptions['clearScheduledTimeout']>
   private readonly onCancelTimeout: NonNullable<TaskExecutorOptions['onCancelTimeout']>
+  private readonly ensureChangeBaseline?: TaskExecutorOptions['ensureChangeBaseline']
   private executionRevision = 0
   private active: ActiveExecution | null = null
   private lastExecution: TaskExecutionDto | null = null
@@ -129,6 +140,7 @@ export class TaskExecutor {
     this.scheduleTimeout = options.scheduleTimeout ?? setTimeout
     this.clearScheduledTimeout = options.clearScheduledTimeout ?? clearTimeout
     this.onCancelTimeout = options.onCancelTimeout ?? (() => Promise.resolve())
+    this.ensureChangeBaseline = options.ensureChangeBaseline
   }
 
   getSnapshot(): TaskExecutionSnapshot {
@@ -268,6 +280,18 @@ export class TaskExecutor {
         cancelDeadlineTimer: null
       }
       this.publish(queued)
+      if (this.ensureChangeBaseline) {
+        try {
+          await this.ensureChangeBaseline({
+            taskId: input.taskId,
+            projectId: input.projectId,
+            environmentId: input.environmentId,
+            executionRoot: input.resolvedExecutionRoot
+          })
+        } catch {
+          // 基线捕获失败不得拒绝 Turn；后续只读审阅会看到 missing/unavailable。
+        }
+      }
       void this.dispatch(this.active).catch(() => undefined)
       return this.getSnapshot()
     } catch (error) {

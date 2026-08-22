@@ -42,15 +42,15 @@
 **前置依赖：**
 - Task 已绑定 Project 和 ExecutionEnvironmentRef。
 
-- [ ] **第 1 步: 解析 canonical execution root**
+- [x] **第 1 步: 解析 canonical execution root**
 说明：从 Task 环境引用解析真实目录，识别 Git root、仓库顶层、当前 HEAD、分支/ detached 状态和嵌套仓库；禁止向父目录逃逸。
 预期：Local、未来 Worktree、非 Git、子目录打开和嵌套仓库均返回明确类型。
 
-- [ ] **第 2 步: 记录 TaskChangeBaseline**
+- [x] **第 2 步: 记录 TaskChangeBaseline**
 说明：Task 首个写 Turn 前保存 base commit、`git status --porcelain=v2` 摘要、已有 tracked/untracked 路径、必要内容哈希和时间；不把完整用户文件复制进日志。
 预期：后续可以明确标记“任务开始前已存在”，而不是把整个当前 diff 归给 Agent。
 
-- [ ] **第 3 步: 验证基线失效条件**
+- [x] **第 3 步: 验证基线失效条件**
 说明：检测 Git root 变化、HEAD 被外部切换、路径被替换、Worktree 被移除和项目权限变化。
 预期：基线失效后停止自动归因/撤销，保留只读现状并提示重新创建 Task。
 

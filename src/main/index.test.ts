@@ -407,6 +407,7 @@ vi.mock('./agent/task-execution-controller', () => ({
   TaskExecutionController: class {}
 }))
 vi.mock('./provider/grok-provider-config', () => ({
+  AGENT_STUDIO_MODEL_API_KEY_ENV: 'AGENT_STUDIO_MODEL_API_KEY',
   clearGrokProviderConfig: vi.fn(async () => undefined),
   getManagedGrokHome: (userDataPath: string) => `${userDataPath}/grok-home`
 }))

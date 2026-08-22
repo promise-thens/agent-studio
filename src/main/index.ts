@@ -73,6 +73,7 @@ import {
 import { registerProviderIpcHandlers } from './provider/ipc'
 import { validateProviderConfigInput } from './provider/provider-validation'
 import { CommandEvidenceStore } from './command/command-evidence-store'
+import { createEnsureTaskChangeBaseline, TaskChangeBaselineStore } from './git/task-change-baseline'
 import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
 import { listGrokMarketplacePlugins } from './runtime/grok/grok-marketplace-inventory'
 import {
@@ -311,6 +312,10 @@ async function initializeServices(
   await fs.mkdir(commandEvidenceRoot, { recursive: true, mode: 0o700 })
   const evidenceStore = new CommandEvidenceStore({ rootDir: commandEvidenceRoot })
   commandEvidenceStore = evidenceStore
+  // Git 审阅根同样注入，store 自己不调用 app.getPath。
+  const gitReviewRoot = join(app.getPath('userData'), 'git-review')
+  await fs.mkdir(gitReviewRoot, { recursive: true, mode: 0o700 })
+  const taskChangeBaselineStore = new TaskChangeBaselineStore({ rootDir: gitReviewRoot })
   const adapter = new GrokAcpAdapter(
     {
       onStatus: (status) =>
@@ -376,7 +381,18 @@ async function initializeServices(
         rendererTrust,
         AGENT_PUSH_CHANNELS.event,
         projectPublicAgentEvent(event, redactProviderText)
-      )
+      ),
+    ensureChangeBaseline: createEnsureTaskChangeBaseline({
+      store: taskChangeBaselineStore,
+      getProjectAvailability: async (projectId) => {
+        try {
+          return (await requireProjectRegistry().getSummary(projectId)).availability
+        } catch {
+          return { state: 'unavailable', message: 'Project 当前不可用。' }
+        }
+      },
+      sourceEnvironment: process.env
+    })
   })
   agentService = new AgentService(adapter, new TaskExecutionController(), {
     projectRegistry,

@@ -1,8 +1,14 @@
+import { execFile as execFileCallback } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { promisify } from 'node:util'
 import type { AgentRuntimeCapabilitySnapshot, AgentRuntimeStatus } from '../../shared/agent'
+import {
+  createEnsureTaskChangeBaseline,
+  TaskChangeBaselineStore
+} from '../git/task-change-baseline'
 import { ProjectRegistry } from '../project/project-registry'
 import type {
   AgentRuntimeAdapter,
@@ -11,8 +17,14 @@ import type {
   AgentRuntimeTurnResult
 } from './agent-runtime-adapter'
 import { OperationGate } from './operation-gate'
-import { TaskExecutor, type TaskExecutorStartInput } from './task-executor'
+import {
+  TaskExecutor,
+  type TaskExecutorOptions,
+  type TaskExecutorStartInput
+} from './task-executor'
 import { TaskStore } from './task-store'
+
+const execFile = promisify(execFileCallback)
 
 const temporaryDirectories: string[] = []
 
@@ -530,6 +542,75 @@ describe('TaskExecutor', () => {
     })
     expect(fixture.gate.getState()).toBe('idle')
   })
+
+  it('无 ensureChangeBaseline hook 时现有 start 行为不变', async () => {
+    const fixture = await createFixture()
+    fixture.adapter.startTurn.mockResolvedValue({ outcome: 'completed' })
+    const snapshot = await fixture.executor.start(fixture.input)
+    expect(snapshot.execution).toMatchObject({ state: 'queued', taskId: 'task-1' })
+    await fixture.executor.waitForTerminal()
+    expect(fixture.adapter.startTurn).toHaveBeenCalledOnce()
+    expect(fixture.executor.hasActiveExecution()).toBe(false)
+  })
+
+  it('有 hook 时第一轮 start 捕获基线，第二轮不 recapture', async () => {
+    const reviewRoot = await mkdtemp(join(tmpdir(), 'task-executor-git-review-'))
+    temporaryDirectories.push(reviewRoot)
+    const baselineStore = new TaskChangeBaselineStore({ rootDir: reviewRoot })
+    const hooked = await createFixture({
+      ensureChangeBaseline: createEnsureTaskChangeBaseline({
+        store: baselineStore,
+        getProjectAvailability: async () => ({ state: 'available' })
+      })
+    })
+    hooked.adapter.startTurn.mockResolvedValue({ outcome: 'completed' })
+    await initGitRepo(hooked.input.resolvedExecutionRoot)
+    await writeFile(join(hooked.input.resolvedExecutionRoot, 'README.md'), 'hello\n')
+    await runGit(hooked.input.resolvedExecutionRoot, ['add', 'README.md'])
+    await runGit(hooked.input.resolvedExecutionRoot, ['commit', '-m', 'init'])
+
+    await hooked.executor.start(hooked.input)
+    await hooked.executor.waitForTerminal()
+    const first = await baselineStore.get(hooked.input.taskId, hooked.input.environmentId)
+    expect(first?.status).toBe('captured')
+    expect(first?.baseCommit).toMatch(/^[0-9a-f]{40,64}$/)
+
+    await hooked.executor.start(hooked.input)
+    await hooked.executor.waitForTerminal()
+    const second = await baselineStore.get(hooked.input.taskId, hooked.input.environmentId)
+    expect(second?.capturedAt).toBe(first?.capturedAt)
+    expect(second?.baseCommit).toBe(first?.baseCommit)
+    expect(hooked.adapter.startTurn).toHaveBeenCalledTimes(2)
+  })
+
+  it('hook 抛错或 git 不可用时不得拒绝 Turn', async () => {
+    const throwing = await createFixture({
+      ensureChangeBaseline: async () => {
+        throw new Error('模拟基线捕获失败')
+      }
+    })
+    throwing.adapter.startTurn.mockResolvedValue({ outcome: 'completed' })
+    await throwing.executor.start(throwing.input)
+    await throwing.executor.waitForTerminal()
+    expect(throwing.adapter.startTurn).toHaveBeenCalledOnce()
+    expect(throwing.executor.getSnapshot()).toMatchObject({
+      execution: { state: 'completed' }
+    })
+
+    const reviewRoot = await mkdtemp(join(tmpdir(), 'task-executor-git-unavailable-'))
+    temporaryDirectories.push(reviewRoot)
+    const unavailable = await createFixture({
+      ensureChangeBaseline: createEnsureTaskChangeBaseline({
+        store: new TaskChangeBaselineStore({ rootDir: reviewRoot }),
+        getProjectAvailability: async () => ({ state: 'available' }),
+        gitExecutable: join(reviewRoot, 'no-such-git-binary')
+      })
+    })
+    unavailable.adapter.startTurn.mockResolvedValue({ outcome: 'completed' })
+    await unavailable.executor.start(unavailable.input)
+    await unavailable.executor.waitForTerminal()
+    expect(unavailable.adapter.startTurn).toHaveBeenCalledOnce()
+  })
 })
 
 async function createFixture(
@@ -544,6 +625,7 @@ async function createFixture(
       taskId: string
       turnId: string
     }) => Promise<void>
+    ensureChangeBaseline?: TaskExecutorOptions['ensureChangeBaseline']
   } = {}
 ): Promise<{
   store: TaskStore
@@ -590,7 +672,8 @@ async function createFixture(
     forceDisconnectTimeoutMs: options.forceDisconnectTimeoutMs,
     scheduleTimeout: options.scheduleTimeout,
     clearScheduledTimeout: options.clearScheduledTimeout,
-    onCancelTimeout: options.onCancelTimeout
+    onCancelTimeout: options.onCancelTimeout,
+    ...(options.ensureChangeBaseline ? { ensureChangeBaseline: options.ensureChangeBaseline } : {})
   })
   const input = startInput({
     projectId: project.projectId,
@@ -705,3 +788,27 @@ function createManualScheduler(): {
 process.on('exit', () => {
   for (const directory of temporaryDirectories) void rm(directory, { recursive: true, force: true })
 })
+
+async function initGitRepo(dir: string): Promise<void> {
+  try {
+    await runGit(dir, ['init', '-b', 'main'])
+  } catch {
+    await runGit(dir, ['init'])
+  }
+  await runGit(dir, ['config', 'user.email', 'baseline-test@example.test'])
+  await runGit(dir, ['config', 'user.name', 'Baseline Test'])
+  await runGit(dir, ['config', 'commit.gpgsign', 'false'])
+}
+
+async function runGit(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFile('git', args, {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_TERMINAL_PROMPT: '0'
+    }
+  })
+  return stdout.trim()
+}
