@@ -56,6 +56,7 @@ import {
   accumulateGrokCommandToolFacts,
   isGrokCommandEvidenceCandidate,
   mapGrokCommandEvidence,
+  rememberGrokCommandToolFacts,
   type GrokCommandEvidenceMapping,
   type GrokCommandToolFacts
 } from './grok-command-evidence-mapper'
@@ -851,7 +852,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       nowIso: new Date().toISOString(),
       ...(approvalId ? { approvalId } : {})
     })
-    accumulators.set(patch.toolCallId, facts)
+    // 超过 Turn 内累积上限则丢弃新 toolCall，避免与授权快照一样把内存撑爆。
+    if (!rememberGrokCommandToolFacts(accumulators, facts)) return
     if (!isGrokCommandEvidenceCandidate(facts)) return
 
     const mapping = mapGrokCommandEvidence(facts, (text) => this.safeRedact(text))

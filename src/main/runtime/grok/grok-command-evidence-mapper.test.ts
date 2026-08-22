@@ -8,12 +8,15 @@ import {
   type CommandExecutionEvidence
 } from '../../../shared/command'
 import { mapGrokPermissionRequest } from './grok-acp-mappers'
+import { MAX_COMMAND_TRANSCRIPT_BYTES } from '../../command/command-evidence-store'
 import {
   GROK_COMMAND_EVIDENCE_FIELD_FREEZE,
+  MAX_GROK_COMMAND_EVIDENCE_ACCUMULATORS,
   accumulateGrokCommandToolFacts,
   deriveGrokRuntimeCommandId,
   isGrokCommandEvidenceCandidate,
   mapGrokCommandEvidence,
+  rememberGrokCommandToolFacts,
   type GrokCommandToolFacts
 } from './grok-command-evidence-mapper'
 
@@ -32,22 +35,40 @@ function redactFakeText(text: string): string {
   return text.replaceAll(FAKE_KEY, '[REDACTED]')
 }
 
-function baseFacts(overrides: Partial<GrokCommandToolFacts> = {}): GrokCommandToolFacts {
-  return {
-    toolCallId: 'tool-bash-1',
-    taskId: 'task-1',
-    turnId: 'turn-1',
-    environmentId: 'env-1',
-    kind: 'execute',
-    title: 'Run tests',
-    status: 'completed',
-    startedAt: TIMESTAMP,
-    endedAt: ENDED_AT,
-    ...overrides
-  }
+type CommandEvidenceCase = {
+  toolCallId?: string
+  kind?: acp.ToolKind | null
+  title?: string | null
+  status?: acp.ToolCallStatus | null
+  rawInput?: unknown
+  rawOutput?: unknown
+  approvalId?: string
 }
 
-function mappedEvidence(overrides: Partial<GrokCommandToolFacts> = {}): CommandExecutionEvidence {
+function baseFacts(overrides: CommandEvidenceCase = {}): GrokCommandToolFacts {
+  const facts = accumulateGrokCommandToolFacts(
+    undefined,
+    {
+      toolCallId: overrides.toolCallId ?? 'tool-bash-1',
+      kind: overrides.kind ?? 'execute',
+      title: overrides.title ?? 'Run tests',
+      status: overrides.status ?? 'completed',
+      ...(overrides.rawInput !== undefined ? { rawInput: overrides.rawInput } : {}),
+      ...(overrides.rawOutput !== undefined ? { rawOutput: overrides.rawOutput } : {})
+    },
+    {
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      environmentId: 'env-1',
+      nowIso: TIMESTAMP,
+      ...(overrides.approvalId ? { approvalId: overrides.approvalId } : {})
+    }
+  )
+  facts.endedAt = ENDED_AT
+  return facts
+}
+
+function mappedEvidence(overrides: CommandEvidenceCase = {}): CommandExecutionEvidence {
   const mapping = mapGrokCommandEvidence(baseFacts(overrides), redactFakeText)
   expect(mapping).not.toBeNull()
   const parsed = parseCommandExecutionEvidence(mapping!.evidence)
@@ -304,7 +325,100 @@ describe('mapGrokCommandEvidence', () => {
       endedAt: ENDED_AT
     })
   })
+
+  it('超大 rawOutput.output 在 accumulate 合并时截断，而不是等到落盘', () => {
+    const oversized = 'A'.repeat(MAX_COMMAND_TRANSCRIPT_BYTES + 8 * 1024)
+    const facts = accumulateGrokCommandToolFacts(
+      undefined,
+      {
+        toolCallId: 'tool-huge-output',
+        kind: 'execute',
+        title: 'Run',
+        status: 'completed',
+        rawInput: { command: 'pnpm test', cwd: '/tmp/ignored', extra: oversized },
+        rawOutput: {
+          exit_code: 0,
+          timed_out: false,
+          output: oversized,
+          extra: oversized,
+          output_file: '/tmp/must-not-keep-path.log'
+        }
+      },
+      {
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        environmentId: 'env-1',
+        nowIso: TIMESTAMP
+      }
+    )
+
+    const serialized = JSON.stringify(facts)
+    expect(serialized).not.toContain(oversized)
+    expect(serialized).not.toContain('/tmp/must-not-keep-path.log')
+    expect(serialized).not.toContain('/tmp/ignored')
+    expect(facts).not.toHaveProperty('rawInput')
+    expect(facts).not.toHaveProperty('rawOutput')
+    expect(utf8ByteLength(facts.output ?? '')).toBeLessThanOrEqual(MAX_COMMAND_TRANSCRIPT_BYTES)
+    expect(facts.outputTruncated).toBe(true)
+    expect(facts.outputFilePresent).toBe(true)
+
+    const mapping = mapGrokCommandEvidence(facts, redactFakeText)
+    expect(mapping?.evidence.truncated).toBe(true)
+    expect(mapping?.evidence.transcriptRef.truncated).toBe(true)
+    expect(mapping?.evidence.transcriptRef.totalBytes).toBeGreaterThan(
+      mapping?.evidence.transcriptRef.availableBytes ?? 0
+    )
+  })
+
+  it('同一 Turn 命令累积条数不超过授权快照同量级上限', () => {
+    const accumulators = new Map<string, GrokCommandToolFacts>()
+    for (let index = 0; index < MAX_GROK_COMMAND_EVIDENCE_ACCUMULATORS + 8; index += 1) {
+      const facts = accumulateGrokCommandToolFacts(
+        undefined,
+        {
+          toolCallId: `tool-${index}`,
+          kind: 'execute',
+          title: 'Run',
+          status: 'completed',
+          rawInput: { command: 'true' },
+          rawOutput: { exit_code: 0, timed_out: false }
+        },
+        {
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          environmentId: 'env-1',
+          nowIso: TIMESTAMP
+        }
+      )
+      rememberGrokCommandToolFacts(accumulators, facts)
+    }
+    expect(accumulators.size).toBe(MAX_GROK_COMMAND_EVIDENCE_ACCUMULATORS)
+    expect(
+      rememberGrokCommandToolFacts(
+        accumulators,
+        accumulateGrokCommandToolFacts(
+          accumulators.get('tool-0'),
+          {
+            toolCallId: 'tool-0',
+            status: 'completed',
+            rawOutput: { exit_code: 1, timed_out: false }
+          },
+          {
+            taskId: 'task-1',
+            turnId: 'turn-1',
+            environmentId: 'env-1',
+            nowIso: ENDED_AT
+          }
+        )
+      )
+    ).toBe(true)
+    expect(accumulators.get('tool-0')?.exitCode).toBe(1)
+  })
 })
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength
+}
 
 describe('命令证据不得成为权限依据', () => {
   it('permission mapper 仍然丢弃 rawInput/rawOutput/_meta/name，不把 command 当授权目标', () => {

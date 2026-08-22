@@ -30,6 +30,13 @@ export const GROK_COMMAND_EVIDENCE_FIELD_FREEZE = {
 const FALLBACK_DISPLAY_COMMAND = 'Runtime 命令'
 const textEncoder = new TextEncoder()
 
+/** 与授权快照同量级，避免 Turn 内命令累积把主进程内存撑爆。 */
+export const MAX_GROK_COMMAND_EVIDENCE_ACCUMULATORS = 2_000
+
+/**
+ * Turn 内只保留已验证、已截断的命令事实。
+ * 禁止缓存 ACP rawInput/rawOutput 原对象或 output_file 路径。
+ */
 export interface GrokCommandToolFacts {
   toolCallId: string
   taskId: string
@@ -38,8 +45,13 @@ export interface GrokCommandToolFacts {
   kind?: acp.ToolKind | null
   title?: string | null
   status?: acp.ToolCallStatus | null
-  rawInput?: unknown
-  rawOutput?: unknown
+  command?: string
+  exitCode?: number
+  timedOut?: boolean
+  output?: string
+  outputTruncated?: boolean
+  outputTotalBytes?: number
+  outputFilePresent?: boolean
   approvalId?: string
   startedAt: string
   endedAt?: string
@@ -82,7 +94,8 @@ interface ParsedGrokCommandRawOutput {
 
 /**
  * 将 ACP tool_call / tool_call_update 累积为命令事实。
- * 未出现的字段保持旧值；rawInput/rawOutput 一旦出现则整体替换，不与旧对象深合并。
+ * 合并当下只留下已验证结构化字段，并立刻按 256KiB 截断 inline output，
+ * 不得把 raw 原对象或未截断正文留在 Turn 内存里。
  */
 export function accumulateGrokCommandToolFacts(
   previous: GrokCommandToolFacts | undefined,
@@ -103,19 +116,25 @@ export function accumulateGrokCommandToolFacts(
   const status =
     patch.status !== undefined && patch.status !== null ? patch.status : current?.status
   if (kind) facts.kind = kind
-  if (title) facts.title = title
+  if (title) facts.title = boundDisplayCommand(title)
   if (status) facts.status = status
-  if (patch.rawInput !== undefined) facts.rawInput = patch.rawInput
-  else if (current && 'rawInput' in current) facts.rawInput = current.rawInput
-  if (patch.rawOutput !== undefined) facts.rawOutput = patch.rawOutput
-  else if (current && 'rawOutput' in current) facts.rawOutput = current.rawOutput
+
+  if (patch.rawInput !== undefined) {
+    const command = parseGrokCommandRawInput(patch.rawInput).command
+    if (command) facts.command = boundDisplayCommand(command)
+  } else if (current?.command) {
+    facts.command = current.command
+  }
+
+  if (patch.rawOutput !== undefined) {
+    assignBoundedRawOutput(facts, parseGrokCommandRawOutput(patch.rawOutput))
+  } else if (current) {
+    copyBoundedOutputFields(facts, current)
+  }
 
   const approvalId = identity.approvalId ?? current?.approvalId
   if (approvalId) facts.approvalId = approvalId
-  if (
-    isTerminalToolStatus(status) ||
-    hasStructuredExit(parseGrokCommandRawOutput(facts.rawOutput))
-  ) {
+  if (isTerminalToolStatus(status) || hasStructuredExit(facts)) {
     facts.endedAt = identity.nowIso
   } else if (current?.endedAt) {
     facts.endedAt = current.endedAt
@@ -124,11 +143,28 @@ export function accumulateGrokCommandToolFacts(
 }
 
 /**
+ * 新 toolCallId 超过上限则拒绝写入；已有项仍可覆盖更新。
+ * 与授权快照 2000 上限对齐，避免 Turn 内无限堆积。
+ */
+export function rememberGrokCommandToolFacts(
+  accumulators: Map<string, GrokCommandToolFacts>,
+  facts: GrokCommandToolFacts
+): boolean {
+  if (accumulators.has(facts.toolCallId)) {
+    accumulators.set(facts.toolCallId, facts)
+    return true
+  }
+  if (accumulators.size >= MAX_GROK_COMMAND_EVIDENCE_ACCUMULATORS) return false
+  accumulators.set(facts.toolCallId, facts)
+  return true
+}
+
+/**
  * execute 工具，或 rawInput.command 为字符串时才视为命令证据候选。
  * 读/改文件等工具即使带未验证 rawInput 也不能当成命令。
  */
 export function isGrokCommandEvidenceCandidate(facts: GrokCommandToolFacts): boolean {
-  return facts.kind === 'execute' || parseGrokCommandRawInput(facts.rawInput).command != null
+  return facts.kind === 'execute' || facts.command != null
 }
 
 /**
@@ -164,34 +200,34 @@ export function mapGrokCommandEvidence(
   if (!isStoreSafeIdentity(facts.taskId) || !isStoreSafeIdentity(facts.turnId)) return null
   if (!isStoreSafeIdentity(facts.environmentId)) return null
 
-  const rawInput = parseGrokCommandRawInput(facts.rawInput)
-  const rawOutput = parseGrokCommandRawOutput(facts.rawOutput)
   const commandId = deriveGrokRuntimeCommandId(facts.taskId, facts.turnId, facts.toolCallId)
   const transcriptId = `tx_${commandId}`
   if (!isStoreSafeIdentity(commandId) || !isStoreSafeIdentity(transcriptId)) return null
 
-  const displayCommand = resolveDisplayCommand(rawInput.command, facts.title, redactText)
+  const displayCommand = resolveDisplayCommand(facts.command, facts.title, redactText)
   const {
     chunks,
     availableBytes,
-    totalBytes,
-    truncated: outputTruncated
-  } = mapOutputChunks(rawOutput.output, redactText)
-  const truncated = outputTruncated || rawOutput.outputFilePresent
-  const timedOut = rawOutput.timedOut === true
+    totalBytes: chunkTotalBytes,
+    truncated: chunkTruncated
+  } = mapOutputChunks(facts.output, redactText)
+  const outputFilePresent = facts.outputFilePresent === true
+  const truncated = chunkTruncated || facts.outputTruncated === true || outputFilePresent
+  const totalBytes = Math.max(chunkTotalBytes, facts.outputTotalBytes ?? 0, availableBytes)
+  const timedOut = facts.timedOut === true
   const hasStructuredFields =
-    rawInput.command != null || rawOutput.exitCode != null || rawOutput.timedOut != null
+    facts.command != null || facts.exitCode != null || facts.timedOut != null
   const status = resolveStatus({
     acpStatus: facts.status,
-    exitCode: rawOutput.exitCode,
+    exitCode: facts.exitCode,
     timedOut,
-    hasCommand: rawInput.command != null
+    hasCommand: facts.command != null
   })
   const trustLevel: CommandTrustLevel = hasStructuredFields ? 'runtime-reported' : 'unverified'
   const inconsistency = resolveInconsistency({
     title: facts.title,
     acpStatus: facts.status,
-    exitCode: rawOutput.exitCode,
+    exitCode: facts.exitCode,
     timedOut
   })
 
@@ -220,19 +256,15 @@ export function mapGrokCommandEvidence(
   }
   if (facts.endedAt) evidence.endedAt = facts.endedAt
   // unknown-exit / title-only 契约禁止携带数值 exitCode。
-  if (
-    typeof rawOutput.exitCode === 'number' &&
-    status !== 'title-only' &&
-    status !== 'unknown-exit'
-  ) {
-    evidence.exitCode = rawOutput.exitCode
+  if (typeof facts.exitCode === 'number' && status !== 'title-only' && status !== 'unknown-exit') {
+    evidence.exitCode = facts.exitCode
   }
   if (isStoreSafeIdentity(facts.toolCallId)) evidence.toolCallId = facts.toolCallId
   if (facts.approvalId && isStoreSafeIdentity(facts.approvalId)) {
     evidence.approvalId = facts.approvalId
   }
   if (inconsistency) evidence.inconsistency = inconsistency
-  if (rawOutput.outputFilePresent) evidence.outputFileNotIngested = true
+  if (outputFilePresent) evidence.outputFileNotIngested = true
 
   const parsed = parseCommandExecutionEvidence(evidence)
   if (!parsed) return null
@@ -378,8 +410,38 @@ function isTerminalToolStatus(status: acp.ToolCallStatus | null | undefined): bo
   return status === 'completed' || status === 'failed'
 }
 
-function hasStructuredExit(output: ParsedGrokCommandRawOutput): boolean {
-  return output.exitCode != null || output.timedOut === true
+function hasStructuredExit(facts: GrokCommandToolFacts): boolean {
+  return facts.exitCode != null || facts.timedOut === true
+}
+
+/**
+ * 合并当下截断 output，并只记下 output_file 是否出现，不保存路径。
+ */
+function assignBoundedRawOutput(
+  facts: GrokCommandToolFacts,
+  parsed: ParsedGrokCommandRawOutput
+): void {
+  if (parsed.exitCode != null) facts.exitCode = parsed.exitCode
+  if (parsed.timedOut != null) facts.timedOut = parsed.timedOut
+  if (parsed.outputFilePresent) facts.outputFilePresent = true
+  if (parsed.output == null) return
+  const totalBytes = utf8ByteLength(parsed.output)
+  facts.outputTotalBytes = totalBytes
+  if (totalBytes <= MAX_COMMAND_TRANSCRIPT_BYTES) {
+    facts.output = parsed.output
+    return
+  }
+  facts.output = truncateUtf8(parsed.output, MAX_COMMAND_TRANSCRIPT_BYTES)
+  facts.outputTruncated = true
+}
+
+function copyBoundedOutputFields(target: GrokCommandToolFacts, source: GrokCommandToolFacts): void {
+  if (source.exitCode != null) target.exitCode = source.exitCode
+  if (source.timedOut != null) target.timedOut = source.timedOut
+  if (source.output) target.output = source.output
+  if (source.outputTruncated) target.outputTruncated = true
+  if (source.outputTotalBytes != null) target.outputTotalBytes = source.outputTotalBytes
+  if (source.outputFilePresent) target.outputFilePresent = true
 }
 
 function sanitizeIdentitySegment(value: string): string {
