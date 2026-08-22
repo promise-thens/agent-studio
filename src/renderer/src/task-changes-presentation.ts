@@ -2,9 +2,12 @@ import type { ValidationOutcome, ValidationOutcomeReason } from '../../shared/co
 import type {
   FileDiffResult,
   FileDiffStatus,
+  LatestTurnRestorePreview,
   ProjectGitPresence,
+  RestorePlanItem,
   TaskChangeAttribution,
   TaskChangePath,
+  TaskChangeRevertible,
   TaskChangeSet,
   TaskChangeSetQueryResult
 } from '../../shared/git-review'
@@ -161,7 +164,27 @@ export function changeSetWarnings(changeSet: TaskChangeSetQueryResult): string[]
 
 export function revertibleNotice(revertible: TaskChangeSet['revertible']): string {
   if (revertible === false) return '不可一键撤销 · 当前版本不提供一键撤销。'
-  return `不可一键撤销 · ${revertible.reason}`
+  if (revertible.kind === 'none') return `不可一键撤销 · ${revertible.reason}`
+  return `可撤销最新一轮 · ${revertible.paths.length} 个文件`
+}
+
+export function canRestoreLatestTurn(
+  revertible: TaskChangeSet['revertible']
+): revertible is Extract<TaskChangeRevertible, { kind: 'latest-turn' }> {
+  return Boolean(revertible) && revertible !== false && revertible.kind === 'latest-turn'
+}
+
+export function restoreActionLabel(item: RestorePlanItem): string {
+  if (item.action === 'delete') return '删除本轮新增'
+  return '恢复为 Git HEAD 内容'
+}
+
+export function restorePreviewSummary(preview: LatestTurnRestorePreview): string {
+  if (preview.revertible.kind !== 'latest-turn') {
+    return preview.revertible.reason
+  }
+  const lose = preview.willLosePaths.length
+  return `将撤销最新一轮 ${preview.revertible.turnId}，涉及 ${preview.revertible.paths.length} 个文件；当前这些内容会被丢弃：${lose} 个路径。`
 }
 
 export function attributionLabel(attribution: TaskChangeAttribution): string {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   parseFileDiffResult,
+  parseLatestTurnRestorePreview,
+  parseLatestTurnRestoreResult,
   parseTaskChangeSetQueryResult,
   parseTurnChangeCheckpoint
 } from './git-review'
@@ -109,5 +111,73 @@ describe('git-review IPC 投影', () => {
     })
     expect(JSON.stringify(parsed)).not.toContain('/tmp/project')
     expect(JSON.stringify(parsed)).not.toContain('fingerprint')
+  })
+
+  it('latest-turn 计划只保留相对路径，拒绝绝对路径和文件正文', () => {
+    const parsed = parseTaskChangeSetQueryResult({
+      taskId: 'task-1',
+      environmentId: 'local:testenv',
+      baselineStatus: 'captured',
+      gitPresence: 'git',
+      generatedAt: '2026-08-22T12:00:00.000Z',
+      preExistingCount: 0,
+      taskChangedCount: 1,
+      unknownCount: 0,
+      validations: [],
+      paths: [{ path: 'README.md', attribution: 'task-modified' }],
+      revertible: {
+        kind: 'latest-turn',
+        turnId: 'turn-1',
+        paths: ['README.md'],
+        restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }],
+        fileBody: 'secret-content',
+        absolutePath: '/Users/secret/README.md'
+      }
+    })
+    expect(parsed?.revertible).toEqual({
+      kind: 'latest-turn',
+      turnId: 'turn-1',
+      paths: ['README.md'],
+      restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+    })
+    expect(JSON.stringify(parsed)).not.toContain('/Users/secret')
+    expect(JSON.stringify(parsed)).not.toContain('secret-content')
+    expect(
+      parseLatestTurnRestorePreview({
+        taskId: 'task-1',
+        revertible: {
+          kind: 'latest-turn',
+          turnId: 'turn-1',
+          paths: ['README.md'],
+          restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+        },
+        willLosePaths: ['README.md'],
+        contents: { 'README.md': 'agent-edit' }
+      })
+    ).toEqual({
+      taskId: 'task-1',
+      revertible: {
+        kind: 'latest-turn',
+        turnId: 'turn-1',
+        paths: ['README.md'],
+        restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+      },
+      willLosePaths: ['README.md']
+    })
+    expect(
+      parseLatestTurnRestorePreview({
+        taskId: 'task-1',
+        revertible: { kind: 'none', reason: 'ok' },
+        willLosePaths: ['/etc/passwd']
+      })
+    ).toBeNull()
+    expect(
+      parseLatestTurnRestoreResult({
+        taskId: 'task-1',
+        ok: false,
+        reason: 'denied',
+        message: '/Users/secret/project 无法恢复'
+      })?.message
+    ).toBe('恢复未完成。')
   })
 })

@@ -55,6 +55,8 @@ import {
 } from '../shared/command'
 import {
   parseFileDiffResult,
+  parseLatestTurnRestorePreview,
+  parseLatestTurnRestoreResult,
   parseTaskChangeSetQueryResult,
   parseTurnChangeCheckpointList
 } from '../shared/git-review'
@@ -1002,6 +1004,28 @@ export function createTaskDesktopApi(ipcRenderer: NarrowIpcRenderer): TaskDeskto
       }
       if (parsed.some((item) => item.taskId !== taskId)) {
         return { ok: false, error: { code: 'operation-failed', message: '检查点列表无效。' } }
+      }
+      return { ok: true, value: parsed }
+    },
+    previewLatestTurnRestore: async (taskId) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.previewLatestTurnRestore, {
+        taskId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const parsed = parseLatestTurnRestorePreview(result.value)
+      if (!parsed || parsed.taskId !== taskId) {
+        return { ok: false, error: { code: 'operation-failed', message: '恢复预览无效。' } }
+      }
+      return { ok: true, value: parsed }
+    },
+    restoreLatestTurn: async (taskId) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.restoreLatestTurn, {
+        taskId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const parsed = parseLatestTurnRestoreResult(result.value)
+      if (!parsed || parsed.taskId !== taskId) {
+        return { ok: false, error: { code: 'operation-failed', message: '恢复结果无效。' } }
       }
       return { ok: true, value: parsed }
     },

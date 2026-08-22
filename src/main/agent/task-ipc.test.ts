@@ -10,6 +10,8 @@ import type { DesktopIpcHandler } from '../ipc-types'
 import { DesktopIpcFailure, type TrustedIpcInvokeEvent } from '../security/ipc-sender-validation'
 import type {
   FileDiffResult,
+  LatestTurnRestorePreview,
+  LatestTurnRestoreResult,
   TaskChangeSetQueryResult,
   TurnChangeCheckpoint
 } from '../../shared/git-review'
@@ -62,6 +64,8 @@ function createFixture(
     getChangeSet: ReturnType<typeof vi.fn>
     getFileDiff: ReturnType<typeof vi.fn>
     listTurnCheckpoints: ReturnType<typeof vi.fn>
+    previewLatestTurnRestore: ReturnType<typeof vi.fn>
+    restoreLatestTurn: ReturnType<typeof vi.fn>
   }
   assertTrustedSender: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, request: unknown) => Promise<DesktopIpcResult<T>>
@@ -163,7 +167,18 @@ function createFixture(
       }
       return { taskId, path, status: 'ok', unifiedDiff: '--- a/README.md\n+++ b/README.md\n' }
     }),
-    listTurnCheckpoints: vi.fn(async (): Promise<TurnChangeCheckpoint[]> => [])
+    listTurnCheckpoints: vi.fn(async (): Promise<TurnChangeCheckpoint[]> => []),
+    previewLatestTurnRestore: vi.fn(async (taskId: string): Promise<LatestTurnRestorePreview> => ({
+      taskId,
+      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' },
+      willLosePaths: []
+    })),
+    restoreLatestTurn: vi.fn(async (taskId: string): Promise<LatestTurnRestoreResult> => ({
+      taskId,
+      ok: false,
+      reason: 'none',
+      message: '当前不能自动撤销。'
+    }))
   }
   registerTaskIpcHandlers({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
@@ -534,6 +549,24 @@ describe('Task 变更审阅只读 IPC', () => {
         taskId: 'task-1',
         path: 'README.md',
         commandId: 'cmd-other-task'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+  })
+
+  it('恢复预览与执行只接受 taskId，未知 Task 当 not-found', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.previewLatestTurnRestore, { taskId: 'task-1' })
+    ).toMatchObject({ ok: true, value: { taskId: 'task-1' } })
+    expect(fixture.gitReview.previewLatestTurnRestore).toHaveBeenCalledWith('task-1')
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.restoreLatestTurn, { taskId: 'missing-task' })
+    ).toMatchObject({ ok: false, error: { code: 'history-not-found' } })
+    expect(fixture.gitReview.restoreLatestTurn).not.toHaveBeenCalled()
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.restoreLatestTurn, {
+        taskId: 'task-1',
+        extra: true
       })
     ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
   })

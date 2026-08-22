@@ -40,6 +40,8 @@ type TaskDeletionDependencies = {
     getChangeSet(taskId: string): Promise<unknown>
     getFileDiff(taskId: string, path: string): Promise<unknown>
     listTurnCheckpoints(taskId: string): Promise<unknown>
+    previewLatestTurnRestore?(taskId: string): Promise<unknown>
+    restoreLatestTurn?(taskId: string): Promise<unknown>
   } | null
 }
 
@@ -501,6 +503,8 @@ describe('Main 删除与权限失效编排', () => {
     expect(typeof review?.getChangeSet).toBe('function')
     expect(typeof review?.getFileDiff).toBe('function')
     expect(typeof review?.listTurnCheckpoints).toBe('function')
+    expect(typeof review?.previewLatestTurnRestore).toBe('function')
+    expect(typeof review?.restoreLatestTurn).toBe('function')
   })
 
   it('Task 删除成功后才失效授权，token 校验失败时保持原授权', async () => {

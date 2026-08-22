@@ -793,4 +793,34 @@ describe('窄 Preload API', () => {
       value: { path: 'README.md', status: 'ok' }
     })
   })
+
+  it('恢复预览丢掉绝对路径和文件正文', async () => {
+    const ipcRenderer = createIpcRenderer()
+    const task = createTaskDesktopApi(ipcRenderer)
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        revertible: {
+          kind: 'latest-turn',
+          turnId: 'turn-1',
+          paths: ['README.md'],
+          restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+        },
+        willLosePaths: ['README.md'],
+        absolutePath: '/Users/secret/README.md',
+        body: 'agent-edit'
+      }
+    })
+    const preview = await task.previewLatestTurnRestore('task-1')
+    expect(preview).toMatchObject({
+      ok: true,
+      value: {
+        taskId: 'task-1',
+        willLosePaths: ['README.md']
+      }
+    })
+    expect(JSON.stringify(preview)).not.toContain('/Users/secret')
+    expect(JSON.stringify(preview)).not.toContain('agent-edit')
+  })
 })

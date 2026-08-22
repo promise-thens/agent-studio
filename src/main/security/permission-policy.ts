@@ -62,7 +62,8 @@ const APP_SERVICE_OPERATIONS: Record<
   readonly AgentOperationType[]
 > = {
   'command-runner': ['execute-command'],
-  git: ['git-read', 'git-mutate'],
+  // write-file/delete-path 仅用于最新一轮受控恢复，不得借此提交 git reset。
+  git: ['git-read', 'git-mutate', 'write-file', 'delete-path'],
   worktree: ['worktree-create', 'worktree-remove'],
   other: ['read-project', 'write-file', 'delete-path', 'network-egress', 'unknown']
 }

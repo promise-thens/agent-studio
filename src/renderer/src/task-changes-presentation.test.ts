@@ -17,7 +17,10 @@ import {
   omittedLabel,
   parseUnifiedDiff,
   presentChangeSetSummary,
+  canRestoreLatestTurn,
   revertibleNotice,
+  restoreActionLabel,
+  restorePreviewSummary,
   shouldRenderUnifiedDiff,
   unverifiedTaskPaths,
   validationOutcomeLabel,
@@ -134,6 +137,36 @@ describe('基线失效与不可撤销', () => {
       revertibleNotice({ kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' })
     ).toBe('不可一键撤销 · 当前版本仅提供只读审阅，不支持一键撤销。')
     expect(revertibleNotice(false)).toMatch(/不可一键撤销/)
+    expect(
+      revertibleNotice({
+        kind: 'latest-turn',
+        turnId: 'turn-1',
+        paths: ['README.md'],
+        restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+      })
+    ).toMatch(/可撤销最新一轮/)
+    expect(
+      canRestoreLatestTurn({
+        kind: 'latest-turn',
+        turnId: 'turn-1',
+        paths: ['README.md'],
+        restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+      })
+    ).toBe(true)
+    expect(canRestoreLatestTurn({ kind: 'none', reason: '不可撤销' })).toBe(false)
+    expect(restoreActionLabel({ path: 'README.md', action: 'write', from: 'head' })).toMatch(/HEAD/)
+    expect(
+      restorePreviewSummary({
+        taskId: 'task-1',
+        revertible: {
+          kind: 'latest-turn',
+          turnId: 'turn-1',
+          paths: ['README.md'],
+          restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+        },
+        willLosePaths: ['README.md']
+      })
+    ).toMatch(/将丢失|丢弃/)
   })
 })
 
@@ -242,7 +275,7 @@ describe('验证与未验证文件', () => {
 })
 
 describe('Changes 面板源码约束', () => {
-  it('只读审阅：有截断横幅和命令来源标签，没有继续任务或可执行撤销', () => {
+  it('只在 latest-turn 显示撤销按钮，没有继续任务', () => {
     const panel = readFileSync(join(rendererDir, 'components/TaskChangesPanel.vue'), 'utf8')
     const viewer = readFileSync(join(rendererDir, 'components/FileDiffViewer.vue'), 'utf8')
     const inspector = readFileSync(join(rendererDir, 'components/TaskInspector.vue'), 'utf8')
@@ -250,7 +283,8 @@ describe('Changes 面板源码约束', () => {
     expect(panel).toContain('commandSourceLabel')
     expect(panel).toContain('commandTrustLabel')
     expect(panel).toContain('formatCommandDuration')
-    expect(panel).toContain('不可一键撤销')
+    expect(panel).toContain('撤销最新一轮')
+    expect(panel).toContain('canRestoreLatestTurn')
     expect(panel).not.toContain('继续任务')
     expect(panel).not.toMatch(/emit\('revert/)
     expect(viewer).toContain('fileDiffBanner')

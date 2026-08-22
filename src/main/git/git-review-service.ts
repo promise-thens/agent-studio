@@ -1,6 +1,7 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import { isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
+import type { OperationIntent } from '../../shared/agent'
 import {
   deriveValidationResult,
   takeLatestCommandEvidencePage,
@@ -8,23 +9,32 @@ import {
   type ValidationResult
 } from '../../shared/command'
 import type { ProjectAvailability } from '../../shared/task-history'
-import type {
-  FileDiffResult,
-  FileDiffStatus,
-  ResolvedProjectRoot,
-  TaskChangeAttribution,
-  TaskChangeBaseline,
-  TaskChangePath,
-  TaskChangePathSnapshot,
-  TaskChangeSetQueryResult,
-  TurnChangeCheckpoint
+import {
+  isSafeRelativePosixPath,
+  type FileDiffResult,
+  type FileDiffStatus,
+  type LatestTurnRestorePreview,
+  type LatestTurnRestoreResult,
+  type ResolvedProjectRoot,
+  type RestorePlanItem,
+  type RestoreRefusalReason,
+  type TaskChangeAttribution,
+  type TaskChangeBaseline,
+  type TaskChangePath,
+  type TaskChangePathSnapshot,
+  type TaskChangeRevertible,
+  type TaskChangeSet,
+  type TaskChangeSetQueryResult,
+  type TurnChangeCheckpoint
 } from '../../shared/git-review'
 import { redactSensitiveText } from '../security/sensitive-redaction'
+import type { PermissionAuthorizationResult, PermissionBroker } from '../security/permission-broker'
 import {
   DEFAULT_GIT_TIMEOUT_MS,
   isPathInsideRoot,
   resolveProjectRoot,
   runReadOnlyGit,
+  runReadOnlyGitBytes,
   toPosixRelativePath,
   type ReadOnlyGitOptions
 } from '../project/project-root-resolver'
@@ -34,6 +44,9 @@ import type { TurnChangeCheckpointStore } from './turn-change-checkpoint'
 export const MAX_CHANGE_SET_PATHS = 500
 export const MAX_FILE_DIFF_BYTES = 64 * 1024
 export const REVERT_UNAVAILABLE_REASON = '当前版本仅提供只读审阅，不支持一键撤销。'
+const RECOVERY_TURN_PREFIX = 'recovery_'
+/** 与 PermissionPolicy MAX_TARGETS 对齐，超出则整次拒绝，禁止拆成部分应用。 */
+const MAX_RESTORE_INTENT_TARGETS = 32
 
 const MAX_HASH_FILE_BYTES = 256 * 1024
 const MAX_HASH_TOTAL_BYTES = 2 * 1024 * 1024
@@ -86,6 +99,11 @@ export interface GitReviewServiceDependencies {
   now?: () => string
   gitExecutable?: string
   sourceEnvironment?: NodeJS.ProcessEnv
+  /** 由 TaskExecutor 注入，禁止 Renderer 自报是否空闲。 */
+  hasActiveExecution?: () => boolean
+  /** 只调用 authorizeOperation；不得改 Broker 内部，也不得走 git reset。 */
+  broker?: Pick<PermissionBroker, 'authorizeOperation'>
+  createRecoveryId?: () => string
 }
 
 /**
@@ -102,6 +120,8 @@ export class GitReviewService {
     if (this.deps.waitForEvidenceWrites) await this.deps.waitForEvidenceWrites()
     const identity = this.deps.getTaskIdentity(taskId)
     const computed = await this.computeAttributedChangeSet(identity)
+    const evaluation = await this.evaluateRestoreFromComputed(identity, computed)
+    computed.changeSet.revertible = toPublicRevertible(evaluation)
     const validations = await this.collectValidations(taskId)
     return toQueryResult(computed.changeSet, validations)
   }
@@ -116,6 +136,44 @@ export class GitReviewService {
     return await this.deps.checkpointStore.list(taskId)
   }
 
+  /** 只读预览。主进程重新计算 predicate，不信任 UI 缓存的 revertible。 */
+  async previewLatestTurnRestore(taskId: string): Promise<LatestTurnRestorePreview> {
+    const identity = this.deps.getTaskIdentity(taskId)
+    const computed = await this.computeAttributedChangeSet(identity)
+    const evaluation = await this.evaluateRestoreFromComputed(identity, computed)
+    if (evaluation.kind !== 'latest-turn') {
+      return {
+        taskId: identity.taskId,
+        revertible: { kind: 'none', reason: evaluation.reason },
+        willLosePaths: []
+      }
+    }
+    return {
+      taskId: identity.taskId,
+      revertible: toPublicRevertible(evaluation),
+      willLosePaths: [...evaluation.paths]
+    }
+  }
+
+  /**
+   * 恢复前再次计算 predicate，经 Broker 写/删。
+   * 检查点只存哈希不是 git blob，因此禁止 git reset/checkout/clean/stash。
+   */
+  async restoreLatestTurn(taskId: string): Promise<LatestTurnRestoreResult> {
+    const identity = this.deps.getTaskIdentity(taskId)
+    const computed = await this.computeAttributedChangeSet(identity)
+    const evaluation = await this.evaluateRestoreFromComputed(identity, computed)
+    if (evaluation.kind !== 'latest-turn') {
+      return {
+        taskId: identity.taskId,
+        ok: false,
+        reason: evaluation.refusal,
+        message: evaluation.reason
+      }
+    }
+    return await this.executeRestore(identity, computed, evaluation)
+  }
+
   /**
    * 写入型 Turn 的 before/after 快照。调用方必须吞掉抛错，不得让 Turn 失败。
    */
@@ -127,13 +185,9 @@ export class GitReviewService {
     await this.captureAfterCheckpoint(input)
   }
 
-  private async computeAttributedChangeSet(identity: GitReviewTaskIdentity): Promise<{
-    changeSet: import('../../shared/git-review').TaskChangeSet
-    resolved: ResolvedProjectRoot
-    current: TaskChangePathSnapshot[]
-    baseline: TaskChangeBaseline | null
-    lastCompleteAfter?: TaskChangePathSnapshot[]
-  }> {
+  private async computeAttributedChangeSet(
+    identity: GitReviewTaskIdentity
+  ): Promise<ComputedChangeSet> {
     const generatedAt = this.now()
     const gitOptions = this.gitOptions()
     const resolved = await resolveProjectRoot({
@@ -151,7 +205,8 @@ export class GitReviewService {
     const availability = await this.safeProjectAvailability(identity.projectId)
     const baselineUsable = await this.isBaselineUsable(baseline, resolved, availability, gitOptions)
     const snapshot = await snapshotWorkingTree(resolved, gitOptions, MAX_CHANGE_SET_PATHS)
-    const lastComplete = await this.findLastCompleteCheckpoint(identity.taskId)
+    const checkpoints = await this.deps.checkpointStore.list(identity.taskId)
+    const lastComplete = findLastCompleteCheckpoint(checkpoints)
     const lastCompleteAfter = lastComplete?.afterPaths
     const attributed = attributeWorkingTreePaths({
       current: snapshot.paths,
@@ -188,7 +243,17 @@ export class GitReviewService {
       changeSet.baseCommit = baseline?.baseCommit ?? resolved.git.head.oid
     }
     if (truncated) changeSet.truncated = true
-    return { changeSet, resolved, current: snapshot.paths, baseline, lastCompleteAfter }
+    return {
+      changeSet,
+      resolved,
+      current: snapshot.paths,
+      baseline,
+      baselineUsable,
+      lastCompleteAfter,
+      checkpoints,
+      truncated,
+      unavailable: snapshot.unavailable
+    }
   }
 
   private async captureBeforeCheckpoint(input: RecordTurnChangeCheckpointInput): Promise<void> {
@@ -431,13 +496,365 @@ export class GitReviewService {
     }
   }
 
-  private async findLastCompleteCheckpoint(taskId: string): Promise<TurnChangeCheckpoint | null> {
-    const listed = await this.deps.checkpointStore.list(taskId)
-    for (let index = listed.length - 1; index >= 0; index -= 1) {
-      const item = listed[index]
-      if (item && item.status === 'complete' && item.afterPaths) return item
+  private async evaluateRestoreFromComputed(
+    identity: GitReviewTaskIdentity,
+    computed: ComputedChangeSet
+  ): Promise<RestoreEvaluation> {
+    if (this.deps.hasActiveExecution?.() === true) {
+      return refuseRestore('active-turn', '当前有活动 Turn，不能自动撤销。')
     }
-    return null
+    if (computed.unavailable || computed.truncated || computed.changeSet.truncated) {
+      return refuseRestore('incomplete', '变更列表不完整，不能自动撤销。')
+    }
+    if (!computed.baselineUsable && computed.changeSet.baselineStatus !== 'captured') {
+      return refuseRestore('none', '基线未捕获或已失效，不能自动撤销。')
+    }
+    if (!computed.baseline || computed.baseline.status !== 'captured' || !computed.baselineUsable) {
+      return refuseRestore('none', '基线未捕获或已失效，不能自动撤销。')
+    }
+    if (computed.resolved.environmentId !== identity.environmentId) {
+      return refuseRestore('drift', '执行环境已漂移，不能自动撤销。')
+    }
+    if (computed.resolved.executionRoot !== identity.executionRoot) {
+      return refuseRestore('drift', '执行根目录已漂移，不能自动撤销。')
+    }
+
+    const latest = computed.checkpoints.at(-1)
+    if (!latest) return refuseRestore('none', '没有已完成的写入型最新一轮。')
+    if (latest.turnId.startsWith(RECOVERY_TURN_PREFIX)) {
+      return refuseRestore('none', '最新一轮已撤销，历史检查点仍保留。')
+    }
+    if (latest.status === 'incomplete') {
+      return refuseRestore('incomplete', '最新检查点不完整，不能自动撤销。')
+    }
+    if (latest.status !== 'complete' || !latest.afterPaths || latest.affectedPaths.length === 0) {
+      return refuseRestore('none', '没有已完成的写入型最新一轮。')
+    }
+    if (latest.environmentId !== identity.environmentId || latest.drift) {
+      return refuseRestore('drift', '检查点环境已漂移，不能自动撤销。')
+    }
+    if (
+      latest.beforePaths.length >= MAX_CHANGE_SET_PATHS ||
+      latest.afterPaths.length >= MAX_CHANGE_SET_PATHS
+    ) {
+      return refuseRestore('incomplete', '检查点路径列表可能被截断，不能自动撤销。')
+    }
+
+    const currentByPath = new Map(computed.current.map((item) => [item.path, item]))
+    const afterByPath = new Map(latest.afterPaths.map((item) => [item.path, item]))
+    const beforeByPath = new Map(latest.beforePaths.map((item) => [item.path, item]))
+    const attributionByPath = new Map(
+      computed.changeSet.paths.map((item) => [item.path, item.attribution])
+    )
+
+    for (const path of latest.affectedPaths) {
+      if (!isSafeRestorePath(path)) {
+        return refuseRestore('not-recoverable', '恢复路径越界，已拒绝写入。')
+      }
+      const after = afterByPath.get(path)
+      const current = currentByPath.get(path)
+      if (!currentMatchesAfter(after, current)) {
+        return refuseRestore('drift', '当前工作区与该轮结束时的哈希不一致，不能自动覆盖。')
+      }
+      const attribution = attributionByPath.get(path)
+      if (
+        attribution === 'pre-existing' ||
+        attribution === 'overlap-unknown' ||
+        attribution === 'user-changed-after-task'
+      ) {
+        return refuseRestore('drift', '这些路径存在任务开始前改动、重叠或事后编辑，不能自动覆盖。')
+      }
+    }
+
+    const restorePlan: RestorePlanItem[] = []
+    const blobs = new Map<string, Buffer>()
+    const gitOptions = this.gitOptions()
+    for (const path of latest.affectedPaths) {
+      const planned = await this.planPathRestore({
+        path,
+        before: beforeByPath.get(path),
+        after: afterByPath.get(path),
+        resolved: computed.resolved,
+        gitOptions,
+        baseCommit: computed.baseline.baseCommit ?? computed.changeSet.baseCommit
+      })
+      if ('refuse' in planned) return refuseRestore(planned.refuse, planned.reason)
+      restorePlan.push({ path: planned.path, action: planned.action, from: planned.from })
+      if (planned.bytes) blobs.set(path, planned.bytes)
+    }
+    if (restorePlan.length === 0) {
+      return refuseRestore('none', '没有已完成的写入型最新一轮。')
+    }
+    const writes = restorePlan.filter((item) => item.action === 'write')
+    const deletes = restorePlan.filter((item) => item.action === 'delete')
+    if (writes.length > MAX_RESTORE_INTENT_TARGETS || deletes.length > MAX_RESTORE_INTENT_TARGETS) {
+      return refuseRestore('not-recoverable', '恢复路径过多，不能自动撤销。')
+    }
+    return {
+      kind: 'latest-turn',
+      turnId: latest.turnId,
+      paths: [...latest.affectedPaths],
+      restorePlan,
+      blobs,
+      checkpoint: latest
+    }
+  }
+
+  private async planPathRestore(input: {
+    path: string
+    before?: TaskChangePathSnapshot
+    after?: TaskChangePathSnapshot
+    resolved: ResolvedProjectRoot
+    gitOptions: ReadOnlyGitOptions
+    baseCommit?: string
+  }): Promise<PlannedRestorePath | RestoreRefuse> {
+    const omitted = input.after?.omitted ?? input.before?.omitted
+    if (omitted === 'binary' || omitted === 'too-large' || omitted === 'limit') {
+      return {
+        refuse: 'not-recoverable',
+        reason: '二进制、超大或截断文件无法从 Git 对象恢复。'
+      }
+    }
+    const beforePresent = isPresentSnapshot(input.before)
+    const afterPresent = isPresentSnapshot(input.after)
+    const head = await readHeadBlob(input.resolved, input.path, input.gitOptions, input.baseCommit)
+    if (!beforePresent) {
+      if (head.present) {
+        return { path: input.path, action: 'write', from: 'head', bytes: head.bytes }
+      }
+      if (!afterPresent) {
+        return { refuse: 'not-recoverable', reason: '无法证明恢复前状态，禁止 git reset。' }
+      }
+      return { path: input.path, action: 'delete', from: 'absent' }
+    }
+    if (input.before?.kind === 'untracked' || !input.before?.contentHash) {
+      return {
+        refuse: 'not-recoverable',
+        reason: '未跟踪或缺少哈希的事前文件无法从 Git 对象恢复。'
+      }
+    }
+    if (!head.present || head.hash !== input.before.contentHash) {
+      return {
+        refuse: 'not-recoverable',
+        reason: '无法从 Git HEAD 证明恢复前状态（检查点只存哈希，禁止 git reset/checkout）。'
+      }
+    }
+    return { path: input.path, action: 'write', from: 'head', bytes: head.bytes }
+  }
+
+  private async executeRestore(
+    identity: GitReviewTaskIdentity,
+    computed: ComputedChangeSet,
+    evaluation: Extract<RestoreEvaluation, { kind: 'latest-turn' }>
+  ): Promise<LatestTurnRestoreResult> {
+    const broker = this.deps.broker
+    if (!broker) {
+      return {
+        taskId: identity.taskId,
+        ok: false,
+        reason: 'not-recoverable',
+        message: '权限服务尚未就绪，未改写任何文件。'
+      }
+    }
+
+    const writes = evaluation.restorePlan.filter((item) => item.action === 'write')
+    const deletes = evaluation.restorePlan.filter((item) => item.action === 'delete')
+    const applied: string[] = []
+    const isActive = (): boolean => this.deps.hasActiveExecution?.() !== true
+    let mutated = false
+
+    if (writes.length > 0) {
+      const writeAuth = await broker.authorizeOperation(
+        this.createRestoreIntent(identity, evaluation.turnId, 'write-file', writes),
+        async () => {
+          if (!mutated) {
+            const fresh = await this.recheckRestore(identity, evaluation)
+            if (fresh.kind !== 'ok') return fresh
+          }
+          try {
+            for (const step of writes) {
+              const bytes = evaluation.blobs.get(step.path)
+              if (!bytes) {
+                return {
+                  kind: 'refuse' as const,
+                  reason: 'not-recoverable' as const,
+                  message: '缺少可写回的 Git blob，未继续删除。'
+                }
+              }
+              await writeContainedFile(
+                computed.resolved.executionRoot,
+                gitRootOf(computed.resolved),
+                step.path,
+                bytes
+              )
+              applied.push(step.path)
+              mutated = true
+            }
+            return { kind: 'ok' as const }
+          } catch {
+            return {
+              kind: 'refuse' as const,
+              reason: 'not-recoverable' as const,
+              message: '写入目标越界或不可用，已停止。'
+            }
+          }
+        },
+        { isActive }
+      )
+      const writeFailure = restoreAuthorizationFailure(identity.taskId, writeAuth, applied, '写入')
+      if (writeFailure) return writeFailure
+    }
+
+    if (deletes.length > 0) {
+      const deleteAuth = await broker.authorizeOperation(
+        this.createRestoreIntent(identity, evaluation.turnId, 'delete-path', deletes),
+        async () => {
+          // 写回已经改变 after 哈希；删除阶段只复核空闲与路径，不得用 reset 回滚已写文件。
+          if (!mutated) {
+            const fresh = await this.recheckRestore(identity, evaluation)
+            if (fresh.kind !== 'ok') return fresh
+          } else if (this.deps.hasActiveExecution?.() === true) {
+            return {
+              kind: 'refuse' as const,
+              reason: 'active-turn' as const,
+              message: '当前有活动 Turn，已停止删除。'
+            }
+          }
+          try {
+            for (const step of deletes) {
+              await deleteContainedFile(
+                computed.resolved.executionRoot,
+                gitRootOf(computed.resolved),
+                step.path
+              )
+              applied.push(step.path)
+              mutated = true
+            }
+            return { kind: 'ok' as const }
+          } catch {
+            return {
+              kind: 'refuse' as const,
+              reason: 'not-recoverable' as const,
+              message: '删除目标越界或不可用，已停止。'
+            }
+          }
+        },
+        { isActive }
+      )
+      const deleteFailure = restoreAuthorizationFailure(
+        identity.taskId,
+        deleteAuth,
+        applied,
+        '删除'
+      )
+      if (deleteFailure) return deleteFailure
+    }
+
+    const recoveryId = this.allocateRecoveryId()
+    const afterSnapshot = await snapshotWorkingTree(
+      computed.resolved,
+      this.gitOptions(),
+      MAX_CHANGE_SET_PATHS
+    )
+    const lastTime =
+      computed.checkpoints.at(-1)?.capturedAfterAt ??
+      computed.checkpoints.at(-1)?.capturedBeforeAt ??
+      this.now()
+    const capturedAt = laterTimestamp(lastTime)
+    const recovery: TurnChangeCheckpoint = {
+      schemaVersion: 1,
+      taskId: identity.taskId,
+      turnId: recoveryId,
+      environmentId: identity.environmentId,
+      previousCheckpointId: evaluation.turnId,
+      capturedBeforeAt: capturedAt,
+      capturedAfterAt: capturedAt,
+      status: 'complete',
+      beforePaths: evaluation.checkpoint.afterPaths ?? [],
+      afterPaths: afterSnapshot.paths,
+      affectedPaths: [...evaluation.paths]
+    }
+    await this.deps.checkpointStore.put(recovery)
+    return {
+      taskId: identity.taskId,
+      ok: true,
+      message: '已撤销最新一轮写入，历史检查点仍保留。',
+      recoveryCheckpointId: recoveryId,
+      restoredPaths: [...applied],
+      appliedPaths: [...applied]
+    }
+  }
+
+  private async recheckRestore(
+    identity: GitReviewTaskIdentity,
+    expected: Extract<RestoreEvaluation, { kind: 'latest-turn' }>
+  ): Promise<{ kind: 'ok' } | { kind: 'refuse'; reason: RestoreRefusalReason; message: string }> {
+    if (this.deps.hasActiveExecution?.() === true) {
+      return { kind: 'refuse', reason: 'active-turn', message: '当前有活动 Turn，不能自动撤销。' }
+    }
+    const computed = await this.computeAttributedChangeSet(identity)
+    const evaluation = await this.evaluateRestoreFromComputed(identity, computed)
+    if (evaluation.kind !== 'latest-turn' || evaluation.turnId !== expected.turnId) {
+      return {
+        kind: 'refuse',
+        reason: evaluation.kind === 'none' ? evaluation.refusal : 'drift',
+        message: evaluation.kind === 'none' ? evaluation.reason : '恢复条件已变化，未继续改写文件。'
+      }
+    }
+    return { kind: 'ok' }
+  }
+
+  private createRestoreIntent(
+    identity: GitReviewTaskIdentity,
+    turnId: string,
+    operationType: 'write-file' | 'delete-path',
+    steps: RestorePlanItem[]
+  ): OperationIntent {
+    const fingerprint = createHash('sha256')
+      .update(
+        JSON.stringify({
+          kind: 'latest-turn-restore',
+          taskId: identity.taskId,
+          turnId,
+          operationType,
+          paths: steps.map((item) => item.path).sort()
+        })
+      )
+      .digest('hex')
+    const count = steps.length
+    if (operationType === 'write-file') {
+      return {
+        initiator: { kind: 'app', service: 'git' },
+        taskId: identity.taskId,
+        turnId,
+        projectId: identity.projectId,
+        environmentId: identity.environmentId,
+        executionRoot: identity.executionRoot,
+        operationType,
+        targets: steps.map((item) => ({ kind: 'path', value: item.path })),
+        parameterFingerprint: fingerprint,
+        title: '写回最新一轮撤销目标',
+        impact: `将把 ${count} 个文件恢复为 Git HEAD 中的内容。检查点只存哈希，不会执行 git reset、checkout、clean 或 stash。`
+      }
+    }
+    return {
+      initiator: { kind: 'app', service: 'git' },
+      taskId: identity.taskId,
+      turnId,
+      projectId: identity.projectId,
+      environmentId: identity.environmentId,
+      executionRoot: identity.executionRoot,
+      operationType,
+      targets: steps.map((item) => ({ kind: 'path', value: item.path })),
+      parameterFingerprint: fingerprint,
+      title: '删除本轮新增文件',
+      impact: `将删除 ${count} 个本轮新增路径。不会执行 git clean 或 reset。`
+    }
+  }
+
+  private allocateRecoveryId(): string {
+    const created = this.deps.createRecoveryId?.() ?? `${RECOVERY_TURN_PREFIX}${randomUUID()}`
+    return created.startsWith(RECOVERY_TURN_PREFIX) ? created : `${RECOVERY_TURN_PREFIX}${created}`
   }
 
   private async isBaselineUsable(
@@ -1115,4 +1532,225 @@ function truncateUtf8(text: string, maxBytes: number): string {
 
 function hasParentTraversal(value: string): boolean {
   return value.split(/[\\/]+/u).some((segment) => segment === '..')
+}
+
+interface ComputedChangeSet {
+  changeSet: TaskChangeSet
+  resolved: ResolvedProjectRoot
+  current: TaskChangePathSnapshot[]
+  baseline: TaskChangeBaseline | null
+  baselineUsable: boolean
+  lastCompleteAfter?: TaskChangePathSnapshot[]
+  checkpoints: TurnChangeCheckpoint[]
+  truncated: boolean
+  unavailable: boolean
+}
+
+type RestoreRefuse = { refuse: RestoreRefusalReason; reason: string }
+
+type PlannedRestorePath = RestorePlanItem & { bytes?: Buffer }
+
+type RestoreEvaluation =
+  | { kind: 'none'; reason: string; refusal: RestoreRefusalReason }
+  | {
+      kind: 'latest-turn'
+      turnId: string
+      paths: string[]
+      restorePlan: RestorePlanItem[]
+      blobs: Map<string, Buffer>
+      checkpoint: TurnChangeCheckpoint
+    }
+
+type RestoreExecuteResult =
+  { kind: 'ok' } | { kind: 'refuse'; reason: RestoreRefusalReason; message: string }
+
+function refuseRestore(refusal: RestoreRefusalReason, reason: string): RestoreEvaluation {
+  return { kind: 'none', refusal, reason }
+}
+
+function toPublicRevertible(evaluation: RestoreEvaluation): TaskChangeRevertible {
+  if (evaluation.kind !== 'latest-turn') {
+    return { kind: 'none', reason: evaluation.reason }
+  }
+  return {
+    kind: 'latest-turn',
+    turnId: evaluation.turnId,
+    paths: evaluation.paths,
+    restorePlan: evaluation.restorePlan
+  }
+}
+
+function findLastCompleteCheckpoint(list: TurnChangeCheckpoint[]): TurnChangeCheckpoint | null {
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const item = list[index]
+    if (item && item.status === 'complete' && item.afterPaths) return item
+  }
+  return null
+}
+
+function isPresentSnapshot(snapshot?: TaskChangePathSnapshot): boolean {
+  return Boolean(snapshot && !isDeletedSnapshot(snapshot))
+}
+
+function currentMatchesAfter(
+  after: TaskChangePathSnapshot | undefined,
+  current: TaskChangePathSnapshot | undefined
+): boolean {
+  const afterPresent = isPresentSnapshot(after)
+  const currentPresent = isPresentSnapshot(current)
+  if (!afterPresent && !currentPresent) return true
+  return pathSnapshotsEquivalent(after, current)
+}
+
+function isSafeRestorePath(value: string): boolean {
+  return isSafeRelativePosixPath(value)
+}
+
+function gitRootOf(resolved: ResolvedProjectRoot): string {
+  return resolved.git.kind === 'git' ? resolved.git.gitRoot : resolved.executionRoot
+}
+
+function laterTimestamp(iso: string): string {
+  const milliseconds = Date.parse(iso)
+  if (!Number.isFinite(milliseconds)) return iso
+  return new Date(milliseconds + 1).toISOString()
+}
+
+function restoreAuthorizationFailure(
+  taskId: string,
+  auth: PermissionAuthorizationResult<RestoreExecuteResult>,
+  applied: string[],
+  phase: string
+): LatestTurnRestoreResult | null {
+  if (auth.ok) {
+    if (auth.value.kind === 'refuse') {
+      return {
+        taskId,
+        ok: false,
+        reason: auth.value.reason,
+        message: auth.value.message,
+        ...(applied.length ? { appliedPaths: [...applied] } : {})
+      }
+    }
+    return null
+  }
+  const reason: RestoreRefusalReason =
+    auth.reason === 'invalid-target' ? 'not-recoverable' : 'denied'
+  const message =
+    auth.reason === 'user-denied'
+      ? `用户拒绝了${phase}授权，未继续改写其余文件。`
+      : auth.reason === 'invalid-target'
+        ? `${phase}目标越界，未继续改写。`
+        : `${phase}授权未通过，未继续改写其余文件。`
+  return {
+    taskId,
+    ok: false,
+    reason,
+    message,
+    ...(applied.length ? { appliedPaths: [...applied] } : {})
+  }
+}
+
+async function readHeadBlob(
+  resolved: ResolvedProjectRoot,
+  relativePath: string,
+  gitOptions: ReadOnlyGitOptions,
+  baseCommit?: string
+): Promise<{ present: true; bytes: Buffer; hash: string } | { present: false }> {
+  if (
+    resolved.git.kind !== 'git' ||
+    !isSafeRestorePath(relativePath) ||
+    relativePath.includes(':')
+  ) {
+    return { present: false }
+  }
+  const gitRelative = toPosixRelativePath(
+    resolved.git.gitRoot,
+    join(resolved.executionRoot, ...relativePath.split('/'))
+  )
+  if (!gitRelative || gitRelative.includes(':') || !isSafeRestorePath(gitRelative)) {
+    return { present: false }
+  }
+  const rev = baseCommit && /^[0-9a-f]{7,64}$/i.test(baseCommit) ? baseCommit : 'HEAD'
+  const shown = await runReadOnlyGitBytes(
+    resolved.git.gitRoot,
+    ['-c', 'core.quotepath=false', 'show', `${rev}:${gitRelative}`],
+    { ...gitOptions, allowedRoot: resolved.executionRoot }
+  )
+  if (!shown.ok || shown.stdout.length > MAX_HASH_FILE_BYTES) return { present: false }
+  return {
+    present: true,
+    bytes: shown.stdout,
+    hash: createHash('sha256').update(shown.stdout).digest('hex')
+  }
+}
+
+/**
+ * 只对 realpath 后仍落在 execution root 与 git root 内的路径写文件。
+ * 已存在的外部符号链接直接拒绝，避免 writeFile 跟随写到仓库外。
+ */
+async function writeContainedFile(
+  executionRoot: string,
+  gitRoot: string,
+  relativePath: string,
+  bytes: Buffer
+): Promise<void> {
+  const joined = resolveContainedJoin(executionRoot, gitRoot, relativePath)
+  try {
+    const existing = await fs.realpath(joined)
+    if (!isPathInsideRoot(executionRoot, existing) || !isPathInsideRoot(gitRoot, existing)) {
+      throw new Error('escaped')
+    }
+    await fs.writeFile(existing, bytes)
+    return
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error
+  }
+  const parent = dirname(joined)
+  if (!isPathInsideRoot(executionRoot, parent) || !isPathInsideRoot(gitRoot, parent)) {
+    throw new Error('escaped')
+  }
+  await fs.mkdir(parent, { recursive: true })
+  await fs.writeFile(joined, bytes)
+  const written = await fs.realpath(joined)
+  if (!isPathInsideRoot(executionRoot, written) || !isPathInsideRoot(gitRoot, written)) {
+    await fs.unlink(joined).catch(() => undefined)
+    throw new Error('escaped')
+  }
+}
+
+/** unlink 目录项本身，不跟随符号链接去删外部目标。 */
+async function deleteContainedFile(
+  executionRoot: string,
+  gitRoot: string,
+  relativePath: string
+): Promise<void> {
+  const joined = resolveContainedJoin(executionRoot, gitRoot, relativePath)
+  try {
+    const existing = await fs.realpath(joined)
+    if (!isPathInsideRoot(executionRoot, existing) || !isPathInsideRoot(gitRoot, existing)) {
+      throw new Error('escaped')
+    }
+  } catch (error) {
+    if (isNotFoundError(error)) return
+    throw error
+  }
+  await fs.unlink(joined)
+}
+
+function resolveContainedJoin(
+  executionRoot: string,
+  gitRoot: string,
+  relativePath: string
+): string {
+  if (!isSafeRestorePath(relativePath)) throw new Error('escaped')
+  const joined = resolve(executionRoot, ...relativePath.split('/'))
+  if (!isPathInsideRoot(executionRoot, joined) || !isPathInsideRoot(gitRoot, joined)) {
+    throw new Error('escaped')
+  }
+  return joined
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')
 }

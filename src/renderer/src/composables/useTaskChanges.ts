@@ -8,7 +8,12 @@ import {
   type Ref
 } from 'vue'
 import type { CommandExecutionEvidence } from '../../../shared/command'
-import type { FileDiffResult, TaskChangeSetQueryResult } from '../../../shared/git-review'
+import type {
+  FileDiffResult,
+  LatestTurnRestorePreview,
+  LatestTurnRestoreResult,
+  TaskChangeSetQueryResult
+} from '../../../shared/git-review'
 import type { DesktopIpcResult } from '../../../shared/ipc-result'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 
@@ -19,6 +24,8 @@ export interface TaskChangesQueryApi {
     taskId: string,
     commandId: string
   ) => Promise<DesktopIpcResult<CommandExecutionEvidence>>
+  previewLatestTurnRestore?: (taskId: string) => Promise<DesktopIpcResult<LatestTurnRestorePreview>>
+  restoreLatestTurn?: (taskId: string) => Promise<DesktopIpcResult<LatestTurnRestoreResult>>
 }
 
 interface QuerySlot<T> {
@@ -44,6 +51,13 @@ export interface TaskChangesController {
   retryFileDiff(): Promise<void>
   selectCommand(commandId: string): Promise<void>
   retryCommandEvidence(): Promise<void>
+  restorePreview: Ref<LatestTurnRestorePreview | null>
+  restoreBusy: Ref<boolean>
+  restoreError: Ref<string>
+  restoreMessage: Ref<string>
+  openRestorePreview(): Promise<void>
+  cancelRestorePreview(): void
+  confirmRestore(): Promise<void>
   dispose(): void
 }
 
@@ -51,7 +65,9 @@ function defaultApi(): TaskChangesQueryApi {
   return {
     getChangeSet: (taskId) => window.task.getChangeSet(taskId),
     getFileDiff: (taskId, path) => window.task.getFileDiff(taskId, path),
-    getCommandEvidence: (taskId, commandId) => window.task.getCommandEvidence(taskId, commandId)
+    getCommandEvidence: (taskId, commandId) => window.task.getCommandEvidence(taskId, commandId),
+    previewLatestTurnRestore: (taskId) => window.task.previewLatestTurnRestore(taskId),
+    restoreLatestTurn: (taskId) => window.task.restoreLatestTurn(taskId)
   }
 }
 
@@ -77,6 +93,10 @@ export function useTaskChanges(
   const selectedCommandId = ref('')
   const fileDiffs = ref<Record<string, QuerySlot<FileDiffResult>>>({})
   const commandEvidence = ref<Record<string, QuerySlot<CommandExecutionEvidence>>>({})
+  const restorePreview = ref<LatestTurnRestorePreview | null>(null)
+  const restoreBusy = ref(false)
+  const restoreError = ref('')
+  const restoreMessage = ref('')
   let changeSetGeneration = 0
   let disposed = false
 
@@ -98,6 +118,9 @@ export function useTaskChanges(
     selectedCommandId.value = ''
     fileDiffs.value = {}
     commandEvidence.value = {}
+    restorePreview.value = null
+    restoreError.value = ''
+    restoreMessage.value = ''
   }
 
   /** 丢弃过期请求，避免切 Task 后把旧快照写进新面板。 */
@@ -206,9 +229,55 @@ export function useTaskChanges(
     const commandId = selectedCommandId.value
     fileDiffs.value = {}
     commandEvidence.value = {}
+    restorePreview.value = null
+    restoreError.value = ''
     await loadChangeSet(toValue(taskId), true)
     if (path) await selectPath(path)
     if (commandId) await selectCommand(commandId)
+  }
+
+  async function openRestorePreview(): Promise<void> {
+    const id = toValue(taskId)
+    const previewApi = api.previewLatestTurnRestore
+    if (!id || !previewApi || restoreBusy.value) return
+    restoreBusy.value = true
+    restoreError.value = ''
+    restoreMessage.value = ''
+    try {
+      restorePreview.value = unwrapDesktopIpcResult(await previewApi(id))
+    } catch (error) {
+      restorePreview.value = null
+      restoreError.value = readErrorMessage(error)
+    } finally {
+      restoreBusy.value = false
+    }
+  }
+
+  function cancelRestorePreview(): void {
+    restorePreview.value = null
+    restoreError.value = ''
+  }
+
+  async function confirmRestore(): Promise<void> {
+    const id = toValue(taskId)
+    const restoreApi = api.restoreLatestTurn
+    if (!id || !restoreApi || restoreBusy.value) return
+    restoreBusy.value = true
+    restoreError.value = ''
+    try {
+      const result = unwrapDesktopIpcResult(await restoreApi(id))
+      if (!result.ok) {
+        restoreError.value = result.message
+        return
+      }
+      restoreMessage.value = result.message
+      restorePreview.value = null
+      await reload()
+    } catch (error) {
+      restoreError.value = readErrorMessage(error)
+    } finally {
+      restoreBusy.value = false
+    }
   }
 
   function dispose(): void {
@@ -241,6 +310,13 @@ export function useTaskChanges(
     retryFileDiff,
     selectCommand,
     retryCommandEvidence,
+    restorePreview,
+    restoreBusy,
+    restoreError,
+    restoreMessage,
+    openRestorePreview,
+    cancelRestorePreview,
+    confirmRestore,
     dispose
   }
 }

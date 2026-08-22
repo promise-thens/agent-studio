@@ -16,6 +16,8 @@ import type {
 } from '../../shared/task-history'
 import type {
   FileDiffResult,
+  LatestTurnRestorePreview,
+  LatestTurnRestoreResult,
   TaskChangeSetQueryResult,
   TurnChangeCheckpoint
 } from '../../shared/git-review'
@@ -68,6 +70,8 @@ export interface TaskIpcDependencies {
     getChangeSet(taskId: string): Promise<TaskChangeSetQueryResult>
     getFileDiff(taskId: string, path: string): Promise<FileDiffResult>
     listTurnCheckpoints(taskId: string): Promise<TurnChangeCheckpoint[]>
+    previewLatestTurnRestore(taskId: string): Promise<LatestTurnRestorePreview>
+    restoreLatestTurn(taskId: string): Promise<LatestTurnRestoreResult>
   } | null
   sanitizeError: (error: unknown) => string
 }
@@ -309,12 +313,30 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
     requireExistingTask(dependencies.getHistory, taskId)
     return requireGitReview(dependencies.getGitReview).listTurnCheckpoints(taskId)
   })
+
+  /** 只读预览最新一轮恢复计划。主进程重算 predicate，不信任 UI。 */
+  register(TASK_INVOKE_CHANNELS.previewLatestTurnRestore, async (args) => {
+    const request = readRequest(args, ['taskId'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    requireExistingTask(dependencies.getHistory, taskId)
+    return requireGitReview(dependencies.getGitReview).previewLatestTurnRestore(taskId)
+  })
+
+  /** 恢复前再次计算 predicate，经 Broker 写/删，禁止 git reset。 */
+  register(TASK_INVOKE_CHANNELS.restoreLatestTurn, async (args) => {
+    const request = readRequest(args, ['taskId'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    requireExistingTask(dependencies.getHistory, taskId)
+    return requireGitReview(dependencies.getGitReview).restoreLatestTurn(taskId)
+  })
 }
 
 function requireGitReview(getGitReview: TaskIpcDependencies['getGitReview']): {
   getChangeSet(taskId: string): Promise<TaskChangeSetQueryResult>
   getFileDiff(taskId: string, path: string): Promise<FileDiffResult>
   listTurnCheckpoints(taskId: string): Promise<TurnChangeCheckpoint[]>
+  previewLatestTurnRestore(taskId: string): Promise<LatestTurnRestorePreview>
+  restoreLatestTurn(taskId: string): Promise<LatestTurnRestoreResult>
 } {
   const review = getGitReview?.() ?? null
   if (!review) throw new DesktopIpcFailure('runtime-unavailable', 'Git 审阅服务尚未初始化。')

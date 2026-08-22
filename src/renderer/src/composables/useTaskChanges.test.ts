@@ -176,4 +176,38 @@ describe('useTaskChanges', () => {
     expect(api.getCommandEvidence).toHaveBeenCalledWith('task-2', 'cmd-1')
     expect(controller.selectedCommandEvidence.value?.source).toBe('runtime-tool')
   })
+
+  it('撤销预览按需调用，确认后才 restore 并刷新变更', async () => {
+    const previewLatestTurnRestore = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        revertible: {
+          kind: 'latest-turn' as const,
+          turnId: 'turn-1',
+          paths: ['README.md'],
+          restorePlan: [{ path: 'README.md', action: 'write' as const, from: 'head' as const }]
+        },
+        willLosePaths: ['README.md']
+      })
+    )
+    const restoreLatestTurn = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        ok: true,
+        message: '已撤销最新一轮写入，历史检查点仍保留。',
+        recoveryCheckpointId: 'recovery_1',
+        restoredPaths: ['README.md']
+      })
+    )
+    const api = createApi({ previewLatestTurnRestore, restoreLatestTurn })
+    const controller = useTaskChanges(ref('task-1'), api)
+    await waitUntilIdle(controller.loading)
+    expect(previewLatestTurnRestore).not.toHaveBeenCalled()
+    await controller.openRestorePreview()
+    expect(previewLatestTurnRestore).toHaveBeenCalledWith('task-1')
+    expect(controller.restorePreview.value?.revertible.kind).toBe('latest-turn')
+    await controller.confirmRestore()
+    expect(restoreLatestTurn).toHaveBeenCalledWith('task-1')
+    expect(api.getChangeSet).toHaveBeenCalledTimes(2)
+  })
 })

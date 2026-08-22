@@ -100,8 +100,49 @@ export interface TaskChangeSet {
   generatedAt: string
   paths: TaskChangePath[]
   truncated?: true
-  /** Task 4 才会给出可执行撤销；Task 2 一律不可一键撤销。 */
-  revertible: false | { kind: 'none'; reason: string }
+  /**
+   * 只有最新一轮写入且无漂移时才是 latest-turn。
+   * 计划只含相对路径，不得夹带绝对路径或文件正文。
+   */
+  revertible: false | TaskChangeRevertible
+}
+
+/** 自动恢复只指向最新完整写入型 Turn；更早轮次只能手工对照 Diff。 */
+export type TaskChangeRevertible =
+  | { kind: 'none'; reason: string }
+  | {
+      kind: 'latest-turn'
+      turnId: string
+      paths: string[]
+      restorePlan: RestorePlanItem[]
+    }
+
+/** 写回 HEAD blob 或删除本轮新增；from 说明 before 状态如何被证明。 */
+export interface RestorePlanItem {
+  path: string
+  action: 'write' | 'delete'
+  from: 'head' | 'absent'
+}
+
+export type RestoreRefusalReason =
+  'drift' | 'denied' | 'incomplete' | 'not-recoverable' | 'active-turn' | 'none'
+
+/** 只读预览：路径列表，不含文件正文。 */
+export interface LatestTurnRestorePreview {
+  taskId: string
+  revertible: TaskChangeRevertible
+  willLosePaths: string[]
+}
+
+/** 恢复结果。失败时保留当时工作区，不借 git reset 回滚已完成的步骤。 */
+export interface LatestTurnRestoreResult {
+  taskId: string
+  ok: boolean
+  reason?: RestoreRefusalReason
+  message: string
+  recoveryCheckpointId?: string
+  restoredPaths?: string[]
+  appliedPaths?: string[]
 }
 
 export type TurnCheckpointStatus = 'complete' | 'incomplete' | 'no-change'
@@ -290,20 +331,125 @@ function parseInvalidReason(value: unknown): TaskChangeBaseline['invalidReason']
   return undefined
 }
 
+function parseRestorePlanItem(value: unknown): RestorePlanItem | null {
+  if (!isPlainRecord(value) || !isSafeRelativePosixPath(value.path)) return null
+  if (value.action !== 'write' && value.action !== 'delete') return null
+  if (value.from !== 'head' && value.from !== 'absent') return null
+  if (value.action === 'write' && value.from !== 'head') return null
+  if (value.action === 'delete' && value.from !== 'absent') return null
+  return { path: value.path, action: value.action, from: value.from }
+}
+
+function parseSafeReason(value: unknown, fallback: string): string | null {
+  if (typeof value !== 'string' || !value.trim() || value.includes('\0')) return null
+  if (utf8Bytes(value) > MAX_REASON_BYTES) return null
+  if (looksLikeAbsolutePath(value)) return fallback
+  return value
+}
+
 function parseRevertible(value: unknown): TaskChangeSet['revertible'] | null {
   if (value === false) return false
-  if (!isPlainRecord(value) || value.kind !== 'none' || typeof value.reason !== 'string')
-    return null
+  if (!isPlainRecord(value) || typeof value.kind !== 'string') return null
+  if (value.kind === 'none') {
+    const reason = parseSafeReason(value.reason, '当前版本不提供一键撤销。')
+    if (reason === null) return null
+    return { kind: 'none', reason }
+  }
+  if (value.kind !== 'latest-turn') return null
+  if (!isStoreIdentity(value.turnId) || !Array.isArray(value.paths)) return null
+  if (!Array.isArray(value.restorePlan)) return null
   if (
-    !value.reason.trim() ||
-    value.reason.includes('\0') ||
-    utf8Bytes(value.reason) > MAX_REASON_BYTES
+    value.paths.length > MAX_CHANGE_SET_PATHS ||
+    value.restorePlan.length > MAX_CHANGE_SET_PATHS
   ) {
     return null
   }
-  if (looksLikeAbsolutePath(value.reason))
-    return { kind: 'none', reason: '当前版本不提供一键撤销。' }
-  return { kind: 'none', reason: value.reason }
+  const paths: string[] = []
+  for (const item of value.paths) {
+    if (!isSafeRelativePosixPath(item)) return null
+    paths.push(item)
+  }
+  const restorePlan: RestorePlanItem[] = []
+  for (const item of value.restorePlan) {
+    const parsed = parseRestorePlanItem(item)
+    if (!parsed) return null
+    restorePlan.push(parsed)
+  }
+  return { kind: 'latest-turn', turnId: value.turnId, paths, restorePlan }
+}
+
+const RESTORE_REFUSAL_REASONS: readonly RestoreRefusalReason[] = [
+  'drift',
+  'denied',
+  'incomplete',
+  'not-recoverable',
+  'active-turn',
+  'none'
+]
+
+/**
+ * 投影只读恢复预览。计划不得夹带绝对路径或文件正文。
+ */
+export function parseLatestTurnRestorePreview(value: unknown): LatestTurnRestorePreview | null {
+  if (!isPlainRecord(value) || !isStoreIdentity(value.taskId)) return null
+  const revertible = parseRevertible(value.revertible)
+  if (revertible === null || revertible === false) return null
+  if (!Array.isArray(value.willLosePaths) || value.willLosePaths.length > MAX_CHANGE_SET_PATHS) {
+    return null
+  }
+  const willLosePaths: string[] = []
+  for (const item of value.willLosePaths) {
+    if (!isSafeRelativePosixPath(item)) return null
+    willLosePaths.push(item)
+  }
+  return { taskId: value.taskId, revertible, willLosePaths }
+}
+
+/**
+ * 投影恢复结果。失败原因不得回传绝对路径。
+ */
+export function parseLatestTurnRestoreResult(value: unknown): LatestTurnRestoreResult | null {
+  if (!isPlainRecord(value) || !isStoreIdentity(value.taskId)) return null
+  if (typeof value.ok !== 'boolean') return null
+  const message = parseSafeReason(value.message, '恢复未完成。')
+  if (message === null) return null
+  const result: LatestTurnRestoreResult = { taskId: value.taskId, ok: value.ok, message }
+  if (value.reason !== undefined) {
+    if (
+      typeof value.reason !== 'string' ||
+      !(RESTORE_REFUSAL_REASONS as readonly string[]).includes(value.reason)
+    ) {
+      return null
+    }
+    result.reason = value.reason as RestoreRefusalReason
+  }
+  if (value.recoveryCheckpointId !== undefined) {
+    if (!isStoreIdentity(value.recoveryCheckpointId)) return null
+    result.recoveryCheckpointId = value.recoveryCheckpointId
+  }
+  if (value.restoredPaths !== undefined) {
+    if (!Array.isArray(value.restoredPaths) || value.restoredPaths.length > MAX_CHANGE_SET_PATHS) {
+      return null
+    }
+    const restoredPaths: string[] = []
+    for (const item of value.restoredPaths) {
+      if (!isSafeRelativePosixPath(item)) return null
+      restoredPaths.push(item)
+    }
+    result.restoredPaths = restoredPaths
+  }
+  if (value.appliedPaths !== undefined) {
+    if (!Array.isArray(value.appliedPaths) || value.appliedPaths.length > MAX_CHANGE_SET_PATHS) {
+      return null
+    }
+    const appliedPaths: string[] = []
+    for (const item of value.appliedPaths) {
+      if (!isSafeRelativePosixPath(item)) return null
+      appliedPaths.push(item)
+    }
+    result.appliedPaths = appliedPaths
+  }
+  return result
 }
 
 /**

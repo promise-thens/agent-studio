@@ -144,6 +144,57 @@ export async function runReadOnlyGit(
   })
 }
 
+/**
+ * 只读取 git blob 字节。与 runReadOnlyGit 共用只读参数白名单，禁止 reset/checkout。
+ */
+export async function runReadOnlyGitBytes(
+  cwd: string,
+  args: string[],
+  options: ReadOnlyGitOptions = {}
+): Promise<{ ok: true; stdout: Buffer } | { ok: false; unavailable: boolean; stdout: Buffer }> {
+  if (!isReadOnlyGitArgs(args)) {
+    return { ok: false, unavailable: false, stdout: Buffer.alloc(0) }
+  }
+  if (options.allowedRoot && !isPathInsideRoot(options.allowedRoot, cwd)) {
+    return { ok: false, unavailable: false, stdout: Buffer.alloc(0) }
+  }
+
+  const env = buildCommandEnvironment(options.sourceEnvironment ?? process.env)
+  env.GIT_OPTIONAL_LOCKS = '0'
+  env.GIT_TERMINAL_PROMPT = '0'
+  env.GIT_CONFIG_NOSYSTEM = '1'
+  if (options.ceilingDir) {
+    env.GIT_CEILING_DIRECTORIES = options.ceilingDir
+  }
+
+  return await new Promise((resolveResult) => {
+    execFile(
+      options.gitExecutable ?? 'git',
+      args,
+      {
+        cwd,
+        env,
+        timeout: options.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
+        maxBuffer: MAX_GIT_STDOUT_BYTES,
+        windowsHide: true,
+        encoding: 'buffer'
+      },
+      (error, stdout) => {
+        const bytes = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout ?? '')
+        if (!error) {
+          resolveResult({ ok: true, stdout: bytes })
+          return
+        }
+        resolveResult({
+          ok: false,
+          unavailable: isGitUnavailableError(error),
+          stdout: bytes
+        })
+      }
+    )
+  })
+}
+
 export function isPathInsideRoot(root: string, target: string): boolean {
   const comparedRoot = process.platform === 'win32' ? root.toLowerCase() : root
   const comparedTarget = process.platform === 'win32' ? target.toLowerCase() : target
@@ -364,12 +415,29 @@ function isReadOnlyGitArgs(args: string[]): boolean {
   if (command === 'ls-files') {
     return rest.every((arg) => arg !== '--stdin' && !arg.startsWith('--out'))
   }
+  if (command === 'show') {
+    // 只允许 `show <rev>:<path>` 读 blob，禁止 --output 等写入口。
+    return rest.length === 1 && isSafeGitShowSpec(rest[0] ?? '')
+  }
   return (
     command === 'rev-parse' ||
     command === 'status' ||
     command === 'symbolic-ref' ||
     command === 'merge-base'
   )
+}
+
+/** rev 只接受 HEAD 或十六进制对象名，path 必须是无 `..` 的相对路径。 */
+function isSafeGitShowSpec(value: string): boolean {
+  if (!value || value.includes('\0') || value.startsWith('-')) return false
+  const colon = value.indexOf(':')
+  if (colon <= 0) return false
+  const rev = value.slice(0, colon)
+  const path = value.slice(colon + 1)
+  if (rev !== 'HEAD' && !/^[0-9a-f]{7,64}$/i.test(rev)) return false
+  if (!path || path.includes('\0') || isAbsolute(path) || hasParentTraversal(path)) return false
+  if (path.includes(':')) return false
+  return true
 }
 
 function isGitUnavailableError(error: unknown): boolean {

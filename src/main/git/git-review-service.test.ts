@@ -44,6 +44,12 @@ describe('runReadOnlyGit diff 边界', () => {
       await runReadOnlyGit(canonical, ['checkout', '--', 'README.md'], { allowedRoot: canonical })
     ).toEqual(expect.objectContaining({ ok: false }))
     expect(
+      await runReadOnlyGit(canonical, ['restore', '--', 'README.md'], { allowedRoot: canonical })
+    ).toEqual(expect.objectContaining({ ok: false }))
+    expect(
+      await runReadOnlyGit(canonical, ['show', 'HEAD:README.md'], { allowedRoot: canonical })
+    ).toEqual(expect.objectContaining({ ok: true }))
+    expect(
       await runReadOnlyGit(
         canonical,
         ['diff', '--output', join(canonical, 'out.patch'), 'HEAD', '--', 'README.md'],

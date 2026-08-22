@@ -91,6 +91,14 @@ describe('Permission 风险策略', () => {
         targets: [{ kind: 'git', value: 'status' }]
       },
       {
+        ...createIntent('write-file'),
+        initiator: { kind: 'app', service: 'git' }
+      },
+      {
+        ...createIntent('delete-path'),
+        initiator: { kind: 'app', service: 'git' }
+      },
+      {
         ...createIntent('worktree-remove'),
         initiator: { kind: 'app', service: 'worktree' },
         targets: [

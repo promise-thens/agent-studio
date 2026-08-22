@@ -10,6 +10,7 @@ import {
 import { useTaskChanges } from '../composables/useTaskChanges'
 import {
   attributionLabel,
+  canRestoreLatestTurn,
   changeSetReadiness,
   changeSetWarnings,
   gitPresenceNotice,
@@ -17,6 +18,8 @@ import {
   incompleteReviewPaths,
   omittedLabel,
   presentChangeSetSummary,
+  restoreActionLabel,
+  restorePreviewSummary,
   revertibleNotice,
   unverifiedTaskPaths,
   validationOutcomeLabel,
@@ -24,7 +27,7 @@ import {
 } from '../task-changes-presentation'
 import FileDiffViewer from './FileDiffViewer.vue'
 
-/** 只读 Changes 审阅：不预取 Diff，也不提供一键撤销。 */
+/** Changes 审阅：Diff 按需加载；仅 latest-turn 才提供一键撤销。 */
 
 const props = defineProps<{
   taskId: string
@@ -47,6 +50,13 @@ const {
   retryFileDiff,
   selectCommand,
   retryCommandEvidence,
+  restorePreview,
+  restoreBusy,
+  restoreError,
+  restoreMessage,
+  openRestorePreview,
+  cancelRestorePreview,
+  confirmRestore,
   dispose
 } = useTaskChanges(() => props.taskId)
 onBeforeUnmount(() => dispose())
@@ -70,6 +80,14 @@ const incompletePaths = computed(() =>
 )
 const revertibleText = computed(() =>
   changeSet.value ? revertibleNotice(changeSet.value.revertible) : ''
+)
+const canRestore = computed(() =>
+  changeSet.value ? canRestoreLatestTurn(changeSet.value.revertible) : false
+)
+const restorePlan = computed(() =>
+  restorePreview.value?.revertible.kind === 'latest-turn'
+    ? restorePreview.value.revertible.restorePlan
+    : []
 )
 const validations = computed(() => changeSet.value?.validations ?? [])
 
@@ -292,7 +310,57 @@ function durationLabel(durationMs: number | undefined): string {
         </ul>
       </section>
 
-      <p class="changes-risk" role="status" aria-label="不可一键撤销">{{ revertibleText }}</p>
+      <section class="changes-restore" aria-label="撤销边界">
+        <p v-if="!canRestore" class="changes-risk" role="status" aria-label="不可一键撤销">
+          {{ revertibleText }}
+        </p>
+        <template v-else>
+          <p class="changes-muted" role="status">{{ revertibleText }}</p>
+          <p v-if="restoreMessage" class="changes-muted" role="status">{{ restoreMessage }}</p>
+          <p v-if="restoreError" class="changes-risk" role="alert">{{ restoreError }}</p>
+          <div v-if="restorePreview" class="changes-restore-preview">
+            <p>{{ restorePreviewSummary(restorePreview) }}</p>
+            <ul>
+              <li v-for="item in restorePlan" :key="item.path">
+                {{ item.path }} · {{ restoreActionLabel(item) }}
+              </li>
+            </ul>
+            <div class="changes-restore-actions">
+              <button
+                class="secondary-button"
+                type="button"
+                title="确认撤销最新一轮"
+                aria-label="确认撤销最新一轮"
+                :disabled="restoreBusy"
+                @click="confirmRestore()"
+              >
+                确认撤销
+              </button>
+              <button
+                class="secondary-button"
+                type="button"
+                title="取消撤销"
+                aria-label="取消撤销"
+                :disabled="restoreBusy"
+                @click="cancelRestorePreview()"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+          <button
+            v-else
+            class="secondary-button"
+            type="button"
+            title="撤销最新一轮"
+            aria-label="撤销最新一轮"
+            :disabled="restoreBusy"
+            @click="openRestorePreview()"
+          >
+            撤销最新一轮
+          </button>
+        </template>
+      </section>
     </template>
   </section>
 </template>

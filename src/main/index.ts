@@ -86,6 +86,7 @@ import {
 import { getGrokPlugin, listGrokPlugins } from './runtime/grok/grok-plugin-inventory'
 import { PermissionAuditStore } from './security/permission-audit-store'
 import { PermissionBroker } from './security/permission-broker'
+import { resolvePermissionTurnIdentity } from './security/permission-intent-context'
 import { createLocalEnvironmentId } from './security/permission-policy'
 import {
   assertTrustedIpcSender,
@@ -269,17 +270,21 @@ async function initializeServices(
       try {
         const task = requireTaskStore().getTaskRecord(taskId)
         if (task.environment.kind !== 'local') return null
+        const matched = resolvePermissionTurnIdentity({
+          activeTurnId: task.activeTurnId,
+          lastTurnId: task.lastTurnId,
+          state: task.state,
+          requestedTurnId: turnId
+        })
         return {
           taskId: task.taskId,
-          turnId: task.activeTurnId ?? '',
+          turnId: matched.turnId,
           projectId: task.projectId,
           executionRoot: task.environment.rootSnapshot,
           environmentId: createLocalEnvironmentId(task.projectId, task.environment.rootSnapshot),
           runtimeId: task.runtimeId,
           environmentKind: 'local',
-          active:
-            task.activeTurnId === turnId &&
-            (task.state === 'running' || task.state === 'waiting-permission')
+          active: matched.active
         }
       } catch {
         return null
@@ -347,7 +352,9 @@ async function initializeServices(
     waitForEvidenceWrites: () => evidenceStore.waitForWrites(),
     attachTurnValidationIds: (taskId, turnId, validationIds) =>
       requireTaskStore().attachTurnValidationIds(taskId, turnId, validationIds),
-    sourceEnvironment: process.env
+    sourceEnvironment: process.env,
+    hasActiveExecution: () => taskExecutor?.hasActiveExecution() ?? false,
+    broker: permissionBroker ?? undefined
   })
   gitReviewService = reviewService
   const adapter = new GrokAcpAdapter(
