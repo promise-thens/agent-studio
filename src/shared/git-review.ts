@@ -386,13 +386,8 @@ export function parseFileDiffResult(value: unknown): FileDiffResult | null {
     status: value.status as FileDiffStatus
   }
   if (typeof value.unifiedDiff === 'string') {
+    // Diff 正文可能含文件里的路径字面量；只拦 NUL 与超长，不把 `/Users` 等内容当逃逸。
     if (value.unifiedDiff.includes('\0') || utf8Bytes(value.unifiedDiff) > MAX_UNIFIED_DIFF_BYTES) {
-      return null
-    }
-    if (
-      looksLikeAbsolutePath(value.unifiedDiff) ||
-      /(?:^|\n)\/(?:Users|home|tmp)\//u.test(value.unifiedDiff)
-    ) {
       return null
     }
     result.unifiedDiff = value.unifiedDiff

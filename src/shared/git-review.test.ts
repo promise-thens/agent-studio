@@ -65,6 +65,30 @@ describe('git-review IPC 投影', () => {
     })
   })
 
+  it('unifiedDiff 正文可含路径字面量；path 字段仍拒绝绝对路径', () => {
+    expect(
+      parseFileDiffResult({
+        taskId: 'task-1',
+        path: 'readme.md',
+        status: 'ok',
+        unifiedDiff: '--- a/readme.md\n+++ b/readme.md\n@@ -0,0 +1 @@\n+/Users/example/secret\n'
+      })
+    ).toEqual({
+      taskId: 'task-1',
+      path: 'readme.md',
+      status: 'ok',
+      unifiedDiff: '--- a/readme.md\n+++ b/readme.md\n@@ -0,0 +1 @@\n+/Users/example/secret\n'
+    })
+    expect(
+      parseFileDiffResult({
+        taskId: 'task-1',
+        path: '/tmp/outside',
+        status: 'ok',
+        unifiedDiff: '--- a/readme.md\n+++ b/readme.md\n'
+      })
+    ).toBeNull()
+  })
+
   it('检查点只保留相对路径快照', () => {
     const parsed = parseTurnChangeCheckpoint({
       schemaVersion: 1,
