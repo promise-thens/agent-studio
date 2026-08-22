@@ -583,6 +583,47 @@ describe('TaskExecutor', () => {
     expect(hooked.adapter.startTurn).toHaveBeenCalledTimes(2)
   })
 
+  it('hook 等待期间 cancel 不会 dispatch 到错误 execution', async () => {
+    const hookStarted = deferred<void>()
+    const releaseHook = deferred<void>()
+    const fixture = await createFixture({
+      ensureChangeBaseline: async () => {
+        hookStarted.resolve()
+        await releaseHook.promise
+      }
+    })
+    fixture.adapter.startTurn.mockResolvedValue({ outcome: 'completed' })
+
+    const firstStart = fixture.executor.start(fixture.input)
+    await hookStarted.promise
+    expect(fixture.executor.hasActiveExecution()).toBe(false)
+    await expect(fixture.executor.start(fixture.input)).rejects.toMatchObject({
+      code: 'invalid-state'
+    })
+    await expect(
+      fixture.executor.cancel({
+        executionId: 'execution-1',
+        taskId: 'task-1',
+        turnId: 'turn-1'
+      })
+    ).resolves.toBe(false)
+    expect(fixture.adapter.startTurn).not.toHaveBeenCalled()
+
+    releaseHook.resolve()
+    const snapshot = await firstStart
+    expect(snapshot.execution).toMatchObject({
+      executionId: 'execution-1',
+      turnId: 'turn-1',
+      state: 'queued'
+    })
+    await fixture.executor.waitForTerminal()
+    expect(fixture.adapter.startTurn).toHaveBeenCalledOnce()
+    expect(fixture.adapter.startTurn.mock.calls[0]?.[0]).toMatchObject({
+      turnId: 'turn-1',
+      workspace: fixture.input.resolvedExecutionRoot
+    })
+  })
+
   it('hook 抛错或 git 不可用时不得拒绝 Turn', async () => {
     const throwing = await createFixture({
       ensureChangeBaseline: async () => {

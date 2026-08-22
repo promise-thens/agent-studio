@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -68,8 +68,9 @@ describe('captureTaskChangeBaseline', () => {
     expect(JSON.stringify(baseline.preExistingPaths)).not.toContain('untracked-notes')
   })
 
-  it('非 Git 目录：gitPresence=non-git，不伪造 commit', async () => {
+  it('非 Git 目录：gitPresence=non-git，不伪造 commit，但仍记录有限已有文件', async () => {
     const root = await createTemporaryDirectory()
+    await writeFile(join(root, 'notes.txt'), 'already-there\n')
     const resolved = await resolveProjectRoot(identity(await realpath(root)))
     const baseline = await captureTaskChangeBaseline(resolved)
 
@@ -77,7 +78,13 @@ describe('captureTaskChangeBaseline', () => {
     expect(baseline.status).toBe('captured')
     expect(baseline.baseCommit).toBeUndefined()
     expect(baseline.gitRoot).toBeUndefined()
-    expect(baseline.preExistingPaths).toEqual([])
+    expect(baseline.preExistingPaths).toEqual([
+      expect.objectContaining({
+        path: 'notes.txt',
+        kind: 'untracked',
+        contentHash: sha256('already-there\n')
+      })
+    ])
   })
 
   it('超大或二进制文件只记 omitted，不把文件正文写入 JSON', async () => {
@@ -127,10 +134,38 @@ describe('captureTaskChangeBaseline', () => {
     expect(baseline.gitPresence).toBe('non-git')
     expect(baseline.baseCommit).toBeUndefined()
   })
+
+  it('git status 失败不得写成 captured 空路径', async () => {
+    const repo = await createGitRepo()
+    await writeFile(join(repo, 'dirty.txt'), 'keep-me\n')
+    const stub = await writeGitStatusFailureStub()
+    const resolved = await resolveProjectRoot({
+      ...identity(await realpath(repo)),
+      gitExecutable: stub
+    })
+    expect(resolved.git.kind).toBe('git')
+    const baseline = await captureTaskChangeBaseline(resolved, { gitExecutable: stub })
+    expect(baseline.status).toBe('unavailable')
+    expect(baseline.preExistingPaths).toEqual([])
+    expect(baseline.gitPresence).toBe('git')
+    expect(baseline.baseCommit).toMatch(/^[0-9a-f]{40,64}$/)
+  })
+
+  it('符号链接逃出 execution root 时不得哈希目标内容', async () => {
+    const repo = await createGitRepo()
+    const outside = await createTemporaryDirectory()
+    const secret = 'SECRET_OUTSIDE_PAYLOAD_DO_NOT_HASH'
+    await writeFile(join(outside, 'secret.txt'), `${secret}\n`)
+    await symlink(join(outside, 'secret.txt'), join(repo, 'escape.txt'))
+    const resolved = await resolveProjectRoot(identity(await realpath(repo)))
+    const baseline = await captureTaskChangeBaseline(resolved)
+    expect(JSON.stringify(baseline)).not.toContain(secret)
+    expect(baseline.preExistingPaths.some((item) => item.path === 'escape.txt')).toBe(false)
+  })
 })
 
 describe('evaluateBaselineValidity 与 Store', () => {
-  it('捕获后 checkout 换 HEAD：invalid head-changed，store 不自动覆盖为新 HEAD', async () => {
+  it('checkout 切分支会使基线 head-changed，store 不自动覆盖为新 HEAD', async () => {
     const repo = await createGitRepo()
     const canonical = await realpath(repo)
     const store = new TaskChangeBaselineStore({ rootDir: await createTemporaryDirectory() })
@@ -142,9 +177,9 @@ describe('evaluateBaselineValidity 与 Store', () => {
     const originalHead = baseline.baseCommit
     expect(originalHead).toBeTruthy()
 
-    await writeTrackedCommit(repo, 'next.md', 'second\n')
+    await runGit(repo, ['checkout', '-b', 'other'])
     const current = await resolveProjectRoot(identity(canonical))
-    expect(evaluateBaselineValidity(baseline, current, available)).toEqual({
+    await expect(evaluateBaselineValidity(baseline, current, available)).resolves.toEqual({
       valid: false,
       reason: 'head-changed'
     })
@@ -157,11 +192,24 @@ describe('evaluateBaselineValidity 与 Store', () => {
     const recapture = await captureTaskChangeBaseline(current, {
       now: () => '2026-08-22T11:00:00.000Z'
     })
-    expect(recapture.baseCommit).not.toBe(originalHead)
+    expect(recapture.headBranch).toBe('other')
     const stored = await store.put(recapture)
     expect(stored.status).toBe('invalid')
     expect(stored.baseCommit).toBe(originalHead)
+    expect(stored.headBranch).not.toBe('other')
     expect(stored.capturedAt).toBe('2026-08-22T10:00:00.000Z')
+  })
+
+  it('同分支新 commit 不使基线失效', async () => {
+    const repo = await createGitRepo()
+    const canonical = await realpath(repo)
+    const baseline = await captureTaskChangeBaseline(await resolveProjectRoot(identity(canonical)))
+    await writeTrackedCommit(repo, 'next.md', 'second\n')
+    const current = await resolveProjectRoot(identity(canonical))
+    expect(current.git.kind === 'git' && current.git.head.oid).not.toBe(baseline.baseCommit)
+    await expect(evaluateBaselineValidity(baseline, current, available)).resolves.toEqual({
+      valid: true
+    })
   })
 
   it('execution root 换成别的路径或删除：path-replaced 或 root-missing', async () => {
@@ -171,14 +219,14 @@ describe('evaluateBaselineValidity 与 Store', () => {
 
     const other = await createTemporaryDirectory()
     const moved = await resolveProjectRoot(identity(await realpath(other)))
-    expect(evaluateBaselineValidity(baseline, moved, available)).toEqual({
+    await expect(evaluateBaselineValidity(baseline, moved, available)).resolves.toEqual({
       valid: false,
       reason: 'path-replaced'
     })
 
     await rm(repo, { recursive: true, force: true })
     const missing = await resolveProjectRoot(identity(canonical))
-    expect(evaluateBaselineValidity(baseline, missing, available)).toEqual({
+    await expect(evaluateBaselineValidity(baseline, missing, available)).resolves.toEqual({
       valid: false,
       reason: 'root-missing'
     })
@@ -187,7 +235,7 @@ describe('evaluateBaselineValidity 与 Store', () => {
     await initGitRepo(canonical)
     await writeTrackedCommit(canonical, 'README.md', 'replaced\n')
     const replaced = await resolveProjectRoot(identity(canonical))
-    expect(evaluateBaselineValidity(baseline, replaced, available)).toEqual({
+    await expect(evaluateBaselineValidity(baseline, replaced, available)).resolves.toEqual({
       valid: false,
       reason: 'path-replaced'
     })
@@ -197,12 +245,12 @@ describe('evaluateBaselineValidity 与 Store', () => {
     const repo = await createGitRepo()
     const resolved = await resolveProjectRoot(identity(await realpath(repo)))
     const baseline = await captureTaskChangeBaseline(resolved)
-    expect(
+    await expect(
       evaluateBaselineValidity(baseline, resolved, {
         state: 'unavailable',
         message: '目录已移动、不可访问或权限已撤回。'
       })
-    ).toEqual({ valid: false, reason: 'project-unavailable' })
+    ).resolves.toEqual({ valid: false, reason: 'project-unavailable' })
   })
 
   it('已存在且仍 valid 的 baseline 不会被 put 覆盖', async () => {
@@ -249,6 +297,12 @@ describe('createEnsureTaskChangeBaseline', () => {
     expect(reused?.baseCommit).toBe(originalHead)
 
     await writeTrackedCommit(repo, 'later.md', 'later\n')
+    await ensure({ ...input })
+    const stillValid = await store.get(input.taskId, input.environmentId)
+    expect(stillValid?.status).toBe('captured')
+    expect(stillValid?.baseCommit).toBe(originalHead)
+
+    await runGit(repo, ['checkout', '-b', 'other'])
     await ensure({ ...input })
     const invalid = await store.get(input.taskId, input.environmentId)
     expect(invalid).toMatchObject({ status: 'invalid', invalidReason: 'head-changed' })
@@ -310,6 +364,26 @@ async function writeTrackedCommit(dir: string, fileName: string, content: string
   await writeFile(join(dir, fileName), content)
   await runGit(dir, ['add', fileName])
   await runGit(dir, ['commit', '-m', `add ${fileName}`])
+}
+
+async function writeGitStatusFailureStub(): Promise<string> {
+  const dir = await createTemporaryDirectory()
+  const stub = join(dir, 'git-stub.mjs')
+  await writeFile(
+    stub,
+    [
+      '#!/usr/bin/env node',
+      "import { spawnSync } from 'node:child_process'",
+      'const args = process.argv.slice(2)',
+      'if (args.includes("status")) process.exit(128)',
+      'const result = spawnSync("git", args, { encoding: "utf8", cwd: process.cwd(), env: process.env })',
+      'if (result.stdout) process.stdout.write(result.stdout)',
+      'if (result.stderr) process.stderr.write(result.stderr)',
+      'process.exit(result.status ?? 1)'
+    ].join('\n')
+  )
+  await chmod(stub, 0o755)
+  return stub
 }
 
 async function runGit(cwd: string, args: string[]): Promise<string> {

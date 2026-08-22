@@ -12,6 +12,7 @@ import type {
 import { redactSensitiveText } from '../security/sensitive-redaction'
 import { AtomicJsonWriter } from '../storage/atomic-json-file'
 import {
+  DEFAULT_GIT_TIMEOUT_MS,
   isPathInsideRoot,
   resolveProjectRoot,
   runReadOnlyGit,
@@ -33,6 +34,7 @@ export interface CaptureTaskChangeBaselineOptions {
   now?: () => string
   gitExecutable?: string
   sourceEnvironment?: NodeJS.ProcessEnv
+  timeoutMs?: number
   maxPaths?: number
   maxHashFileBytes?: number
   maxHashTotalBytes?: number
@@ -80,9 +82,12 @@ export async function captureTaskChangeBaseline(
     return { ...base, status: 'unavailable' }
   }
   if (resolved.git.kind === 'non-git') {
+    const listing = await listBoundedWorkingTreeFiles(resolved.executionRoot, options)
     return {
       ...base,
-      status: resolved.git.reason === 'git-unavailable' ? 'unavailable' : 'captured'
+      status: resolved.git.reason === 'git-unavailable' ? 'unavailable' : 'captured',
+      preExistingPaths: listing.paths,
+      ...(listing.truncated ? { truncated: true } : {})
     }
   }
 
@@ -90,6 +95,7 @@ export async function captureTaskChangeBaseline(
   const gitOptions: ReadOnlyGitOptions = {
     gitExecutable: options.gitExecutable,
     sourceEnvironment: options.sourceEnvironment,
+    timeoutMs: options.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
     allowedRoot: resolved.executionRoot
   }
   const status = await runReadOnlyGit(
@@ -107,49 +113,43 @@ export async function captureTaskChangeBaseline(
     nestedGit: git.nested
   }
 
-  if (!status.ok && status.unavailable) {
+  // status 失败不得写成 captured + 空路径，否则用户已有脏文件会丢失。
+  if (!status.ok) {
     return { ...withGitIdentity, status: 'unavailable' }
   }
 
-  let preExistingPaths: TaskChangePathSnapshot[] = []
-  let truncated: true | undefined
-  let porcelainSummary: string | undefined
-  if (status.ok) {
-    porcelainSummary = boundPorcelainSummary(
-      status.stdout,
-      resolved.executionRoot,
-      git.gitRoot,
-      options.maxPorcelainChars ?? DEFAULT_MAX_PORCELAIN_CHARS
-    )
-    const snapshot = await snapshotPreExistingPaths(
-      status.stdout,
-      resolved.executionRoot,
-      git.gitRoot,
-      options
-    )
-    preExistingPaths = snapshot.paths
-    if (snapshot.truncated) truncated = true
-  } else {
-    truncated = true
-  }
+  const porcelainSummary = boundPorcelainSummary(
+    status.stdout,
+    resolved.executionRoot,
+    git.gitRoot,
+    options.maxPorcelainChars ?? DEFAULT_MAX_PORCELAIN_CHARS
+  )
+  const snapshot = await snapshotPreExistingPaths(
+    status.stdout,
+    resolved.executionRoot,
+    git.gitRoot,
+    options
+  )
 
   return {
     ...withGitIdentity,
     status: 'captured',
-    preExistingPaths,
+    preExistingPaths: snapshot.paths,
     ...(porcelainSummary ? { porcelainSummary } : {}),
-    ...(truncated ? { truncated: true } : {})
+    ...(snapshot.truncated ? { truncated: true } : {})
   }
 }
 
 /**
- * 基线一旦因 Git root / HEAD / 路径 / 项目可用性漂移而失效，就必须停止自动归因，且不得偷偷重建。
+ * 基线一旦因 Git root / HEAD 身份 / 路径 / 项目可用性漂移而失效，就必须停止自动归因，且不得偷偷重建。
+ * head-changed 不是 oid 前进：同分支新 commit 保持 valid。
  */
-export function evaluateBaselineValidity(
+export async function evaluateBaselineValidity(
   baseline: TaskChangeBaseline,
   currentResolved: ResolvedProjectRoot,
-  projectAvailability: ProjectAvailability
-): BaselineInvalidation {
+  projectAvailability: ProjectAvailability,
+  gitOptions?: ReadOnlyGitOptions
+): Promise<BaselineInvalidation> {
   if (projectAvailability.state !== 'available') {
     return { valid: false, reason: 'project-unavailable' }
   }
@@ -182,7 +182,23 @@ export function evaluateBaselineValidity(
   }
 
   if (baseline.gitPresence === 'git' && currentResolved.git.kind === 'git') {
-    if ((baseline.baseCommit ?? null) !== currentResolved.git.head.oid) {
+    const head = currentResolved.git.head
+    if (
+      Boolean(baseline.detached) !== head.detached ||
+      (baseline.headBranch ?? null) !== head.branch
+    ) {
+      return { valid: false, reason: 'head-changed' }
+    }
+    if (
+      baseline.baseCommit &&
+      head.oid &&
+      baseline.baseCommit !== head.oid &&
+      (await isBaseCommitAncestor(currentResolved.git.gitRoot, baseline.baseCommit, {
+        ...gitOptions,
+        timeoutMs: gitOptions?.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
+        allowedRoot: currentResolved.executionRoot
+      })) === false
+    ) {
       return { valid: false, reason: 'head-changed' }
     }
   }
@@ -251,6 +267,11 @@ export function createEnsureTaskChangeBaseline(
   executionRoot: string
 }) => Promise<void> {
   return async (input) => {
+    const gitOptions: ReadOnlyGitOptions = {
+      gitExecutable: deps.gitExecutable,
+      sourceEnvironment: deps.sourceEnvironment,
+      timeoutMs: DEFAULT_GIT_TIMEOUT_MS
+    }
     const resolved = await resolveProjectRoot({
       taskId: input.taskId,
       projectId: input.projectId,
@@ -259,7 +280,8 @@ export function createEnsureTaskChangeBaseline(
       executionRoot: input.executionRoot,
       now: deps.now,
       gitExecutable: deps.gitExecutable,
-      sourceEnvironment: deps.sourceEnvironment
+      sourceEnvironment: deps.sourceEnvironment,
+      timeoutMs: DEFAULT_GIT_TIMEOUT_MS
     })
     const existing = await deps.store.get(input.taskId, input.environmentId)
     if (existing?.status === 'invalid') return
@@ -272,7 +294,7 @@ export function createEnsureTaskChangeBaseline(
     }
 
     if (existing?.status === 'captured') {
-      const validity = evaluateBaselineValidity(existing, resolved, availability)
+      const validity = await evaluateBaselineValidity(existing, resolved, availability, gitOptions)
       if (validity.valid) return
       await deps.store.put({
         ...existing,
@@ -282,10 +304,27 @@ export function createEnsureTaskChangeBaseline(
       return
     }
 
+    if (availability.state !== 'available') {
+      await deps.store.put({
+        schemaVersion: 1,
+        taskId: input.taskId,
+        environmentId: input.environmentId,
+        environmentKind: 'local',
+        executionRoot: resolved.executionRoot,
+        gitPresence: resolved.git.kind,
+        capturedAt: resolved.resolvedAt,
+        status: 'unavailable',
+        preExistingPaths: [],
+        ...(resolved.rootFingerprint ? { rootFingerprint: resolved.rootFingerprint } : {})
+      })
+      return
+    }
+
     const baseline = await captureTaskChangeBaseline(resolved, {
       now: deps.now,
       gitExecutable: deps.gitExecutable,
-      sourceEnvironment: deps.sourceEnvironment
+      sourceEnvironment: deps.sourceEnvironment,
+      timeoutMs: DEFAULT_GIT_TIMEOUT_MS
     })
     await deps.store.put(baseline)
   }
@@ -295,6 +334,36 @@ interface PorcelainEntry {
   path: string
   kind: TaskChangePathKind
   statusCode: string
+}
+
+const SKIP_LISTING_DIRECTORY_NAMES = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'out',
+  '.next',
+  'target',
+  'build',
+  'coverage',
+  '.cache'
+])
+const MAX_LISTING_DEPTH = 4
+const MAX_LISTING_ENTRIES = 256
+
+async function isBaseCommitAncestor(
+  gitRoot: string,
+  baseCommit: string,
+  options: ReadOnlyGitOptions
+): Promise<boolean | null> {
+  if (!/^[0-9a-f]{40,64}$/i.test(baseCommit)) return false
+  const result = await runReadOnlyGit(
+    gitRoot,
+    ['merge-base', '--is-ancestor', baseCommit, 'HEAD'],
+    options
+  )
+  if (result.ok) return true
+  if (result.exitCode === 1) return false
+  return null
 }
 
 async function snapshotPreExistingPaths(
@@ -312,37 +381,161 @@ async function snapshotPreExistingPaths(
   let hashedBytes = 0
 
   for (const entry of entries) {
-    const relativePath = toExecutionRelativePath(executionRoot, gitRoot, entry.path)
-    if (!relativePath) continue
+    const located = await resolveContainedWorkingPath(executionRoot, gitRoot, entry.path)
+    if (!located || located.kind === 'escaped') continue
     if (paths.length >= maxPaths) {
       truncated = true
-      paths.push({ path: relativePath, kind: entry.kind, omitted: 'limit' })
+      paths.push({ path: located.relativePath, kind: entry.kind, omitted: 'limit' })
       break
     }
-    const absolutePath = resolve(gitRoot, entry.path)
-    const hashed = await hashWorkingTreeFile(
-      absolutePath,
-      maxFileBytes,
-      maxTotalBytes - hashedBytes
-    )
     const snapshot: TaskChangePathSnapshot = {
-      path: relativePath,
+      path: located.relativePath,
       kind: entry.kind,
       statusCode: entry.statusCode.slice(0, MAX_STATUS_CODE_CHARS)
     }
-    if (hashed.kind === 'hash') {
-      snapshot.contentHash = hashed.contentHash
-      hashedBytes += hashed.bytes
-    } else if (hashed.kind === 'omitted') {
-      snapshot.omitted = hashed.omitted
+    if (located.kind === 'inside') {
+      const hashed = await hashWorkingTreeFile(
+        located.realPath,
+        maxFileBytes,
+        maxTotalBytes - hashedBytes
+      )
+      if (hashed.kind === 'hash') {
+        snapshot.contentHash = hashed.contentHash
+        hashedBytes += hashed.bytes
+      } else if (hashed.kind === 'omitted') {
+        snapshot.omitted = hashed.omitted
+      }
     }
     paths.push(snapshot)
   }
   return { paths, truncated }
 }
 
+/**
+ * 非 Git 项目也记录有限已有文件，避免后续 Task 把原有文件当成 task-added。
+ * 不伪造 gitRoot / commit。
+ */
+async function listBoundedWorkingTreeFiles(
+  executionRoot: string,
+  options: CaptureTaskChangeBaselineOptions
+): Promise<{ paths: TaskChangePathSnapshot[]; truncated: boolean }> {
+  const maxPaths = options.maxPaths ?? DEFAULT_MAX_PATHS
+  const maxFileBytes = options.maxHashFileBytes ?? DEFAULT_MAX_HASH_FILE_BYTES
+  const maxTotalBytes = options.maxHashTotalBytes ?? DEFAULT_MAX_HASH_TOTAL_BYTES
+  const paths: TaskChangePathSnapshot[] = []
+  let truncated = false
+  let hashedBytes = 0
+  let visited = 0
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: executionRoot, depth: 0 }]
+
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (!current) break
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = await fs.readdir(current.dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (
+        SKIP_LISTING_DIRECTORY_NAMES.has(entry.name) ||
+        entry.name === '.' ||
+        entry.name === '..'
+      ) {
+        continue
+      }
+      visited += 1
+      if (visited > MAX_LISTING_ENTRIES) {
+        truncated = true
+        break
+      }
+      const child = join(current.dir, entry.name)
+      const located = await resolveContainedWorkingPath(
+        executionRoot,
+        executionRoot,
+        toPosixRelativePath(executionRoot, child) ?? entry.name
+      )
+      if (!located || located.kind === 'escaped') continue
+      if (located.kind === 'missing') continue
+      let stats: { isDirectory(): boolean; isFile(): boolean }
+      try {
+        stats = await fs.stat(located.realPath)
+      } catch {
+        continue
+      }
+      if (stats.isDirectory()) {
+        if (current.depth < MAX_LISTING_DEPTH) {
+          queue.push({ dir: located.realPath, depth: current.depth + 1 })
+        }
+        continue
+      }
+      if (!stats.isFile()) continue
+      if (paths.length >= maxPaths) {
+        truncated = true
+        paths.push({ path: located.relativePath, kind: 'untracked', omitted: 'limit' })
+        return { paths, truncated }
+      }
+      const snapshot: TaskChangePathSnapshot = { path: located.relativePath, kind: 'untracked' }
+      const hashed = await hashWorkingTreeFile(
+        located.realPath,
+        maxFileBytes,
+        maxTotalBytes - hashedBytes
+      )
+      if (hashed.kind === 'hash') {
+        snapshot.contentHash = hashed.contentHash
+        hashedBytes += hashed.bytes
+      } else if (hashed.kind === 'omitted') {
+        snapshot.omitted = hashed.omitted
+      }
+      paths.push(snapshot)
+    }
+    if (truncated) break
+  }
+  return { paths, truncated }
+}
+
+/**
+ * 先 join 再 realpath，确认目标同时落在 execution root 与 git root 内才允许 stat/hash/open。
+ * 符号链接逃出 root 不得读入内存。
+ */
+async function resolveContainedWorkingPath(
+  executionRoot: string,
+  gitRoot: string,
+  gitRelativePath: string
+): Promise<
+  | { kind: 'inside'; relativePath: string; realPath: string }
+  | { kind: 'escaped'; relativePath: string }
+  | { kind: 'missing'; relativePath: string }
+  | null
+> {
+  if (
+    !gitRelativePath ||
+    gitRelativePath.includes('\0') ||
+    isAbsolute(gitRelativePath) ||
+    hasParentTraversal(gitRelativePath)
+  ) {
+    return null
+  }
+  const joined = resolve(gitRoot, gitRelativePath)
+  if (!isPathInsideRoot(executionRoot, joined) || !isPathInsideRoot(gitRoot, joined)) {
+    return null
+  }
+  const relativePath = toPosixRelativePath(executionRoot, joined)
+  if (!relativePath) return null
+  try {
+    const realPath = await fs.realpath(joined)
+    if (!isPathInsideRoot(executionRoot, realPath) || !isPathInsideRoot(gitRoot, realPath)) {
+      return { kind: 'escaped', relativePath }
+    }
+    return { kind: 'inside', relativePath, realPath }
+  } catch {
+    return { kind: 'missing', relativePath }
+  }
+}
+
 async function hashWorkingTreeFile(
-  absolutePath: string,
+  realPath: string,
   maxFileBytes: number,
   remainingTotalBytes: number
 ): Promise<
@@ -352,12 +545,12 @@ async function hashWorkingTreeFile(
 > {
   let handle: fs.FileHandle | null = null
   try {
-    const stats = await fs.stat(absolutePath)
+    const stats = await fs.stat(realPath)
     if (!stats.isFile()) return { kind: 'skip' }
     if (stats.size > maxFileBytes || stats.size > remainingTotalBytes) {
       return { kind: 'omitted', omitted: 'too-large' }
     }
-    handle = await fs.open(absolutePath, 'r')
+    handle = await fs.open(realPath, 'r')
     const sampleSize = Math.min(stats.size, BINARY_SAMPLE_BYTES)
     const sample = Buffer.alloc(sampleSize)
     await handle.read(sample, 0, sampleSize, 0)
@@ -402,26 +595,6 @@ function parsePorcelainV2(stdout: string): PorcelainEntry[] {
     }
   }
   return entries
-}
-
-function toExecutionRelativePath(
-  executionRoot: string,
-  gitRoot: string,
-  gitRelativePath: string
-): string | null {
-  if (
-    !gitRelativePath ||
-    gitRelativePath.includes('\0') ||
-    isAbsolute(gitRelativePath) ||
-    hasParentTraversal(gitRelativePath)
-  ) {
-    return null
-  }
-  const absolutePath = resolve(gitRoot, gitRelativePath)
-  if (!isPathInsideRoot(executionRoot, absolutePath) || !isPathInsideRoot(gitRoot, absolutePath)) {
-    return null
-  }
-  return toPosixRelativePath(executionRoot, absolutePath)
 }
 
 function boundPorcelainSummary(

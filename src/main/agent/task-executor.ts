@@ -53,8 +53,8 @@ export interface TaskExecutorOptions {
   /** cancel deadline 到期时先撤销属于该 Turn 的主进程审批，再强制断开 Runtime。 */
   onCancelTimeout?: (identity: ExecutionIdentity) => Promise<void>
   /**
-   * 身份校验与 admit 成功之后、dispatch 之前捕获变更基线。
-   * 缺省为 no-op；抛错不得让 Turn 失败。
+   * 身份校验与 admit 成功之后、this.active/publish 之前捕获变更基线。
+   * 缺省为 no-op；抛错不得让 Turn 失败。start() 可短等只读 git。
    */
   ensureChangeBaseline?: (input: {
     taskId: string
@@ -251,8 +251,21 @@ export class TaskExecutor {
         })
         throw new TaskExecutorConflictError('应用正在退出，不能开始新的 Turn。')
       }
+      // 基线必须在 this.active/publish 之前完成：queued 窗口内 cancel 再 start 不得 dispatch 到新 execution。
+      if (this.ensureChangeBaseline) {
+        try {
+          await this.ensureChangeBaseline({
+            taskId: input.taskId,
+            projectId: input.projectId,
+            environmentId: input.environmentId,
+            executionRoot: input.resolvedExecutionRoot
+          })
+        } catch {
+          // 基线捕获失败不得拒绝 Turn；后续只读审阅会看到 missing/unavailable。
+        }
+      }
       const completion = deferredCompletion()
-      this.active = {
+      const active: ActiveExecution = {
         identity,
         runtimeTurn: {
           taskId: input.taskId,
@@ -279,20 +292,9 @@ export class TaskExecutor {
         cancelRequestPromise: null,
         cancelDeadlineTimer: null
       }
+      this.active = active
       this.publish(queued)
-      if (this.ensureChangeBaseline) {
-        try {
-          await this.ensureChangeBaseline({
-            taskId: input.taskId,
-            projectId: input.projectId,
-            environmentId: input.environmentId,
-            executionRoot: input.resolvedExecutionRoot
-          })
-        } catch {
-          // 基线捕获失败不得拒绝 Turn；后续只读审阅会看到 missing/unavailable。
-        }
-      }
-      void this.dispatch(this.active).catch(() => undefined)
+      void this.dispatch(active).catch(() => undefined)
       return this.getSnapshot()
     } catch (error) {
       activeLease?.release()

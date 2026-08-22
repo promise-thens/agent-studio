@@ -5,7 +5,8 @@ import type { GitHeadState, ProjectGitPresence, ResolvedProjectRoot } from '../.
 import { buildCommandEnvironment } from '../command/command-environment'
 
 const MAX_GIT_STDOUT_BYTES = 2 * 1024 * 1024
-const DEFAULT_GIT_TIMEOUT_MS = 15_000
+/** 只读 git 必须短超时，避免每一轮 start 被 15s 卡住。 */
+export const DEFAULT_GIT_TIMEOUT_MS = 3_000
 const NESTED_SCAN_MAX_DEPTH = 3
 const NESTED_SCAN_MAX_DIRS = 64
 const SKIP_NESTED_DIRECTORY_NAMES = new Set([
@@ -29,6 +30,7 @@ export interface ResolveProjectRootInput {
   now?: () => string
   gitExecutable?: string
   sourceEnvironment?: NodeJS.ProcessEnv
+  timeoutMs?: number
 }
 
 export interface ReadOnlyGitOptions {
@@ -58,7 +60,8 @@ export async function resolveProjectRoot(
   }
   const gitOptions: ReadOnlyGitOptions = {
     gitExecutable: input.gitExecutable,
-    sourceEnvironment: input.sourceEnvironment
+    sourceEnvironment: input.sourceEnvironment,
+    timeoutMs: input.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS
   }
 
   const canonical = await canonicalizeExecutionRoot(input.executionRoot)
@@ -90,7 +93,10 @@ export async function runReadOnlyGit(
   cwd: string,
   args: string[],
   options: ReadOnlyGitOptions = {}
-): Promise<{ ok: true; stdout: string } | { ok: false; unavailable: boolean; stdout: string }> {
+): Promise<
+  | { ok: true; stdout: string }
+  | { ok: false; unavailable: boolean; stdout: string; exitCode?: number }
+> {
   if (!isReadOnlyGitArgs(args)) {
     return { ok: false, unavailable: false, stdout: '' }
   }
@@ -123,10 +129,15 @@ export async function runReadOnlyGit(
           resolveResult({ ok: true, stdout: String(stdout ?? '') })
           return
         }
+        const exitCode =
+          error && typeof error === 'object' && 'code' in error && typeof error.code === 'number'
+            ? error.code
+            : undefined
         resolveResult({
           ok: false,
           unavailable: isGitUnavailableError(error),
-          stdout: String(stdout ?? '')
+          stdout: String(stdout ?? ''),
+          ...(exitCode !== undefined ? { exitCode } : {})
         })
       }
     )
@@ -342,7 +353,12 @@ function isReadOnlyGitArgs(args: string[]): boolean {
     index += 2
   }
   const command = args[index]
-  return command === 'rev-parse' || command === 'status' || command === 'symbolic-ref'
+  return (
+    command === 'rev-parse' ||
+    command === 'status' ||
+    command === 'symbolic-ref' ||
+    command === 'merge-base'
+  )
 }
 
 function isGitUnavailableError(error: unknown): boolean {
