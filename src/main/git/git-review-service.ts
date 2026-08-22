@@ -564,6 +564,16 @@ export class GitReviewService {
       ) {
         return refuseRestore('drift', '这些路径存在任务开始前改动、重叠或事后编辑，不能自动覆盖。')
       }
+      // 重命名只记下 dest，无法从 HEAD 证明 source before，整次拒绝以免只删 dest。
+      if (
+        isRenameOrCopyStatus(after?.statusCode) ||
+        isRenameOrCopyStatus(beforeByPath.get(path)?.statusCode)
+      ) {
+        return refuseRestore(
+          'not-recoverable',
+          '重命名无法从 Git HEAD 完整恢复源路径，不能自动撤销。'
+        )
+      }
     }
 
     const restorePlan: RestorePlanItem[] = []
@@ -618,28 +628,37 @@ export class GitReviewService {
     const beforePresent = isPresentSnapshot(input.before)
     const afterPresent = isPresentSnapshot(input.after)
     const head = await readHeadBlob(input.resolved, input.path, input.gitOptions, input.baseCommit)
-    if (!beforePresent) {
-      if (head.present) {
-        return { path: input.path, action: 'write', from: 'head', bytes: head.bytes }
+    if (head.kind === 'present') {
+      if (beforePresent && input.before?.contentHash && head.hash !== input.before.contentHash) {
+        return {
+          refuse: 'not-recoverable',
+          reason: '无法从 Git HEAD 证明恢复前状态（检查点只存哈希，禁止 git reset/checkout）。'
+        }
       }
-      if (!afterPresent) {
-        return { refuse: 'not-recoverable', reason: '无法证明恢复前状态，禁止 git reset。' }
+      if (beforePresent && (input.before?.kind === 'untracked' || !input.before?.contentHash)) {
+        return {
+          refuse: 'not-recoverable',
+          reason: '未跟踪或缺少哈希的事前文件无法从 Git 对象恢复。'
+        }
       }
+      return { path: input.path, action: 'write', from: 'head', bytes: head.bytes }
+    }
+    if (head.kind !== 'missing') {
+      return {
+        refuse: 'not-recoverable',
+        reason: 'Git 无法读取 HEAD blob，不能把失败当成文件本不存在。'
+      }
+    }
+    if (!beforePresent && afterPresent && canDeleteAsTaskAdded(input.after)) {
       return { path: input.path, action: 'delete', from: 'absent' }
     }
-    if (input.before?.kind === 'untracked' || !input.before?.contentHash) {
-      return {
-        refuse: 'not-recoverable',
-        reason: '未跟踪或缺少哈希的事前文件无法从 Git 对象恢复。'
-      }
+    if (!beforePresent && !afterPresent) {
+      return { refuse: 'not-recoverable', reason: '无法证明恢复前状态，禁止 git reset。' }
     }
-    if (!head.present || head.hash !== input.before.contentHash) {
-      return {
-        refuse: 'not-recoverable',
-        reason: '无法从 Git HEAD 证明恢复前状态（检查点只存哈希，禁止 git reset/checkout）。'
-      }
+    return {
+      refuse: 'not-recoverable',
+      reason: '无法从 Git HEAD 证明恢复前状态（检查点只存哈希，禁止 git reset/checkout）。'
     }
-    return { path: input.path, action: 'write', from: 'head', bytes: head.bytes }
   }
 
   private async executeRestore(
@@ -709,7 +728,7 @@ export class GitReviewService {
       const deleteAuth = await broker.authorizeOperation(
         this.createRestoreIntent(identity, evaluation.turnId, 'delete-path', deletes),
         async () => {
-          // 写回已经改变 after 哈希；删除阶段只复核空闲与路径，不得用 reset 回滚已写文件。
+          // 写回已经改变 after 哈希；删除阶段不得用 reset 回滚已写文件，但要再核对待删路径。
           if (!mutated) {
             const fresh = await this.recheckRestore(identity, evaluation)
             if (fresh.kind !== 'ok') return fresh
@@ -718,6 +737,19 @@ export class GitReviewService {
               kind: 'refuse' as const,
               reason: 'active-turn' as const,
               message: '当前有活动 Turn，已停止删除。'
+            }
+          } else {
+            const stillMatch = await deleteTargetsStillMatchAfter(
+              computed.resolved,
+              evaluation,
+              deletes
+            )
+            if (!stillMatch) {
+              return {
+                kind: 'refuse' as const,
+                reason: 'drift' as const,
+                message: '待删除路径在写回后已漂移，已停止删除。'
+              }
             }
           }
           try {
@@ -1588,7 +1620,7 @@ function findLastCompleteCheckpoint(list: TurnChangeCheckpoint[]): TurnChangeChe
   return null
 }
 
-function isPresentSnapshot(snapshot?: TaskChangePathSnapshot): boolean {
+function isPresentSnapshot(snapshot?: TaskChangePathSnapshot): snapshot is TaskChangePathSnapshot {
   return Boolean(snapshot && !isDeletedSnapshot(snapshot))
 }
 
@@ -1651,25 +1683,29 @@ function restoreAuthorizationFailure(
   }
 }
 
+type HeadBlobResult =
+  | { kind: 'present'; bytes: Buffer; hash: string }
+  | { kind: 'missing' }
+  | { kind: 'unavailable' }
+  | { kind: 'unsafe' }
+  | { kind: 'too-large' }
+
 async function readHeadBlob(
   resolved: ResolvedProjectRoot,
   relativePath: string,
   gitOptions: ReadOnlyGitOptions,
   baseCommit?: string
-): Promise<{ present: true; bytes: Buffer; hash: string } | { present: false }> {
-  if (
-    resolved.git.kind !== 'git' ||
-    !isSafeRestorePath(relativePath) ||
-    relativePath.includes(':')
-  ) {
-    return { present: false }
-  }
+): Promise<HeadBlobResult> {
+  if (resolved.git.kind === 'invalid') return { kind: 'unavailable' }
+  // 非 Git 没有 blob；仅当路径是本轮新增时才允许删除。
+  if (resolved.git.kind !== 'git') return { kind: 'missing' }
+  if (!isSafeRestorePath(relativePath) || relativePath.includes(':')) return { kind: 'unsafe' }
   const gitRelative = toPosixRelativePath(
     resolved.git.gitRoot,
     join(resolved.executionRoot, ...relativePath.split('/'))
   )
   if (!gitRelative || gitRelative.includes(':') || !isSafeRestorePath(gitRelative)) {
-    return { present: false }
+    return { kind: 'unsafe' }
   }
   const rev = baseCommit && /^[0-9a-f]{7,64}$/i.test(baseCommit) ? baseCommit : 'HEAD'
   const shown = await runReadOnlyGitBytes(
@@ -1677,12 +1713,45 @@ async function readHeadBlob(
     ['-c', 'core.quotepath=false', 'show', `${rev}:${gitRelative}`],
     { ...gitOptions, allowedRoot: resolved.executionRoot }
   )
-  if (!shown.ok || shown.stdout.length > MAX_HASH_FILE_BYTES) return { present: false }
-  return {
-    present: true,
-    bytes: shown.stdout,
-    hash: createHash('sha256').update(shown.stdout).digest('hex')
+  if (shown.ok) {
+    if (shown.stdout.length > MAX_HASH_FILE_BYTES) return { kind: 'too-large' }
+    return {
+      kind: 'present',
+      bytes: shown.stdout,
+      hash: createHash('sha256').update(shown.stdout).digest('hex')
+    }
   }
+  // 超时、git 不可用或路径映射失败不得当成「本不存在」。
+  if (shown.unavailable) return { kind: 'unavailable' }
+  if (isMissingHeadBlobError(shown.exitCode, shown.stderr)) return { kind: 'missing' }
+  return { kind: 'unavailable' }
+}
+
+/** 只有明确的 missing blob（exit 128 且文案指向该 rev 中无此路径）才允许按新增删除。 */
+function isMissingHeadBlobError(exitCode: number | undefined, stderr: string): boolean {
+  if (exitCode !== 128) return false
+  if (/not a valid object name/i.test(stderr) && !/does not exist in/i.test(stderr)) return false
+  return (
+    /does not exist in ['"][^'"]+['"]/i.test(stderr) ||
+    /exists on disk, but not in ['"][^'"]+['"]/i.test(stderr)
+  )
+}
+
+function isRenameOrCopyStatus(statusCode?: string): boolean {
+  if (!statusCode) return false
+  const xy = statusCode.slice(0, 2)
+  return /[RC]/i.test(xy)
+}
+
+function isAddedStatus(statusCode?: string): boolean {
+  if (!statusCode || isRenameOrCopyStatus(statusCode)) return false
+  return statusCode.slice(0, 2).includes('A')
+}
+
+function canDeleteAsTaskAdded(after?: TaskChangePathSnapshot): boolean {
+  if (!isPresentSnapshot(after) || isRenameOrCopyStatus(after.statusCode)) return false
+  if (after.kind === 'untracked') return true
+  return isAddedStatus(after.statusCode)
 }
 
 /**
@@ -1706,17 +1775,92 @@ async function writeContainedFile(
   } catch (error) {
     if (!isNotFoundError(error)) throw error
   }
-  const parent = dirname(joined)
-  if (!isPathInsideRoot(executionRoot, parent) || !isPathInsideRoot(gitRoot, parent)) {
-    throw new Error('escaped')
-  }
-  await fs.mkdir(parent, { recursive: true })
+  await ensureContainedParentDir(executionRoot, gitRoot, dirname(joined))
   await fs.writeFile(joined, bytes)
   const written = await fs.realpath(joined)
   if (!isPathInsideRoot(executionRoot, written) || !isPathInsideRoot(gitRoot, written)) {
+    // 只删除刚创建的目录项，绝不 unlink realpath 指向的外部目标。
     await fs.unlink(joined).catch(() => undefined)
     throw new Error('escaped')
   }
+}
+
+/** lstat 父目录；若是指向 root 外的符号链接则拒绝，避免 mkdir/write 跟出去。 */
+async function ensureContainedParentDir(
+  executionRoot: string,
+  gitRoot: string,
+  parent: string
+): Promise<void> {
+  if (!isPathInsideRoot(executionRoot, parent) || !isPathInsideRoot(gitRoot, parent)) {
+    throw new Error('escaped')
+  }
+  try {
+    const listed = await fs.lstat(parent)
+    if (listed.isSymbolicLink()) {
+      const real = await fs.realpath(parent)
+      if (!isPathInsideRoot(executionRoot, real) || !isPathInsideRoot(gitRoot, real)) {
+        throw new Error('escaped')
+      }
+      return
+    }
+    if (!listed.isDirectory()) throw new Error('escaped')
+    const real = await fs.realpath(parent)
+    if (!isPathInsideRoot(executionRoot, real) || !isPathInsideRoot(gitRoot, real)) {
+      throw new Error('escaped')
+    }
+    return
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error
+  }
+  const relative = toPosixRelativePath(executionRoot, parent)
+  if (relative === null) throw new Error('escaped')
+  const segments = relative ? relative.split('/') : []
+  let current = executionRoot
+  for (const segment of segments) {
+    current = join(current, segment)
+    if (!isPathInsideRoot(executionRoot, current) || !isPathInsideRoot(gitRoot, current)) {
+      throw new Error('escaped')
+    }
+    try {
+      const listed = await fs.lstat(current)
+      if (listed.isSymbolicLink()) {
+        const real = await fs.realpath(current)
+        if (!isPathInsideRoot(executionRoot, real) || !isPathInsideRoot(gitRoot, real)) {
+          throw new Error('escaped')
+        }
+        current = real
+        continue
+      }
+      if (!listed.isDirectory()) throw new Error('escaped')
+    } catch (error) {
+      if (!isNotFoundError(error)) throw error
+      await fs.mkdir(current)
+    }
+  }
+}
+
+async function deleteTargetsStillMatchAfter(
+  resolved: ResolvedProjectRoot,
+  evaluation: Extract<RestoreEvaluation, { kind: 'latest-turn' }>,
+  deletes: RestorePlanItem[]
+): Promise<boolean> {
+  const afterByPath = new Map(
+    (evaluation.checkpoint.afterPaths ?? []).map((item) => [item.path, item])
+  )
+  const gitRoot = gitRootOf(resolved)
+  for (const step of deletes) {
+    const after = afterByPath.get(step.path)
+    if (!after?.contentHash) return false
+    const located = await resolveContainedWorkingPath(resolved.executionRoot, gitRoot, step.path)
+    if (!located || located.kind !== 'inside') return false
+    const hashed = await hashWorkingTreeFile(
+      located.realPath,
+      MAX_HASH_FILE_BYTES,
+      MAX_HASH_FILE_BYTES
+    )
+    if (hashed.kind !== 'hash' || hashed.contentHash !== after.contentHash) return false
+  }
+  return true
 }
 
 /** unlink 目录项本身，不跟随符号链接去删外部目标。 */

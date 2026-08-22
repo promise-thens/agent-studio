@@ -6,7 +6,11 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { CommandExecutionEvidence } from '../../shared/command'
 import { deriveValidationResult } from '../../shared/command'
-import { resolveProjectRoot, runReadOnlyGit } from '../project/project-root-resolver'
+import {
+  resolveProjectRoot,
+  runReadOnlyGit,
+  runReadOnlyGitBytes
+} from '../project/project-root-resolver'
 import { captureTaskChangeBaseline, TaskChangeBaselineStore } from './task-change-baseline'
 import {
   deriveTaskValidations,
@@ -49,6 +53,25 @@ describe('runReadOnlyGit diff 边界', () => {
     expect(
       await runReadOnlyGit(canonical, ['show', 'HEAD:README.md'], { allowedRoot: canonical })
     ).toEqual(expect.objectContaining({ ok: true }))
+    const missing = await runReadOnlyGitBytes(canonical, ['show', 'HEAD:missing.txt'], {
+      allowedRoot: canonical
+    })
+    expect(missing).toEqual(
+      expect.objectContaining({ ok: false, unavailable: false, exitCode: 128 })
+    )
+    if (!missing.ok) expect(missing.stderr).toMatch(/does not exist in ['"]?HEAD['"]?/i)
+    await writeFile(join(repo, 'notes.txt'), 'new\n')
+    const onDisk = await runReadOnlyGitBytes(
+      canonical,
+      ['-c', 'core.quotepath=false', 'show', 'HEAD:notes.txt'],
+      { allowedRoot: canonical }
+    )
+    expect(onDisk).toEqual(
+      expect.objectContaining({ ok: false, unavailable: false, exitCode: 128 })
+    )
+    if (!onDisk.ok) {
+      expect(onDisk.stderr).toMatch(/exists on disk, but not in ['"][^'"]+['"]/i)
+    }
     expect(
       await runReadOnlyGit(
         canonical,

@@ -151,12 +151,15 @@ export async function runReadOnlyGitBytes(
   cwd: string,
   args: string[],
   options: ReadOnlyGitOptions = {}
-): Promise<{ ok: true; stdout: Buffer } | { ok: false; unavailable: boolean; stdout: Buffer }> {
+): Promise<
+  | { ok: true; stdout: Buffer }
+  | { ok: false; unavailable: boolean; stdout: Buffer; stderr: string; exitCode?: number }
+> {
   if (!isReadOnlyGitArgs(args)) {
-    return { ok: false, unavailable: false, stdout: Buffer.alloc(0) }
+    return { ok: false, unavailable: false, stdout: Buffer.alloc(0), stderr: '' }
   }
   if (options.allowedRoot && !isPathInsideRoot(options.allowedRoot, cwd)) {
-    return { ok: false, unavailable: false, stdout: Buffer.alloc(0) }
+    return { ok: false, unavailable: false, stdout: Buffer.alloc(0), stderr: '' }
   }
 
   const env = buildCommandEnvironment(options.sourceEnvironment ?? process.env)
@@ -179,16 +182,23 @@ export async function runReadOnlyGitBytes(
         windowsHide: true,
         encoding: 'buffer'
       },
-      (error, stdout) => {
+      (error, stdout, stderr) => {
         const bytes = Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout ?? '')
+        const stderrText = decodeGitStderr(stderr)
         if (!error) {
           resolveResult({ ok: true, stdout: bytes })
           return
         }
+        const exitCode =
+          error && typeof error === 'object' && 'code' in error && typeof error.code === 'number'
+            ? error.code
+            : undefined
         resolveResult({
           ok: false,
           unavailable: isGitUnavailableError(error),
-          stdout: bytes
+          stdout: bytes,
+          stderr: stderrText,
+          ...(exitCode !== undefined ? { exitCode } : {})
         })
       }
     )
@@ -438,6 +448,17 @@ function isSafeGitShowSpec(value: string): boolean {
   if (!path || path.includes('\0') || isAbsolute(path) || hasParentTraversal(path)) return false
   if (path.includes(':')) return false
   return true
+}
+
+const MAX_GIT_STDERR_CHARS = 4 * 1024
+
+function decodeGitStderr(stderr: unknown): string {
+  const text = Buffer.isBuffer(stderr)
+    ? stderr.toString('utf8')
+    : typeof stderr === 'string'
+      ? stderr
+      : ''
+  return text.replace(/\0/gu, '').slice(0, MAX_GIT_STDERR_CHARS)
 }
 
 function isGitUnavailableError(error: unknown): boolean {

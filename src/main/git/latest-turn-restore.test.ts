@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process'
-import { mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -300,6 +300,60 @@ describe('最新一轮受控恢复', () => {
     expect(intents.every((intent) => intent.operationType !== 'git-mutate')).toBe(true)
     expect(intents.some((intent) => intent.operationType === 'write-file')).toBe(true)
   })
+
+  it('git show 失败不得当成文件本不存在而去删除', async () => {
+    const repo = await createGitRepo()
+    const stub = await writeGitShowFailureStub()
+    const fixture = await createRestoreFixture(repo, { gitExecutable: stub })
+    await recordWriteTurn(fixture, 'turn-1', async () => {
+      await writeFile(join(repo, 'README.md'), 'agent-edit\n')
+    })
+    expect((await fixture.service.getChangeSet('task-1')).revertible).toMatchObject({
+      kind: 'none'
+    })
+    const restored = await fixture.service.restoreLatestTurn('task-1')
+    expect(restored.ok).toBe(false)
+    expect(restored.reason).toBe('not-recoverable')
+    expect(await readFile(join(repo, 'README.md'), 'utf8')).toBe('agent-edit\n')
+  })
+
+  it('git mv 重命名不可自动撤销，不得只删 dest', async () => {
+    const repo = await createGitRepo()
+    const fixture = await createRestoreFixture(repo)
+    await recordWriteTurn(fixture, 'turn-1', async () => {
+      await runGit(repo, ['mv', 'README.md', 'NOTES.md'])
+    })
+    expect((await fixture.service.getChangeSet('task-1')).revertible).toMatchObject({
+      kind: 'none'
+    })
+    const restored = await fixture.service.restoreLatestTurn('task-1')
+    expect(restored.ok).toBe(false)
+    expect(restored.reason).toBe('not-recoverable')
+    expect(await readFile(join(repo, 'NOTES.md'), 'utf8')).toBe('hello\n')
+    await expect(readFile(join(repo, 'README.md'), 'utf8')).rejects.toThrow()
+  })
+
+  it('嵌套仓库恢复只写 git root 内路径，不改外部文件', async () => {
+    const root = await createTemporaryDirectory()
+    await writeFile(join(root, 'outside.txt'), 'OUTSIDE\n')
+    const inner = join(root, 'nested')
+    await mkdir(inner)
+    await initGitRepo(inner)
+    await writeFile(join(inner, 'file.txt'), 'hello\n')
+    await runGit(inner, ['add', 'file.txt'])
+    await runGit(inner, ['commit', '-m', 'add file.txt'])
+    const fixture = await createRestoreFixture(root)
+    await recordWriteTurn(fixture, 'turn-1', async () => {
+      await writeFile(join(inner, 'file.txt'), 'agent-edit\n')
+    })
+    const listed = await fixture.service.getChangeSet('task-1')
+    expect(listed.gitPresence).toBe('git')
+    expect(listed.revertible).toMatchObject({ kind: 'latest-turn' })
+    expect((await fixture.service.restoreLatestTurn('task-1')).ok).toBe(true)
+    expect(await readFile(join(inner, 'file.txt'), 'utf8')).toBe('hello\n')
+    expect(await readFile(join(root, 'outside.txt'), 'utf8')).toBe('OUTSIDE\n')
+    expect(JSON.stringify(listed)).not.toContain('OUTSIDE')
+  })
 })
 
 async function recordWriteTurn(
@@ -354,6 +408,7 @@ async function createRestoreFixture(
   options: {
     hasActiveExecution?: () => boolean
     broker?: Pick<PermissionBroker, 'authorizeOperation'>
+    gitExecutable?: string
   } = {}
 ): Promise<{
   service: GitReviewService
@@ -385,7 +440,8 @@ async function createRestoreFixture(
     now: () => '2026-08-22T12:00:00.000Z',
     hasActiveExecution: options.hasActiveExecution ?? (() => false),
     broker: options.broker ?? createAllowingBroker(),
-    createRecoveryId: () => `recovery_${++recoverySerial}`
+    createRecoveryId: () => `recovery_${++recoverySerial}`,
+    ...(options.gitExecutable ? { gitExecutable: options.gitExecutable } : {})
   })
   return { service, identity, checkpointStore }
 }
@@ -398,18 +454,42 @@ async function createTemporaryDirectory(): Promise<string> {
 
 async function createGitRepo(): Promise<string> {
   const repo = await createTemporaryDirectory()
-  try {
-    await runGit(repo, ['init', '-b', 'main'])
-  } catch {
-    await runGit(repo, ['init'])
-  }
-  await runGit(repo, ['config', 'user.email', 'restore-test@example.test'])
-  await runGit(repo, ['config', 'user.name', 'Restore Test'])
-  await runGit(repo, ['config', 'commit.gpgsign', 'false'])
+  await initGitRepo(repo)
   await writeFile(join(repo, 'README.md'), 'hello\n')
   await runGit(repo, ['add', 'README.md'])
   await runGit(repo, ['commit', '-m', 'add README.md'])
   return repo
+}
+
+async function initGitRepo(dir: string): Promise<void> {
+  try {
+    await runGit(dir, ['init', '-b', 'main'])
+  } catch {
+    await runGit(dir, ['init'])
+  }
+  await runGit(dir, ['config', 'user.email', 'restore-test@example.test'])
+  await runGit(dir, ['config', 'user.name', 'Restore Test'])
+  await runGit(dir, ['config', 'commit.gpgsign', 'false'])
+}
+
+async function writeGitShowFailureStub(): Promise<string> {
+  const dir = await createTemporaryDirectory()
+  const stub = join(dir, 'git-stub.mjs')
+  await writeFile(
+    stub,
+    [
+      '#!/usr/bin/env node',
+      "import { spawnSync } from 'node:child_process'",
+      'const args = process.argv.slice(2)',
+      'if (args.includes("show")) process.exit(1)',
+      'const result = spawnSync("git", args, { encoding: "utf8", cwd: process.cwd(), env: process.env })',
+      'if (result.stdout) process.stdout.write(result.stdout)',
+      'if (result.stderr) process.stderr.write(result.stderr)',
+      'process.exit(result.status ?? 1)'
+    ].join('\n')
+  )
+  await chmod(stub, 0o755)
+  return stub
 }
 
 async function runGit(cwd: string, args: string[]): Promise<string> {

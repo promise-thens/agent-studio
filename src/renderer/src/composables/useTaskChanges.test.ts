@@ -210,4 +210,30 @@ describe('useTaskChanges', () => {
     expect(restoreLatestTurn).toHaveBeenCalledWith('task-1')
     expect(api.getChangeSet).toHaveBeenCalledTimes(2)
   })
+
+  it('preview 不是 latest-turn 时确认撤销不得调用 restore', async () => {
+    const restoreLatestTurn = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        ok: true,
+        message: 'should-not-run'
+      })
+    )
+    const api = createApi({
+      previewLatestTurnRestore: vi.fn(async () =>
+        ok({
+          taskId: 'task-1',
+          revertible: { kind: 'none' as const, reason: 'Git 无法读取 HEAD blob。' },
+          willLosePaths: []
+        })
+      ),
+      restoreLatestTurn
+    })
+    const controller = useTaskChanges(ref('task-1'), api)
+    await waitUntilIdle(controller.loading)
+    await controller.openRestorePreview()
+    await controller.confirmRestore()
+    expect(restoreLatestTurn).not.toHaveBeenCalled()
+    expect(controller.restoreError.value).toMatch(/不能自动撤销/)
+  })
 })

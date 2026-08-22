@@ -262,6 +262,10 @@ export function useTaskChanges(
     const id = toValue(taskId)
     const restoreApi = api.restoreLatestTurn
     if (!id || !restoreApi || restoreBusy.value) return
+    if (restorePreview.value?.revertible.kind !== 'latest-turn') {
+      restoreError.value = '当前不能自动撤销。'
+      return
+    }
     restoreBusy.value = true
     restoreError.value = ''
     try {
