@@ -49,8 +49,10 @@ describe('Inspector 开关与标签', () => {
 })
 
 describe('Inspector 占位文案', () => {
-  it('Changes 与 Artifacts 指向后续计划，不伪装已实现', () => {
-    expect(inspectorPlaceholderCopy('changes').heading).toBe('尚未实现 · P0-12 Git Review')
+  it('Changes 已实现，无 Task 时只提示选择；Artifacts 仍指向 P0-13', () => {
+    expect(inspectorPlaceholderCopy('changes').heading).toBe('选择一个 Task')
+    expect(inspectorPlaceholderCopy('changes').heading).not.toMatch(/尚未实现/)
+    expect(inspectorPlaceholderCopy('changes').detail).toMatch(/变更|审阅/)
     expect(inspectorPlaceholderCopy('artifacts').heading).toBe('尚未实现 · P0-13')
   })
 
@@ -66,7 +68,7 @@ describe('Inspector 占位文案', () => {
     expect(INSPECTOR_DEFAULT_TAB).toBe('timeline')
     expect(WORKSPACE_PRIMARY_COLUMNS).toEqual(['sidebar', 'conversation'])
     expect(WORKSPACE_INSPECTOR_PLACEMENT).toBe('overlay')
-    expect(inspectorPlaceholderCopy('changes').heading).toContain('P0-12')
+    expect(inspectorPlaceholderCopy('changes').heading).toBe('选择一个 Task')
     expect(inspectorPlaceholderCopy('terminal').heading).toContain('P0-15')
     expect(inspectorPlaceholderCopy('artifacts').heading).toContain('P0-13')
 

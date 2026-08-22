@@ -14,11 +14,13 @@ import {
   resolveInspectorTab,
   type InspectorTab
 } from '../task-inspector'
+import TaskChangesPanel from './TaskChangesPanel.vue'
 
 const props = withDefaults(
   defineProps<{
     open: boolean
     activeTab: InspectorTab
+    taskId?: string
     timeline: TaskTimelineViewModel | null
     timelineLoading?: boolean
     permissionAudits?: readonly PermissionAuditRecord[]
@@ -27,6 +29,7 @@ const props = withDefaults(
     showPermissionAudits?: boolean
   }>(),
   {
+    taskId: '',
     timelineLoading: false,
     permissionAudits: () => [],
     permissionAuditCursor: null,
@@ -42,9 +45,11 @@ const emit = defineEmits<{
 }>()
 
 const currentTab = computed(() => resolveInspectorTab(props.activeTab))
-const placeholder = computed(() =>
-  currentTab.value === 'timeline' ? null : inspectorPlaceholderCopy(currentTab.value)
-)
+const showChangesPanel = computed(() => currentTab.value === 'changes' && Boolean(props.taskId))
+const placeholder = computed(() => {
+  if (currentTab.value === 'timeline' || showChangesPanel.value) return null
+  return inspectorPlaceholderCopy(currentTab.value)
+})
 const timelineSummary = computed(() => projectInspectorTimelineSummary(props.timeline))
 // Esc 由 App 裁定：执行中先聚焦停止，只有焦点已在抽屉内才关检查器。
 
@@ -187,6 +192,8 @@ function onTabListKeydown(event: KeyboardEvent): void {
           </div>
         </section>
       </template>
+
+      <TaskChangesPanel v-else-if="showChangesPanel" :task-id="taskId" />
 
       <div v-else class="inspector-placeholder" role="status">
         <strong>{{ placeholder?.heading }}</strong>

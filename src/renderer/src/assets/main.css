@@ -1518,7 +1518,8 @@ button:disabled {
   scrollbar-width: thin;
 }
 
-.inspector-body > .execution-timeline {
+.inspector-body > .execution-timeline,
+.inspector-body > .task-changes-panel {
   width: 100%;
   margin: 0;
   padding: 4px 4px 16px;
@@ -1612,6 +1613,247 @@ button:disabled {
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+}
+
+.task-changes-panel {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 4px 12px;
+}
+
+.changes-toolbar,
+.file-diff-header,
+.changes-path-button {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.changes-toolbar {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.changes-toolbar strong,
+.file-diff-header strong,
+.changes-path-group h3,
+.changes-validations h3,
+.changes-unverified h3 {
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.changes-summary,
+.changes-state,
+.file-diff-viewer,
+.changes-validation,
+.changes-unverified {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: var(--radius-soft);
+  background: color-mix(in srgb, var(--surface-2) 42%, transparent);
+}
+
+.changes-summary p,
+.changes-state p,
+.changes-muted,
+.changes-risk,
+.changes-validation p,
+.changes-unverified li {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.changes-state {
+  display: grid;
+  gap: 8px;
+}
+
+.changes-state strong {
+  color: var(--text-1);
+  font-size: 13px;
+}
+
+.changes-warnings {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--border));
+  border-radius: var(--radius-soft);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+  list-style: none;
+}
+
+.changes-path-groups,
+.changes-validations,
+.changes-unverified ul {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.changes-path-group {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.changes-path-button {
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  color: var(--text-2);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.changes-path-button:hover,
+.changes-path-button[aria-selected='true'] {
+  color: var(--text-1);
+  background: var(--selected-fill);
+}
+
+.changes-path-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.changes-path-meta {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.file-diff-viewer {
+  display: grid;
+  gap: 8px;
+}
+
+.file-diff-header strong,
+.changes-path-name,
+.file-diff-text,
+.changes-unverified li {
+  user-select: text;
+}
+
+.file-diff-banner {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.file-diff-state {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.file-diff-scroll {
+  overflow: auto;
+  max-height: 42vh;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-1) 70%, transparent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.file-diff-line {
+  display: grid;
+  grid-template-columns: 36px 36px 14px minmax(max-content, 1fr);
+  min-width: max-content;
+}
+
+.file-diff-gutter,
+.file-diff-mark {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.file-diff-gutter,
+.file-diff-mark,
+.file-diff-text {
+  padding: 0 6px;
+  white-space: pre;
+}
+
+.file-diff-line[data-kind='add'] {
+  color: color-mix(in srgb, var(--success) 42%, var(--text-1));
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.file-diff-line[data-kind='del'] {
+  color: color-mix(in srgb, var(--danger) 42%, var(--text-1));
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.file-diff-line[data-kind='hunk'],
+.file-diff-line[data-kind='meta'],
+.file-diff-line[data-kind='no-newline'] {
+  color: var(--text-3);
+}
+
+.changes-command-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.changes-command-button {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  color: var(--text-2);
+  background: var(--hover-fill);
+  cursor: pointer;
+}
+
+.changes-command-button[aria-pressed='true'] {
+  color: var(--text-1);
+  border-color: var(--border-strong);
+  background: var(--selected-fill);
+}
+
+.changes-validation[data-outcome='fail'] p,
+.changes-risk {
+  color: var(--danger);
+}
+
+.changes-validation[data-outcome='pass'] p {
+  color: var(--success);
+}
+
+.changes-muted {
+  color: var(--text-3);
+}
+
+.changes-unverified ul {
+  list-style: none;
 }
 
 .plan-list,

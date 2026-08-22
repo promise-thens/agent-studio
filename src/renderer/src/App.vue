@@ -1726,6 +1726,7 @@ function scrollMessagesToBottom(): void {
       <TaskInspector
         :open="showInspector"
         :active-tab="inspectorTab"
+        :task-id="activeTaskId"
         :timeline="taskTimeline.activeTimeline.value"
         :timeline-loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
         :permission-audits="taskHistory.permissionAudits.value"

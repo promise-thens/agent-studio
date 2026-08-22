@@ -82,8 +82,8 @@ export function nextInspectorTab(current: InspectorTab, delta: -1 | 1): Inspecto
 }
 
 /**
- * 未实现标签的诚实占位。
- * Terminal 只声明 P0-15 用户交互终端，不把 P0-11 命令证据缺失说成终端没接上。
+ * 未选 Task 或尚未实现标签的诚实占位。
+ * Changes 已实现，无 Task 时只提示选择；Terminal 仍只声明 P0-15 用户交互终端。
  */
 function inspectorTurnStatusLabel(status: TurnTimelineViewModel['status']): string {
   if (status === 'waiting-permission') return '待审批'
@@ -142,8 +142,8 @@ export function inspectorPlaceholderCopy(
 ): InspectorPlaceholderCopy {
   if (tab === 'changes') {
     return {
-      heading: '尚未实现 · P0-12 Git Review',
-      detail: '项目变更审阅将挂在这个标签，不会再改顶层导航。'
+      heading: '选择一个 Task',
+      detail: '选中 Task 后可审阅 Git 基线、文件变更、受限 Diff 和验证摘要。'
     }
   }
   if (tab === 'terminal') {
