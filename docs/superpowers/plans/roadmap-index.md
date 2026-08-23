@@ -47,7 +47,8 @@
 |        6 | P0-10   |    5 | [单 Runtime 任务工作台](p0-10-single-runtime-task-workbench.md)                              | Task 1–4 已合入功能分支；开发版手工与 lifecycle e2e 未在本分支实跑 | P0-06、P0-08、P0-09、P0-10A、GACP-02     |
 |        7 | P0-11   |    5 | [Command Runner 与执行证据](p0-11-command-execution-evidence.md)                             | 待开始                             | P0-06、P0-07、P0-08、P0-10               |
 |       7a | GACP-03 |    4 | [结构化权限证据](grokACP计划/gacp-03-structured-permission-evidence.md)                     | 待开始                             | P0-11、GACP-01                           |
-|        8 | P0-12   |    5 | [项目 Git 基线与变更审阅](p0-12-project-git-change-review.md)                                | 待开始                             | P0-06、P0-07、P0-08、P0-10、P0-11        |
+|        8 | P0-12   |    5 | [项目 Git 基线与变更审阅](p0-12-project-git-change-review.md)                                | Task 1–4 代码已落地；自动验证已过（GUI 未跑） | P0-06、P0-07、P0-08、P0-10、P0-11        |
+|       8b | P0-12A  |    4 | [两层变更审阅工作区](p0-12a-change-review-workspace.md)                                      | 代码已落地；自动验证已过（GUI 未跑） | P0-12                                    |
 |       8a | GACP-04 |    4 | [Grok ACP 方言兼容契约](grokACP计划/gacp-04-grok-acp-dialect-compat.md)                     | 待开始                             | P0-10、GACP-01；可与 P0-12 并行，P2 前完成 |
 
 #### P0-A 验收门

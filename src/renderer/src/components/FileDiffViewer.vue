@@ -5,6 +5,7 @@ import {
   fileDiffBanner,
   fileDiffFallback,
   parseUnifiedDiff,
+  presentFileDiffRows,
   shouldRenderUnifiedDiff,
   type FileDiffLineKind
 } from '../task-changes-presentation'
@@ -34,6 +35,7 @@ const lines = computed(() =>
     ? parseUnifiedDiff(props.diff.unifiedDiff)
     : []
 )
+const rows = computed(() => presentFileDiffRows(lines.value))
 const showFallback = computed(
   () => Boolean(props.diff) && lines.value.length === 0 && !props.loading && !banner.value
 )
@@ -71,18 +73,22 @@ function lineNumber(value: number | undefined): string {
     </div>
     <template v-else-if="diff">
       <p v-if="banner" class="file-diff-banner" role="status">{{ banner }}</p>
-      <div v-if="lines.length" class="file-diff-scroll" tabindex="0" aria-label="差异内容">
-        <div
-          v-for="(line, index) in lines"
-          :key="`${index}:${line.kind}:${line.oldLine ?? ''}:${line.newLine ?? ''}`"
-          class="file-diff-line"
-          :data-kind="line.kind"
-        >
-          <span class="file-diff-gutter" aria-hidden="true">{{ lineNumber(line.oldLine) }}</span>
-          <span class="file-diff-gutter" aria-hidden="true">{{ lineNumber(line.newLine) }}</span>
-          <span class="file-diff-mark" aria-hidden="true">{{ lineMark(line.kind) }}</span>
-          <span class="file-diff-text">{{ line.text }}</span>
-        </div>
+      <div v-if="rows.length" class="file-diff-scroll" tabindex="0" aria-label="差异内容">
+        <template v-for="(row, index) in rows" :key="`${index}:${row.kind}`">
+          <div v-if="row.kind === 'unmodified'" class="file-diff-unmodified" role="note">
+            {{ row.count }} 行未修改
+          </div>
+          <div v-else class="file-diff-line" :data-kind="row.line.kind">
+            <span class="file-diff-gutter" aria-hidden="true">{{
+              lineNumber(row.line.oldLine)
+            }}</span>
+            <span class="file-diff-gutter" aria-hidden="true">{{
+              lineNumber(row.line.newLine)
+            }}</span>
+            <span class="file-diff-mark" aria-hidden="true">{{ lineMark(row.line.kind) }}</span>
+            <span class="file-diff-text">{{ row.line.text }}</span>
+          </div>
+        </template>
       </div>
       <p v-else-if="showFallback" class="file-diff-state" role="status">
         {{ fileDiffFallback(diff.status) }}

@@ -7,6 +7,7 @@ defineProps<{
   canResume?: boolean
   resumePending?: boolean
   canCreateTask?: boolean
+  hideChangedPaths?: boolean
 }>()
 
 defineEmits<{
@@ -67,7 +68,7 @@ function inconsistencyLabel(command: TimelineCommandEvidenceView): string {
         <dt>Usage</dt>
         <dd>{{ usageLabel(model) }}</dd>
       </div>
-      <div>
+      <div v-if="!hideChangedPaths">
         <dt>修改路径</dt>
         <dd>
           <template v-if="model.changedPaths.availability === 'observed'">

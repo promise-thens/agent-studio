@@ -45,6 +45,43 @@ describe('git-review IPC 投影', () => {
     expect(JSON.stringify(parsed)).not.toContain('all tests passed')
   })
 
+  it('接受非负 added/deleted，拒绝负数以免污染变更卡', () => {
+    const parsed = parseTaskChangeSetQueryResult({
+      taskId: 'task-1',
+      environmentId: 'local:testenv',
+      baselineStatus: 'captured',
+      gitPresence: 'git',
+      generatedAt: '2026-08-22T12:00:00.000Z',
+      preExistingCount: 0,
+      taskChangedCount: 1,
+      unknownCount: 0,
+      validations: [],
+      paths: [{ path: 'README.md', attribution: 'task-modified', added: 12, deleted: 3 }],
+      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' }
+    })
+    expect(parsed?.paths[0]).toEqual({
+      path: 'README.md',
+      attribution: 'task-modified',
+      added: 12,
+      deleted: 3
+    })
+    expect(
+      parseTaskChangeSetQueryResult({
+        taskId: 'task-1',
+        environmentId: 'local:testenv',
+        baselineStatus: 'captured',
+        gitPresence: 'git',
+        generatedAt: '2026-08-22T12:00:00.000Z',
+        preExistingCount: 0,
+        taskChangedCount: 1,
+        unknownCount: 0,
+        validations: [],
+        paths: [{ path: 'README.md', attribution: 'task-modified', added: -1, deleted: 0 }],
+        revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' }
+      })
+    ).toBeNull()
+  })
+
   it('拒绝绝对路径 Diff，escaped 相对越界可以回显', () => {
     expect(
       parseFileDiffResult({

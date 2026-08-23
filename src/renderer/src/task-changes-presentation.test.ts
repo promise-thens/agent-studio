@@ -9,14 +9,19 @@ import {
   changeSetReadiness,
   changeSetTruncationBanner,
   fileDiffBanner,
+  filterChangeFileTree,
   formatBaseCommit,
+  formatChangeLineDelta,
   gitPresenceLabel,
   gitPresenceNotice,
   gitPresenceWarning,
   groupChangePaths,
   omittedLabel,
   parseUnifiedDiff,
+  presentChangeCard,
+  presentChangeFileTree,
   presentChangeSetSummary,
+  presentFileDiffRows,
   canRestoreLatestTurn,
   revertibleNotice,
   restoreActionLabel,
@@ -245,6 +250,98 @@ describe('Diff 行解析与状态横幅', () => {
   })
 })
 
+describe('对话变更卡', () => {
+  it('只收本 Task 与未知路径，合计 +/-，pre-existing 不进卡片', () => {
+    const card = presentChangeCard(
+      changeSet({
+        taskChangedCount: 2,
+        unknownCount: 1,
+        preExistingCount: 1,
+        paths: [
+          { path: 'src/old.ts', attribution: 'pre-existing', added: 3, deleted: 1 },
+          { path: 'src/new.ts', attribution: 'task-added', added: 10, deleted: 0 },
+          { path: 'src/edit.ts', attribution: 'task-modified', added: 57, deleted: 48 },
+          { path: 'src/overlap.ts', attribution: 'overlap-unknown', added: 2, deleted: 2 }
+        ],
+        revertible: {
+          kind: 'latest-turn',
+          turnId: 'turn-1',
+          paths: ['src/new.ts', 'src/edit.ts'],
+          restorePlan: [
+            { path: 'src/new.ts', action: 'delete', from: 'absent' },
+            { path: 'src/edit.ts', action: 'write', from: 'head' }
+          ]
+        }
+      })
+    )
+    expect(card.visible).toBe(true)
+    expect(card.heading).toBe('已编辑 3 个文件')
+    expect(card.added).toBe(69)
+    expect(card.deleted).toBe(50)
+    expect(card.files.map((item) => item.path)).toEqual([
+      'src/edit.ts',
+      'src/new.ts',
+      'src/overlap.ts'
+    ])
+    expect(card.files[0]).toMatchObject({ fileName: 'edit.ts', added: 57, deleted: 48 })
+    expect(card.canRestore).toBe(true)
+    expect(formatChangeLineDelta(57, 48)).toBe('+57 −48')
+  })
+
+  it('只有任务开始前已有改动时不展示卡片', () => {
+    const card = presentChangeCard(
+      changeSet({
+        taskChangedCount: 0,
+        preExistingCount: 1,
+        paths: [{ path: 'README.md', attribution: 'pre-existing', added: 1, deleted: 0 }]
+      })
+    )
+    expect(card.visible).toBe(false)
+    expect(presentChangeCard(null).visible).toBe(false)
+  })
+})
+
+describe('审阅文件树与未修改行摘要', () => {
+  it('按目录成树，筛选只留下匹配文件及其父目录', () => {
+    const tree = presentChangeFileTree([
+      { path: 'src/views/chat-input.vue', attribution: 'task-modified', added: 57, deleted: 48 },
+      { path: 'src/views/chat-window.vue', attribution: 'task-modified', added: 34, deleted: 28 },
+      { path: 'src/index.vue', attribution: 'task-modified', added: 11, deleted: 9 }
+    ])
+    expect(tree).toHaveLength(1)
+    expect(tree[0]).toMatchObject({ kind: 'folder', name: 'src' })
+    const src = tree[0]
+    if (src.kind !== 'folder') throw new Error('expected folder')
+    expect(src.children.map((item) => item.name)).toEqual(['index.vue', 'views'])
+    const filtered = filterChangeFileTree(tree, 'chat-input')
+    expect(JSON.stringify(filtered)).toContain('chat-input.vue')
+    expect(JSON.stringify(filtered)).not.toContain('chat-window.vue')
+    expect(JSON.stringify(filtered)).not.toContain('index.vue')
+  })
+
+  it('hunk 缺口插入只读未修改行摘要，不把元数据算进缺口', () => {
+    const lines = parseUnifiedDiff(
+      [
+        'diff --git a/a.ts b/a.ts',
+        '--- a/a.ts',
+        '+++ b/a.ts',
+        '@@ -123,2 +123,2 @@',
+        ' keep',
+        '-old',
+        '+new',
+        '@@ -128,1 +128,1 @@',
+        '-x',
+        '+y'
+      ].join('\n')
+    )
+    const rows = presentFileDiffRows(lines)
+    const gaps = rows.filter((row) => row.kind === 'unmodified')
+    expect(gaps[0]).toEqual({ kind: 'unmodified', count: 122 })
+    expect(gaps[1]).toEqual({ kind: 'unmodified', count: 3 })
+    expect(rows.some((row) => row.kind === 'unmodified' && 'expandable' in row)).toBe(false)
+  })
+})
+
 describe('验证与未验证文件', () => {
   it('验证结论与原因用中文，且无通过结论时列出 Task 修改路径', () => {
     expect(validationOutcomeLabel('pass')).toBe('通过')
@@ -294,13 +391,27 @@ describe('Changes 面板源码约束', () => {
     expect(panel).toContain('撤销最新一轮')
     expect(panel).toContain('canRestoreLatestTurn')
     expect(panel).toContain('restoreMessage')
+    expect(panel).toContain('changes-review-split')
+    expect(panel).toContain('filterChangeFileTree')
     expect(panel).not.toContain('继续任务')
     expect(panel).not.toMatch(/emit\('revert/)
     expect(viewer).toContain('fileDiffBanner')
-    expect(viewer).toContain('parseUnifiedDiff')
+    expect(viewer).toContain('presentFileDiffRows')
+    expect(viewer).toContain('行未修改')
     expect(viewer).not.toContain('没有改动')
     expect(inspector).toContain('TaskChangesPanel')
-    expect(inspector).toContain('taskId')
-    expect(app).toContain(':task-id="activeTaskId"')
+    expect(inspector).toContain('reviewWorkspaceClass')
+    expect(inspector).toContain('changesController')
+    expect(readFileSync(join(rendererDir, 'task-inspector.ts'), 'utf8')).toContain(
+      'is-review-workspace'
+    )
+    expect(app).toContain('openChangeReview')
+    expect(app).toContain('useTaskChanges')
+    const card = readFileSync(join(rendererDir, 'components/TaskChangeCard.vue'), 'utf8')
+    const presentation = readFileSync(join(rendererDir, 'task-changes-presentation.ts'), 'utf8')
+    expect(presentation).toContain('已编辑')
+    expect(card).toContain('审核')
+    expect(card).toContain('撤销')
+    expect(card).not.toContain('继续任务')
   })
 })

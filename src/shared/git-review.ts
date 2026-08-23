@@ -88,6 +88,10 @@ export interface TaskChangePath {
   attribution: TaskChangeAttribution
   omitted?: 'too-large' | 'binary' | 'limit' | 'untracked' | 'truncated'
   contentHash?: string
+  /** 相对 HEAD 的新增行数；二进制/过大不加。 */
+  added?: number
+  /** 相对 HEAD 的删除行数；二进制/过大不加。 */
+  deleted?: number
 }
 
 export interface TaskChangeSet {
@@ -227,6 +231,7 @@ const MAX_UNIFIED_DIFF_BYTES = 64 * 1024
 const MAX_CHANGE_SET_PATHS = 500
 const MAX_CHECKPOINT_PATHS = 500
 const MAX_REASON_BYTES = 4 * 1024
+const MAX_LINE_STAT = 10_000_000
 
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength
@@ -267,6 +272,10 @@ function isAttribution(value: unknown): value is TaskChangeAttribution {
   )
 }
 
+function isLineStat(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= MAX_LINE_STAT
+}
+
 function parseTaskChangePath(value: unknown): TaskChangePath | null {
   if (
     !isPlainRecord(value) ||
@@ -284,6 +293,14 @@ function parseTaskChangePath(value: unknown): TaskChangePath | null {
     (PATH_OMISSIONS as readonly string[]).includes(value.omitted)
   ) {
     path.omitted = value.omitted as TaskChangePath['omitted']
+  }
+  if (value.added !== undefined) {
+    if (!isLineStat(value.added)) return null
+    path.added = value.added
+  }
+  if (value.deleted !== undefined) {
+    if (!isLineStat(value.deleted)) return null
+    path.deleted = value.deleted
   }
   return path
 }

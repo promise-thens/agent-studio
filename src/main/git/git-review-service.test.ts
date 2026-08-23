@@ -107,6 +107,40 @@ describe('GitReviewService 归因', () => {
     expect(JSON.stringify(result)).not.toContain(await realpath(repo))
   })
 
+  it('变更集带上每文件 +/-，未跟踪文本数行，二进制不加行数', async () => {
+    const repo = await createGitRepo()
+    const fixture = await createReviewFixture(repo)
+    await writeFile(join(repo, 'README.md'), 'hello\nagent-edit\n')
+    await writeFile(join(repo, 'notes.txt'), 'a\nb\n')
+    await writeFile(
+      join(repo, 'blob.bin'),
+      Buffer.concat([Buffer.from('BIN'), Buffer.from([0, 1, 2]), Buffer.from('end')])
+    )
+
+    const result = await fixture.service.getChangeSet('task-1')
+    expect(result.paths).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: 'README.md',
+          attribution: 'task-modified',
+          added: expect.any(Number),
+          deleted: expect.any(Number)
+        }),
+        expect.objectContaining({
+          path: 'notes.txt',
+          attribution: 'task-added',
+          added: 2,
+          deleted: 0
+        }),
+        expect.objectContaining({ path: 'blob.bin', omitted: 'binary', attribution: 'task-added' })
+      ])
+    )
+    const readme = result.paths.find((item) => item.path === 'README.md')
+    expect((readme?.added ?? 0) + (readme?.deleted ?? 0)).toBeGreaterThan(0)
+    expect(result.paths.find((item) => item.path === 'blob.bin')?.added).toBeUndefined()
+    expect(JSON.stringify(result)).not.toContain(await realpath(repo))
+  })
+
   it('基线时已 dirty 的文件再改 → overlap-unknown，不是 task-modified', async () => {
     const repo = await createGitRepo()
     await writeFile(join(repo, 'README.md'), 'user-dirty\n')

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { PhArrowClockwise as ArrowClockwise } from '@phosphor-icons/vue'
 import {
   commandSourceLabel,
@@ -7,16 +7,20 @@ import {
   formatCommandDuration,
   toCommandEvidenceView
 } from '../command-evidence-presentation'
-import { useTaskChanges } from '../composables/useTaskChanges'
+import type { TaskChangesController } from '../composables/useTaskChanges'
 import {
   attributionLabel,
   canRestoreLatestTurn,
   changeSetReadiness,
   changeSetWarnings,
+  filterChangeFileTree,
+  flattenChangeTreeRows,
+  formatChangeLineDelta,
   gitPresenceNotice,
-  groupChangePaths,
   incompleteReviewPaths,
   omittedLabel,
+  presentChangeCard,
+  presentChangeFileTree,
   presentChangeSetSummary,
   restoreActionLabel,
   restorePreviewSummary,
@@ -27,10 +31,11 @@ import {
 } from '../task-changes-presentation'
 import FileDiffViewer from './FileDiffViewer.vue'
 
-/** Changes 审阅：Diff 按需加载；仅 latest-turn 才提供一键撤销。 */
+/** Changes 审阅工作区：文件树 + Diff；撤销仍只允许 latest-turn。 */
 
 const props = defineProps<{
   taskId: string
+  controller: TaskChangesController
 }>()
 
 const {
@@ -56,19 +61,26 @@ const {
   restoreMessage,
   openRestorePreview,
   cancelRestorePreview,
-  confirmRestore,
-  dispose
-} = useTaskChanges(() => props.taskId)
-onBeforeUnmount(() => dispose())
+  confirmRestore
+} = props.controller
 
+const fileFilter = ref('')
 const summary = computed(() => (changeSet.value ? presentChangeSetSummary(changeSet.value) : null))
 const warnings = computed(() => (changeSet.value ? changeSetWarnings(changeSet.value) : []))
 const gitNotice = computed(() =>
   changeSet.value ? gitPresenceNotice(changeSet.value.gitPresence) : null
 )
 const readiness = computed(() => (changeSet.value ? changeSetReadiness(changeSet.value) : null))
-const pathGroups = computed(() => (changeSet.value ? groupChangePaths(changeSet.value.paths) : []))
-const flatPaths = computed(() => pathGroups.value.flatMap((group) => group.paths))
+const card = computed(() => presentChangeCard(changeSet.value))
+const treeRows = computed(() =>
+  flattenChangeTreeRows(
+    filterChangeFileTree(
+      changeSet.value ? presentChangeFileTree(changeSet.value.paths) : [],
+      fileFilter.value
+    )
+  )
+)
+const fileRows = computed(() => treeRows.value.filter((row) => row.kind === 'file' && row.path))
 const commandView = computed(() =>
   selectedCommandEvidence.value ? toCommandEvidenceView(selectedCommandEvidence.value) : null
 )
@@ -91,6 +103,18 @@ const restorePlan = computed(() =>
 )
 const validations = computed(() => changeSet.value?.validations ?? [])
 
+watch(
+  () => [changeSet.value?.paths, selectedPath.value] as const,
+  ([paths, selected]) => {
+    if (selected || !paths?.length) return
+    const first = flattenChangeTreeRows(presentChangeFileTree(paths)).find(
+      (row) => row.kind === 'file' && row.path
+    )
+    if (first?.path) void selectPath(first.path)
+  },
+  { immediate: true }
+)
+
 function pathButtonId(path: string): string {
   return `changes-path-${encodeURIComponent(path)}`
 }
@@ -98,19 +122,19 @@ function pathButtonId(path: string): string {
 function onPathKeydown(event: KeyboardEvent, path: string): void {
   if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
   event.preventDefault()
-  const index = flatPaths.value.findIndex((item) => item.path === path)
+  const index = fileRows.value.findIndex((item) => item.path === path)
   const nextIndex = event.key === 'ArrowDown' ? index + 1 : index - 1
-  const next = flatPaths.value[nextIndex]
-  if (!next) return
-  void selectPath(next.path)
+  const nextPath = fileRows.value[nextIndex]?.path
+  if (!nextPath) return
+  void selectPath(nextPath)
   void nextTick(() => {
-    document.getElementById(pathButtonId(next.path))?.focus()
+    document.getElementById(pathButtonId(nextPath))?.focus()
   })
 }
 
 function pathTabIndex(path: string): number {
   if (selectedPath.value === path) return 0
-  if (!selectedPath.value && flatPaths.value[0]?.path === path) return 0
+  if (!selectedPath.value && fileRows.value[0]?.path === path) return 0
   return -1
 }
 
@@ -124,9 +148,14 @@ function durationLabel(durationMs: number | undefined): string {
 </script>
 
 <template>
-  <section class="task-changes-panel" aria-label="变更审阅">
+  <section class="task-changes-panel" :data-task-id="taskId" aria-label="变更审阅">
     <header class="changes-toolbar">
-      <strong>变更审阅</strong>
+      <div class="changes-toolbar-copy">
+        <strong>审查</strong>
+        <span v-if="card.visible" class="changes-toolbar-delta">
+          {{ formatChangeLineDelta(card.added, card.deleted) }}
+        </span>
+      </div>
       <button
         class="icon-button"
         type="button"
@@ -159,56 +188,71 @@ function durationLabel(durationMs: number | undefined): string {
         <li v-for="warning in warnings" :key="warning">{{ warning }}</li>
       </ul>
 
-      <div class="changes-summary" role="status">
-        <p>{{ summary.gitLine }}</p>
-        <p>{{ summary.countLine }}</p>
-        <p v-if="gitNotice" class="changes-muted">{{ gitNotice }}</p>
-      </div>
+      <p v-if="gitNotice" class="changes-muted changes-git-notice">{{ gitNotice }}</p>
 
       <div v-if="readiness.kind !== 'ready'" class="changes-state" role="status">
         <strong>{{ readiness.heading }}</strong>
         <p>{{ readiness.detail }}</p>
       </div>
 
-      <div
-        v-if="pathGroups.length"
-        class="changes-path-groups"
-        role="listbox"
-        aria-label="变更文件"
-      >
-        <section v-for="group in pathGroups" :key="group.id" class="changes-path-group">
-          <h3>{{ group.title }} · {{ group.paths.length }}</h3>
-          <button
-            v-for="item in group.paths"
-            :id="pathButtonId(item.path)"
-            :key="item.path"
-            class="changes-path-button"
-            type="button"
-            role="option"
-            :title="item.path"
-            :aria-label="`${attributionLabel(item.attribution)} ${item.path}`"
-            :aria-selected="selectedPath === item.path"
-            :tabindex="pathTabIndex(item.path)"
-            @click="selectPath(item.path)"
-            @keydown="onPathKeydown($event, item.path)"
-          >
-            <span class="changes-path-name">{{ item.path }}</span>
-            <span class="changes-path-meta">
-              {{ attributionLabel(item.attribution) }}
-              <template v-if="item.omitted"> · {{ omittedLabel(item.omitted) }}</template>
-            </span>
-          </button>
-        </section>
-      </div>
+      <div v-else class="changes-review-split">
+        <div class="changes-tree-pane">
+          <label class="changes-filter">
+            <span class="visually-hidden">筛选文件</span>
+            <input
+              v-model="fileFilter"
+              type="search"
+              placeholder="筛选文件…"
+              title="筛选文件"
+              aria-label="筛选文件"
+            />
+          </label>
+          <div class="changes-path-groups" role="listbox" aria-label="变更文件">
+            <template v-for="row in treeRows" :key="row.id">
+              <div
+                v-if="row.kind === 'folder'"
+                class="changes-tree-folder"
+                :style="{ paddingLeft: `${10 + row.depth * 12}px` }"
+              >
+                {{ row.name }}
+              </div>
+              <button
+                v-else-if="row.path"
+                :id="pathButtonId(row.path)"
+                class="changes-path-button"
+                type="button"
+                role="option"
+                :title="row.path"
+                :aria-label="`${attributionLabel(row.attribution ?? 'overlap-unknown')} ${row.path}`"
+                :aria-selected="selectedPath === row.path"
+                :tabindex="pathTabIndex(row.path)"
+                :style="{ paddingLeft: `${10 + row.depth * 12}px` }"
+                @click="selectPath(row.path)"
+                @keydown="onPathKeydown($event, row.path)"
+              >
+                <span class="changes-path-name">{{ row.name }}</span>
+                <span class="changes-path-meta">
+                  <template v-if="row.added !== undefined || row.deleted !== undefined">
+                    <span class="is-add">+{{ row.added ?? 0 }}</span>
+                    <span class="is-del">−{{ row.deleted ?? 0 }}</span>
+                  </template>
+                  <template v-else-if="row.omitted">{{ omittedLabel(row.omitted) }}</template>
+                </span>
+              </button>
+            </template>
+          </div>
+        </div>
 
-      <FileDiffViewer
-        v-if="selectedPath"
-        :path="selectedPath"
-        :diff="selectedDiff"
-        :loading="selectedDiffLoading"
-        :error-message="selectedDiffError"
-        @retry="retryFileDiff()"
-      />
+        <FileDiffViewer
+          v-if="selectedPath"
+          :path="selectedPath"
+          :diff="selectedDiff"
+          :loading="selectedDiffLoading"
+          :error-message="selectedDiffError"
+          @retry="retryFileDiff()"
+        />
+        <p v-else class="changes-muted changes-diff-empty" role="status">选择一个文件查看差异。</p>
+      </div>
 
       <section class="changes-validations" aria-label="验证摘要">
         <h3>验证</h3>

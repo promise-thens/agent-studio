@@ -27,6 +27,16 @@ export const INSPECTOR_DEFAULT_TAB: InspectorTab = 'timeline'
 export const WORKSPACE_PRIMARY_COLUMNS = ['sidebar', 'conversation'] as const
 export const WORKSPACE_INSPECTOR_PLACEMENT = 'overlay' as const
 
+/** 对话卡「审核」只打开 Changes，不切 Timeline。 */
+export function openChangesReview(): { open: true; tab: 'changes' } {
+  return { open: true, tab: 'changes' }
+}
+
+/** Changes 才加宽成审阅工作区；其它标签保持窄抽屉。 */
+export function inspectorReviewWorkspaceClass(tab: InspectorTab): string {
+  return resolveInspectorTab(tab) === 'changes' ? 'is-review-workspace' : ''
+}
+
 export interface InspectorTimelineSummary {
   empty: boolean
   turnCount: number

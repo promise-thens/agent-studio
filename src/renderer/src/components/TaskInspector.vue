@@ -3,9 +3,11 @@ import { computed, nextTick } from 'vue'
 import { PhX as X } from '@phosphor-icons/vue'
 import type { PermissionAuditRecord } from '../../../shared/task-history'
 import type { TaskTimelineViewModel } from '../task-timeline-reducer'
+import type { TaskChangesController } from '../composables/useTaskChanges'
 import {
   INSPECTOR_TABS,
   inspectorPlaceholderCopy,
+  inspectorReviewWorkspaceClass,
   nextInspectorTab,
   permissionAuditInitiatorLabel,
   permissionAuditReasonLabel,
@@ -27,6 +29,7 @@ const props = withDefaults(
     permissionAuditCursor?: string | null
     loadingMorePermissionAudits?: boolean
     showPermissionAudits?: boolean
+    changesController?: TaskChangesController | null
   }>(),
   {
     taskId: '',
@@ -34,7 +37,8 @@ const props = withDefaults(
     permissionAudits: () => [],
     permissionAuditCursor: null,
     loadingMorePermissionAudits: false,
-    showPermissionAudits: false
+    showPermissionAudits: false,
+    changesController: null
   }
 )
 
@@ -45,7 +49,10 @@ const emit = defineEmits<{
 }>()
 
 const currentTab = computed(() => resolveInspectorTab(props.activeTab))
-const showChangesPanel = computed(() => currentTab.value === 'changes' && Boolean(props.taskId))
+const showChangesPanel = computed(
+  () => currentTab.value === 'changes' && Boolean(props.taskId) && Boolean(props.changesController)
+)
+const reviewWorkspaceClass = computed(() => inspectorReviewWorkspaceClass(currentTab.value))
 const placeholder = computed(() => {
   if (currentTab.value === 'timeline' || showChangesPanel.value) return null
   return inspectorPlaceholderCopy(currentTab.value)
@@ -89,6 +96,7 @@ function onTabListKeydown(event: KeyboardEvent): void {
   <aside
     v-if="open"
     class="task-inspector inspector-panel"
+    :class="reviewWorkspaceClass || undefined"
     data-inspector-drawer
     role="complementary"
     aria-label="检查器"
@@ -193,7 +201,11 @@ function onTabListKeydown(event: KeyboardEvent): void {
         </section>
       </template>
 
-      <TaskChangesPanel v-else-if="showChangesPanel" :task-id="taskId" />
+      <TaskChangesPanel
+        v-else-if="showChangesPanel && changesController"
+        :task-id="taskId"
+        :controller="changesController"
+      />
 
       <div v-else class="inspector-placeholder" role="status">
         <strong>{{ placeholder?.heading }}</strong>

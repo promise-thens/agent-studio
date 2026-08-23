@@ -7,9 +7,11 @@ import {
   WORKSPACE_INSPECTOR_PLACEMENT,
   WORKSPACE_PRIMARY_COLUMNS,
   inspectorPlaceholderCopy,
+  inspectorReviewWorkspaceClass,
   inspectorToggleLabel,
   isInspectorTab,
   nextInspectorTab,
+  openChangesReview,
   projectInspectorTimelineSummary,
   resolveInspectorTab,
   toggleInspectorOpen,
@@ -36,6 +38,13 @@ describe('Inspector 开关与标签', () => {
     expect(inspectorToggleLabel(false)).toBe('打开检查器')
     expect(inspectorToggleLabel(true)).toBe('关闭检查器')
     expect(resolveInspectorTab('changes')).toBe('changes')
+  })
+
+  it('审核入口打开 Changes 工作区，其它标签不加宽', () => {
+    expect(openChangesReview()).toEqual({ open: true, tab: 'changes' })
+    expect(inspectorReviewWorkspaceClass('changes')).toBe('is-review-workspace')
+    expect(inspectorReviewWorkspaceClass('timeline')).toBe('')
+    expect(WORKSPACE_INSPECTOR_PLACEMENT).toBe('overlay')
   })
 
   it('未知标签回退到 Timeline，左右方向键循环', () => {

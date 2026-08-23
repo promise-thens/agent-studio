@@ -217,6 +217,7 @@ export class GitReviewService {
       currentUsable: !snapshot.unavailable,
       maxPaths: MAX_CHANGE_SET_PATHS
     })
+    const paths = await attachLineStats(attributed.paths, resolved, gitOptions)
     const truncated =
       snapshot.truncated || attributed.truncated || snapshot.unavailable || listed.truncated
     const changeSet: import('../../shared/git-review').TaskChangeSet = {
@@ -229,7 +230,7 @@ export class GitReviewService {
           : 'invalid',
       gitPresence: resolved.git.kind,
       generatedAt,
-      paths: attributed.paths,
+      paths,
       revertible: { kind: 'none', reason: REVERT_UNAVAILABLE_REASON }
     }
     if (!baselineUsable && baseline?.invalidReason) changeSet.invalidReason = baseline.invalidReason
@@ -1526,6 +1527,116 @@ function isBinaryDiffOutput(text: string): boolean {
 
 function isBinaryNumstat(stdout: string): boolean {
   return /^(?:-\t-\t|-\t-\s)/mu.test(stdout.trim())
+}
+
+/**
+ * 一次 numstat 覆盖已跟踪改动；未跟踪文本再有界数行。失败不加行数，不挡审阅。
+ */
+async function attachLineStats(
+  paths: TaskChangePath[],
+  resolved: ResolvedProjectRoot,
+  gitOptions: ReadOnlyGitOptions
+): Promise<TaskChangePath[]> {
+  if (paths.length === 0) return paths
+  const stats = new Map<string, { added: number; deleted: number }>()
+  if (resolved.git.kind === 'git') {
+    const numstat = await runReadOnlyGit(
+      resolved.git.gitRoot,
+      ['-c', 'core.quotepath=false', 'diff', '--numstat', '--no-color', '--no-ext-diff', 'HEAD'],
+      { ...gitOptions, allowedRoot: resolved.executionRoot }
+    )
+    if (numstat.ok) {
+      for (const [gitPath, counts] of parseGitNumstat(numstat.stdout)) {
+        const relative = executionRelativeFromGitPath(
+          resolved.executionRoot,
+          resolved.git.gitRoot,
+          gitPath
+        )
+        if (relative) stats.set(relative, counts)
+      }
+    }
+  }
+
+  const next: TaskChangePath[] = []
+  for (const path of paths) {
+    const copy: TaskChangePath = { ...path }
+    const fromGit = stats.get(path.path)
+    if (fromGit) {
+      copy.added = fromGit.added
+      copy.deleted = fromGit.deleted
+    } else if (
+      path.attribution === 'task-added' &&
+      path.omitted !== 'binary' &&
+      path.omitted !== 'too-large' &&
+      path.omitted !== 'limit'
+    ) {
+      const lines = await countWorkingTreeLines(resolved.executionRoot, path.path)
+      if (lines !== undefined) {
+        copy.added = lines
+        copy.deleted = 0
+      }
+    }
+    next.push(copy)
+  }
+  return next
+}
+
+function parseGitNumstat(stdout: string): Map<string, { added: number; deleted: number }> {
+  const stats = new Map<string, { added: number; deleted: number }>()
+  for (const raw of stdout.split('\n')) {
+    const line = raw.trimEnd()
+    if (!line.trim()) continue
+    const parts = line.split('\t')
+    if (parts.length < 3) continue
+    const addedText = parts[0] ?? ''
+    const deletedText = parts[1] ?? ''
+    if (addedText === '-' || deletedText === '-') continue
+    const added = Number(addedText)
+    const deleted = Number(deletedText)
+    if (
+      !Number.isSafeInteger(added) ||
+      added < 0 ||
+      !Number.isSafeInteger(deleted) ||
+      deleted < 0
+    ) {
+      continue
+    }
+    const gitPath = parts[parts.length - 1] ?? ''
+    if (!gitPath) continue
+    stats.set(gitPath, { added, deleted })
+  }
+  return stats
+}
+
+function executionRelativeFromGitPath(
+  executionRoot: string,
+  gitRoot: string,
+  gitPath: string
+): string | null {
+  const absolute = resolve(gitRoot, gitPath)
+  const relativePath = toPosixRelativePath(executionRoot, absolute)
+  if (!relativePath || !isSafeRelativePosixPath(relativePath)) return null
+  return relativePath
+}
+
+async function countWorkingTreeLines(
+  executionRoot: string,
+  relativePath: string
+): Promise<number | undefined> {
+  const realPath = resolve(executionRoot, ...relativePath.split('/'))
+  if (!isPathInsideRoot(executionRoot, realPath)) return undefined
+  try {
+    const stats = await fs.stat(realPath)
+    if (!stats.isFile() || stats.size > MAX_HASH_FILE_BYTES) return undefined
+    const contents = await fs.readFile(realPath)
+    if (contents.includes(0)) return undefined
+    const text = contents.toString('utf8')
+    if (!text) return 0
+    const lines = text.split('\n')
+    return text.endsWith('\n') ? Math.max(0, lines.length - 1) : lines.length
+  } catch {
+    return undefined
+  }
 }
 
 function isDeletedSnapshot(snapshot: TaskChangePathSnapshot): boolean {

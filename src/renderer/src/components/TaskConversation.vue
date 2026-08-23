@@ -17,8 +17,10 @@ import {
   type ConversationScrollIntent,
   type ConversationScrollInteraction
 } from '../task-conversation-view'
+import type { ChangeCardView } from '../task-changes-presentation'
 import ConversationTurn from './ConversationTurn.vue'
 import PermissionPrompt from './PermissionPrompt.vue'
+import TaskChangeCard from './TaskChangeCard.vue'
 import TaskResultReview from './TaskResultReview.vue'
 
 const props = withDefaults(
@@ -36,6 +38,8 @@ const props = withDefaults(
     permission?: AgentPermissionRequest | null
     permissionPending?: boolean
     permissionTaskTitle?: string
+    changeCard?: ChangeCardView | null
+    restoreBusy?: boolean
   }>(),
   {
     loading: false,
@@ -46,7 +50,9 @@ const props = withDefaults(
     connectFailure: null,
     permission: null,
     permissionPending: false,
-    permissionTaskTitle: ''
+    permissionTaskTitle: '',
+    changeCard: null,
+    restoreBusy: false
   }
 )
 
@@ -57,6 +63,9 @@ defineEmits<{
   retryConnect: []
   respondPermission: [decision: AgentPermissionDecision]
   cancelTurn: []
+  reviewChanges: []
+  restoreChanges: []
+  reviewFile: [path: string]
 }>()
 
 const messageList = ref<HTMLElement | null>(null)
@@ -247,11 +256,21 @@ watch(
         @load-more-events="$emit('loadMoreEvents', $event)"
       />
 
+      <TaskChangeCard
+        v-if="changeCard && index === (model?.turns.length ?? 0) - 1"
+        :model="changeCard"
+        :restore-busy="restoreBusy"
+        @review="$emit('reviewChanges')"
+        @restore="$emit('restoreChanges')"
+        @review-file="$emit('reviewFile', $event)"
+      />
+
       <TaskResultReview
         v-if="model && index === model.turns.length - 1"
         :model="model.resultReview"
         :can-resume="false"
         :can-create-task="canCreateTask"
+        :hide-changed-paths="Boolean(changeCard?.visible)"
         @create-task="$emit('createTask')"
       />
     </article>

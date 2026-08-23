@@ -44,6 +44,7 @@ import TaskConversation from './components/TaskConversation.vue'
 import TaskHeader from './components/TaskHeader.vue'
 import TaskInspector from './components/TaskInspector.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
+import { useTaskChanges } from './composables/useTaskChanges'
 import { useTaskTimeline } from './composables/useTaskTimeline'
 import { useTaskWorkbench } from './composables/useTaskWorkbench'
 import {
@@ -69,9 +70,11 @@ import {
   INSPECTOR_DEFAULT_OPEN,
   INSPECTOR_DEFAULT_TAB,
   inspectorToggleLabel,
+  openChangesReview,
   toggleInspectorOpen,
   type InspectorTab
 } from './task-inspector'
+import { presentChangeCard } from './task-changes-presentation'
 import {
   DEFAULT_PLUGIN_HUB_TAB,
   DEFAULT_PLUGIN_PANE,
@@ -221,6 +224,21 @@ let permissionExpiryTimer: ReturnType<typeof setTimeout> | null = null
 const showInspector = ref(INSPECTOR_DEFAULT_OPEN)
 const inspectorTab = ref<InspectorTab>(INSPECTOR_DEFAULT_TAB)
 const inspectorToggleTitle = computed(() => inspectorToggleLabel(showInspector.value))
+const taskChanges = useTaskChanges(() => activeTaskId.value)
+const changeCard = computed(() => presentChangeCard(taskChanges.changeSet.value))
+const restoreBusy = taskChanges.restoreBusy
+
+function openChangeReview(path?: string): void {
+  const next = openChangesReview()
+  showInspector.value = next.open
+  inspectorTab.value = next.tab
+  if (path) void taskChanges.selectPath(path)
+}
+
+function startChangeRestore(): void {
+  openChangeReview()
+  void taskChanges.openRestorePreview()
+}
 const taskViews = ref<Record<string, TaskViewState>>({})
 const taskOrder = ref<string[]>([])
 /** 以 workbench 的查看身份驱动 Timeline；保留后台 facts，但绝不将旧 Task 展示到新 Project。 */
@@ -655,6 +673,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   workbench.dispose()
   taskTimeline.dispose()
+  taskChanges.dispose()
   cleanupListeners.forEach((cleanup) => cleanup())
   if (permissionExpiryTimer) {
     clearTimeout(permissionExpiryTimer)
@@ -1684,12 +1703,17 @@ function scrollMessagesToBottom(): void {
             :permission="permission"
             :permission-pending="permissionResponsePending"
             :permission-task-title="permissionTaskTitle"
+            :change-card="changeCard"
+            :restore-busy="restoreBusy"
             @load-more-turns="loadMoreHistoryTurns"
             @load-more-events="loadMoreHistoryEvents"
             @create-task="startNewChat"
             @retry-connect="retryRuntimeConnect"
             @respond-permission="respondPermission"
             @cancel-turn="cancelTurn"
+            @review-changes="openChangeReview()"
+            @restore-changes="startChangeRestore"
+            @review-file="openChangeReview"
           />
 
           <TaskComposer
@@ -1733,6 +1757,7 @@ function scrollMessagesToBottom(): void {
         :permission-audit-cursor="taskHistory.permissionAuditCursor.value"
         :loading-more-permission-audits="taskHistory.loadingMorePermissionAudits.value"
         :show-permission-audits="activeTaskView?.mode === 'history'"
+        :changes-controller="taskChanges"
         @close="showInspector = false"
         @update:active-tab="inspectorTab = $event"
         @load-more-permission-audits="taskHistory.loadMorePermissionAudits"

@@ -34,6 +34,58 @@ export interface ChangeSetSummaryView {
   countLine: string
 }
 
+export interface ChangeCardFileView {
+  path: string
+  fileName: string
+  added?: number
+  deleted?: number
+  attribution: TaskChangeAttribution
+}
+
+/** 对话里的紧凑变更卡；pre-existing 不进入。 */
+export interface ChangeCardView {
+  visible: boolean
+  heading: string
+  added: number
+  deleted: number
+  files: ChangeCardFileView[]
+  canRestore: boolean
+}
+
+export interface ChangeTreeFileView {
+  kind: 'file'
+  path: string
+  name: string
+  added?: number
+  deleted?: number
+  attribution: TaskChangeAttribution
+  omitted?: TaskChangePath['omitted']
+}
+
+export interface ChangeTreeFolderView {
+  kind: 'folder'
+  id: string
+  name: string
+  children: ChangeTreeNode[]
+}
+
+export type ChangeTreeNode = ChangeTreeFileView | ChangeTreeFolderView
+
+export interface ChangeTreeRowView {
+  kind: 'folder' | 'file'
+  id: string
+  name: string
+  depth: number
+  path?: string
+  added?: number
+  deleted?: number
+  attribution?: TaskChangeAttribution
+  omitted?: TaskChangePath['omitted']
+}
+
+export type FileDiffDisplayRow =
+  { kind: 'line'; line: FileDiffLineView } | { kind: 'unmodified'; count: number }
+
 export type FileDiffLineKind = 'meta' | 'hunk' | 'add' | 'del' | 'ctx' | 'no-newline'
 
 export interface FileDiffLineView {
@@ -97,6 +149,158 @@ export function presentChangeSetSummary(changeSet: TaskChangeSetQueryResult): Ch
     gitLine: `${gitPresenceLabel(changeSet.gitPresence)} · ${formatBaseCommit(changeSet.baseCommit)}`,
     countLine: `用户已有修改 ${changeSet.preExistingCount} · 本 Task 修改 ${changeSet.taskChangedCount} · 未知或重叠 ${changeSet.unknownCount}`
   }
+}
+
+function fileNameOf(path: string): string {
+  const parts = path.split('/')
+  return parts[parts.length - 1] || path
+}
+
+/** 对话卡：本 Task 与未知路径，不含打开项目前就有的脏文件。 */
+export function presentChangeCard(changeSet: TaskChangeSetQueryResult | null): ChangeCardView {
+  if (!changeSet) {
+    return { visible: false, heading: '', added: 0, deleted: 0, files: [], canRestore: false }
+  }
+  const files = changeSet.paths
+    .filter((item) => item.attribution !== 'pre-existing')
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .map((item) => ({
+      path: item.path,
+      fileName: fileNameOf(item.path),
+      added: item.added,
+      deleted: item.deleted,
+      attribution: item.attribution
+    }))
+  if (files.length === 0) {
+    return { visible: false, heading: '', added: 0, deleted: 0, files: [], canRestore: false }
+  }
+  let added = 0
+  let deleted = 0
+  for (const file of files) {
+    added += file.added ?? 0
+    deleted += file.deleted ?? 0
+  }
+  return {
+    visible: true,
+    heading: `已编辑 ${files.length} 个文件`,
+    added,
+    deleted,
+    files,
+    canRestore: canRestoreLatestTurn(changeSet.revertible)
+  }
+}
+
+export function formatChangeLineDelta(added: number, deleted: number): string {
+  return `+${added} −${deleted}`
+}
+
+/** 把路径收成目录树，子节点按名称排序。 */
+export function presentChangeFileTree(paths: readonly TaskChangePath[]): ChangeTreeNode[] {
+  const root: ChangeTreeFolderView = { kind: 'folder', id: '', name: '', children: [] }
+  const ordered = [...paths].sort((left, right) => left.path.localeCompare(right.path))
+  for (const file of ordered) {
+    const parts = file.path.split('/').filter(Boolean)
+    if (parts.length === 0) continue
+    let node = root
+    for (let index = 0; index < parts.length - 1; index += 1) {
+      const name = parts[index] ?? ''
+      const id = parts.slice(0, index + 1).join('/')
+      let folder = node.children.find(
+        (child): child is ChangeTreeFolderView => child.kind === 'folder' && child.name === name
+      )
+      if (!folder) {
+        folder = { kind: 'folder', id, name, children: [] }
+        node.children.push(folder)
+      }
+      node = folder
+    }
+    node.children.push({
+      kind: 'file',
+      path: file.path,
+      name: parts[parts.length - 1] ?? file.path,
+      added: file.added,
+      deleted: file.deleted,
+      attribution: file.attribution,
+      omitted: file.omitted
+    })
+  }
+  sortChangeTree(root.children)
+  return root.children
+}
+
+function sortChangeTree(nodes: ChangeTreeNode[]): void {
+  nodes.sort((left, right) => left.name.localeCompare(right.name))
+  for (const node of nodes) {
+    if (node.kind === 'folder') sortChangeTree(node.children)
+  }
+}
+
+export function filterChangeFileTree(nodes: ChangeTreeNode[], query: string): ChangeTreeNode[] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return nodes
+  const filtered: ChangeTreeNode[] = []
+  for (const node of nodes) {
+    if (node.kind === 'file') {
+      if (node.path.toLowerCase().includes(needle) || node.name.toLowerCase().includes(needle)) {
+        filtered.push(node)
+      }
+      continue
+    }
+    const children = filterChangeFileTree(node.children, query)
+    if (children.length) filtered.push({ ...node, children })
+  }
+  return filtered
+}
+
+export function flattenChangeTreeRows(nodes: ChangeTreeNode[], depth = 0): ChangeTreeRowView[] {
+  const rows: ChangeTreeRowView[] = []
+  for (const node of nodes) {
+    if (node.kind === 'folder') {
+      rows.push({ kind: 'folder', id: node.id, name: node.name, depth })
+      rows.push(...flattenChangeTreeRows(node.children, depth + 1))
+      continue
+    }
+    rows.push({
+      kind: 'file',
+      id: node.path,
+      name: node.name,
+      depth,
+      path: node.path,
+      added: node.added,
+      deleted: node.deleted,
+      attribution: node.attribution,
+      omitted: node.omitted
+    })
+  }
+  return rows
+}
+
+/**
+ * 按 hunk 行号插入未修改行摘要。缺口只是行号推算，不能展开成全文。
+ */
+export function presentFileDiffRows(lines: readonly FileDiffLineView[]): FileDiffDisplayRow[] {
+  const rows: FileDiffDisplayRow[] = []
+  let pendingOld = 1
+  let pendingNew = 1
+  for (const line of lines) {
+    if (line.kind === 'hunk') {
+      const hunk = line.text.match(HUNK_HEADER_RE)
+      if (hunk) {
+        const oldStart = Number(hunk[1])
+        const newStart = Number(hunk[2])
+        const skipped = Math.max(oldStart - pendingOld, newStart - pendingNew)
+        if (skipped > 0) rows.push({ kind: 'unmodified', count: skipped })
+        pendingOld = oldStart
+        pendingNew = newStart
+      }
+      rows.push({ kind: 'line', line })
+      continue
+    }
+    rows.push({ kind: 'line', line })
+    if (line.oldLine !== undefined) pendingOld = line.oldLine + 1
+    if (line.newLine !== undefined) pendingNew = line.newLine + 1
+  }
+  return rows
 }
 
 /**
