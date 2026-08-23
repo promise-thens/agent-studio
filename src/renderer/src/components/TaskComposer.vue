@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { PhPaperPlaneTilt as PaperPlaneTilt, PhStop as Stop } from '@phosphor-icons/vue'
+import {
+  PhPaperclip as Paperclip,
+  PhPaperPlaneTilt as PaperPlaneTilt,
+  PhStop as Stop,
+  PhX as X
+} from '@phosphor-icons/vue'
+import type { TaskAttachmentKind } from '../../../shared/task-attachment'
 import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
 import type {
   ProviderConfigSummary,
@@ -40,6 +46,13 @@ const props = defineProps<{
   /** 上下文 used/limit；没数据时不传或传空，模板藏起来。 */
   contextUsage?: string | null
   runtimeCommands?: AgentAvailableCommand[]
+  attachments?: Array<{
+    attachmentId: string
+    originalName: string
+    kind: TaskAttachmentKind
+    previewUrl?: string
+  }>
+  promptMediaHint?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -54,10 +67,51 @@ const emit = defineEmits<{
   'open-settings': []
   'open-settings-memory': []
   'open-settings-grok-config': []
+  'pick-attachments': []
+  'import-dropped-paths': [paths: string[]]
+  'import-clipboard': []
+  'remove-attachment': [attachmentId: string]
 }>()
 
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const stopButton = ref<HTMLButtonElement | null>(null)
+const dragging = ref(false)
+
+function droppedFilePath(file: File): string | null {
+  const path = (file as File & { path?: string }).path
+  return typeof path === 'string' && path.trim() ? path : null
+}
+
+function handleDragOver(event: DragEvent): void {
+  if (props.textareaDisabled) return
+  event.preventDefault()
+  dragging.value = true
+}
+
+function handleDragLeave(): void {
+  dragging.value = false
+}
+
+function handleDrop(event: DragEvent): void {
+  event.preventDefault()
+  dragging.value = false
+  if (props.textareaDisabled) return
+  const files = [...(event.dataTransfer?.files ?? [])]
+  const paths = files.map(droppedFilePath).filter((path): path is string => Boolean(path))
+  if (paths.length > 0) emit('import-dropped-paths', paths)
+}
+
+function handlePaste(event: ClipboardEvent): void {
+  if (props.textareaDisabled) return
+  const items = [...(event.clipboardData?.items ?? [])]
+  const files = [...(event.clipboardData?.files ?? [])]
+  const hasBinary = files.length > 0 || items.some((item) => item.type.startsWith('image/'))
+  if (!hasBinary) return
+  event.preventDefault()
+  const text = event.clipboardData?.getData('text') ?? ''
+  if (text) emit('update:prompt', `${props.prompt}${text}`)
+  emit('import-clipboard')
+}
 const paletteDismissed = ref(false)
 const activeIndex = ref(0)
 
@@ -167,7 +221,14 @@ defineExpose({ focus, focusStop })
 
 <template>
   <footer class="composer-wrap">
-    <div class="composer">
+    <div
+      class="composer"
+      :class="{ dragging }"
+      @dragenter="handleDragOver"
+      @dragover="handleDragOver"
+      @dragleave="handleDragLeave"
+      @drop="handleDrop"
+    >
       <SlashCommandPalette
         v-if="showPalette"
         :items="filteredCommands"
@@ -175,6 +236,28 @@ defineExpose({ focus, focusStop })
         :waiting="waitingRuntimeCommands"
         @select="submitPaletteItem"
       />
+      <ul v-if="attachments?.length" class="composer-attachments" aria-label="待发送附件">
+        <li v-for="item in attachments" :key="item.attachmentId" class="composer-attachment">
+          <img
+            v-if="item.previewUrl"
+            :src="item.previewUrl"
+            :alt="item.originalName"
+            class="composer-attachment-thumb"
+          />
+          <span class="composer-attachment-name" :title="item.originalName">{{
+            item.originalName
+          }}</span>
+          <button
+            type="button"
+            class="composer-attachment-remove"
+            :title="`移除 ${item.originalName}`"
+            :aria-label="`移除 ${item.originalName}`"
+            @click="emit('remove-attachment', item.attachmentId)"
+          >
+            <X :size="12" weight="bold" />
+          </button>
+        </li>
+      </ul>
       <textarea
         ref="textarea"
         :value="prompt"
@@ -186,6 +269,7 @@ defineExpose({ focus, focusStop })
         placeholder="描述你想修改、排查或验证的内容…"
         @input="emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
         @keydown="handleComposerKeydown"
+        @paste="handlePaste"
       />
       <div class="composer-footer">
         <div class="composer-context">
@@ -214,27 +298,38 @@ defineExpose({ focus, focusStop })
         >
           <Stop :size="15" weight="fill" />停止
         </button>
-        <button
-          v-else
-          class="send-button"
-          type="button"
-          :disabled="!canSend"
-          :title="disabledMessage || '发送'"
-          :aria-label="disabledMessage || '发送'"
-          :aria-describedby="disabledMessage ? 'prompt-capability-message' : undefined"
-          @click="emit('send')"
-        >
-          <PaperPlaneTilt :size="17" weight="fill" />
-        </button>
+        <template v-else>
+          <button
+            class="attach-button"
+            type="button"
+            title="添加图片或文件"
+            aria-label="添加图片或文件"
+            :disabled="textareaDisabled"
+            @click="emit('pick-attachments')"
+          >
+            <Paperclip :size="16" />
+          </button>
+          <button
+            class="send-button"
+            type="button"
+            :disabled="!canSend"
+            :title="disabledMessage || '发送'"
+            :aria-label="disabledMessage || '发送'"
+            :aria-describedby="disabledMessage ? 'prompt-capability-message' : undefined"
+            @click="emit('send')"
+          >
+            <PaperPlaneTilt :size="17" weight="fill" />
+          </button>
+        </template>
       </div>
     </div>
     <p
-      v-if="disabledMessage"
+      v-if="disabledMessage || promptMediaHint"
       id="prompt-capability-message"
       class="capability-message"
       role="status"
     >
-      {{ disabledMessage }}
+      {{ disabledMessage || promptMediaHint }}
     </p>
   </footer>
 </template>

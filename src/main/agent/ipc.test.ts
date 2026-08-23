@@ -192,6 +192,17 @@ describe('Agent IPC Handler', () => {
     expect(fixture.runtime.startTurn).toHaveBeenCalledWith('task-1', prompt)
   })
 
+  it('允许空白 Prompt 搭配 attachmentIds 发送', async () => {
+    const fixture = createFixture()
+    const result = await fixture.invoke(AGENT_INVOKE_CHANNELS.startTurn, {
+      taskId: 'task-1',
+      prompt: '   ',
+      attachmentIds: ['att-1']
+    })
+    expect(result).toMatchObject({ ok: true })
+    expect(fixture.runtime.startTurn).toHaveBeenCalledWith('task-1', '   ', ['att-1'])
+  })
+
   it('接受 null prototype 的普通请求对象', async () => {
     const fixture = createFixture()
     const request = Object.create(null) as { taskId: string; prompt: string }
@@ -288,7 +299,7 @@ describe('Agent IPC Handler', () => {
       'invalid-input'
     ],
     [
-      '空白 Prompt',
+      '空白 Prompt 且无附件',
       AGENT_INVOKE_CHANNELS.startTurn,
       [{ taskId: 'task-1', prompt: '   ' }],
       'invalid-input'

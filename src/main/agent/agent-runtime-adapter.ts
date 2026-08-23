@@ -65,10 +65,19 @@ export interface AgentRuntimeTurnRef {
   runtimeSessionId: string
 }
 
+/** 已由 inbox 校验的附件字节，只在主进程内传给 Adapter。 */
+export interface AgentRuntimeTurnAttachment {
+  fileName: string
+  mimeType: string
+  kind: 'image' | 'text' | 'pdf'
+  bytes: Buffer
+}
+
 /** Adapter 启动 Turn 时只消费服务层已经校验并分配好的产品上下文。 */
 export interface AgentRuntimeTurnContext extends AgentRuntimeTurnRef {
   workspace: string
   prompt: string
+  attachments?: AgentRuntimeTurnAttachment[]
 }
 
 /** Adapter 完成一次 Turn 后返回与唯一终态事件一致的结果。 */

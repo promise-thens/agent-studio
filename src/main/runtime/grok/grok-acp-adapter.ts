@@ -52,6 +52,7 @@ import {
   mergeGrokToolCallAuthorizationPatch,
   type GrokToolCallAuthorizationSnapshot
 } from './grok-acp-mappers'
+import { buildGrokPromptContentBlocks } from './grok-acp-prompt-blocks'
 import {
   accumulateGrokCommandToolFacts,
   isGrokCommandEvidenceCandidate,
@@ -168,6 +169,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   private controlledTraceWrite: Promise<void> = Promise.resolve()
   private supportsCloseSession = false
   private capabilitySnapshot: AgentRuntimeCapabilitySnapshot
+  private promptMedia = { image: false, embeddedContext: false }
   private status: AgentRuntimeStatus
   private commandEvidenceWrites: Promise<void> = Promise.resolve()
 
@@ -538,7 +540,12 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     try {
       const response = await connection.prompt({
         sessionId: context.runtimeSessionId,
-        prompt: [{ type: 'text', text: context.prompt }]
+        prompt: buildGrokPromptContentBlocks({
+          prompt: context.prompt,
+          attachments: context.attachments ?? [],
+          promptImage: this.promptMedia.image,
+          embeddedContext: this.promptMedia.embeddedContext
+        })
       })
       if (!this.isActiveTurnCurrent(activeTurn)) {
         return { outcome: activeTurn.outcome ?? 'cancelled' }
@@ -645,6 +652,10 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       (text) => this.safeRedact(text),
       acp.PROTOCOL_VERSION
     )
+    this.promptMedia = {
+      image: response.agentCapabilities?.promptCapabilities?.image === true,
+      embeddedContext: response.agentCapabilities?.promptCapabilities?.embeddedContext === true
+    }
     this.supportsCloseSession = response.agentCapabilities?.sessionCapabilities?.close != null
     this.verifyCapability('runtime.connect', 'stable', undefined, false)
     this.status = {
@@ -652,7 +663,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       state: 'connecting',
       message: '正在启动 Grok Build',
       workspace,
-      capabilitySnapshot: this.capabilitySnapshot
+      capabilitySnapshot: this.capabilitySnapshot,
+      promptMedia: { ...this.promptMedia }
     }
     return true
   }
@@ -1324,7 +1336,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     this.status = {
       ...status,
       runtimeId: GROK_RUNTIME_ID,
-      capabilitySnapshot: this.capabilitySnapshot
+      capabilitySnapshot: this.capabilitySnapshot,
+      promptMedia: { ...this.promptMedia }
     }
     this.sink.onStatus(this.status)
   }
@@ -1332,6 +1345,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   /** 新连接、断开与失败均恢复静态基线，避免旧 Runtime 证据泄漏到下一连接。 */
   private resetCapabilitySnapshot(): void {
     this.capabilitySnapshot = createGrokCapabilitySnapshot((text) => this.safeRedact(text))
+    this.promptMedia = { image: false, embeddedContext: false }
   }
 
   /** 真实 Runtime 操作成功后才将单项能力提升为 verified/runtime。 */

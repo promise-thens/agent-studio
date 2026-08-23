@@ -15,6 +15,8 @@ const RESTORE_STATES_THAT_CAN_SEND = new Set<ConversationRestoreState>([
 
 export interface TaskComposerSendInput {
   prompt: string
+  /** 有 draft 附件时允许空正文发送。 */
+  hasAttachments?: boolean
   selectedTaskId: string
   activeExecution: Pick<TaskExecutionDto, 'taskId' | 'state'> | null
   restore?: ConversationRestoreState | null
@@ -219,7 +221,7 @@ export function evaluateTaskComposerSend(input: TaskComposerSendInput): TaskComp
       !isForeignExecutionBlockingSend(input.activeExecution, input.selectedTaskId) &&
       !input.turnTiming &&
       !input.promptSubmissionPending &&
-      Boolean(input.prompt.trim()) &&
+      (Boolean(input.prompt.trim()) || Boolean(input.hasAttachments)) &&
       input.promptCapabilityAvailable &&
       (input.runtimeConnected || canSendWhileConversationRestoring(input.restore)),
     reason: resolveComposerDisabledMessage(input)

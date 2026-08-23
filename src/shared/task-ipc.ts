@@ -1,4 +1,5 @@
 import type { PublicAgentEvent } from './agent-event'
+import type { TaskAttachmentDescriptor } from './task-attachment'
 import type {
   CommandEvidencePage,
   CommandExecutionEvidence,
@@ -39,13 +40,26 @@ export const TASK_INVOKE_CHANNELS = {
   getFileDiff: 'task:get-file-diff',
   listTurnCheckpoints: 'task:list-turn-checkpoints',
   previewLatestTurnRestore: 'task:preview-latest-turn-restore',
-  restoreLatestTurn: 'task:restore-latest-turn'
+  restoreLatestTurn: 'task:restore-latest-turn',
+  pickAttachments: 'task:pick-attachments',
+  importDroppedPaths: 'task:import-dropped-paths',
+  importClipboard: 'task:import-clipboard',
+  listDraftAttachments: 'task:list-draft-attachments',
+  removeAttachment: 'task:remove-attachment',
+  getAttachmentPreview: 'task:get-attachment-preview',
+  getChangeMediaPreview: 'task:get-change-media-preview'
 } as const
 
 export interface PublicAgentEventPage {
   items: PublicAgentEvent[]
   nextAfterSequence?: number
   watermark: number
+}
+
+export interface TaskAttachmentPreview {
+  descriptor: TaskAttachmentDescriptor
+  thumbnailBase64?: string
+  thumbnailMime?: string
 }
 
 export interface TaskDesktopApi {
@@ -92,4 +106,20 @@ export interface TaskDesktopApi {
   delete: (taskId: string, token: string) => Promise<DesktopIpcResult<null>>
   rename: (taskId: string, title: string) => Promise<DesktopIpcResult<TaskHistoryDetail>>
   archive: (taskId: string) => Promise<DesktopIpcResult<TaskHistoryDetail>>
+  pickAttachments: (taskId: string) => Promise<DesktopIpcResult<TaskAttachmentDescriptor[]>>
+  importDroppedPaths: (
+    taskId: string,
+    paths: string[]
+  ) => Promise<DesktopIpcResult<TaskAttachmentDescriptor[]>>
+  importClipboard: (taskId: string) => Promise<DesktopIpcResult<TaskAttachmentDescriptor[]>>
+  listDraftAttachments: (taskId: string) => Promise<DesktopIpcResult<TaskAttachmentDescriptor[]>>
+  removeAttachment: (taskId: string, attachmentId: string) => Promise<DesktopIpcResult<null>>
+  getAttachmentPreview: (
+    taskId: string,
+    attachmentId: string
+  ) => Promise<DesktopIpcResult<TaskAttachmentPreview>>
+  getChangeMediaPreview: (
+    taskId: string,
+    path: string
+  ) => Promise<DesktopIpcResult<TaskAttachmentPreview>>
 }

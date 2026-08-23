@@ -45,7 +45,7 @@ import {
   type RuntimePluginSummary
 } from '../shared/runtime-plugin'
 import type { TaskExecutionSnapshot } from '../shared/task-execution'
-import type { ProviderDesktopApi } from '../shared/provider'
+import { toSerializableProviderModel, type ProviderDesktopApi } from '../shared/provider'
 import type { ConversationEntryState } from '../shared/task-history'
 import {
   parseCommandExecutionEvidence,
@@ -566,10 +566,12 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
       }
       return { ok: true, value: entry }
     },
-    startTurn: (taskId, prompt) =>
-      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.startTurn, { taskId, prompt }) as Promise<
-        DesktopIpcResult<TaskExecutionSnapshot>
-      >,
+    startTurn: (taskId, prompt, attachmentIds) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.startTurn, {
+        taskId,
+        prompt,
+        ...(attachmentIds && attachmentIds.length > 0 ? { attachmentIds } : {})
+      }) as Promise<DesktopIpcResult<TaskExecutionSnapshot>>,
     cancelTurn: (request) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.cancelTurn, {
         executionId: request.executionId,
@@ -1048,7 +1050,39 @@ export function createTaskDesktopApi(ipcRenderer: NarrowIpcRenderer): TaskDeskto
     archive: (taskId) =>
       ipcRenderer.invoke(TASK_INVOKE_CHANNELS.archive, { taskId }) as ReturnType<
         TaskDesktopApi['archive']
-      >
+      >,
+    pickAttachments: (taskId) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.pickAttachments, { taskId }) as ReturnType<
+        TaskDesktopApi['pickAttachments']
+      >,
+    importDroppedPaths: (taskId, paths) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.importDroppedPaths, {
+        taskId,
+        paths
+      }) as ReturnType<TaskDesktopApi['importDroppedPaths']>,
+    importClipboard: (taskId) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.importClipboard, { taskId }) as ReturnType<
+        TaskDesktopApi['importClipboard']
+      >,
+    listDraftAttachments: (taskId) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.listDraftAttachments, { taskId }) as ReturnType<
+        TaskDesktopApi['listDraftAttachments']
+      >,
+    removeAttachment: (taskId, attachmentId) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.removeAttachment, {
+        taskId,
+        attachmentId
+      }) as ReturnType<TaskDesktopApi['removeAttachment']>,
+    getAttachmentPreview: (taskId, attachmentId) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getAttachmentPreview, {
+        taskId,
+        attachmentId
+      }) as ReturnType<TaskDesktopApi['getAttachmentPreview']>,
+    getChangeMediaPreview: (taskId, path) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getChangeMediaPreview, {
+        taskId,
+        path
+      }) as ReturnType<TaskDesktopApi['getChangeMediaPreview']>
   }
 }
 
@@ -1064,7 +1098,7 @@ export function createProviderDesktopApi(ipcRenderer: NarrowIpcRenderer): Provid
     save: (input) =>
       ipcRenderer.invoke('provider:save', input) as ReturnType<ProviderDesktopApi['save']>,
     selectModel: (model) =>
-      ipcRenderer.invoke('provider:select-model', model) as ReturnType<
+      ipcRenderer.invoke('provider:select-model', toSerializableProviderModel(model)) as ReturnType<
         ProviderDesktopApi['selectModel']
       >,
     clear: () => ipcRenderer.invoke('provider:clear') as ReturnType<ProviderDesktopApi['clear']>

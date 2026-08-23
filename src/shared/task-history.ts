@@ -113,6 +113,8 @@ export interface TurnHistoryRecord {
   eventBytes: number
   artifactIds?: string[]
   validationIds?: string[]
+  /** 本轮绑定的 inbox 附件，不含路径。 */
+  attachmentIds?: string[]
   revision: number
 }
 

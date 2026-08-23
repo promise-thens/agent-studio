@@ -70,6 +70,11 @@ export interface AgentRuntimeStatus {
   workspace?: string
   runtimeSessionId?: string
   capabilitySnapshot?: AgentRuntimeCapabilitySnapshot
+  /** 握手声明的 Prompt 媒体能力；不进入 P0-03 固定能力 ID 表。 */
+  promptMedia?: {
+    image: boolean
+    embeddedContext: boolean
+  }
 }
 
 /** Renderer 可查询的内存 Task 状态；Runtime 私有 session 引用不得进入此 DTO。 */

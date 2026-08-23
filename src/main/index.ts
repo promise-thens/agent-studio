@@ -1,9 +1,11 @@
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
   nativeTheme,
   safeStorage,
   shell,
@@ -12,7 +14,7 @@ import {
 import { existsSync, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { appearanceWindowBackground, type AppAppearanceState } from '../shared/app-appearance'
@@ -30,6 +32,8 @@ import { projectPublicAgentEvent } from './agent/agent-event-projection'
 import { registerAgentIpcHandlers } from './agent/ipc'
 import { registerTaskIpcHandlers } from './agent/task-ipc'
 import { TaskStore } from './agent/task-store'
+import { TaskAttachmentInbox } from './agent/task-attachment-inbox'
+import { ATTACHMENT_LIMITS } from '../shared/task-attachment'
 import { OperationGate, type OperationLease } from './agent/operation-gate'
 import { TaskExecutor } from './agent/task-executor'
 import { TaskExecutionController } from './agent/task-execution-controller'
@@ -106,6 +110,7 @@ let providerStore: ProviderConfigStore | null = null
 let providerTester: ProviderConnectionTester | null = null
 let projectRegistry: ProjectRegistry | null = null
 let taskStore: TaskStore | null = null
+let taskAttachmentInbox: TaskAttachmentInbox | null = null
 let permissionAuditStore: PermissionAuditStore | null = null
 let permissionBroker: PermissionBroker | null = null
 let appearanceController: AppearanceController | null = null
@@ -245,6 +250,24 @@ async function initializeServices(
   }
   taskStore = new TaskStore({ projectRegistry })
   await taskStore.initialize()
+  taskAttachmentInbox = new TaskAttachmentInbox({
+    resolveTaskDirectory: (taskId) => requireTaskStore().getTaskFilesystemRoot(taskId),
+    probeImagePixels: (bytes) => {
+      const image = nativeImage.createFromBuffer(bytes)
+      if (image.isEmpty()) return null
+      return image.getSize()
+    },
+    createThumbnail: (bytes) => {
+      const image = nativeImage.createFromBuffer(bytes)
+      if (image.isEmpty()) return null
+      const { width } = image.getSize()
+      const resized =
+        width > ATTACHMENT_LIMITS.maxPreviewEdge
+          ? image.resize({ width: ATTACHMENT_LIMITS.maxPreviewEdge, quality: 'good' })
+          : image
+      return { bytes: resized.toJPEG(80), mime: 'image/jpeg' }
+    }
+  })
   permissionAuditStore = new PermissionAuditStore({
     projectRegistry,
     getTaskIdentity: (taskId) => {
@@ -408,6 +431,17 @@ async function initializeServices(
   )
   runtimeAdapter = adapter
   operationGate = new OperationGate()
+  const ensureChangeBaseline = createEnsureTaskChangeBaseline({
+    store: taskChangeBaselineStore,
+    getProjectAvailability: async (projectId) => {
+      try {
+        return (await requireProjectRegistry().getSummary(projectId)).availability
+      } catch {
+        return { state: 'unavailable', message: 'Project 当前不可用。' }
+      }
+    },
+    sourceEnvironment: process.env
+  })
   taskExecutor = new TaskExecutor({
     taskStore: requireTaskStore(),
     adapter,
@@ -423,22 +457,13 @@ async function initializeServices(
         AGENT_PUSH_CHANNELS.event,
         projectPublicAgentEvent(event, redactProviderText)
       ),
-    ensureChangeBaseline: createEnsureTaskChangeBaseline({
-      store: taskChangeBaselineStore,
-      getProjectAvailability: async (projectId) => {
-        try {
-          return (await requireProjectRegistry().getSummary(projectId)).availability
-        } catch {
-          return { state: 'unavailable', message: 'Project 当前不可用。' }
-        }
-      },
-      sourceEnvironment: process.env
-    }),
+    ensureChangeBaseline,
     recordTurnChangeCheckpoint: createRecordTurnChangeCheckpoint(reviewService)
   })
   agentService = new AgentService(adapter, new TaskExecutionController(), {
     projectRegistry,
     taskStore,
+    ensureChangeBaseline,
     getTurnModel: () => {
       const config = requireProviderRuntimeConfig()
       return {
@@ -453,6 +478,7 @@ async function initializeServices(
     getSessionMcpServers: async () =>
       toAgentRuntimeMcpServers(await requireMcpServerStore().listEnabledResolved()),
     getTrustedExternalRoots: () => requireGrokMemoryStore().listTrustedRoots(),
+    attachmentInbox: taskAttachmentInbox ?? undefined,
     onEvent: (event) =>
       sendToTrustedRenderer(
         rendererTrust,
@@ -736,6 +762,9 @@ function registerIpcHandlers(): void {
     assertTrustedSender,
     getCommandEvidenceStore: () => commandEvidenceStore,
     getGitReview: () => gitReviewService,
+    getInbox: () => taskAttachmentInbox,
+    pickFiles: pickAttachmentFiles,
+    readClipboard: readClipboardAttachments,
     getHistory: () => {
       const store = taskStore
       const service = agentService
@@ -840,6 +869,70 @@ function registerIpcHandlers(): void {
   })
 }
 
+const ATTACHMENT_DIALOG_EXTENSIONS = [
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'gif',
+  'pdf',
+  'txt',
+  'md',
+  'json',
+  'csv',
+  'log',
+  'ts',
+  'tsx',
+  'js',
+  'vue',
+  'py',
+  'go',
+  'rs',
+  'toml',
+  'yaml',
+  'yml'
+]
+
+/** 主进程选文件，路径不回传 Renderer，只把校验后的描述符交出去。 */
+async function pickAttachmentFiles(): Promise<string[] | null> {
+  const options: Electron.OpenDialogOptions = {
+    title: '添加附件',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: '附件', extensions: ATTACHMENT_DIALOG_EXTENSIONS }]
+  }
+  const currentWindow = mainWindow
+  const result =
+    currentWindow && !currentWindow.isDestroyed()
+      ? await dialog.showOpenDialog(currentWindow, options)
+      : await dialog.showOpenDialog(options)
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths.slice(0, ATTACHMENT_LIMITS.maxPerTurn)
+}
+
+/** 剪贴板图片与 file URL；Finder 复制的文件走 file://。 */
+async function readClipboardAttachments(): Promise<Array<{ originalName: string; bytes: Buffer }>> {
+  const items: Array<{ originalName: string; bytes: Buffer }> = []
+  const image = clipboard.readImage()
+  if (!image.isEmpty()) {
+    items.push({ originalName: 'clipboard.png', bytes: image.toPNG() })
+  }
+  const uriText = [clipboard.read('public.file-url'), clipboard.read('text/uri-list')]
+    .filter((value) => value && value.trim())
+    .join('\n')
+  for (const line of uriText.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed.startsWith('file://')) continue
+    try {
+      const filePath = fileURLToPath(trimmed)
+      const bytes = await fs.readFile(filePath)
+      items.push({ originalName: filePath, bytes })
+    } catch {
+      continue
+    }
+  }
+  return items.slice(0, ATTACHMENT_LIMITS.maxPerTurn)
+}
+
 /** 打开目录选择器；用户取消属于成功结果，不改变当前工作区。 */
 async function openWorkspaceDialog(): Promise<string | null> {
   const options: Electron.OpenDialogOptions = {
@@ -923,20 +1016,42 @@ async function persistProviderConfig(
     throw new Error('任务执行中，结束后才能修改模型配置。')
   }
 
-  const workspace = status.state === 'ready' ? status.workspace : undefined
+  // 重连必须用 Project ID。workspace 是目录路径，交给 connect() 会被当成非法 ID。
+  // 断开前先记住当前 Task，避免 disconnect 清掉 selectedTaskId 后对话接不回去。
+  let reconnect: { projectId: string; selectedTaskId: string | null } | null = null
+  if (status.state === 'ready') {
+    const projectId = requireProjectRegistry().findActiveProjectIdByRoot(status.workspace ?? '')
+    if (!projectId) {
+      throw new Error('当前连接没有有效的 Project，无法切换模型。')
+    }
+    reconnect = { projectId, selectedTaskId: currentAgent.getSelectedTaskId() }
+  }
+
   const nextSummary = await store.save(input, { testedAt: new Date().toISOString() })
-  if (!workspace) return nextSummary
+  if (!reconnect) return nextSummary
 
   await currentAgent.disconnect(lease)
   try {
-    await currentAgent.connect(workspace, lease)
+    await restoreProviderRuntime(currentAgent, reconnect, lease)
     return nextSummary
   } catch (error) {
     if (previous) {
       await store.save(previous, { testedAt: previous.testedAt })
-      await currentAgent.connect(workspace, lease).catch(() => undefined)
+      await restoreProviderRuntime(currentAgent, reconnect, lease).catch(() => undefined)
     }
     throw error
+  }
+}
+
+/** 按 Project ID 重连，并在有打开的对话时立刻 resume/load，不把压缩交给桌面。 */
+async function restoreProviderRuntime(
+  currentAgent: AgentService,
+  reconnect: { projectId: string; selectedTaskId: string | null },
+  lease: OperationLease
+): Promise<void> {
+  await currentAgent.connect(reconnect.projectId, lease)
+  if (reconnect.selectedTaskId) {
+    await currentAgent.ensureTaskSessionForTurn(reconnect.selectedTaskId, lease)
   }
 }
 

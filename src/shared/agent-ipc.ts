@@ -52,6 +52,7 @@ export interface AgentEnterTaskRequest {
 export interface AgentStartTurnRequest {
   taskId: string
   prompt: string
+  attachmentIds?: string[]
 }
 
 export type AgentCancelTurnRequest = TaskExecutionCancellationRequest
@@ -90,7 +91,8 @@ export interface AgentDesktopApi {
   enterTask: (taskId: string) => Promise<DesktopIpcResult<ConversationEntryState>>
   startTurn: (
     taskId: string,
-    prompt: string
+    prompt: string,
+    attachmentIds?: string[]
   ) => Promise<DesktopIpcResult<AgentStartTurnAdmissionResult>>
   cancelTurn: (request: AgentCancelTurnRequest) => Promise<DesktopIpcResult<null>>
   getTaskRuntimeState: (taskId: string) => Promise<DesktopIpcResult<AgentTaskRuntimeState>>

@@ -125,7 +125,11 @@ const mocks = vi.hoisted(() => {
       })),
       disconnect: vi.fn<(inheritedLease?: OperationLease) => Promise<AgentRuntimeStatus>>(
         async () => ({ runtimeId: 'grok', state: 'idle', message: 'idle' })
-      )
+      ),
+      getSelectedTaskId: vi.fn<() => string | null>(() => null),
+      ensureTaskSessionForTurn: vi.fn<
+        (taskId: string, inheritedLease?: OperationLease) => Promise<void>
+      >(async () => undefined)
     },
     runtimeAdapter: {
       disconnect: vi.fn(async () => undefined),
@@ -139,7 +143,10 @@ const mocks = vi.hoisted(() => {
       initialize: vi.fn(async () => undefined),
       list: vi.fn(async () => []),
       register: vi.fn(async () => null),
-      remove: vi.fn<(_projectId: string) => Promise<void>>(async () => undefined)
+      remove: vi.fn<(_projectId: string) => Promise<void>>(async () => undefined),
+      findActiveProjectIdByRoot: vi.fn<(workspace: string) => string | null>((workspace) =>
+        workspace === '/tmp/project-1' ? 'project-1' : null
+      )
     },
     taskStore: {
       initialize: vi.fn(async () => undefined),
@@ -264,6 +271,18 @@ vi.mock('electron', () => {
       getSelectedStorageBackend: vi.fn(() => 'keychain')
     },
     shell: { openExternal: vi.fn(async () => undefined) },
+    clipboard: {
+      readImage: vi.fn(() => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) })),
+      read: vi.fn(() => '')
+    },
+    nativeImage: {
+      createFromBuffer: vi.fn(() => ({
+        isEmpty: () => true,
+        getSize: () => ({ width: 0, height: 0 }),
+        resize: vi.fn(),
+        toJPEG: vi.fn(() => Buffer.alloc(0))
+      }))
+    },
     Menu: {
       buildFromTemplate: vi.fn((template: unknown) => template),
       setApplicationMenu: vi.fn()
@@ -495,6 +514,14 @@ describe('Main 删除与权限失效编排', () => {
       state: 'idle',
       message: 'idle'
     })
+    mocks.agentService.getSelectedTaskId.mockReset()
+    mocks.agentService.getSelectedTaskId.mockReturnValue(null)
+    mocks.agentService.ensureTaskSessionForTurn.mockReset()
+    mocks.agentService.ensureTaskSessionForTurn.mockResolvedValue(undefined)
+    mocks.projectRegistry.findActiveProjectIdByRoot.mockReset()
+    mocks.projectRegistry.findActiveProjectIdByRoot.mockImplementation((workspace) =>
+      workspace === '/tmp/project-1' ? 'project-1' : null
+    )
   })
 
   it('组装层把 GitReviewService 交给 task:* 只读审阅 IPC', () => {
@@ -689,19 +716,72 @@ describe('Main 删除与权限失效编排', () => {
       expect(currentLease.isCurrent()).toBe(true)
       return { runtimeId: 'grok', state: 'idle', message: 'idle' }
     })
-    mocks.agentService.connect.mockImplementationOnce(async (workspace, lease) => {
+    mocks.agentService.connect.mockImplementationOnce(async (projectId, lease) => {
       const currentLease = requireOperationLease(lease)
-      expect(workspace).toBe('/tmp/project-1')
+      expect(projectId).toBe('project-1')
       expect(currentLease).toBe(inheritedLease)
       expect(currentLease.isCurrent()).toBe(true)
-      return { runtimeId: 'grok', state: 'ready', message: 'ready', workspace }
+      return { runtimeId: 'grok', state: 'ready', message: 'ready', workspace: '/tmp/project-1' }
     })
 
     await expect(operations.save(providerInput('model-2'))).resolves.toMatchObject({
       modelId: 'model-2'
     })
     expect(mocks.agentService.disconnect).toHaveBeenCalledOnce()
-    expect(mocks.agentService.connect).toHaveBeenCalledOnce()
+    expect(mocks.agentService.connect).toHaveBeenCalledWith('project-1', inheritedLease)
+    expect(mocks.agentService.ensureTaskSessionForTurn).not.toHaveBeenCalled()
+  })
+
+  it('已连接并打开对话时，切换模型按 Project ID 重连并恢复当前 Task', async () => {
+    const operations = mocks.providerOperations!
+    mocks.agentService.getStatus.mockReturnValue({
+      runtimeId: 'grok',
+      state: 'ready',
+      message: 'ready',
+      workspace: '/tmp/project-1'
+    })
+    mocks.agentService.getSelectedTaskId.mockReturnValue('task-1')
+    let inheritedLease: OperationLease | null = null
+    mocks.agentService.disconnect.mockImplementationOnce(async (lease) => {
+      inheritedLease = requireOperationLease(lease)
+      return { runtimeId: 'grok', state: 'idle', message: 'idle' }
+    })
+    mocks.agentService.connect.mockImplementationOnce(async (projectId, lease) => {
+      expect(projectId).toBe('project-1')
+      expect(lease).toBe(inheritedLease)
+      return { runtimeId: 'grok', state: 'ready', message: 'ready', workspace: '/tmp/project-1' }
+    })
+    mocks.agentService.ensureTaskSessionForTurn.mockImplementationOnce(async (taskId, lease) => {
+      expect(taskId).toBe('task-1')
+      expect(lease).toBe(inheritedLease)
+    })
+
+    await expect(operations.selectModel({ modelId: 'deepseek-chat' })).resolves.toMatchObject({
+      modelId: 'deepseek-chat'
+    })
+    expect(mocks.agentService.connect).toHaveBeenCalledWith('project-1', inheritedLease)
+    expect(mocks.agentService.ensureTaskSessionForTurn).toHaveBeenCalledWith(
+      'task-1',
+      inheritedLease
+    )
+  })
+
+  it('已连接但反查不到 Project ID 时拒绝切换，避免把路径当身份重连', async () => {
+    const operations = mocks.providerOperations!
+    mocks.agentService.getStatus.mockReturnValue({
+      runtimeId: 'grok',
+      state: 'ready',
+      message: 'ready',
+      workspace: '/tmp/unknown-project'
+    })
+    mocks.projectRegistry.findActiveProjectIdByRoot.mockReturnValueOnce(null)
+
+    await expect(operations.selectModel({ modelId: 'deepseek-chat' })).rejects.toThrow(
+      '当前连接没有有效的 Project'
+    )
+    expect(mocks.providerStore.save).not.toHaveBeenCalled()
+    expect(mocks.agentService.disconnect).not.toHaveBeenCalled()
+    expect(mocks.agentService.connect).not.toHaveBeenCalled()
   })
 
   it('插件安装 trust 非 true 时 CLI argv 不含 --trust，且不回传 stdout', async () => {

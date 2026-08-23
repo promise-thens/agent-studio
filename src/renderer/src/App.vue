@@ -27,6 +27,7 @@ import type {
   ProviderTestResult
 } from '../../shared/provider'
 import type { ConversationEntryState, DeletionPreview } from '../../shared/task-history'
+import type { TaskAttachmentDescriptor } from '../../shared/task-attachment'
 import {
   createAgentEventGuard,
   createAgentMessageKey,
@@ -190,6 +191,8 @@ const conversationEntry = ref<ConversationEntryState | null>(null)
 let conversationEnterGeneration = 0
 let conversationEnterPromise: Promise<ConversationEntryState | null> | null = null
 const prompt = ref('')
+const draftAttachments = ref<TaskAttachmentDescriptor[]>([])
+const draftPreviewUrls = ref<Record<string, string>>({})
 const runtimeSlashCommands = ref<AgentAvailableCommand[]>([])
 /** 当前命令板已应用的快照 revision；切 Task 时归零，避免旧 GET 盖住更新的 push。 */
 const runtimeSlashRevision = ref(0)
@@ -444,6 +447,7 @@ const runningTaskTitle = computed(() => {
 const composerSend = computed(() =>
   evaluateTaskComposerSend({
     prompt: prompt.value,
+    hasAttachments: draftAttachments.value.length > 0,
     selectedTaskId: activeTaskId.value,
     activeExecution: activeExecution.value,
     restore: conversationEntry.value?.restore,
@@ -470,6 +474,19 @@ const composerChrome = computed(() =>
 const composerAction = computed(() => composerChrome.value.action)
 const composerContextUsage = computed(() =>
   resolveComposerContextUsage(pickLatestContextUsage(taskTimeline.activeTimeline.value))
+)
+const promptMediaHint = computed(() =>
+  status.value.promptMedia && status.value.promptMedia.image === false
+    ? '当前 Runtime 未声明识图，图片将按文件附件发送。'
+    : ''
+)
+const composerAttachmentViews = computed(() =>
+  draftAttachments.value.map((item) => ({
+    attachmentId: item.attachmentId,
+    originalName: item.originalName,
+    kind: item.kind,
+    previewUrl: draftPreviewUrls.value[item.attachmentId]
+  }))
 )
 const stopButtonTitle = computed(() => resolveStopButtonTitle(activeExecution.value))
 const stopButtonAriaLabel = computed(() =>
@@ -671,6 +688,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearDraftAttachmentPreviews()
   workbench.dispose()
   taskTimeline.dispose()
   taskChanges.dispose()
@@ -1085,6 +1103,7 @@ watch(activeTaskId, (taskId) => {
   runtimeSlashCommands.value = []
   runtimeSlashRevision.value = 0
   void loadAvailableCommands(taskId)
+  void refreshDraftAttachments(taskId)
 })
 
 function applyAppearanceState(state: AppAppearanceState): void {
@@ -1172,7 +1191,10 @@ async function sendPrompt(): Promise<void> {
   }
 
   const text = prompt.value.trim()
-  if (!text || !canSend.value) return
+  const attachmentIds = draftAttachments.value.map((item) => item.attachmentId)
+  if ((!text && attachmentIds.length === 0) || !canSend.value) return
+  const displayText =
+    text || (draftAttachments.value[0] ? `附件：${draftAttachments.value[0].originalName}` : '')
 
   await runPromptSubmission(async () => {
     let turnStarted = false
@@ -1194,14 +1216,18 @@ async function sendPrompt(): Promise<void> {
 
       const current = taskViews.value[taskId]
       if (current && isUntitledTaskTitle(current.title)) {
-        current.title = deriveSessionTitle(text)
+        current.title = deriveSessionTitle(displayText)
         taskOrder.value = [taskId, ...taskOrder.value.filter((id) => id !== taskId)]
       }
 
-      appendMessage('user', text)
+      appendMessage('user', displayText)
       await nextTick()
       taskComposer.value?.focus()
-      const admitted = unwrapDesktopIpcResult(await window.agent.startTurn(taskId, text))
+      const admitted = unwrapDesktopIpcResult(
+        await window.agent.startTurn(taskId, text, attachmentIds)
+      )
+      clearDraftAttachmentPreviews()
+      draftAttachments.value = []
       // admission 也必须经过 epoch/revision watermark，不能覆盖已经先到的较新 Push。
       workbench.acceptExecutionSnapshot(admitted)
       // 实时 Timeline 只靠 AgentEvent 看不到用户 Prompt；admission 成功后立刻写入同一投影。
@@ -1211,7 +1237,7 @@ async function sendPrompt(): Promise<void> {
           taskId: execution.taskId,
           turnId: execution.turnId,
           executionId: execution.executionId,
-          promptDisplayText: text,
+          promptDisplayText: displayText,
           model: execution.model,
           acceptedAt: execution.acceptedAt
         })
@@ -1248,6 +1274,78 @@ async function cancelTurn(): Promise<void> {
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   }
+}
+
+function clearDraftAttachmentPreviews(): void {
+  for (const url of Object.values(draftPreviewUrls.value)) {
+    URL.revokeObjectURL(url)
+  }
+  draftPreviewUrls.value = {}
+}
+
+async function hydrateDraftPreviews(items: TaskAttachmentDescriptor[]): Promise<void> {
+  const next: Record<string, string> = {}
+  for (const item of items) {
+    if (item.kind !== 'image') continue
+    try {
+      const preview = unwrapDesktopIpcResult(
+        await window.task.getAttachmentPreview(item.taskId, item.attachmentId)
+      )
+      if (!preview.thumbnailBase64 || !preview.thumbnailMime) continue
+      const binary = atob(preview.thumbnailBase64)
+      const bytes = new Uint8Array(binary.length)
+      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+      next[item.attachmentId] = URL.createObjectURL(
+        new Blob([bytes], { type: preview.thumbnailMime })
+      )
+    } catch {
+      continue
+    }
+  }
+  clearDraftAttachmentPreviews()
+  draftPreviewUrls.value = next
+}
+
+async function refreshDraftAttachments(taskId?: string): Promise<void> {
+  const id = taskId || activeTaskId.value
+  if (!id) {
+    draftAttachments.value = []
+    clearDraftAttachmentPreviews()
+    return
+  }
+  try {
+    const items = unwrapDesktopIpcResult(await window.task.listDraftAttachments(id))
+    draftAttachments.value = items
+    await hydrateDraftPreviews(items)
+  } catch {
+    draftAttachments.value = []
+    clearDraftAttachmentPreviews()
+  }
+}
+
+async function pickComposerAttachments(): Promise<void> {
+  const taskId = await ensureActiveTask()
+  unwrapDesktopIpcResult(await window.task.pickAttachments(taskId))
+  await refreshDraftAttachments(taskId)
+}
+
+async function importDroppedAttachmentPaths(paths: string[]): Promise<void> {
+  const taskId = await ensureActiveTask()
+  unwrapDesktopIpcResult(await window.task.importDroppedPaths(taskId, paths))
+  await refreshDraftAttachments(taskId)
+}
+
+async function importClipboardAttachments(): Promise<void> {
+  const taskId = await ensureActiveTask()
+  unwrapDesktopIpcResult(await window.task.importClipboard(taskId))
+  await refreshDraftAttachments(taskId)
+}
+
+async function removeDraftAttachment(attachmentId: string): Promise<void> {
+  const taskId = activeTaskId.value
+  if (!taskId) return
+  unwrapDesktopIpcResult(await window.task.removeAttachment(taskId, attachmentId))
+  await refreshDraftAttachments(taskId)
 }
 
 async function respondPermission(decision: AgentPermissionDecision): Promise<void> {
@@ -1379,9 +1477,12 @@ function handleAgentEvent(event: PublicAgentEvent): void {
     // 整轮完成：只沉淀一个总耗时，不给中间片段分别计时。
     completeCurrentTurn(event.taskId)
     void taskHistory.refreshTasks()
+    // 基线/检查点在主进程 Turn 终态后才齐，刷新对话卡，避免继续展示打开项目前的脏文件。
+    void taskChanges.reload()
   } else if (event.kind === 'error') {
     completeCurrentTurn(event.taskId)
     if (shouldMirrorLiveAgentErrorLocally()) appendMessage('error', event.message)
+    void taskChanges.reload()
   }
 }
 
@@ -1698,7 +1799,6 @@ function scrollMessagesToBottom(): void {
             :event-after-sequence-by-turn="taskHistory.eventAfterSequenceByTurn.value"
             :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
             :local-errors="localErrorMessages"
-            :can-create-task="!newChatDisabled"
             :connect-failure="conversationConnectFailure"
             :permission="permission"
             :permission-pending="permissionResponsePending"
@@ -1707,7 +1807,6 @@ function scrollMessagesToBottom(): void {
             :restore-busy="restoreBusy"
             @load-more-turns="loadMoreHistoryTurns"
             @load-more-events="loadMoreHistoryEvents"
-            @create-task="startNewChat"
             @retry-connect="retryRuntimeConnect"
             @respond-permission="respondPermission"
             @cancel-turn="cancelTurn"
@@ -1732,9 +1831,15 @@ function scrollMessagesToBottom(): void {
             :model-disabled="!providerSummary?.configured"
             :context-usage="composerContextUsage"
             :runtime-commands="runtimeSlashCommands"
+            :attachments="composerAttachmentViews"
+            :prompt-media-hint="promptMediaHint"
             @update:prompt="prompt = $event"
             @send="sendPrompt"
             @stop="cancelTurn"
+            @pick-attachments="pickComposerAttachments"
+            @import-dropped-paths="importDroppedAttachmentPaths"
+            @import-clipboard="importClipboardAttachments"
+            @remove-attachment="removeDraftAttachment"
             @open-plugins="handleProductSlashAction('open-plugins')"
             @open-plugins-mcp="handleProductSlashAction('open-plugins-mcp')"
             @open-plugins-marketplace="handleProductSlashAction('open-plugins-marketplace')"

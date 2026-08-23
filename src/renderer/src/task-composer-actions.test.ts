@@ -118,6 +118,23 @@ describe('发送与停止身份', () => {
     ).toBe(false)
   })
 
+  it('只有附件没有正文时也可以发送', () => {
+    const ready = {
+      prompt: '   ',
+      selectedTaskId: 'task-a',
+      activeExecution: null,
+      restore: 'ready' as const,
+      providerConfigured: true,
+      projectSelectionPending: false,
+      turnTiming: false,
+      promptSubmissionPending: false,
+      promptCapabilityAvailable: true,
+      runtimeConnected: true
+    }
+    expect(evaluateTaskComposerSend(ready).canSend).toBe(false)
+    expect(evaluateTaskComposerSend({ ...ready, hasAttachments: true }).canSend).toBe(true)
+  })
+
   it('发送失败后恢复已清空的草稿，不覆盖用户新输入', () => {
     expect(restoreComposerPromptAfterFailure('', '原来的草稿')).toBe('原来的草稿')
     expect(restoreComposerPromptAfterFailure('用户又打了字', '原来的草稿')).toBe('用户又打了字')

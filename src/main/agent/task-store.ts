@@ -348,8 +348,14 @@ export class TaskStore {
     turnId: string
     promptDisplayText: string
     model: TurnModelSnapshot
+    attachmentIds?: string[]
   }): Promise<TurnRecordV1> {
     return this.createTurnRecord({ ...input, initialState: 'pending' })
+  }
+
+  /** 附件柜落在 Task 历史目录下，不进用户仓库。 */
+  getTaskFilesystemRoot(taskId: string): string {
+    return this.taskDirectory(this.requireTask(taskId))
   }
 
   private async createTurnRecord(input: {
@@ -361,6 +367,7 @@ export class TaskStore {
     executionId?: string
     environmentId?: string
     activeExecutionId?: string
+    attachmentIds?: string[]
   }): Promise<TurnRecordV1> {
     return this.enqueueTask(input.taskId, async () => {
       const task = this.requireTask(input.taskId)
@@ -397,7 +404,10 @@ export class TaskStore {
         ...(input.environmentId ? { environmentId: input.environmentId } : {}),
         eventCount: 0,
         eventBytes: 0,
-        revision: 1
+        revision: 1,
+        ...(input.attachmentIds && input.attachmentIds.length > 0
+          ? { attachmentIds: input.attachmentIds }
+          : {})
       }
       const nextTask: TaskRecordV1 = {
         ...task,
@@ -1823,6 +1833,15 @@ function parseTurnRecord(value: unknown): RecordParseResult<TurnRecordV1> {
     return { kind: 'corrupt' }
   if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 1) {
     return { kind: 'corrupt' }
+  }
+  if (value.attachmentIds !== undefined) {
+    if (
+      !Array.isArray(value.attachmentIds) ||
+      value.attachmentIds.length > 8 ||
+      value.attachmentIds.some((id) => typeof id !== 'string' || !isValidIdentifier(id))
+    ) {
+      return { kind: 'corrupt' }
+    }
   }
   const upgraded = {
     ...value,

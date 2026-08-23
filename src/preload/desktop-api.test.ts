@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, type Mock } from 'vitest'
+import { reactive } from 'vue'
 import { AGENT_INVOKE_CHANNELS, AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
 import { APP_INVOKE_CHANNELS, APP_PUSH_CHANNELS } from '../shared/app-ipc'
 import { TASK_INVOKE_CHANNELS } from '../shared/task-ipc'
@@ -474,6 +475,20 @@ describe('窄 Preload API', () => {
     await provider.listModels(input)
 
     expect(ipcRenderer.invoke).toHaveBeenCalledWith('provider:list-models', input)
+  })
+
+  it('selectModel 发送前把 Vue Proxy 摊成可克隆纯对象', async () => {
+    const ipcRenderer = createIpcRenderer()
+    const provider = createProviderDesktopApi(ipcRenderer)
+    const model = reactive({ modelId: 'deepseek-chat', displayName: 'DeepSeek Chat' })
+
+    await provider.selectModel(model)
+
+    const payload = ipcRenderer.invoke.mock.calls[0]?.[1]
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('provider:select-model', payload)
+    expect(payload).toEqual({ modelId: 'deepseek-chat', displayName: 'DeepSeek Chat' })
+    expect(payload).not.toBe(model)
+    expect(() => structuredClone(payload)).not.toThrow()
   })
 
   it('外观 API 走固定 channel，非法推送丢弃', async () => {

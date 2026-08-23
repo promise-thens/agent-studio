@@ -23,6 +23,8 @@ import type {
 } from '../../shared/git-review'
 import type { PublicAgentEventPage } from '../../shared/task-ipc'
 import { TASK_INVOKE_CHANNELS } from '../../shared/task-ipc'
+import { registerTaskAttachmentIpcHandlers } from './task-attachment-ipc'
+import type { TaskAttachmentInbox } from './task-attachment-inbox'
 import type { CommandEvidenceStore } from '../command/command-evidence-store'
 import type { DesktopIpcMain } from '../ipc-types'
 import {
@@ -74,6 +76,13 @@ export interface TaskIpcDependencies {
     restoreLatestTurn(taskId: string): Promise<LatestTurnRestoreResult>
   } | null
   sanitizeError: (error: unknown) => string
+  getInbox?: () => TaskAttachmentInbox | null
+  pickFiles?: () => Promise<string[] | null>
+  readClipboard?: () => Promise<Array<{ originalName: string; bytes: Buffer }>>
+  getChangeMediaPreview?: (
+    taskId: string,
+    path: string
+  ) => Promise<import('../../shared/task-ipc').TaskAttachmentPreview>
 }
 
 function requireHistory(getHistory: TaskIpcDependencies['getHistory']): TaskHistoryIpcRuntime {
@@ -328,6 +337,16 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
     const taskId = readCommandIdentity(request, 'taskId')
     requireExistingTask(dependencies.getHistory, taskId)
     return requireGitReview(dependencies.getGitReview).restoreLatestTurn(taskId)
+  })
+
+  registerTaskAttachmentIpcHandlers({
+    ipcMain: dependencies.ipcMain,
+    assertTrustedSender: dependencies.assertTrustedSender,
+    sanitizeError: dependencies.sanitizeError,
+    getInbox: () => dependencies.getInbox?.() ?? null,
+    pickFiles: () => dependencies.pickFiles?.() ?? Promise.resolve(null),
+    readClipboard: () => dependencies.readClipboard?.() ?? Promise.resolve([]),
+    getChangeMediaPreview: dependencies.getChangeMediaPreview
   })
 }
 

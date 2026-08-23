@@ -28,6 +28,8 @@ export interface ConversationUserBlock {
   kind: 'user'
   nodeId: string
   text: string
+  taskId?: string
+  attachmentIds?: string[]
 }
 
 export interface ConversationThoughtBlock {
@@ -188,11 +190,13 @@ export function projectConversationTurn(
   const blocks: ConversationBlock[] = []
   const userNode = turn.nodes.find((node): node is TimelineTextNode => node.kind === 'user-prompt')
   const userText = userNode?.text.trim() || turn.prompt.trim()
-  if (userText) {
+  if (userText || userNode?.attachmentIds?.length) {
     blocks.push({
       kind: 'user',
       nodeId: userNode?.nodeId ?? `${turn.taskId}:${turn.turnId}:user`,
-      text: userText
+      text: userText,
+      taskId: turn.taskId,
+      ...(userNode?.attachmentIds?.length ? { attachmentIds: userNode.attachmentIds } : {})
     })
   }
 

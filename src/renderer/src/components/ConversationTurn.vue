@@ -9,6 +9,7 @@ import {
 } from '../conversation-turn-view'
 import type { TurnTimelineViewModel } from '../task-timeline-reducer'
 import AssistantMarkdown from './AssistantMarkdown.vue'
+import ConversationMedia from './ConversationMedia.vue'
 import PermissionPrompt from './PermissionPrompt.vue'
 import PlanChecklist from './PlanChecklist.vue'
 import SubagentCard from './SubagentCard.vue'
@@ -65,7 +66,12 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
   <div class="conversation-blocks" :data-variant="variant">
     <template v-for="block in blocks" :key="block.nodeId">
       <div v-if="block.kind === 'user'" class="conversation-user" data-kind="user">
-        <p>{{ block.text }}</p>
+        <p v-if="block.text">{{ block.text }}</p>
+        <ConversationMedia
+          v-if="block.taskId && block.attachmentIds?.length"
+          :task-id="block.taskId"
+          :attachment-ids="block.attachmentIds"
+        />
       </div>
 
       <details

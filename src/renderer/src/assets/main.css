@@ -79,7 +79,7 @@ textarea {
   background: var(--app-bg);
 }
 
-/* 主对话不再被第三列挤窄；检查器以抽屉盖住右侧。 */
+/* 主对话不再被第三列挤窄；检查器以悬浮卡片盖住对话。 */
 .workspace-layout > .chat-panel {
   min-width: 0;
   min-height: 0;
@@ -1519,10 +1519,100 @@ button:disabled {
 }
 
 .composer-footer {
+  display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: 8px;
   margin-top: 6px;
   color: var(--text-3);
   font-size: 9px;
+}
+
+.composer.dragging {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border-strong));
+}
+
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.composer-attachment {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  background: var(--surface-2);
+}
+
+.composer-attachment-thumb {
+  width: 32px;
+  height: 32px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.composer-attachment-name {
+  overflow: hidden;
+  max-width: 160px;
+  color: var(--text-2);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment-remove,
+.attach-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  color: var(--text-2);
+  background: transparent;
+}
+
+.composer-attachment-remove {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+}
+
+.attach-button {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-chip);
+}
+
+.conversation-user-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+
+.conversation-user-attachments img {
+  max-width: min(280px, 100%);
+  max-height: 180px;
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+.conversation-file-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-chip);
+  color: var(--text-2);
+  font-size: 12px;
 }
 
 .composer-context {
@@ -1544,7 +1634,8 @@ button:disabled {
 
 .composer-footer .model-selector,
 .composer-footer .send-button,
-.composer-footer .stop-button {
+.composer-footer .stop-button,
+.composer-footer .attach-button {
   flex: 0 0 auto;
 }
 
@@ -1568,28 +1659,37 @@ button:disabled {
   background: color-mix(in srgb, var(--danger) 12%, var(--surface-2));
 }
 
-/* 检查器从右侧盖住对话，不改两栏栅格。 */
+/* 检查器是可拖动的悬浮卡片，不改两栏栅格，也不贴右侧通栏。 */
 .workspace-layout > .task-inspector {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  top: 12px;
+  right: 12px;
+  bottom: auto;
   z-index: 8;
   display: flex;
-  width: min(360px, 46%);
+  width: min(400px, calc(100% - 24px));
+  height: min(560px, calc(100% - 24px));
   min-width: 280px;
   flex-direction: column;
   overflow: hidden;
-  border-left: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 12px;
   background: color-mix(in srgb, var(--surface-1) 96%, var(--surface-0));
-  box-shadow: -16px 0 36px rgb(2 5 9 / 28%);
+  box-shadow: 0 18px 48px rgb(2 5 9 / 34%);
   animation: inspector-slide-in 180ms ease;
 }
 
-/* Changes 审阅工作区加宽，仍覆盖右侧，不改主列栅格。 */
-.workspace-layout > .task-inspector.is-review-workspace {
-  width: min(780px, 64%);
-  min-width: 480px;
+/* 变更标签加宽，仍是悬浮卡。 */
+.workspace-layout > .task-inspector.is-review-workspace:not(.is-expanded) {
+  width: min(720px, calc(100% - 24px));
+  height: min(640px, calc(100% - 24px));
+  min-width: 420px;
+}
+
+.workspace-layout > .task-inspector.is-expanded {
+  width: calc(100% - 24px);
+  height: calc(100% - 24px);
+  min-width: 280px;
 }
 
 .task-inspector.is-review-workspace .inspector-body {
@@ -1614,6 +1714,23 @@ button:disabled {
   min-width: 0;
   padding: 8px 8px 0 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  -webkit-app-region: no-drag;
+}
+
+.inspector-toolbar[data-inspector-drag-handle] {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.inspector-toolbar[data-inspector-drag-handle]:active {
+  cursor: grabbing;
+}
+
+.inspector-toolbar .inspector-tabs,
+.inspector-toolbar .icon-button {
+  cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
 .inspector-tabs {
@@ -1708,12 +1825,12 @@ button:disabled {
 
 @keyframes inspector-slide-in {
   from {
-    transform: translateX(16px);
+    transform: translateY(8px);
     opacity: 0.4;
   }
 
   to {
-    transform: translateX(0);
+    transform: translateY(0);
     opacity: 1;
   }
 }
@@ -1795,7 +1912,6 @@ button:disabled {
 .changes-toolbar strong,
 .file-diff-header strong,
 .changes-path-group h3,
-.changes-validations h3,
 .changes-unverified h3 {
   color: var(--text-1);
   font-size: 12px;
@@ -1805,7 +1921,6 @@ button:disabled {
 .changes-summary,
 .changes-state,
 .file-diff-viewer,
-.changes-validation,
 .changes-unverified {
   min-width: 0;
   padding: 10px 12px;
@@ -1818,7 +1933,6 @@ button:disabled {
 .changes-state p,
 .changes-muted,
 .changes-risk,
-.changes-validation p,
 .changes-unverified li {
   margin: 0;
   color: var(--text-2);
@@ -1851,7 +1965,6 @@ button:disabled {
 }
 
 .changes-path-groups,
-.changes-validations,
 .changes-unverified ul {
   display: grid;
   gap: 2px;
@@ -1862,7 +1975,7 @@ button:disabled {
 
 .changes-review-split {
   display: grid;
-  grid-template-columns: minmax(168px, 240px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
@@ -1896,14 +2009,102 @@ button:disabled {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 0 6px 8px;
+  padding: 2px 6px 8px;
+  align-content: start;
+  grid-auto-rows: min-content;
+}
+
+.changes-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  padding: 0 8px 0 2px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-2);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.changes-tree-row:active:not(:disabled) {
+  transform: none;
+}
+
+.changes-tree-guides {
+  display: flex;
+  align-self: stretch;
+  flex: 0 0 auto;
+}
+
+.changes-tree-guide {
+  position: relative;
+  flex: 0 0 14px;
+  width: 14px;
+  align-self: stretch;
+}
+
+.changes-tree-guide[data-guide='line']::before,
+.changes-tree-guide[data-guide='tee']::before,
+.changes-tree-guide[data-guide='elbow']::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  width: 1px;
+  background: color-mix(in srgb, var(--text-3) 58%, transparent);
+}
+
+.changes-tree-guide[data-guide='line']::before,
+.changes-tree-guide[data-guide='tee']::before {
+  top: 0;
+  bottom: 0;
+}
+
+.changes-tree-guide[data-guide='elbow']::before {
+  top: 0;
+  height: 50%;
+}
+
+.changes-tree-guide[data-guide='tee']::after,
+.changes-tree-guide[data-guide='elbow']::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 7px;
+  right: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--text-3) 58%, transparent);
+}
+
+.changes-tree-caret {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  color: var(--text-3);
+}
+
+.changes-tree-caret.is-open {
+  transform: rotate(90deg);
+}
+
+.changes-tree-icon {
+  flex: 0 0 14px;
+  color: var(--text-3);
 }
 
 .changes-tree-folder {
-  padding: 6px 8px 2px;
-  color: var(--text-3);
-  font-size: 11px;
-  font-weight: 650;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.changes-tree-folder:hover {
+  color: var(--text-1);
+  background: var(--hover-fill);
 }
 
 .changes-git-notice,
@@ -1917,10 +2118,16 @@ button:disabled {
   min-height: 0;
 }
 
-.changes-validations,
 .changes-unverified,
 .changes-restore {
   padding: 0 10px 8px;
+}
+
+.changes-restore .changes-risk {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
 }
 
 .changes-path-group {
@@ -1931,15 +2138,9 @@ button:disabled {
 
 .changes-path-button {
   justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 10px;
+  gap: 6px;
   border: 1px solid transparent;
-  border-radius: var(--radius-control);
   color: var(--text-2);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
 }
 
 .changes-path-button:hover,
@@ -1950,6 +2151,7 @@ button:disabled {
 
 .changes-path-name {
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1958,8 +2160,10 @@ button:disabled {
 
 .changes-path-meta {
   flex: 0 0 auto;
+  margin-left: auto;
   color: var(--text-3);
   font-size: 10px;
+  gap: 4px;
 }
 
 .file-diff-viewer {
@@ -2014,7 +2218,15 @@ button:disabled {
   line-height: 1.5;
 }
 
+.file-diff-lines {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 100%;
+}
+
 .file-diff-unmodified {
+  box-sizing: border-box;
+  min-width: 100%;
   padding: 6px 12px;
   color: var(--text-3);
   background: color-mix(in srgb, var(--surface-2) 70%, transparent);
@@ -2024,8 +2236,9 @@ button:disabled {
 
 .file-diff-line {
   display: grid;
-  grid-template-columns: 36px 36px 14px minmax(max-content, 1fr);
-  min-width: max-content;
+  grid-template-columns: 36px 36px 14px max-content;
+  box-sizing: border-box;
+  min-width: 100%;
 }
 
 .file-diff-gutter,
@@ -2058,30 +2271,6 @@ button:disabled {
   color: var(--text-3);
 }
 
-.changes-command-ids {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.changes-command-button {
-  min-height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-chip);
-  color: var(--text-2);
-  background: var(--hover-fill);
-  cursor: pointer;
-}
-
-.changes-command-button[aria-pressed='true'] {
-  color: var(--text-1);
-  border-color: var(--border-strong);
-  background: var(--selected-fill);
-}
-
-.changes-validation[data-outcome='fail'] p,
 .changes-risk {
   color: var(--danger);
 }
@@ -2111,10 +2300,6 @@ button:disabled {
 .changes-restore-actions {
   grid-template-columns: repeat(2, minmax(0, max-content));
   align-items: center;
-}
-
-.changes-validation[data-outcome='pass'] p {
-  color: var(--success);
 }
 
 .changes-muted {
@@ -2592,13 +2777,13 @@ button:disabled {
   }
 
   .workspace-layout > .task-inspector {
-    width: min(340px, 52%);
+    width: min(360px, calc(100% - 24px));
     min-width: 260px;
   }
 
-  .workspace-layout > .task-inspector.is-review-workspace {
-    width: min(640px, 72%);
-    min-width: 360px;
+  .workspace-layout > .task-inspector.is-review-workspace:not(.is-expanded) {
+    width: min(560px, calc(100% - 24px));
+    min-width: 300px;
   }
 }
 
@@ -2606,7 +2791,8 @@ button:disabled {
 @media (max-width: 980px) {
   .composer-footer .model-selector,
   .composer-footer .send-button,
-  .composer-footer .stop-button {
+  .composer-footer .stop-button,
+  .composer-footer .attach-button {
     display: inline-flex;
   }
 }

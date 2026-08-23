@@ -11,6 +11,7 @@ import {
   type AgentRespondPermissionRequest,
   type AgentStartTurnRequest
 } from '../../shared/agent-ipc'
+import { ATTACHMENT_LIMITS } from '../../shared/task-attachment'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
 import type {
   AgentStartTurnAdmissionResult,
@@ -39,7 +40,8 @@ export interface AgentIpcRuntime {
   enterTask: (taskId: string) => Promise<ConversationEntryState>
   startTurn: (
     taskId: string,
-    prompt: string
+    prompt: string,
+    attachmentIds?: string[]
   ) => Promise<
     AgentStartTurnAdmissionResult | import('../../shared/agent').AgentTurnExecutionResult
   >
@@ -131,11 +133,46 @@ function readEnterTaskRequest(args: unknown[]): AgentEnterTaskRequest {
   return { taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES) }
 }
 
+function readOptionalPrompt(request: Record<string, unknown>): string {
+  const value = request.prompt
+  if (typeof value !== 'string' || value.includes('\0')) {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  if (Buffer.byteLength(value, 'utf8') > MAX_PROMPT_BYTES) {
+    throw new DesktopIpcFailure('payload-too-large', '请求内容过大。')
+  }
+  return value
+}
+
+function readAttachmentIds(value: unknown): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > ATTACHMENT_LIMITS.maxPerTurn) {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  const ids: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !item.trim() || item.includes('\0')) {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    if (Buffer.byteLength(item, 'utf8') > MAX_TASK_ID_BYTES) {
+      throw new DesktopIpcFailure('payload-too-large', '请求内容过大。')
+    }
+    if (!ids.includes(item)) ids.push(item)
+  }
+  return ids
+}
+
 function readStartTurnRequest(args: unknown[]): AgentStartTurnRequest {
-  const request = readRequest(args, ['taskId', 'prompt'])
+  const request = readRequest(args, ['taskId', 'prompt', 'attachmentIds'])
+  const attachmentIds = readAttachmentIds(request.attachmentIds)
+  const prompt = readOptionalPrompt(request)
+  if (!prompt.trim() && attachmentIds.length === 0) {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
   return {
     taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES),
-    prompt: readRequiredString(request, 'prompt', MAX_PROMPT_BYTES)
+    prompt,
+    ...(attachmentIds.length > 0 ? { attachmentIds } : {})
   }
 }
 
@@ -253,7 +290,9 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
     const request = readStartTurnRequest(args)
     const agent = requireAgent(dependencies.getAgent)
     assertPromptState(agent.getStatus())
-    return agent.startTurn(request.taskId, request.prompt)
+    return request.attachmentIds?.length
+      ? agent.startTurn(request.taskId, request.prompt, request.attachmentIds)
+      : agent.startTurn(request.taskId, request.prompt)
   })
 
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.cancelTurn, async (args) => {

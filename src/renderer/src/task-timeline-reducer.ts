@@ -119,6 +119,7 @@ interface TimelineNodeBase {
 export interface TimelineTextNode extends TimelineNodeBase {
   kind: 'user-prompt' | 'message' | 'thought'
   text: string
+  attachmentIds?: string[]
 }
 
 export interface TimelinePlanNode extends TimelineNodeBase {
@@ -403,7 +404,8 @@ function projectNodes(
       turnId: turn.turnId,
       source: record ? 'turn-record' : 'admission',
       kind: 'user-prompt',
-      text: prompt
+      text: prompt,
+      ...(record?.attachmentIds?.length ? { attachmentIds: record.attachmentIds } : {})
     })
   const messageNodes = new Map<string, TimelineTextNode>()
   let previousAnonymousText:

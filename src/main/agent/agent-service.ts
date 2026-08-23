@@ -26,6 +26,7 @@ import {
   type AgentRuntimePermissionCancellation,
   type AgentRuntimePermissionRequest,
   type AgentRuntimeSessionRef,
+  type AgentRuntimeTurnAttachment,
   type AgentRuntimeTurnRef
 } from './agent-runtime-adapter'
 import type { TaskExecutor } from './task-executor'
@@ -42,6 +43,8 @@ import type { AgentRespondPermissionRequest } from '../../shared/agent-ipc'
 import type { AgentAvailableCommandSnapshot } from '../../shared/agent-available-command'
 import type { PermissionBroker } from '../security/permission-broker'
 import { createLocalEnvironmentId } from '../security/permission-policy'
+import { TaskAttachmentError, type TaskAttachmentInbox } from './task-attachment-inbox'
+import { ATTACHMENT_LIMITS, type TaskAttachmentDescriptor } from '../../shared/task-attachment'
 
 const MAX_WORKSPACE_BYTES = 4 * 1024
 const MAX_PROMPT_BYTES = 64 * 1024
@@ -89,6 +92,17 @@ export interface AgentServiceOptions {
   getSessionMcpServers?: () => Promise<AgentRuntimeMcpServer[]> | AgentRuntimeMcpServer[]
   /** 共享记忆树等 Runtime 笔记根；缺省为空，写入会被当成项目外逃逸。 */
   getTrustedExternalRoots?: () => Promise<string[]> | string[]
+  attachmentInbox?: TaskAttachmentInbox
+  /**
+   * 新 Task 持久化成功后立刻捕获工作区基线，避免对话卡把打开项目前的脏文件算成本轮编辑。
+   * 抛错不得让创建 Task 失败。
+   */
+  ensureChangeBaseline?: (input: {
+    taskId: string
+    projectId: string
+    environmentId: string
+    executionRoot: string
+  }) => Promise<void>
 }
 
 interface AgentTaskRecord extends AgentTaskRuntimeState {
@@ -164,6 +178,8 @@ export class AgentService {
   private readonly onEvent: (event: AgentEvent) => void
   private readonly getSessionMcpServers?: AgentServiceOptions['getSessionMcpServers']
   private readonly getTrustedExternalRoots?: AgentServiceOptions['getTrustedExternalRoots']
+  private readonly ensureChangeBaseline?: AgentServiceOptions['ensureChangeBaseline']
+  private readonly attachmentInbox?: TaskAttachmentInbox
   private readonly historyWrites = new Map<string, Promise<void>>()
   private readonly runtimePermissionRequests = new Map<string, AgentRuntimePermissionRequest>()
 
@@ -184,6 +200,8 @@ export class AgentService {
     this.onEvent = options.onEvent ?? (() => undefined)
     this.getSessionMcpServers = options.getSessionMcpServers
     this.getTrustedExternalRoots = options.getTrustedExternalRoots
+    this.ensureChangeBaseline = options.ensureChangeBaseline
+    this.attachmentInbox = options.attachmentInbox
     for (const persistedTask of this.taskStore?.listTaskRecords() ?? []) {
       const task = restoreRuntimeTask(persistedTask)
       this.tasks.set(task.taskId, task)
@@ -321,6 +339,18 @@ export class AgentService {
             await this.adapter.closeSession(session).catch(() => undefined)
             throw error
           }
+          if (this.ensureChangeBaseline) {
+            try {
+              await this.ensureChangeBaseline({
+                taskId,
+                projectId: task.projectId,
+                environmentId: createLocalEnvironmentId(task.projectId, validatedWorkspace),
+                executionRoot: validatedWorkspace
+              })
+            } catch {
+              // 基线失败不能把已经创建的 Task 回滚；后续审阅会看到 missing/unavailable。
+            }
+          }
         }
         this.tasks.set(taskId, task)
         this.selectedTaskId = taskId
@@ -338,9 +368,14 @@ export class AgentService {
    * 为每轮 Prompt 分配新的 turnId；同 Task 复用 session，切回旧 Task 时先恢复其绑定会话。
    * 第二个并发调用在生成 ID 前即被明确拒绝。
    */
-  async startTurn(taskId: string, prompt: string): Promise<AgentTurnExecutionResult> {
+  async startTurn(
+    taskId: string,
+    prompt: string,
+    attachmentIds: string[] = []
+  ): Promise<AgentTurnExecutionResult> {
     this.requireTask(taskId)
-    const validatedPrompt = validatePrompt(prompt)
+    const acceptedAttachmentIds = uniqueAttachmentIds(attachmentIds)
+    const validatedPrompt = validatePrompt(prompt, acceptedAttachmentIds.length > 0)
     if (this.sessionOperationActive || this.executionController.hasActiveTurn()) {
       throw new AgentServiceError('invalid-state', '已有 Turn 正在执行。')
     }
@@ -355,12 +390,20 @@ export class AgentService {
       turnId,
       runtimeSessionId: liveTask.runtimeSessionId
     }
+    const boundAttachments = await this.bindTurnAttachments(
+      liveTask.taskId,
+      turnId,
+      acceptedAttachmentIds
+    )
+    const displayText =
+      validatedPrompt || (boundAttachments[0] ? `附件：${boundAttachments[0].originalName}` : '')
     if (this.taskStore) {
       await this.taskStore.createTurn({
         taskId: liveTask.taskId,
         turnId,
-        promptDisplayText: this.redactText(validatedPrompt),
-        model: this.getTurnModel()
+        promptDisplayText: this.redactText(displayText),
+        model: this.getTurnModel(),
+        attachmentIds: boundAttachments.map((item) => item.attachmentId)
       })
     }
     this.markTurnRunning(liveTask, turnId)
@@ -372,7 +415,8 @@ export class AgentService {
         return this.adapter.startTurn({
           ...turnRef,
           workspace: liveTask.workspace,
-          prompt: validatedPrompt
+          prompt: validatedPrompt,
+          attachments: await this.readTurnAttachments(liveTask.taskId, boundAttachments)
         })
       })
       await this.flushHistoryWrites(liveTask.taskId, turnId)
@@ -1190,6 +1234,36 @@ export class AgentService {
     )
   }
 
+  /** 发送前把 draft 绑定到本轮，避免把别人的附件 ID 塞进 Prompt。 */
+  private async bindTurnAttachments(
+    taskId: string,
+    turnId: string,
+    attachmentIds: string[]
+  ): Promise<TaskAttachmentDescriptor[]> {
+    if (attachmentIds.length === 0) return []
+    if (!this.attachmentInbox) {
+      throw new AgentServiceError('invalid-input', '当前不能发送附件。')
+    }
+    return this.attachmentInbox.bindToTurn(taskId, attachmentIds, turnId)
+  }
+
+  private async readTurnAttachments(
+    taskId: string,
+    descriptors: import('../../shared/task-attachment').TaskAttachmentDescriptor[]
+  ): Promise<AgentRuntimeTurnAttachment[]> {
+    if (!this.attachmentInbox || descriptors.length === 0) return []
+    const attachments: AgentRuntimeTurnAttachment[] = []
+    for (const descriptor of descriptors) {
+      attachments.push({
+        fileName: descriptor.originalName,
+        mimeType: descriptor.mimeType,
+        kind: descriptor.kind,
+        bytes: await this.attachmentInbox.readBytes(taskId, descriptor.attachmentId)
+      })
+    }
+    return attachments
+  }
+
   private async flushHistoryWrites(taskId: string, turnId: string): Promise<void> {
     const key = `${taskId}:${turnId}`
     const current = this.historyWrites.get(key)
@@ -1238,8 +1312,32 @@ function validateWorkspace(workspace: string): string {
   return value
 }
 
-function validatePrompt(prompt: string): string {
-  return validateRequiredText(prompt, MAX_PROMPT_BYTES, 'Prompt')
+function uniqueAttachmentIds(attachmentIds: string[]): string[] {
+  if (attachmentIds.length > ATTACHMENT_LIMITS.maxPerTurn) {
+    throw new AgentServiceError('invalid-input', '本轮附件数量超过上限。')
+  }
+  const unique: string[] = []
+  for (const id of attachmentIds) {
+    if (typeof id !== 'string' || !id.trim() || id.includes('\0')) {
+      throw new AgentServiceError('invalid-input', '附件身份无效。')
+    }
+    if (!unique.includes(id)) unique.push(id)
+  }
+  return unique
+}
+
+function validatePrompt(prompt: string, hasAttachments: boolean): string {
+  if (typeof prompt !== 'string' || prompt.includes('\0')) {
+    throw new AgentServiceError('invalid-input', 'Prompt 无效。')
+  }
+  if (Buffer.byteLength(prompt, 'utf8') > MAX_PROMPT_BYTES) {
+    throw new AgentServiceError('payload-too-large', 'Prompt 内容过大。')
+  }
+  const trimmed = prompt.trim()
+  if (!trimmed && !hasAttachments) {
+    throw new AgentServiceError('invalid-input', 'Prompt 无效。')
+  }
+  return trimmed
 }
 
 function validateIdentifier(value: string, label: string): string {
@@ -1286,6 +1384,11 @@ function normalizeServiceError(error: unknown): AgentServiceError {
   }
   if (error instanceof ProjectRegistryError || error instanceof TaskStoreError) {
     return new AgentServiceError(error.code, error.message)
+  }
+  if (error instanceof TaskAttachmentError) {
+    const code =
+      error.code === 'too-large' || error.code === 'quota' ? 'payload-too-large' : 'invalid-input'
+    return new AgentServiceError(code, error.message)
   }
   return new AgentServiceError('operation-failed', 'Agent Runtime 操作失败。')
 }
