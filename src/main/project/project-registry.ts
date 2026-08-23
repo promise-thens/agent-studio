@@ -150,6 +150,19 @@ export class ProjectRegistry {
     )
   }
 
+  /**
+   * 用 Runtime 当前 workspace 反查仍有效的 Project ID。
+   * 路径不能当 ID 用；切换模型重连必须拿真正的 projectId。
+   */
+  findActiveProjectIdByRoot(workspace: string): string | null {
+    if (!isValidCanonicalRoot(workspace)) return null
+    for (const record of this.records.values()) {
+      if (record.status !== 'active') continue
+      if (compareCanonicalPath(record.canonicalRoot, workspace)) return record.projectId
+    }
+    return null
+  }
+
   getRecord(projectId: string): ProjectRecordV1 {
     validateIdentifier(projectId)
     if (this.unsupportedRecords.has(projectId)) {

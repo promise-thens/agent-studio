@@ -6,10 +6,15 @@ import {
   INSPECTOR_TABS,
   WORKSPACE_INSPECTOR_PLACEMENT,
   WORKSPACE_PRIMARY_COLUMNS,
+  INSPECTOR_CARD_MARGIN,
+  clampInspectorCardRect,
+  defaultInspectorCardRect,
   inspectorPlaceholderCopy,
   inspectorReviewWorkspaceClass,
   inspectorToggleLabel,
+  isInspectorCardDragSource,
   isInspectorTab,
+  moveInspectorCardRect,
   nextInspectorTab,
   openChangesReview,
   projectInspectorTimelineSummary,
@@ -19,6 +24,18 @@ import {
   permissionAuditReasonLabel,
   permissionAuditScopeLabel
 } from './task-inspector'
+
+function fakeClosestNode(
+  matches: readonly string[],
+  parent?: { closest: (selector: string) => unknown }
+): { closest: (selector: string) => unknown } {
+  return {
+    closest(selector: string) {
+      if (matches.some((item) => selector.includes(item))) return this
+      return parent?.closest(selector) ?? null
+    }
+  }
+}
 
 describe('Inspector 开关与标签', () => {
   it('默认关闭，且默认落在 Timeline', () => {
@@ -30,6 +47,7 @@ describe('Inspector 开关与标签', () => {
       'terminal',
       'artifacts'
     ])
+    expect(INSPECTOR_TABS.map((tab) => tab.label)).toEqual(['时间线', '变更', '终端', '产物'])
   })
 
   it('开关只翻转布尔值，标题栏文案随开合变化', () => {
@@ -45,6 +63,64 @@ describe('Inspector 开关与标签', () => {
     expect(inspectorReviewWorkspaceClass('changes')).toBe('is-review-workspace')
     expect(inspectorReviewWorkspaceClass('timeline')).toBe('')
     expect(WORKSPACE_INSPECTOR_PLACEMENT).toBe('overlay')
+  })
+
+  it('悬浮卡默认贴右上角，拖出视口会夹回边距，放大则铺满工作区', () => {
+    expect(
+      defaultInspectorCardRect({
+        viewportWidth: 1200,
+        viewportHeight: 800,
+        width: 380,
+        height: 560
+      })
+    ).toEqual({
+      left: 1200 - 380 - INSPECTOR_CARD_MARGIN,
+      top: INSPECTOR_CARD_MARGIN,
+      width: 380,
+      height: 560
+    })
+    expect(
+      clampInspectorCardRect({
+        left: -80,
+        top: 900,
+        width: 380,
+        height: 560,
+        viewportWidth: 1000,
+        viewportHeight: 700
+      })
+    ).toEqual({
+      left: INSPECTOR_CARD_MARGIN,
+      top: 700 - 560 - INSPECTOR_CARD_MARGIN,
+      width: 380,
+      height: 560
+    })
+    expect(
+      moveInspectorCardRect({ left: 100, top: 40, width: 380, height: 200 }, 24, -8, {
+        viewportWidth: 1000,
+        viewportHeight: 700
+      })
+    ).toMatchObject({ left: 124, top: 32 })
+    const expanded = defaultInspectorCardRect({
+      viewportWidth: 1000,
+      viewportHeight: 700,
+      width: 380,
+      height: 560,
+      expanded: true
+    })
+    expect(expanded).toEqual({
+      left: INSPECTOR_CARD_MARGIN,
+      top: INSPECTOR_CARD_MARGIN,
+      width: 1000 - INSPECTOR_CARD_MARGIN * 2,
+      height: 700 - INSPECTOR_CARD_MARGIN * 2
+    })
+  })
+
+  it('只有拖动手柄空白处能开始拖拽，标签和关闭按钮不行', () => {
+    const handle = fakeClosestNode(['data-inspector-drag-handle'])
+    const closeButton = fakeClosestNode(['button'], handle)
+    expect(isInspectorCardDragSource(closeButton)).toBe(false)
+    expect(isInspectorCardDragSource(handle)).toBe(true)
+    expect(isInspectorCardDragSource(null)).toBe(false)
   })
 
   it('未知标签回退到 Timeline，左右方向键循环', () => {

@@ -18,7 +18,7 @@ import type {
   AgentRuntimeTurnResult
 } from './agent-runtime-adapter'
 import { AgentRuntimeAdapterError } from './agent-runtime-adapter'
-import { AgentService, AgentServiceError } from './agent-service'
+import { AgentService, AgentServiceError, type AgentServiceOptions } from './agent-service'
 import { OperationGate } from './operation-gate'
 import { TaskExecutionController } from './task-execution-controller'
 import { ProjectRegistry } from '../project/project-registry'
@@ -945,6 +945,46 @@ describe('AgentService Task / Turn 编排', () => {
     }
   })
 
+  it('创建 Task 成功后立刻捕获变更基线，失败不得回滚 Task', async () => {
+    const ensureChangeBaseline = vi.fn(async () => undefined)
+    const fixture = await createHistoryServiceFixture(
+      ['task-a'],
+      { resume: true, load: true },
+      { ensureChangeBaseline }
+    )
+    try {
+      const task = await fixture.service.createTask(fixture.project.projectId)
+      expect(ensureChangeBaseline).toHaveBeenCalledWith({
+        taskId: task.taskId,
+        projectId: fixture.project.projectId,
+        environmentId: createLocalEnvironmentId(
+          fixture.project.projectId,
+          fixture.project.canonicalRoot
+        ),
+        executionRoot: fixture.project.canonicalRoot
+      })
+      expect(fixture.store.getTaskRecord(task.taskId).taskId).toBe(task.taskId)
+    } finally {
+      await fixture.dispose()
+    }
+
+    const failingEnsure = vi.fn(async () => {
+      throw new Error('baseline-unavailable')
+    })
+    const failing = await createHistoryServiceFixture(
+      ['task-b'],
+      { resume: true, load: true },
+      { ensureChangeBaseline: failingEnsure }
+    )
+    try {
+      const task = await failing.service.createTask(failing.project.projectId)
+      expect(failingEnsure).toHaveBeenCalledOnce()
+      expect(failing.store.getTaskRecord(task.taskId).taskId).toBe(task.taskId)
+    } finally {
+      await failing.dispose()
+    }
+  })
+
   it('createSession 期间到达的命令快照在 createTask 返回后仍可读取', async () => {
     const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
     const service = createService(adapter, ['task-a'])
@@ -1219,7 +1259,8 @@ function restoreSnapshot({
 
 async function createHistoryServiceFixture(
   ids: string[],
-  capabilities: { resume: boolean; load: boolean } = { resume: true, load: true }
+  capabilities: { resume: boolean; load: boolean } = { resume: true, load: true },
+  extra: Pick<AgentServiceOptions, 'ensureChangeBaseline'> = {}
 ): Promise<{
   adapter: FakeRuntimeAdapter
   service: AgentService
@@ -1242,7 +1283,8 @@ async function createHistoryServiceFixture(
     projectRegistry: registry,
     taskStore: store,
     operationGate: new OperationGate(),
-    createId: () => ids[idIndex++] ?? `unexpected-id-${idIndex}`
+    createId: () => ids[idIndex++] ?? `unexpected-id-${idIndex}`,
+    ...extra
   })
   return {
     adapter,

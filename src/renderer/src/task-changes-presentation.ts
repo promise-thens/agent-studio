@@ -71,6 +71,9 @@ export interface ChangeTreeFolderView {
 
 export type ChangeTreeNode = ChangeTreeFileView | ChangeTreeFolderView
 
+/** 树引导线：竖线、空位、T 形分叉、末位子节点折线。 */
+export type ChangeTreeGuide = 'line' | 'blank' | 'tee' | 'elbow'
+
 export interface ChangeTreeRowView {
   kind: 'folder' | 'file'
   id: string
@@ -81,6 +84,8 @@ export interface ChangeTreeRowView {
   deleted?: number
   attribution?: TaskChangeAttribution
   omitted?: TaskChangePath['omitted']
+  collapsed?: boolean
+  guides: readonly ChangeTreeGuide[]
 }
 
 export type FileDiffDisplayRow =
@@ -156,13 +161,15 @@ function fileNameOf(path: string): string {
   return parts[parts.length - 1] || path
 }
 
-/** 对话卡：本 Task 与未知路径，不含打开项目前就有的脏文件。 */
+const TASK_EDIT_ATTRIBUTIONS = new Set(['task-added', 'task-modified', 'task-deleted'])
+
+/** 对话卡只展示本 Task 写入的路径，不把打开项目前的脏文件或无法归因的变化说成已编辑。 */
 export function presentChangeCard(changeSet: TaskChangeSetQueryResult | null): ChangeCardView {
   if (!changeSet) {
     return { visible: false, heading: '', added: 0, deleted: 0, files: [], canRestore: false }
   }
   const files = changeSet.paths
-    .filter((item) => item.attribution !== 'pre-existing')
+    .filter((item) => TASK_EDIT_ATTRIBUTIONS.has(item.attribution))
     .sort((left, right) => left.path.localeCompare(right.path))
     .map((item) => ({
       path: item.path,
@@ -225,7 +232,26 @@ export function presentChangeFileTree(paths: readonly TaskChangePath[]): ChangeT
     })
   }
   sortChangeTree(root.children)
-  return root.children
+  return compactChangeFolders(root.children)
+}
+
+/** 单子目录链收成 src/renderer/src，避免树被拆成很多空行。 */
+export function compactChangeFolders(nodes: ChangeTreeNode[]): ChangeTreeNode[] {
+  return nodes.map((node) => compactChangeFolder(node))
+}
+
+function compactChangeFolder(node: ChangeTreeNode): ChangeTreeNode {
+  if (node.kind !== 'folder') return node
+  let name = node.name
+  let id = node.id
+  let children = compactChangeFolders(node.children)
+  while (children.length === 1 && children[0]?.kind === 'folder') {
+    const only = children[0]
+    name = `${name}/${only.name}`
+    id = only.id
+    children = only.children
+  }
+  return { kind: 'folder', id, name, children }
 }
 
 function sortChangeTree(nodes: ChangeTreeNode[]): void {
@@ -249,15 +275,28 @@ export function filterChangeFileTree(nodes: ChangeTreeNode[], query: string): Ch
     const children = filterChangeFileTree(node.children, query)
     if (children.length) filtered.push({ ...node, children })
   }
-  return filtered
+  return compactChangeFolders(filtered)
 }
 
-export function flattenChangeTreeRows(nodes: ChangeTreeNode[], depth = 0): ChangeTreeRowView[] {
+export function flattenChangeTreeRows(
+  nodes: ChangeTreeNode[],
+  depth = 0,
+  collapsedIds: ReadonlySet<string> = new Set(),
+  ancestorLines: readonly boolean[] = []
+): ChangeTreeRowView[] {
   const rows: ChangeTreeRowView[] = []
-  for (const node of nodes) {
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index]
+    if (!node) continue
+    const isLast = index === nodes.length - 1
+    const guides = buildChangeTreeGuides(ancestorLines, depth, isLast)
     if (node.kind === 'folder') {
-      rows.push({ kind: 'folder', id: node.id, name: node.name, depth })
-      rows.push(...flattenChangeTreeRows(node.children, depth + 1))
+      const collapsed = collapsedIds.has(node.id)
+      rows.push({ kind: 'folder', id: node.id, name: node.name, depth, collapsed, guides })
+      if (!collapsed) {
+        const nextLines = depth === 0 ? ancestorLines : [...ancestorLines, !isLast]
+        rows.push(...flattenChangeTreeRows(node.children, depth + 1, collapsedIds, nextLines))
+      }
       continue
     }
     rows.push({
@@ -269,10 +308,22 @@ export function flattenChangeTreeRows(nodes: ChangeTreeNode[], depth = 0): Chang
       added: node.added,
       deleted: node.deleted,
       attribution: node.attribution,
-      omitted: node.omitted
+      omitted: node.omitted,
+      guides
     })
   }
   return rows
+}
+
+/** 根节点不画线；子节点用祖先竖线 + 当前层 T/L 折线，形成可见树形。 */
+function buildChangeTreeGuides(
+  ancestorLines: readonly boolean[],
+  depth: number,
+  isLast: boolean
+): ChangeTreeGuide[] {
+  const guides: ChangeTreeGuide[] = ancestorLines.map((continues) => (continues ? 'line' : 'blank'))
+  if (depth > 0) guides.push(isLast ? 'elbow' : 'tee')
+  return guides
 }
 
 /**

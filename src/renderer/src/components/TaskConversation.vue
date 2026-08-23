@@ -21,7 +21,6 @@ import type { ChangeCardView } from '../task-changes-presentation'
 import ConversationTurn from './ConversationTurn.vue'
 import PermissionPrompt from './PermissionPrompt.vue'
 import TaskChangeCard from './TaskChangeCard.vue'
-import TaskResultReview from './TaskResultReview.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -33,7 +32,6 @@ const props = withDefaults(
     eventAfterSequenceByTurn?: Record<string, number | null>
     loadingEventTurnIds?: readonly string[]
     localErrors?: readonly string[]
-    canCreateTask?: boolean
     connectFailure?: ConversationConnectFailure | null
     permission?: AgentPermissionRequest | null
     permissionPending?: boolean
@@ -46,7 +44,6 @@ const props = withDefaults(
     hasMoreTurns: false,
     loadingMoreTurns: false,
     localErrors: () => [],
-    canCreateTask: false,
     connectFailure: null,
     permission: null,
     permissionPending: false,
@@ -59,7 +56,6 @@ const props = withDefaults(
 defineEmits<{
   loadMoreTurns: []
   loadMoreEvents: [turnId: string]
-  createTask: []
   retryConnect: []
   respondPermission: [decision: AgentPermissionDecision]
   cancelTurn: []
@@ -263,15 +259,6 @@ watch(
         @review="$emit('reviewChanges')"
         @restore="$emit('restoreChanges')"
         @review-file="$emit('reviewFile', $event)"
-      />
-
-      <TaskResultReview
-        v-if="model && index === model.turns.length - 1"
-        :model="model.resultReview"
-        :can-resume="false"
-        :can-create-task="canCreateTask"
-        :hide-changed-paths="Boolean(changeCard?.visible)"
-        @create-task="$emit('createTask')"
       />
     </article>
 

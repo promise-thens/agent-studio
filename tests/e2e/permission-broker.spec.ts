@@ -194,28 +194,26 @@ test.describe('受控 ACP Runtime Electron E2E', () => {
       await expect(turn.locator('.timeline-node')).toHaveCount(0)
       await expect(turn.locator('.tool-row')).toContainText('toolcall-A')
       await expect(context.page.getByRole('region', { name: '执行时间线' })).toHaveCount(0)
-      await expect(context.page.getByRole('region', { name: '结果审阅' })).toContainText(
-        'completed'
-      )
+      await expect(context.page.getByRole('region', { name: '结果审阅' })).toHaveCount(0)
 
-      // 切到没有 Task 的 Project 时，旧对话与结果审阅不得继续显示。
+      // 切到没有 Task 的 Project 时，旧对话不得继续显示。
       await selectWorkbenchProject(context.page, context.layout.secondaryWorkspace)
       await expect(
         context.page.locator('.conversation-turn').filter({ hasText: prompt })
       ).toHaveCount(0)
-      await expect(context.page.getByRole('region', { name: '结果审阅' })).toHaveCount(0)
 
       await selectWorkbenchProject(context.page, context.layout.workspace)
       await selectWorkbenchTaskById(context.page, projectId, taskId)
       await expect(
         context.page.locator('.conversation-turn').filter({ hasText: prompt }).locator('.tool-row')
       ).toContainText('toolcall-A')
-      await expect(context.page.getByRole('region', { name: '结果审阅' })).toBeVisible()
 
       // 新 Task 没有刚才历史 Task 的可见内容。
-      await context.page.getByRole('button', { name: '创建新 Task', exact: true }).click()
+      await context.page.getByRole('button', { name: '新对话', exact: true }).click()
       await expect(context.page.getByRole('region', { name: '执行时间线' })).toHaveCount(0)
-      await expect(context.page.getByRole('region', { name: '结果审阅' })).toHaveCount(0)
+      await expect(
+        context.page.locator('.conversation-turn').filter({ hasText: prompt })
+      ).toHaveCount(0)
     } finally {
       await context.close()
     }

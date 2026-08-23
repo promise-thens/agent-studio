@@ -57,6 +57,16 @@ export interface ProviderModelOption {
   displayName?: string
 }
 
+/**
+ * 把模型选项摊成 IPC 可 structuredClone 的纯对象。
+ * Vue 把列表项变成 Proxy 后不能直接 invoke，Electron 会报 DataCloneError。
+ */
+export function toSerializableProviderModel(model: ProviderModelOption): ProviderModelOption {
+  const modelId = typeof model.modelId === 'string' ? model.modelId : ''
+  const displayName = typeof model.displayName === 'string' ? model.displayName.trim() : ''
+  return displayName ? { modelId, displayName } : { modelId }
+}
+
 export interface ProviderTestResult {
   ok: boolean
   stage: ProviderTestStage

@@ -154,7 +154,7 @@ describe('ProviderConnectionTester.testInference', () => {
     expect(authorization).toBeUndefined()
     expect(requestBody).toMatchObject({
       model: 'actual-model-id',
-      max_tokens: 8,
+      max_tokens: 64,
       stream: false
     })
     expect(result).toEqual({ ok: true, stage: 'inference', message: '模型连接测试成功' })
@@ -220,6 +220,47 @@ describe('ProviderConnectionTester.testInference', () => {
     })
 
     expect(result.code).toBe('invalid-response')
+  })
+
+  it('推理模型把输出放进 reasoning_content 时仍视为连通成功', async () => {
+    const mock = await startMockServer((_request, response) => {
+      sendJson(response, 200, {
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: '',
+              reasoning_content: 'The user asked to reply with OK.'
+            },
+            finish_reason: 'length'
+          }
+        ]
+      })
+    })
+
+    const result = await new ProviderConnectionTester().testInference({
+      baseUrl: mock.baseUrl,
+      authMode: 'none',
+      modelId: 'grok-4.6'
+    })
+
+    expect(result).toEqual({ ok: true, stage: 'inference', message: '模型连接测试成功' })
+  })
+
+  it('推理模型 content 为 null 但带 finish_reason 时仍视为连通成功', async () => {
+    const mock = await startMockServer((_request, response) => {
+      sendJson(response, 200, {
+        choices: [{ message: { role: 'assistant', content: null }, finish_reason: 'stop' }]
+      })
+    })
+
+    const result = await new ProviderConnectionTester().testInference({
+      baseUrl: mock.baseUrl,
+      authMode: 'none',
+      modelId: 'grok-4.6'
+    })
+
+    expect(result).toEqual({ ok: true, stage: 'inference', message: '模型连接测试成功' })
   })
 
   it('映射底层 TLS 证书错误', async () => {

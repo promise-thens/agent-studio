@@ -1,19 +1,25 @@
 <script setup lang="ts">
-import { computed, nextTick } from 'vue'
-import { PhX as X } from '@phosphor-icons/vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { PhArrowsIn as ArrowsIn, PhArrowsOut as ArrowsOut, PhX as X } from '@phosphor-icons/vue'
 import type { PermissionAuditRecord } from '../../../shared/task-history'
 import type { TaskTimelineViewModel } from '../task-timeline-reducer'
 import type { TaskChangesController } from '../composables/useTaskChanges'
 import {
+  INSPECTOR_CARD_MARGIN,
   INSPECTOR_TABS,
+  clampInspectorCardRect,
+  defaultInspectorCardRect,
   inspectorPlaceholderCopy,
   inspectorReviewWorkspaceClass,
+  isInspectorCardDragSource,
+  moveInspectorCardRect,
   nextInspectorTab,
   permissionAuditInitiatorLabel,
   permissionAuditReasonLabel,
   permissionAuditScopeLabel,
   projectInspectorTimelineSummary,
   resolveInspectorTab,
+  type InspectorCardRect,
   type InspectorTab
 } from '../task-inspector'
 import TaskChangesPanel from './TaskChangesPanel.vue'
@@ -58,7 +64,202 @@ const placeholder = computed(() => {
   return inspectorPlaceholderCopy(currentTab.value)
 })
 const timelineSummary = computed(() => projectInspectorTimelineSummary(props.timeline))
-// Esc 由 App 裁定：执行中先聚焦停止，只有焦点已在抽屉内才关检查器。
+const cardRef = ref<HTMLElement | null>(null)
+const cardLeft = ref<number | null>(null)
+const cardTop = ref<number | null>(null)
+const expanded = ref(false)
+const compactRect = ref<InspectorCardRect | null>(null)
+let dragOrigin: { pointerId: number; x: number; y: number; left: number; top: number } | null = null
+
+const cardStyle = computed(() => {
+  if (cardLeft.value == null || cardTop.value == null) return undefined
+  const style: Record<string, string> = {
+    left: `${cardLeft.value}px`,
+    top: `${cardTop.value}px`,
+    right: 'auto'
+  }
+  if (expanded.value) {
+    const viewport = readViewport()
+    style.width = `${Math.max(1, viewport.width - INSPECTOR_CARD_MARGIN * 2)}px`
+    style.height = `${Math.max(1, viewport.height - INSPECTOR_CARD_MARGIN * 2)}px`
+  }
+  return style
+})
+
+const expandLabel = computed(() => (expanded.value ? '还原检查器大小' : '放大检查器'))
+
+// Esc 由 App 裁定：执行中先聚焦停止，只有焦点已在卡片内才关检查器。
+
+function readViewport(): { width: number; height: number } {
+  const parent = cardRef.value?.offsetParent
+  if (parent instanceof HTMLElement) {
+    return { width: parent.clientWidth, height: parent.clientHeight }
+  }
+  return { width: window.innerWidth, height: window.innerHeight }
+}
+
+function readCardSize(): { width: number; height: number } {
+  return {
+    width: cardRef.value?.offsetWidth ?? 380,
+    height: cardRef.value?.offsetHeight ?? 520
+  }
+}
+
+function applyRect(rect: InspectorCardRect): void {
+  cardLeft.value = rect.left
+  cardTop.value = rect.top
+}
+
+function placeDefault(): void {
+  const viewport = readViewport()
+  const size = readCardSize()
+  applyRect(
+    defaultInspectorCardRect({
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      width: size.width,
+      height: size.height,
+      expanded: expanded.value
+    })
+  )
+}
+
+function clampCurrent(): void {
+  if (cardLeft.value == null || cardTop.value == null) return
+  const viewport = readViewport()
+  const size = readCardSize()
+  applyRect(
+    clampInspectorCardRect({
+      left: cardLeft.value,
+      top: cardTop.value,
+      width: size.width,
+      height: size.height,
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height
+    })
+  )
+}
+
+/** 从工具条空白处开始拖卡片；点到标签或按钮时不抢事件。 */
+function onDragHandlePointerDown(event: PointerEvent): void {
+  if (event.button !== 0 || !isInspectorCardDragSource(event.target)) return
+  if (cardLeft.value == null || cardTop.value == null) placeDefault()
+  dragOrigin = {
+    pointerId: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    left: cardLeft.value ?? 0,
+    top: cardTop.value ?? 0
+  }
+  if (event.currentTarget instanceof HTMLElement) {
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+  event.preventDefault()
+}
+
+function onDragHandlePointerMove(event: PointerEvent): void {
+  if (!dragOrigin || dragOrigin.pointerId !== event.pointerId) return
+  const viewport = readViewport()
+  const size = readCardSize()
+  applyRect(
+    moveInspectorCardRect(
+      {
+        left: dragOrigin.left,
+        top: dragOrigin.top,
+        width: size.width,
+        height: size.height
+      },
+      event.clientX - dragOrigin.x,
+      event.clientY - dragOrigin.y,
+      { viewportWidth: viewport.width, viewportHeight: viewport.height }
+    )
+  )
+}
+
+function onDragHandlePointerUp(event: PointerEvent): void {
+  if (!dragOrigin || dragOrigin.pointerId !== event.pointerId) return
+  dragOrigin = null
+  if (
+    event.currentTarget instanceof HTMLElement &&
+    event.currentTarget.hasPointerCapture(event.pointerId)
+  ) {
+    event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+}
+
+/** 放大铺满工作区；还原时回到放大前的位置和尺寸。 */
+function toggleExpanded(): void {
+  const viewport = readViewport()
+  const size = readCardSize()
+  if (!expanded.value) {
+    compactRect.value = {
+      left: cardLeft.value ?? INSPECTOR_CARD_MARGIN,
+      top: cardTop.value ?? INSPECTOR_CARD_MARGIN,
+      width: size.width,
+      height: size.height
+    }
+    expanded.value = true
+    void nextTick(() => {
+      applyRect(
+        defaultInspectorCardRect({
+          viewportWidth: viewport.width,
+          viewportHeight: viewport.height,
+          width: size.width,
+          height: size.height,
+          expanded: true
+        })
+      )
+    })
+    return
+  }
+  expanded.value = false
+  const previous = compactRect.value
+  void nextTick(() => {
+    if (!previous) {
+      placeDefault()
+      return
+    }
+    applyRect(
+      clampInspectorCardRect({
+        ...previous,
+        viewportWidth: readViewport().width,
+        viewportHeight: readViewport().height
+      })
+    )
+  })
+}
+
+function onWindowResize(): void {
+  if (props.open) clampCurrent()
+}
+
+watch(
+  () => props.open,
+  (open) => {
+    if (!open) {
+      dragOrigin = null
+      return
+    }
+    void nextTick(() => {
+      if (cardLeft.value == null) placeDefault()
+      else clampCurrent()
+    })
+  }
+)
+
+watch(currentTab, () => {
+  if (!props.open) return
+  void nextTick(clampCurrent)
+})
+
+onMounted(() => {
+  window.addEventListener('resize', onWindowResize)
+  if (props.open) void nextTick(placeDefault)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onWindowResize)
+})
 
 function selectTab(tab: InspectorTab, focus = false): void {
   const next = resolveInspectorTab(tab)
@@ -95,13 +296,22 @@ function onTabListKeydown(event: KeyboardEvent): void {
 <template>
   <aside
     v-if="open"
-    class="task-inspector inspector-panel"
-    :class="reviewWorkspaceClass || undefined"
+    ref="cardRef"
+    class="task-inspector inspector-panel is-floating-card"
+    :class="[reviewWorkspaceClass, expanded ? 'is-expanded' : undefined]"
+    :style="cardStyle"
     data-inspector-drawer
     role="complementary"
     aria-label="检查器"
   >
-    <header class="inspector-toolbar">
+    <header
+      class="inspector-toolbar"
+      data-inspector-drag-handle
+      @pointerdown="onDragHandlePointerDown"
+      @pointermove="onDragHandlePointerMove"
+      @pointerup="onDragHandlePointerUp"
+      @pointercancel="onDragHandlePointerUp"
+    >
       <div
         class="inspector-tabs"
         role="tablist"
@@ -123,6 +333,16 @@ function onTabListKeydown(event: KeyboardEvent): void {
           {{ tab.label }}
         </button>
       </div>
+      <button
+        class="icon-button inspector-close"
+        type="button"
+        :title="expandLabel"
+        :aria-label="expandLabel"
+        @click="toggleExpanded()"
+      >
+        <ArrowsIn v-if="expanded" :size="16" />
+        <ArrowsOut v-else :size="16" />
+      </button>
       <button
         class="icon-button inspector-close"
         type="button"

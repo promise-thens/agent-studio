@@ -43,6 +43,22 @@ describe('ProjectRegistry', () => {
     expect((await registry.register(projectPath)).status).toBe('active')
   })
 
+  it('按 canonical root 找回仍有效的 Project ID，忽略已移除记录', async () => {
+    const root = await createTemporaryDirectory()
+    const userDataPath = await createTemporaryDirectory()
+    const projectPath = join(root, 'project')
+    await mkdir(projectPath)
+    const registry = new ProjectRegistry({ userDataPath, createId: () => 'project-root-1' })
+    await registry.initialize()
+
+    const registered = await registry.register(projectPath)
+    expect(registry.findActiveProjectIdByRoot(registered.canonicalRoot)).toBe('project-root-1')
+    expect(registry.findActiveProjectIdByRoot('/tmp/not-a-registered-project')).toBeNull()
+
+    await registry.remove(registered.projectId)
+    expect(registry.findActiveProjectIdByRoot(registered.canonicalRoot)).toBeNull()
+  })
+
   it('重启后恢复 Project 列表，目录失效时仍保留只读摘要', async () => {
     const root = await createTemporaryDirectory()
     const userDataPath = await createTemporaryDirectory()

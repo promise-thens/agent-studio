@@ -6,10 +6,11 @@ import {
   PhCircleNotch as CircleNotch,
   PhWarningCircle as WarningCircle
 } from '@phosphor-icons/vue'
-import type {
-  ProviderConfigSummary,
-  ProviderModelOption,
-  ProviderTestResult
+import {
+  toSerializableProviderModel,
+  type ProviderConfigSummary,
+  type ProviderModelOption,
+  type ProviderTestResult
 } from '../../../shared/provider'
 
 interface Props {
@@ -118,6 +119,7 @@ async function refreshModels(): Promise<void> {
 /**
  * 等主进程确认切换成功后才通知父组件。
  * 同一 modelId 的真实名称发生变化时也重新保存，用于修正旧缓存名称。
+ * 列表项来自 Vue ref，必须先摊成纯对象，否则 Electron IPC 无法 structuredClone。
  */
 async function chooseModel(model: ProviderModelOption): Promise<void> {
   if (isDisabled.value) return
@@ -128,7 +130,7 @@ async function chooseModel(model: ProviderModelOption): Promise<void> {
   selectingId.value = model.modelId
   menuError.value = ''
   try {
-    emit('changed', await props.selectModel(model))
+    emit('changed', await props.selectModel(toSerializableProviderModel(model)))
     closeMenu(true)
   } catch (error) {
     menuError.value = errorMessage(error)

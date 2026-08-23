@@ -2,6 +2,8 @@
 import { commandInconsistencyLabel, formatCommandDuration } from '../command-evidence-presentation'
 import type { TaskResultReviewModel, TimelineCommandEvidenceView } from '../task-timeline-reducer'
 
+/** 结果审阅卡片暂时不挂到对话里；数据层仍计算 resultReview，便于以后再接回。 */
+
 defineProps<{
   model: TaskResultReviewModel
   canResume?: boolean

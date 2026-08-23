@@ -10,6 +10,7 @@ import {
   changeSetTruncationBanner,
   fileDiffBanner,
   filterChangeFileTree,
+  flattenChangeTreeRows,
   formatBaseCommit,
   formatChangeLineDelta,
   gitPresenceLabel,
@@ -251,7 +252,7 @@ describe('Diff 行解析与状态横幅', () => {
 })
 
 describe('对话变更卡', () => {
-  it('只收本 Task 与未知路径，合计 +/-，pre-existing 不进卡片', () => {
+  it('只收本 Task 路径，合计 +/-，pre-existing 与未知不进卡片', () => {
     const card = presentChangeCard(
       changeSet({
         taskChangedCount: 2,
@@ -261,7 +262,8 @@ describe('对话变更卡', () => {
           { path: 'src/old.ts', attribution: 'pre-existing', added: 3, deleted: 1 },
           { path: 'src/new.ts', attribution: 'task-added', added: 10, deleted: 0 },
           { path: 'src/edit.ts', attribution: 'task-modified', added: 57, deleted: 48 },
-          { path: 'src/overlap.ts', attribution: 'overlap-unknown', added: 2, deleted: 2 }
+          { path: 'src/overlap.ts', attribution: 'overlap-unknown', added: 2, deleted: 2 },
+          { path: 'src/after.ts', attribution: 'user-changed-after-task', added: 1, deleted: 0 }
         ],
         revertible: {
           kind: 'latest-turn',
@@ -275,25 +277,26 @@ describe('对话变更卡', () => {
       })
     )
     expect(card.visible).toBe(true)
-    expect(card.heading).toBe('已编辑 3 个文件')
-    expect(card.added).toBe(69)
-    expect(card.deleted).toBe(50)
-    expect(card.files.map((item) => item.path)).toEqual([
-      'src/edit.ts',
-      'src/new.ts',
-      'src/overlap.ts'
-    ])
+    expect(card.heading).toBe('已编辑 2 个文件')
+    expect(card.added).toBe(67)
+    expect(card.deleted).toBe(48)
+    expect(card.files.map((item) => item.path)).toEqual(['src/edit.ts', 'src/new.ts'])
     expect(card.files[0]).toMatchObject({ fileName: 'edit.ts', added: 57, deleted: 48 })
     expect(card.canRestore).toBe(true)
     expect(formatChangeLineDelta(57, 48)).toBe('+57 −48')
   })
 
-  it('只有任务开始前已有改动时不展示卡片', () => {
+  it('只有任务开始前已有改动或无法归因的路径时不展示卡片', () => {
     const card = presentChangeCard(
       changeSet({
         taskChangedCount: 0,
         preExistingCount: 1,
-        paths: [{ path: 'README.md', attribution: 'pre-existing', added: 1, deleted: 0 }]
+        unknownCount: 2,
+        paths: [
+          { path: 'README.md', attribution: 'pre-existing', added: 1, deleted: 0 },
+          { path: 'src/old.ts', attribution: 'overlap-unknown', added: 4, deleted: 2 },
+          { path: 'src/later.ts', attribution: 'user-changed-after-task', added: 1, deleted: 0 }
+        ]
       })
     )
     expect(card.visible).toBe(false)
@@ -317,6 +320,49 @@ describe('审阅文件树与未修改行摘要', () => {
     expect(JSON.stringify(filtered)).toContain('chat-input.vue')
     expect(JSON.stringify(filtered)).not.toContain('chat-window.vue')
     expect(JSON.stringify(filtered)).not.toContain('index.vue')
+  })
+
+  it('单子目录链收成一条路径，折叠后不展开子行', () => {
+    const tree = presentChangeFileTree([
+      {
+        path: 'src/renderer/src/App.vue',
+        attribution: 'task-modified',
+        added: 1,
+        deleted: 2
+      },
+      {
+        path: 'src/renderer/src/assets/main.css',
+        attribution: 'task-modified',
+        added: 3,
+        deleted: 1
+      }
+    ])
+    expect(tree).toHaveLength(1)
+    expect(tree[0]).toMatchObject({
+      kind: 'folder',
+      name: 'src/renderer/src',
+      id: 'src/renderer/src'
+    })
+    const root = tree[0]
+    if (root.kind !== 'folder') throw new Error('expected folder')
+    expect(root.children.map((item) => item.name)).toEqual(['App.vue', 'assets'])
+    const collapsed = flattenChangeTreeRows(tree, 0, new Set(['src/renderer/src']))
+    expect(collapsed).toEqual([
+      expect.objectContaining({
+        kind: 'folder',
+        name: 'src/renderer/src',
+        collapsed: true,
+        depth: 0
+      })
+    ])
+    const expanded = flattenChangeTreeRows(tree)
+    expect(expanded.map((row) => row.name)).toEqual([
+      'src/renderer/src',
+      'App.vue',
+      'assets',
+      'main.css'
+    ])
+    expect(expanded.map((row) => row.guides)).toEqual([[], ['tee'], ['elbow'], ['blank', 'elbow']])
   })
 
   it('hunk 缺口插入只读未修改行摘要，不把元数据算进缺口', () => {
@@ -385,9 +431,6 @@ describe('Changes 面板源码约束', () => {
     const viewer = readFileSync(join(rendererDir, 'components/FileDiffViewer.vue'), 'utf8')
     const inspector = readFileSync(join(rendererDir, 'components/TaskInspector.vue'), 'utf8')
     const app = readFileSync(join(rendererDir, 'App.vue'), 'utf8')
-    expect(panel).toContain('commandSourceLabel')
-    expect(panel).toContain('commandTrustLabel')
-    expect(panel).toContain('formatCommandDuration')
     expect(panel).toContain('撤销最新一轮')
     expect(panel).toContain('canRestoreLatestTurn')
     expect(panel).toContain('restoreMessage')
@@ -398,10 +441,15 @@ describe('Changes 面板源码约束', () => {
     expect(viewer).toContain('fileDiffBanner')
     expect(viewer).toContain('presentFileDiffRows')
     expect(viewer).toContain('行未修改')
+    expect(viewer).toContain('file-diff-lines')
     expect(viewer).not.toContain('没有改动')
     expect(inspector).toContain('TaskChangesPanel')
     expect(inspector).toContain('reviewWorkspaceClass')
     expect(inspector).toContain('changesController')
+    expect(inspector).toContain('data-inspector-drag-handle')
+    expect(inspector).toContain('is-floating-card')
+    expect(panel).toContain('changes-tree-guide')
+    expect(panel).toContain('data-guide')
     expect(readFileSync(join(rendererDir, 'task-inspector.ts'), 'utf8')).toContain(
       'is-review-workspace'
     )
@@ -413,5 +461,20 @@ describe('Changes 面板源码约束', () => {
     expect(card).toContain('审核')
     expect(card).toContain('撤销')
     expect(card).not.toContain('继续任务')
+    const css = readFileSync(join(rendererDir, 'assets/main.css'), 'utf8')
+    expect(css).toMatch(/\.changes-tree-pane\s+\.changes-path-groups[\s\S]*?align-content:\s*start/)
+    expect(css).toMatch(/\.changes-tree-row[\s\S]*?max-height:\s*24px/)
+    expect(css).toMatch(/\.file-diff-lines[\s\S]*?min-width:\s*100%/)
+    expect(css).toMatch(/\.file-diff-line[\s\S]*?min-width:\s*100%/)
+  })
+
+  it('不把内部 commandId 和验证命令证据展示在审查工作区', () => {
+    const panel = readFileSync(join(rendererDir, 'components/TaskChangesPanel.vue'), 'utf8')
+    expect(panel).not.toContain('{{ commandId }}')
+    expect(panel).not.toContain('changes-command-button')
+    expect(panel).not.toContain('changes-command-ids')
+    expect(panel).not.toContain('selectCommand')
+    expect(panel).not.toContain('<h3>验证</h3>')
+    expect(panel).not.toContain('commandSourceLabel')
   })
 })

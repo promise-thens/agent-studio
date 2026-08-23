@@ -23,7 +23,7 @@ export interface InspectorPlaceholderCopy {
 /** 抽屉默认关上，避免常驻 310px 挤占对话列。 */
 export const INSPECTOR_DEFAULT_OPEN = false
 export const INSPECTOR_DEFAULT_TAB: InspectorTab = 'timeline'
-/** 主列仍是侧栏+对话两列；检查器 overlay 覆盖右侧，不改栅格。 */
+/** 主列仍是侧栏+对话两列；检查器以 overlay 悬浮卡盖住对话，不改栅格。 */
 export const WORKSPACE_PRIMARY_COLUMNS = ['sidebar', 'conversation'] as const
 export const WORKSPACE_INSPECTOR_PLACEMENT = 'overlay' as const
 
@@ -32,9 +32,102 @@ export function openChangesReview(): { open: true; tab: 'changes' } {
   return { open: true, tab: 'changes' }
 }
 
-/** Changes 才加宽成审阅工作区；其它标签保持窄抽屉。 */
+/** Changes 才加宽成审阅工作区；其它标签保持普通悬浮卡尺寸。 */
 export function inspectorReviewWorkspaceClass(tab: InspectorTab): string {
   return resolveInspectorTab(tab) === 'changes' ? 'is-review-workspace' : ''
+}
+
+export const INSPECTOR_CARD_MARGIN = 12
+
+export interface InspectorCardRect {
+  left: number
+  top: number
+  width: number
+  height: number
+}
+
+/** 把卡片夹在工作区内，避免拖出窗口后找不到。 */
+export function clampInspectorCardRect(input: {
+  left: number
+  top: number
+  width: number
+  height: number
+  viewportWidth: number
+  viewportHeight: number
+}): InspectorCardRect {
+  const maxWidth = Math.max(1, input.viewportWidth - INSPECTOR_CARD_MARGIN * 2)
+  const maxHeight = Math.max(1, input.viewportHeight - INSPECTOR_CARD_MARGIN * 2)
+  const width = Math.min(Math.max(1, input.width), maxWidth)
+  const height = Math.min(Math.max(1, input.height), maxHeight)
+  const maxLeft = input.viewportWidth - width - INSPECTOR_CARD_MARGIN
+  const maxTop = input.viewportHeight - height - INSPECTOR_CARD_MARGIN
+  return {
+    left: clampNumber(input.left, INSPECTOR_CARD_MARGIN, Math.max(INSPECTOR_CARD_MARGIN, maxLeft)),
+    top: clampNumber(input.top, INSPECTOR_CARD_MARGIN, Math.max(INSPECTOR_CARD_MARGIN, maxTop)),
+    width,
+    height
+  }
+}
+
+/** 默认右上角；放大时铺满工作区边距内。 */
+export function defaultInspectorCardRect(input: {
+  viewportWidth: number
+  viewportHeight: number
+  width: number
+  height: number
+  expanded?: boolean
+}): InspectorCardRect {
+  if (input.expanded) {
+    return clampInspectorCardRect({
+      left: INSPECTOR_CARD_MARGIN,
+      top: INSPECTOR_CARD_MARGIN,
+      width: input.viewportWidth - INSPECTOR_CARD_MARGIN * 2,
+      height: input.viewportHeight - INSPECTOR_CARD_MARGIN * 2,
+      viewportWidth: input.viewportWidth,
+      viewportHeight: input.viewportHeight
+    })
+  }
+  return clampInspectorCardRect({
+    left: input.viewportWidth - input.width - INSPECTOR_CARD_MARGIN,
+    top: INSPECTOR_CARD_MARGIN,
+    width: input.width,
+    height: input.height,
+    viewportWidth: input.viewportWidth,
+    viewportHeight: input.viewportHeight
+  })
+}
+
+/** 按指针位移移动卡片，并再次夹回工作区。 */
+export function moveInspectorCardRect(
+  rect: InspectorCardRect,
+  deltaX: number,
+  deltaY: number,
+  viewport: { viewportWidth: number; viewportHeight: number }
+): InspectorCardRect {
+  return clampInspectorCardRect({
+    ...rect,
+    left: rect.left + deltaX,
+    top: rect.top + deltaY,
+    ...viewport
+  })
+}
+
+/**
+ * 只有拖动手柄空白处才能开始拖卡片。
+ * 标签、关闭、放大按钮必须继续可点，不能被拖拽抢走。
+ */
+export function isInspectorCardDragSource(target: unknown): boolean {
+  if (!hasClosest(target)) return false
+  if (target.closest('button, input, textarea, a, [role="tab"]')) return false
+  return Boolean(target.closest('[data-inspector-drag-handle]'))
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function hasClosest(value: unknown): value is { closest: (selector: string) => unknown } {
+  return Boolean(value) && typeof (value as { closest?: unknown }).closest === 'function'
 }
 
 export interface InspectorTimelineSummary {
@@ -47,10 +140,10 @@ export interface InspectorTimelineSummary {
 }
 
 export const INSPECTOR_TABS: readonly InspectorTabDefinition[] = [
-  { id: 'timeline', label: 'Timeline' },
-  { id: 'changes', label: 'Changes' },
-  { id: 'terminal', label: 'Terminal' },
-  { id: 'artifacts', label: 'Artifacts' }
+  { id: 'timeline', label: '时间线' },
+  { id: 'changes', label: '变更' },
+  { id: 'terminal', label: '终端' },
+  { id: 'artifacts', label: '产物' }
 ]
 
 const INSPECTOR_TAB_IDS = INSPECTOR_TABS.map((tab) => tab.id)
@@ -153,7 +246,7 @@ export function inspectorPlaceholderCopy(
   if (tab === 'changes') {
     return {
       heading: '选择一个 Task',
-      detail: '选中 Task 后可审阅 Git 基线、文件变更、受限 Diff 和验证摘要。'
+      detail: '选中 Task 后可审阅 Git 基线、文件变更和受限 Diff。'
     }
   }
   if (tab === 'terminal') {

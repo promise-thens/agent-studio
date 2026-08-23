@@ -90,6 +90,13 @@ describe('命令证据展示文案', () => {
     expect(presentCommandEvidenceSummary(truncated)).not.toContain('stdout')
   })
 
+  it('对话暂不挂载结果审阅卡片', () => {
+    const root = dirname(fileURLToPath(import.meta.url))
+    const conversation = readFileSync(join(root, 'components/TaskConversation.vue'), 'utf8')
+    expect(conversation).not.toContain('TaskResultReview')
+    expect(conversation).not.toContain('结果审阅')
+  })
+
   it('结果审阅展示命令事实，不把 Runtime 命令写成 App 沙箱', () => {
     const root = dirname(fileURLToPath(import.meta.url))
     const source = readFileSync(join(root, 'components/TaskResultReview.vue'), 'utf8')

@@ -74,21 +74,24 @@ function lineNumber(value: number | undefined): string {
     <template v-else-if="diff">
       <p v-if="banner" class="file-diff-banner" role="status">{{ banner }}</p>
       <div v-if="rows.length" class="file-diff-scroll" tabindex="0" aria-label="差异内容">
-        <template v-for="(row, index) in rows" :key="`${index}:${row.kind}`">
-          <div v-if="row.kind === 'unmodified'" class="file-diff-unmodified" role="note">
-            {{ row.count }} 行未修改
-          </div>
-          <div v-else class="file-diff-line" :data-kind="row.line.kind">
-            <span class="file-diff-gutter" aria-hidden="true">{{
-              lineNumber(row.line.oldLine)
-            }}</span>
-            <span class="file-diff-gutter" aria-hidden="true">{{
-              lineNumber(row.line.newLine)
-            }}</span>
-            <span class="file-diff-mark" aria-hidden="true">{{ lineMark(row.line.kind) }}</span>
-            <span class="file-diff-text">{{ row.line.text }}</span>
-          </div>
-        </template>
+        <!-- 包一层让长短行都铺满滚动宽度，增删背景不会只罩住文字。 -->
+        <div class="file-diff-lines">
+          <template v-for="(row, index) in rows" :key="`${index}:${row.kind}`">
+            <div v-if="row.kind === 'unmodified'" class="file-diff-unmodified" role="note">
+              {{ row.count }} 行未修改
+            </div>
+            <div v-else class="file-diff-line" :data-kind="row.line.kind">
+              <span class="file-diff-gutter" aria-hidden="true">{{
+                lineNumber(row.line.oldLine)
+              }}</span>
+              <span class="file-diff-gutter" aria-hidden="true">{{
+                lineNumber(row.line.newLine)
+              }}</span>
+              <span class="file-diff-mark" aria-hidden="true">{{ lineMark(row.line.kind) }}</span>
+              <span class="file-diff-text">{{ row.line.text }}</span>
+            </div>
+          </template>
+        </div>
       </div>
       <p v-else-if="showFallback" class="file-diff-state" role="status">
         {{ fileDiffFallback(diff.status) }}

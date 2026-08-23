@@ -125,7 +125,8 @@ export class ProviderConnectionTester {
         body: JSON.stringify({
           model: input.modelId,
           messages: [{ role: 'user', content: 'Reply with OK.' }],
-          max_tokens: 8,
+          // 8 token 会被推理模型整段吃掉；64 仍保持极小探测，避免误伤长上下文计费。
+          max_tokens: 64,
           stream: false
         })
       })
@@ -134,10 +135,12 @@ export class ProviderConnectionTester {
         return this.mapHttpFailure(response.status, bodyText, 'inference', input.apiKey)
       }
 
-      if (!extractAssistantContent(bodyText)) {
+      // grok-4.6 一类推理模型常把短测试的 token 花在 reasoning 上，content 为空；
+      // 连通测试只确认 /chat/completions 接受该 modelId，不要求必须吐出可见正文。
+      if (!hasUsableInferenceOutput(bodyText)) {
         throw new ProviderRequestError(
           'invalid-response',
-          '推理响应缺少有效的 choices[0].message.content'
+          '推理响应缺少有效的 choices[0] 输出，无法确认该模型可用'
         )
       }
 
@@ -334,18 +337,36 @@ function parseModels(bodyText: string): ProviderModelOption[] {
   return [...modelsById.values()].sort((left, right) => left.modelId.localeCompare(right.modelId))
 }
 
-function extractAssistantContent(bodyText: string): string | undefined {
+/** HTTP 200 且 choices[0] 带正文、推理文本或 finish_reason，即证明该 modelId 可被服务端执行。 */
+function hasUsableInferenceOutput(bodyText: string): boolean {
   const payload = parseJsonObject(bodyText)
-  if (!Array.isArray(payload.choices) || !isRecord(payload.choices[0])) return undefined
-  const message = payload.choices[0].message
+  if (!Array.isArray(payload.choices) || !isRecord(payload.choices[0])) return false
+  const choice = payload.choices[0]
+  if (extractChoiceOutput(choice)) return true
+  return Boolean(readNonEmptyString(choice.finish_reason))
+}
+
+function extractChoiceOutput(choice: Record<string, unknown>): string | undefined {
+  const message = choice.message
   if (!isRecord(message)) return undefined
 
-  if (typeof message.content === 'string') {
-    return message.content.trim() || undefined
-  }
-  if (!Array.isArray(message.content)) return undefined
+  const content = extractMessageContent(message.content)
+  if (content) return content
 
-  const text = message.content
+  return (
+    readNonEmptyString(message.reasoning_content) ??
+    readNonEmptyString(message.reasoning) ??
+    readNonEmptyString(message.output_text)
+  )
+}
+
+function extractMessageContent(content: unknown): string | undefined {
+  if (typeof content === 'string') {
+    return content.trim() || undefined
+  }
+  if (!Array.isArray(content)) return undefined
+
+  const text = content
     .map((part) => {
       if (typeof part === 'string') return part
       return isRecord(part) && typeof part.text === 'string' ? part.text : ''

@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { PhArrowClockwise as ArrowClockwise } from '@phosphor-icons/vue'
 import {
-  commandSourceLabel,
-  commandTrustLabel,
-  formatCommandDuration,
-  toCommandEvidenceView
-} from '../command-evidence-presentation'
+  PhArrowClockwise as ArrowClockwise,
+  PhCaretRight as CaretRight,
+  PhFile as File,
+  PhFolder as Folder
+} from '@phosphor-icons/vue'
 import type { TaskChangesController } from '../composables/useTaskChanges'
 import {
   attributionLabel,
@@ -25,13 +24,11 @@ import {
   restoreActionLabel,
   restorePreviewSummary,
   revertibleNotice,
-  unverifiedTaskPaths,
-  validationOutcomeLabel,
-  validationReasonLabel
+  unverifiedTaskPaths
 } from '../task-changes-presentation'
 import FileDiffViewer from './FileDiffViewer.vue'
 
-/** Changes 审阅工作区：文件树 + Diff；撤销仍只允许 latest-turn。 */
+/** Changes 审阅工作区：文件树 + Diff；撤销仍只允许 latest-turn。不在这里展示内部 commandId。 */
 
 const props = defineProps<{
   taskId: string
@@ -46,15 +43,9 @@ const {
   selectedDiff,
   selectedDiffLoading,
   selectedDiffError,
-  selectedCommandId,
-  selectedCommandEvidence,
-  selectedCommandLoading,
-  selectedCommandError,
   reload,
   selectPath,
   retryFileDiff,
-  selectCommand,
-  retryCommandEvidence,
   restorePreview,
   restoreBusy,
   restoreError,
@@ -65,6 +56,7 @@ const {
 } = props.controller
 
 const fileFilter = ref('')
+const collapsedFolderIds = ref(new Set<string>())
 const summary = computed(() => (changeSet.value ? presentChangeSetSummary(changeSet.value) : null))
 const warnings = computed(() => (changeSet.value ? changeSetWarnings(changeSet.value) : []))
 const gitNotice = computed(() =>
@@ -77,13 +69,12 @@ const treeRows = computed(() =>
     filterChangeFileTree(
       changeSet.value ? presentChangeFileTree(changeSet.value.paths) : [],
       fileFilter.value
-    )
+    ),
+    0,
+    collapsedFolderIds.value
   )
 )
 const fileRows = computed(() => treeRows.value.filter((row) => row.kind === 'file' && row.path))
-const commandView = computed(() =>
-  selectedCommandEvidence.value ? toCommandEvidenceView(selectedCommandEvidence.value) : null
-)
 const unverifiedPaths = computed(() =>
   changeSet.value ? unverifiedTaskPaths(changeSet.value) : []
 )
@@ -101,7 +92,16 @@ const restorePlan = computed(() =>
     ? restorePreview.value.revertible.restorePlan
     : []
 )
-const validations = computed(() => changeSet.value?.validations ?? [])
+/** 没有可审阅文件时不展示「不可一键撤销」，避免空页脚堆内部原因。 */
+const showRestoreUnavailable = computed(
+  () => !canRestore.value && readiness.value?.kind !== 'empty'
+)
+const showRestoreSection = computed(
+  () =>
+    Boolean(restoreMessage.value || restoreError.value) ||
+    canRestore.value ||
+    showRestoreUnavailable.value
+)
 
 watch(
   () => [changeSet.value?.paths, selectedPath.value] as const,
@@ -115,8 +115,20 @@ watch(
   { immediate: true }
 )
 
+watch(fileFilter, () => {
+  collapsedFolderIds.value = new Set()
+})
+
 function pathButtonId(path: string): string {
   return `changes-path-${encodeURIComponent(path)}`
+}
+
+/** 折叠或展开目录，不改变当前选中的文件。 */
+function toggleFolder(id: string): void {
+  const next = new Set(collapsedFolderIds.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  collapsedFolderIds.value = next
 }
 
 function onPathKeydown(event: KeyboardEvent, path: string): void {
@@ -136,14 +148,6 @@ function pathTabIndex(path: string): number {
   if (selectedPath.value === path) return 0
   if (!selectedPath.value && fileRows.value[0]?.path === path) return 0
   return -1
-}
-
-function exitCodeLabel(exitCode: number | undefined): string {
-  return exitCode === undefined ? '未上报' : String(exitCode)
-}
-
-function durationLabel(durationMs: number | undefined): string {
-  return durationMs === undefined ? '未记录' : formatCommandDuration(durationMs)
 }
 </script>
 
@@ -209,34 +213,61 @@ function durationLabel(durationMs: number | undefined): string {
           </label>
           <div class="changes-path-groups" role="listbox" aria-label="变更文件">
             <template v-for="row in treeRows" :key="row.id">
-              <div
+              <button
                 v-if="row.kind === 'folder'"
-                class="changes-tree-folder"
-                :style="{ paddingLeft: `${10 + row.depth * 12}px` }"
+                class="changes-tree-row changes-tree-folder"
+                type="button"
+                :title="row.id"
+                :aria-label="`${row.collapsed ? '展开' : '折叠'} ${row.name}`"
+                :aria-expanded="row.collapsed ? 'false' : 'true'"
+                @click="toggleFolder(row.id)"
               >
-                {{ row.name }}
-              </div>
+                <span class="changes-tree-guides" aria-hidden="true">
+                  <span
+                    v-for="(guide, guideIndex) in row.guides"
+                    :key="`${row.id}:${guideIndex}:${guide}`"
+                    class="changes-tree-guide"
+                    :data-guide="guide"
+                  />
+                </span>
+                <CaretRight
+                  class="changes-tree-caret"
+                  :class="{ 'is-open': !row.collapsed }"
+                  :size="12"
+                />
+                <Folder class="changes-tree-icon" :size="14" />
+                <span class="changes-path-name">{{ row.name }}</span>
+              </button>
               <button
                 v-else-if="row.path"
                 :id="pathButtonId(row.path)"
-                class="changes-path-button"
+                class="changes-tree-row changes-path-button"
                 type="button"
                 role="option"
                 :title="row.path"
                 :aria-label="`${attributionLabel(row.attribution ?? 'overlap-unknown')} ${row.path}`"
                 :aria-selected="selectedPath === row.path"
                 :tabindex="pathTabIndex(row.path)"
-                :style="{ paddingLeft: `${10 + row.depth * 12}px` }"
                 @click="selectPath(row.path)"
                 @keydown="onPathKeydown($event, row.path)"
               >
+                <span class="changes-tree-guides" aria-hidden="true">
+                  <span
+                    v-for="(guide, guideIndex) in row.guides"
+                    :key="`${row.id}:${guideIndex}:${guide}`"
+                    class="changes-tree-guide"
+                    :data-guide="guide"
+                  />
+                </span>
+                <span class="changes-tree-caret" aria-hidden="true"></span>
+                <File class="changes-tree-icon" :size="14" />
                 <span class="changes-path-name">{{ row.name }}</span>
                 <span class="changes-path-meta">
-                  <template v-if="row.added !== undefined || row.deleted !== undefined">
-                    <span class="is-add">+{{ row.added ?? 0 }}</span>
-                    <span class="is-del">−{{ row.deleted ?? 0 }}</span>
+                  <span v-if="row.added" class="is-add">+{{ row.added }}</span>
+                  <span v-if="row.deleted" class="is-del">−{{ row.deleted }}</span>
+                  <template v-if="!row.added && !row.deleted && row.omitted">
+                    {{ omittedLabel(row.omitted) }}
                   </template>
-                  <template v-else-if="row.omitted">{{ omittedLabel(row.omitted) }}</template>
                 </span>
               </button>
             </template>
@@ -253,89 +284,6 @@ function durationLabel(durationMs: number | undefined): string {
         />
         <p v-else class="changes-muted changes-diff-empty" role="status">选择一个文件查看差异。</p>
       </div>
-
-      <section class="changes-validations" aria-label="验证摘要">
-        <h3>验证</h3>
-        <p v-if="!validations.length" class="changes-muted">尚未记录验证命令。</p>
-        <article
-          v-for="validation in validations"
-          :key="validation.validationId"
-          class="changes-validation"
-          :data-outcome="validation.outcome"
-        >
-          <p>
-            {{ validationOutcomeLabel(validation.outcome) }}
-            <template v-if="validation.reason">
-              · {{ validationReasonLabel(validation.reason) }}
-            </template>
-          </p>
-          <div class="changes-command-ids">
-            <button
-              v-for="commandId in validation.commandIds"
-              :key="commandId"
-              class="changes-command-button"
-              type="button"
-              :title="`查看命令证据 ${commandId}`"
-              :aria-label="`查看命令证据 ${commandId}`"
-              :aria-pressed="selectedCommandId === commandId"
-              @click="selectCommand(commandId)"
-            >
-              {{ commandId }}
-            </button>
-          </div>
-        </article>
-
-        <p v-if="selectedCommandLoading" class="changes-muted" role="status">正在加载命令证据…</p>
-        <div v-else-if="selectedCommandError" class="changes-state" role="alert">
-          <p>{{ selectedCommandError }}</p>
-          <button
-            class="secondary-button"
-            type="button"
-            title="重试加载命令证据"
-            aria-label="重试加载命令证据"
-            @click="retryCommandEvidence()"
-          >
-            重试
-          </button>
-        </div>
-        <dl v-else-if="commandView" class="command-evidence-facts" aria-label="命令证据">
-          <div>
-            <dt>命令</dt>
-            <dd>{{ commandView.displayCommand }}</dd>
-          </div>
-          <div>
-            <dt>来源</dt>
-            <dd>{{ commandSourceLabel(commandView.source) }}</dd>
-          </div>
-          <div>
-            <dt>可信度</dt>
-            <dd>{{ commandTrustLabel(commandView.trustLevel) }}</dd>
-          </div>
-          <div>
-            <dt>退出码</dt>
-            <dd>{{ exitCodeLabel(commandView.exitCode) }}</dd>
-          </div>
-          <div>
-            <dt>耗时</dt>
-            <dd>{{ durationLabel(commandView.durationMs) }}</dd>
-          </div>
-          <div>
-            <dt>超时</dt>
-            <dd>{{ commandView.timedOut ? '已超时' : '否' }}</dd>
-          </div>
-          <div>
-            <dt>截断</dt>
-            <dd>{{ commandView.truncated ? '输出已截断' : '未截断' }}</dd>
-          </div>
-        </dl>
-        <p
-          v-if="commandView?.logIncompleteReason"
-          class="command-evidence-incomplete"
-          role="status"
-        >
-          {{ commandView.logIncompleteReason }}
-        </p>
-      </section>
 
       <section v-if="unverifiedPaths.length" class="changes-unverified" aria-label="未验证文件">
         <h3>未验证文件</h3>
@@ -354,13 +302,18 @@ function durationLabel(durationMs: number | undefined): string {
         </ul>
       </section>
 
-      <section class="changes-restore" aria-label="撤销边界">
+      <section v-if="showRestoreSection" class="changes-restore" aria-label="撤销边界">
         <p v-if="restoreMessage" class="changes-muted" role="status">{{ restoreMessage }}</p>
         <p v-if="restoreError" class="changes-risk" role="alert">{{ restoreError }}</p>
-        <p v-if="!canRestore" class="changes-risk" role="status" aria-label="不可一键撤销">
+        <p
+          v-if="showRestoreUnavailable"
+          class="changes-risk"
+          role="status"
+          aria-label="不可一键撤销"
+        >
           {{ revertibleText }}
         </p>
-        <template v-else>
+        <template v-if="canRestore">
           <p class="changes-muted" role="status">{{ revertibleText }}</p>
           <div v-if="restorePreview" class="changes-restore-preview">
             <p>{{ restorePreviewSummary(restorePreview) }}</p>
