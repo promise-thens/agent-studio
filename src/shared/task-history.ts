@@ -133,6 +133,12 @@ export type PersistedAgentEvent =
   | (PersistedAgentEventBase & { kind: 'agent-message'; text: string; messageId?: string })
   | (PersistedAgentEventBase & { kind: 'agent-thought'; text: string; messageId?: string })
   | (PersistedAgentEventBase & {
+      kind: 'agent-attachment'
+      attachmentId: string
+      attachmentKind: 'image'
+      originalName: string
+    })
+  | (PersistedAgentEventBase & {
       kind: 'tool-call'
       toolCallId: string
       title: string

@@ -258,6 +258,66 @@ describe('对话块投影', () => {
     ])
     expect(toolBlocks[1]?.label).not.toContain('ls -la')
   })
+
+  it('Runtime 图片投影为助手媒体块，只合并相邻附件', () => {
+    const blocks = projectConversationTurn(
+      turn('completed', [
+        {
+          nodeId: 'task-1:turn-1:attachment:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'attachment',
+          attachmentId: 'attachment-1',
+          attachmentKind: 'image',
+          originalName: 'runtime-image.png'
+        },
+        {
+          nodeId: 'task-1:turn-1:attachment:2',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'attachment',
+          attachmentId: 'attachment-2',
+          attachmentKind: 'image',
+          originalName: 'runtime-image.png'
+        },
+        {
+          nodeId: 'task-1:turn-1:message:3',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'message',
+          text: '图片说明'
+        },
+        {
+          nodeId: 'task-1:turn-1:attachment:4',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'attachment',
+          attachmentId: 'attachment-3',
+          attachmentKind: 'image',
+          originalName: 'runtime-image.png'
+        }
+      ])
+    )
+    const media = blocks.filter((block) => block.kind === 'attachment')
+
+    expect(media).toEqual([
+      expect.objectContaining({
+        taskId: 'task-1',
+        attachmentIds: ['attachment-1', 'attachment-2']
+      }),
+      expect.objectContaining({ taskId: 'task-1', attachmentIds: ['attachment-3'] })
+    ])
+    expect(blocks.map((block) => block.kind)).toEqual([
+      'user',
+      'attachment',
+      'message',
+      'attachment'
+    ])
+  })
 })
 
 describe('权限卡主按钮', () => {

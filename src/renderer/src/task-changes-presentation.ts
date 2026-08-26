@@ -12,6 +12,7 @@ import type {
   TaskChangeSet,
   TaskChangeSetQueryResult
 } from '../../shared/git-review'
+import { isChangeMediaPreviewPath, isPdfAttachmentPath } from '../../shared/task-attachment'
 
 /** Inspector Changes 文件列表分组；pre-existing 单独成组，避免混进 Task 修改。 */
 export type ChangePathGroupId =
@@ -40,6 +41,7 @@ export interface ChangeCardFileView {
   added?: number
   deleted?: number
   attribution: TaskChangeAttribution
+  mediaKind?: 'image' | 'pdf'
 }
 
 /** 对话里的紧凑变更卡；pre-existing 不进入。 */
@@ -176,7 +178,10 @@ export function presentChangeCard(changeSet: TaskChangeSetQueryResult | null): C
       fileName: fileNameOf(item.path),
       added: item.added,
       deleted: item.deleted,
-      attribution: item.attribution
+      attribution: item.attribution,
+      ...(isChangeMediaPreviewPath(item.path)
+        ? { mediaKind: isPdfAttachmentPath(item.path) ? ('pdf' as const) : ('image' as const) }
+        : {})
     }))
   if (files.length === 0) {
     return { visible: false, heading: '', added: 0, deleted: 0, files: [], canRestore: false }

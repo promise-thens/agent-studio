@@ -63,6 +63,8 @@ export interface TaskAttachmentPreview {
 }
 
 export interface TaskDesktopApi {
+  /** 只解析真实拖入的 File；Renderer 不获得通用 Electron 或文件系统能力。 */
+  resolveDroppedFilePaths: (files: readonly File[]) => string[]
   list: (
     projectId: string,
     cursor?: string,

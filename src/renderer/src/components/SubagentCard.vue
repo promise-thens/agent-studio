@@ -24,6 +24,7 @@ const statusLabel = computed(() => subagentStatusLabel(props.status))
   <details class="subagent-card" :data-status="status" :open="status === 'running'">
     <summary :title="name" :aria-label="`${name}，${statusLabel}`">
       <span class="subagent-heading">
+        <span class="subagent-caret" aria-hidden="true" />
         <span class="subagent-dot" aria-hidden="true" />
         <span class="subagent-name">{{ name }}</span>
         <span class="subagent-status">{{ statusLabel }}</span>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import {
   PhPaperclip as Paperclip,
   PhPaperPlaneTilt as PaperPlaneTilt,
@@ -75,11 +75,19 @@ const emit = defineEmits<{
 
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const stopButton = ref<HTMLButtonElement | null>(null)
+const imageDialog = ref<HTMLElement | null>(null)
+const selectedImage = ref<{ url: string; name: string } | null>(null)
 const dragging = ref(false)
 
-function droppedFilePath(file: File): string | null {
-  const path = (file as File & { path?: string }).path
-  return typeof path === 'string' && path.trim() ? path : null
+/** 打开图片详情并把焦点移入灯箱，确保 Esc 不会被工作台快捷键误处理。 */
+async function openImagePreview(url: string, name: string): Promise<void> {
+  selectedImage.value = { url, name }
+  await nextTick()
+  imageDialog.value?.focus()
+}
+
+function closeImagePreview(): void {
+  selectedImage.value = null
 }
 
 function handleDragOver(event: DragEvent): void {
@@ -97,7 +105,7 @@ function handleDrop(event: DragEvent): void {
   dragging.value = false
   if (props.textareaDisabled) return
   const files = [...(event.dataTransfer?.files ?? [])]
-  const paths = files.map(droppedFilePath).filter((path): path is string => Boolean(path))
+  const paths = window.task.resolveDroppedFilePaths(files)
   if (paths.length > 0) emit('import-dropped-paths', paths)
 }
 
@@ -237,14 +245,28 @@ defineExpose({ focus, focusStop })
         @select="submitPaletteItem"
       />
       <ul v-if="attachments?.length" class="composer-attachments" aria-label="待发送附件">
-        <li v-for="item in attachments" :key="item.attachmentId" class="composer-attachment">
-          <img
-            v-if="item.previewUrl"
-            :src="item.previewUrl"
-            :alt="item.originalName"
-            class="composer-attachment-thumb"
-          />
-          <span class="composer-attachment-name" :title="item.originalName">{{
+        <li
+          v-for="item in attachments"
+          :key="item.attachmentId"
+          class="composer-attachment"
+          :class="{ 'composer-attachment--image': item.kind === 'image' && item.previewUrl }"
+          :aria-label="item.originalName"
+        >
+          <button
+            v-if="item.kind === 'image' && item.previewUrl"
+            type="button"
+            class="composer-attachment-image-trigger"
+            :title="`查看 ${item.originalName}`"
+            :aria-label="`查看 ${item.originalName}`"
+            @click="openImagePreview(item.previewUrl, item.originalName)"
+          >
+            <img
+              :src="item.previewUrl"
+              :alt="item.originalName"
+              class="composer-attachment-thumb"
+            />
+          </button>
+          <span v-else class="composer-attachment-name" :title="item.originalName">{{
             item.originalName
           }}</span>
           <button
@@ -322,6 +344,28 @@ defineExpose({ focus, focusStop })
           </button>
         </template>
       </div>
+    </div>
+    <div v-if="selectedImage" class="attachment-image-backdrop" @click.self="closeImagePreview">
+      <section
+        ref="imageDialog"
+        class="attachment-image-dialog"
+        role="dialog"
+        aria-modal="true"
+        :aria-label="`预览 ${selectedImage.name}`"
+        tabindex="-1"
+        @keydown.esc.stop="closeImagePreview"
+      >
+        <button
+          type="button"
+          class="attachment-image-close"
+          title="关闭图片预览"
+          aria-label="关闭图片预览"
+          @click="closeImagePreview"
+        >
+          <X :size="18" weight="bold" />
+        </button>
+        <img :src="selectedImage.url" :alt="selectedImage.name" />
+      </section>
     </div>
     <p
       v-if="disabledMessage || promptMediaHint"

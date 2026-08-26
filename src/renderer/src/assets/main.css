@@ -298,7 +298,7 @@ button:disabled {
   display: grid;
   flex: 1 1 auto;
   place-content: center;
-  width: min(100%, 760px);
+  width: min(100%, 840px);
   margin: 0 auto;
   padding: 0 24px;
   color: var(--text-3);
@@ -309,8 +309,8 @@ button:disabled {
 
 .conversation-turn {
   display: grid;
-  gap: 10px;
-  width: min(100%, 760px);
+  gap: 14px;
+  width: min(100%, 840px);
   margin: 0 auto;
   padding: 0 24px;
 }
@@ -466,17 +466,88 @@ button:disabled {
 
 .conversation-blocks {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
+}
+
+.conversation-process-step + .conversation-assistant {
+  margin-top: 4px;
+  padding-top: 4px;
 }
 
 .conversation-thought,
 .conversation-plan,
 .conversation-usage {
   min-width: 0;
-  color: var(--text-3);
-  font-size: 12px;
+  color: var(--text-2);
+  font-size: 13px;
   line-height: 1.5;
+}
+
+/* 执行过程共用一条连续细轨，让思考、计划和工具形成可扫描的调用链。 */
+.conversation-process-step {
+  position: relative;
+  min-width: 0;
+  min-height: 28px;
+  padding-left: 30px;
+}
+
+.conversation-process-step:has(+ .conversation-process-step)::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  top: 14px;
+  bottom: -18px;
+  left: 7px;
+  width: 1px;
+  background: color-mix(in srgb, var(--border-strong) 72%, transparent);
+}
+
+.conversation-process-step::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  top: 9px;
+  left: 3px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--app-bg);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-3) 78%, var(--surface-3));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border-strong) 78%, transparent);
+}
+
+.conversation-process-step[data-process-kind='plan']::after,
+.conversation-process-step[data-process-kind='subagent']::after {
+  background: color-mix(in srgb, var(--accent) 72%, var(--surface-3));
+}
+
+.conversation-process-step[data-status='in_progress']::after,
+.conversation-process-step[data-status='pending']::after,
+.conversation-process-step[data-status='running']::after {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  animation: process-node-pulse 1.6s ease-in-out infinite;
+}
+
+.conversation-process-step[data-status='in_progress']:has(+ .conversation-process-step)::before,
+.conversation-process-step[data-status='pending']:has(+ .conversation-process-step)::before,
+.conversation-process-step[data-status='running']:has(+ .conversation-process-step)::before {
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--border-strong) 72%, transparent) 0%,
+    color-mix(in srgb, var(--border-strong) 72%, transparent) 34%,
+    color-mix(in srgb, var(--accent) 82%, transparent) 50%,
+    color-mix(in srgb, var(--border-strong) 72%, transparent) 66%,
+    color-mix(in srgb, var(--border-strong) 72%, transparent) 100%
+  );
+  background-size: 100% 220%;
+  animation: process-rail-flow 1.35s linear infinite;
+}
+
+.conversation-process-step[data-status='failed']::after {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
 .conversation-thought summary,
@@ -484,15 +555,94 @@ button:disabled {
 .conversation-usage summary,
 .tool-row-details summary,
 .subagent-card summary {
+  list-style: none;
   cursor: pointer;
-  font-size: 12px;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 600;
   line-height: 1.5;
-  color: var(--text-3);
+  color: var(--text-2);
+}
+
+.conversation-thought summary::-webkit-details-marker,
+.conversation-plan summary::-webkit-details-marker,
+.conversation-usage summary::-webkit-details-marker,
+.tool-row-details summary::-webkit-details-marker,
+.subagent-card summary::-webkit-details-marker {
+  display: none;
+}
+
+.conversation-thought > summary,
+.conversation-plan > summary,
+.conversation-usage > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  margin-left: -6px;
+  padding: 3px 6px;
+  border-radius: 8px;
+  transition:
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.conversation-thought > summary:hover,
+.conversation-plan > summary:hover,
+.conversation-usage > summary:hover,
+.tool-row-details > summary:hover,
+.subagent-card > summary:hover {
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--surface-3) 64%, transparent);
+}
+
+.conversation-thought > summary:focus-visible,
+.conversation-plan > summary:focus-visible,
+.conversation-usage > summary:focus-visible,
+.tool-row-details > summary:focus-visible,
+.subagent-card > summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 72%, white);
+  outline-offset: 2px;
+}
+
+.conversation-process-caret,
+.tool-row-caret,
+.subagent-caret {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  transform: rotate(-45deg);
+  transition: transform 140ms ease;
+}
+
+.tool-row-caret-placeholder {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+}
+
+.conversation-thought[open] > summary .conversation-process-caret,
+.conversation-plan[open] > summary .conversation-process-caret,
+.conversation-usage[open] > summary .conversation-process-caret,
+.tool-row-details[open] > summary .tool-row-caret,
+.subagent-card[open] > summary .subagent-caret {
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+.conversation-process-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .conversation-thought-body {
   margin: 6px 0 0;
+  padding: 10px 12px;
+  border-left: 2px solid color-mix(in srgb, var(--border-strong) 64%, transparent);
+  border-radius: 0 9px 9px 0;
+  background: color-mix(in srgb, var(--surface-2) 62%, transparent);
   color: var(--text-3);
   font-size: 13px;
   line-height: 1.55;
@@ -501,17 +651,16 @@ button:disabled {
 }
 
 .conversation-plan {
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  border-radius: 10px;
 }
 
 .plan-checklist {
   display: grid;
   gap: 6px;
-  margin: 8px 0 0;
-  padding: 0;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 68%, transparent);
   list-style: none;
 }
 
@@ -566,8 +715,8 @@ button:disabled {
 
 .tool-row {
   min-width: 0;
-  color: var(--text-3);
-  font-size: 12px;
+  color: var(--text-2);
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -575,7 +724,36 @@ button:disabled {
 .tool-row-details summary {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-height: 28px;
+  margin-left: -6px;
+  padding: 3px 6px;
+  border-radius: 8px;
+}
+
+.tool-row-line {
+  transition: background 140ms ease;
+}
+
+.tool-row-line:hover {
+  background: color-mix(in srgb, var(--surface-3) 52%, transparent);
+}
+
+.tool-row-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-weight: 590;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-row-status {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 550;
 }
 
 .tool-row-warning {
@@ -587,22 +765,39 @@ button:disabled {
   color: var(--danger);
 }
 
+.tool-row[data-status='failed'] .tool-row-label,
+.tool-row[data-status='failed'] .tool-row-status {
+  color: var(--danger);
+}
+
+.tool-row[data-status='completed'] .tool-row-status {
+  color: color-mix(in srgb, var(--success) 76%, var(--text-3));
+}
+
+.tool-row[data-status='in_progress'] .tool-row-status,
+.tool-row[data-status='pending'] .tool-row-status {
+  color: var(--accent);
+}
+
 .tool-row-files {
   display: grid;
   gap: 4px;
   margin: 6px 0 0;
-  padding-left: 18px;
+  padding: 8px 10px 8px 22px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-2) 64%, transparent);
   list-style: none;
 }
 
 .tool-row-detail {
   margin: 6px 0 0;
-  padding: 8px 10px;
+  padding: 10px 12px;
   max-height: 12em;
   overflow: auto;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
-  color: var(--text-3);
+  border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+  color: var(--text-2);
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   line-height: 1.5;
@@ -620,19 +815,91 @@ button:disabled {
   animation: spin 900ms linear infinite;
 }
 
-.subagent-card {
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
-  color: var(--text-3);
+/* Turn 尾标持续反馈 Runtime 非终态；只动 transform/opacity，避免对话布局抖动。 */
+.conversation-run-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  min-height: 28px;
+  margin-left: 30px;
+  padding: 3px 7px;
+  border-radius: 8px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
   font-size: 12px;
+  font-weight: 620;
+  line-height: 1.4;
+}
+
+.conversation-run-indicator[data-status='waiting-permission'] {
+  color: color-mix(in srgb, var(--accent) 72%, var(--text-2));
+}
+
+.conversation-run-indicator[data-status='cancelling'] {
+  color: color-mix(in srgb, var(--danger) 76%, var(--text-2));
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+}
+
+.conversation-run-orbit {
+  position: relative;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid color-mix(in srgb, currentcolor 28%, transparent);
+  border-top-color: currentcolor;
+  border-radius: 50%;
+  animation: run-indicator-spin 1s linear infinite;
+}
+
+.conversation-run-orbit::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  background: currentcolor;
+  opacity: 0.72;
+}
+
+.conversation-run-copy {
+  white-space: nowrap;
+}
+
+.conversation-run-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.conversation-run-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentcolor;
+  opacity: 0.28;
+  animation: run-dot-wave 1.2s ease-in-out infinite;
+}
+
+.conversation-run-dots i:nth-child(2) {
+  animation-delay: 140ms;
+}
+
+.conversation-run-dots i:nth-child(3) {
+  animation-delay: 280ms;
+}
+
+.subagent-card {
+  padding-top: 0;
+  padding-right: 0;
+  padding-bottom: 0;
+  border-radius: 10px;
+  color: var(--text-2);
+  font-size: 13px;
   line-height: 1.5;
 }
 
 .subagent-card[data-status='failed'] {
-  border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
-  border-left-color: var(--danger);
+  color: var(--danger);
 }
 
 .subagent-card[data-status='failed'] .subagent-dot {
@@ -642,11 +909,14 @@ button:disabled {
 .subagent-card summary {
   display: grid;
   gap: 2px;
+  margin-left: -6px;
+  padding: 4px 6px;
+  border-radius: 8px;
 }
 
 .subagent-heading {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-columns: 7px 10px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
 }
@@ -673,7 +943,7 @@ button:disabled {
 }
 
 .subagent-count {
-  padding-left: 18px;
+  padding-left: 25px;
   color: var(--text-3);
   font-size: 12px;
   font-weight: 500;
@@ -683,7 +953,11 @@ button:disabled {
   display: grid;
   gap: 6px;
   margin-top: 8px;
-  padding-left: 12px;
+  padding: 9px 10px;
+  padding-left: 16px;
+  border-left: 1px solid color-mix(in srgb, var(--border-strong) 62%, transparent);
+  border-radius: 0 9px 9px 0;
+  background: color-mix(in srgb, var(--surface-2) 58%, transparent);
 }
 
 .conversation-availability {
@@ -761,7 +1035,8 @@ button:disabled {
 .task-change-card-heading,
 .task-change-card-title,
 .task-change-card-actions,
-.task-change-card-file {
+.task-change-card-file,
+.task-change-card-file-main {
   display: flex;
   align-items: center;
   min-width: 0;
@@ -838,6 +1113,35 @@ button:disabled {
   background: var(--hover-fill);
 }
 
+.task-change-card-file-main {
+  gap: 8px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.task-change-media-thumbnail {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+  border-radius: 6px;
+  color: var(--text-3);
+  background: color-mix(in srgb, var(--surface-3) 78%, transparent);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+}
+
+.task-change-media-thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .task-change-card-path {
   min-width: 0;
   overflow: hidden;
@@ -875,7 +1179,7 @@ button:disabled {
   flex-wrap: wrap;
   align-items: baseline;
   gap: 8px 12px;
-  width: min(100%, 760px);
+  width: min(100%, 840px);
   margin: 0 auto;
   padding: 0 24px;
 }
@@ -900,13 +1204,23 @@ button:disabled {
 
 .history-load-more {
   align-self: center;
-  margin: 6px auto;
-  padding: 7px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-chip);
-  color: var(--text-2);
-  background: var(--hover-fill);
+  margin: 4px auto;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-3);
+  background: transparent;
+  font-size: 12px;
   cursor: pointer;
+  transition:
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.history-load-more:hover:not(:disabled),
+.history-load-more:focus-visible {
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--surface-3) 68%, transparent);
 }
 
 .history-load-more:disabled {
@@ -918,7 +1232,7 @@ button:disabled {
 .execution-timeline {
   display: grid;
   gap: 14px;
-  width: min(100%, 760px);
+  width: min(100%, 840px);
   margin: 0 auto;
   padding: 8px 28px 24px;
 }
@@ -1075,7 +1389,7 @@ button:disabled {
 .task-result-review {
   display: grid;
   gap: 14px;
-  width: min(100%, 760px);
+  width: min(100%, 840px);
   margin: 0 auto 24px;
   padding: 16px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
@@ -1542,6 +1856,7 @@ button:disabled {
 }
 
 .composer-attachment {
+  position: relative;
   display: flex;
   max-width: 100%;
   align-items: center;
@@ -1552,11 +1867,45 @@ button:disabled {
   background: var(--surface-2);
 }
 
+.composer-attachment--image {
+  width: 116px;
+  height: 84px;
+  padding: 5px;
+  border-color: color-mix(in srgb, var(--border-strong) 82%, var(--accent));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-3) 84%, transparent);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--app-bg) 22%, transparent);
+}
+
+.composer-attachment--image:hover {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border-strong));
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--app-bg) 30%, transparent);
+}
+
 .composer-attachment-thumb {
-  width: 32px;
-  height: 32px;
-  object-fit: cover;
-  border-radius: 6px;
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* 横向截图完整等比缩进卡片，避免裁切；图片卡片本身负责视觉识别。 */
+  object-fit: contain;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+}
+
+.composer-attachment-image-trigger {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.composer-attachment-image-trigger:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 80%, white);
+  outline-offset: 2px;
 }
 
 .composer-attachment-name {
@@ -1585,23 +1934,127 @@ button:disabled {
   border-radius: 999px;
 }
 
+.composer-attachment--image .composer-attachment-remove {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 22px;
+  height: 22px;
+  border: 1px solid color-mix(in srgb, white 28%, transparent);
+  border-radius: 999px;
+  color: white;
+  background: color-mix(in srgb, var(--app-bg) 78%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--app-bg) 42%, transparent);
+  opacity: 0.88;
+  transform: scale(1);
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease,
+    background 160ms ease;
+}
+
+.composer-attachment--image:hover .composer-attachment-remove,
+.composer-attachment--image:focus-within .composer-attachment-remove {
+  opacity: 1;
+  transform: scale(1.04);
+}
+
+.composer-attachment--image .composer-attachment-remove:hover,
+.composer-attachment--image .composer-attachment-remove:focus-visible {
+  background: color-mix(in srgb, var(--danger) 82%, var(--app-bg));
+}
+
+/* 图片详情使用独立灯箱，放大查看时不改变 Composer 本身的布局。 */
+.attachment-image-backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: rgb(5 7 10 / 76%);
+  backdrop-filter: blur(8px);
+}
+
+.attachment-image-dialog {
+  position: relative;
+  display: grid;
+  place-items: center;
+  max-width: min(1080px, 92vw);
+  max-height: min(760px, 88vh);
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 88%, white);
+  border-radius: 16px;
+  outline: none;
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+  box-shadow: 0 28px 90px rgb(0 0 0 / 48%);
+}
+
+.attachment-image-dialog > img {
+  display: block;
+  max-width: min(1040px, 88vw);
+  max-height: min(720px, 82vh);
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+.attachment-image-close {
+  position: absolute;
+  z-index: 1;
+  top: 16px;
+  right: 16px;
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 26%);
+  border-radius: 999px;
+  color: white;
+  background: rgb(8 10 14 / 72%);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 34%);
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.attachment-image-close:hover,
+.attachment-image-close:focus-visible {
+  background: color-mix(in srgb, var(--danger) 78%, var(--app-bg));
+  transform: scale(1.04);
+}
+
+.attachment-image-close:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 80%, white);
+  outline-offset: 2px;
+}
+
 .attach-button {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-chip);
 }
 
-.conversation-user-attachments {
+.conversation-media {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin: 8px 0 0;
 }
 
-.conversation-user-attachments img {
+.conversation-media[data-variant='assistant'] {
+  justify-content: flex-start;
+  margin-top: 0;
+}
+
+.conversation-media img {
   max-width: min(280px, 100%);
   max-height: 180px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
   object-fit: contain;
 }
 
@@ -2765,6 +3218,44 @@ button:disabled {
   }
 }
 
+@keyframes process-node-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+}
+
+@keyframes process-rail-flow {
+  from {
+    background-position: 0 100%;
+  }
+  to {
+    background-position: 0 -120%;
+  }
+}
+
+@keyframes run-indicator-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes run-dot-wave {
+  0%,
+  70%,
+  100% {
+    opacity: 0.24;
+    transform: translateY(0);
+  }
+  35% {
+    opacity: 0.88;
+    transform: translateY(-2px);
+  }
+}
+
 @keyframes blink {
   50% {
     opacity: 0;
@@ -2823,6 +3314,14 @@ button:disabled {
   }
 
   .conversation-spinner,
+  .conversation-process-step[data-status='in_progress']::after,
+  .conversation-process-step[data-status='pending']::after,
+  .conversation-process-step[data-status='running']::after,
+  .conversation-process-step[data-status='in_progress']::before,
+  .conversation-process-step[data-status='pending']::before,
+  .conversation-process-step[data-status='running']::before,
+  .conversation-run-orbit,
+  .conversation-run-dots i,
   .plan-check-mark[data-status='in_progress'] {
     animation: none;
     animation-duration: 0s;

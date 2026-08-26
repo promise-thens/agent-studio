@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   createAgentDesktopApi,
   createAppDesktopApi,
@@ -14,7 +14,8 @@ import {
 export function exposeDesktopApis(
   contextIsolated: boolean,
   exposeInMainWorld: (apiKey: string, api: unknown) => void,
-  renderer: NarrowIpcRenderer
+  renderer: NarrowIpcRenderer,
+  getPathForFile: (file: File) => string
 ): void {
   if (!contextIsolated) {
     throw new Error('Agent Studio 需要启用 contextIsolation。')
@@ -22,12 +23,13 @@ export function exposeDesktopApis(
 
   exposeInMainWorld('agent', createAgentDesktopApi(renderer))
   exposeInMainWorld('app', createAppDesktopApi(renderer))
-  exposeInMainWorld('task', createTaskDesktopApi(renderer))
+  exposeInMainWorld('task', createTaskDesktopApi(renderer, getPathForFile))
   exposeInMainWorld('provider', createProviderDesktopApi(renderer))
 }
 
 exposeDesktopApis(
   process.contextIsolated,
   (apiKey, api) => contextBridge.exposeInMainWorld(apiKey, api),
-  ipcRenderer
+  ipcRenderer,
+  (file) => webUtils.getPathForFile(file)
 )

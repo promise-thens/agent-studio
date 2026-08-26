@@ -1,14 +1,18 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
+import { createAttachmentPreviewUrl } from '../attachment-preview-url'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 
-const props = defineProps<{
-  taskId: string
-  attachmentIds: string[]
-}>()
+const props = withDefaults(
+  defineProps<{
+    taskId: string
+    attachmentIds: string[]
+    variant?: 'user' | 'assistant'
+  }>(),
+  { variant: 'user' }
+)
 
 const items = ref<Array<{ id: string; name: string; kind: string; url?: string }>>([])
-const urls: string[] = []
 
 async function load(): Promise<void> {
   const next: Array<{ id: string; name: string; kind: string; url?: string }> = []
@@ -19,12 +23,8 @@ async function load(): Promise<void> {
       )
       let url: string | undefined
       if (preview.thumbnailBase64 && preview.thumbnailMime) {
-        const binary = atob(preview.thumbnailBase64)
-        const bytes = new Uint8Array(binary.length)
-        for (let index = 0; index < binary.length; index += 1)
-          bytes[index] = binary.charCodeAt(index)
-        url = URL.createObjectURL(new Blob([bytes], { type: preview.thumbnailMime }))
-        urls.push(url)
+        url =
+          createAttachmentPreviewUrl(preview.thumbnailBase64, preview.thumbnailMime) ?? undefined
       }
       next.push({
         id: attachmentId,
@@ -39,27 +39,17 @@ async function load(): Promise<void> {
   items.value = next
 }
 
-function revoke(): void {
-  while (urls.length > 0) {
-    const url = urls.pop()
-    if (url) URL.revokeObjectURL(url)
-  }
-}
-
 watch(
   () => `${props.taskId}:${props.attachmentIds.join(',')}`,
   () => {
-    revoke()
     void load()
   },
   { immediate: true }
 )
-
-onBeforeUnmount(revoke)
 </script>
 
 <template>
-  <div v-if="items.length" class="conversation-user-attachments">
+  <div v-if="items.length" class="conversation-media" :data-variant="variant">
     <template v-for="item in items" :key="item.id">
       <img v-if="item.url" :src="item.url" :alt="item.name" />
       <span v-else class="conversation-file-chip">{{ item.name }}</span>

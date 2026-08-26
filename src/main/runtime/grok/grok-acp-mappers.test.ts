@@ -1,9 +1,14 @@
 import type * as acp from '@agentclientprotocol/sdk'
 import { describe, expect, it } from 'vitest'
-import { mapGrokAvailableCommands, mapGrokSessionUpdate } from './grok-acp-mappers'
+import {
+  mapGrokAvailableCommands,
+  mapGrokRuntimeImageContent,
+  mapGrokSessionUpdate
+} from './grok-acp-mappers'
 
 const FAKE_KEY = 'sk-fake-available-commands-mapper'
 const SESSION_ID = 'runtime-session-available-commands'
+const FAKE_PNG_BASE64 = 'iVBORw0KGgoBAgME'
 
 function redactFakeText(text: string): string {
   return text.replaceAll(FAKE_KEY, '[REDACTED]')
@@ -122,5 +127,35 @@ describe('mapGrokAvailableCommands', () => {
     } as acp.SessionNotification
 
     expect(mapGrokSessionUpdate(sessionUpdate, redactFakeText)).toEqual([])
+  })
+})
+
+describe('mapGrokRuntimeImageContent', () => {
+  it('只提取白名单图片字节并忽略 ACP URI 与扩展元数据', () => {
+    const mapped = mapGrokRuntimeImageContent({
+      type: 'image',
+      data: FAKE_PNG_BASE64,
+      mimeType: 'image/png',
+      uri: 'file:///private/secret.png',
+      annotations: { audience: ['assistant'] },
+      _meta: { privatePath: '/private/secret.png' }
+    })
+
+    expect(mapped).toMatchObject({
+      mimeType: 'image/png',
+      originalName: 'runtime-image.png'
+    })
+    expect(mapped?.bytes.equals(Buffer.from(FAKE_PNG_BASE64, 'base64'))).toBe(true)
+    expect(JSON.stringify(mapped)).not.toContain('private')
+  })
+
+  it('拒绝脏 base64、未知 MIME 和非图片块', () => {
+    expect(
+      mapGrokRuntimeImageContent({ type: 'image', data: 'not base64', mimeType: 'image/png' })
+    ).toBeNull()
+    expect(
+      mapGrokRuntimeImageContent({ type: 'image', data: FAKE_PNG_BASE64, mimeType: 'image/svg+xml' })
+    ).toBeNull()
+    expect(mapGrokRuntimeImageContent({ type: 'text', text: FAKE_PNG_BASE64 })).toBeNull()
   })
 })

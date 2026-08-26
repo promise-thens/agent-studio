@@ -174,6 +174,21 @@ function limitDraft(event: AgentEventDraft): LimitedDraft {
         truncated
       }
     }
+    case 'agent-attachment': {
+      const attachmentId = limitText(event.attachmentId, MAX_SHORT_TEXT_BYTES)
+      const originalName = limitText(event.originalName, MAX_SHORT_TEXT_BYTES)
+      truncated ||= attachmentId.truncated || originalName.truncated
+      return {
+        event: {
+          ...base,
+          kind: 'agent-attachment',
+          attachmentId: attachmentId.value,
+          attachmentKind: 'image',
+          originalName: originalName.value
+        },
+        truncated
+      }
+    }
     case 'tool-call': {
       const toolCallId = limitText(event.toolCallId, MAX_SHORT_TEXT_BYTES)
       const title = limitText(event.title, MAX_SHORT_TEXT_BYTES)

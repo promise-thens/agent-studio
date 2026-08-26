@@ -23,6 +23,7 @@ import {
   type TaskExecutorStartInput
 } from './task-executor'
 import { TaskStore } from './task-store'
+import { TaskAttachmentInbox } from './task-attachment-inbox'
 
 const execFile = promisify(execFileCallback)
 
@@ -64,6 +65,58 @@ const STATUS: AgentRuntimeStatus = {
 }
 
 describe('TaskExecutor', () => {
+  it('附件 admission 写入历史并把字节交给 Adapter', async () => {
+    const fixture = await createFixture()
+    const bytes = Buffer.from('# attachment')
+    const descriptor = await fixture.inbox.importBytes({
+      taskId: 'task-1',
+      originalName: 'notes.md',
+      bytes
+    })
+    fixture.adapter.startTurn.mockResolvedValue({ outcome: 'completed' })
+
+    await fixture.executor.start({ ...fixture.input, prompt: '', promptDisplayText: '', attachmentIds: [descriptor.attachmentId] })
+    await fixture.executor.waitForTerminal()
+
+    expect(fixture.adapter.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: '',
+        attachments: [
+          expect.objectContaining({
+            fileName: 'notes.md',
+            mimeType: 'text/markdown',
+            kind: 'text',
+            bytes
+          })
+        ]
+      })
+    )
+    expect((await fixture.store.listTurns('task-1')).items[0]).toMatchObject({
+      promptDisplayText: '附件：notes.md',
+      attachmentIds: [descriptor.attachmentId]
+    })
+  })
+
+  it('Turn admission 失败时恢复已绑定的用户 draft', async () => {
+    const fixture = await createFixture()
+    const descriptor = await fixture.inbox.importBytes({
+      taskId: 'task-1',
+      originalName: 'notes.md',
+      bytes: Buffer.from('# attachment')
+    })
+    vi.spyOn(fixture.store, 'admitExecutionTurn').mockRejectedValueOnce(
+      new Error('模拟 admission 失败')
+    )
+
+    await expect(
+      fixture.executor.start({ ...fixture.input, attachmentIds: [descriptor.attachmentId] })
+    ).rejects.toThrow('模拟 admission 失败')
+    expect(await fixture.inbox.listDrafts('task-1')).toMatchObject([
+      { attachmentId: descriptor.attachmentId, binding: 'draft' }
+    ])
+    expect(fixture.adapter.startTurn).not.toHaveBeenCalled()
+  })
+
   it('admission 持久化未完成时原子拒绝第二个 start', async () => {
     const fixture = await createFixture()
     const writer = (
@@ -726,6 +779,7 @@ async function createFixture(
   onSnapshot: ReturnType<typeof vi.fn>
   onEvent: ReturnType<typeof vi.fn>
   input: ReturnType<typeof startInput>
+  inbox: TaskAttachmentInbox
 }> {
   const userDataPath = await mkdtemp(join(tmpdir(), 'task-executor-'))
   temporaryDirectories.push(userDataPath)
@@ -748,6 +802,10 @@ async function createFixture(
   const onSnapshot = vi.fn()
   const onEvent = vi.fn()
   const gate = new OperationGate()
+  const inbox = new TaskAttachmentInbox({
+    resolveTaskDirectory: (taskId) => store.getTaskFilesystemRoot(taskId),
+    probeImagePixels: () => ({ width: 8, height: 8 })
+  })
   const ids = ['execution-1', 'turn-1', 'execution-2', 'turn-2']
   const executor = new TaskExecutor({
     taskStore: store,
@@ -764,6 +822,7 @@ async function createFixture(
     scheduleTimeout: options.scheduleTimeout,
     clearScheduledTimeout: options.clearScheduledTimeout,
     onCancelTimeout: options.onCancelTimeout,
+    attachmentInbox: inbox,
     ...(options.ensureChangeBaseline ? { ensureChangeBaseline: options.ensureChangeBaseline } : {}),
     ...(options.recordTurnChangeCheckpoint
       ? { recordTurnChangeCheckpoint: options.recordTurnChangeCheckpoint }
@@ -774,7 +833,7 @@ async function createFixture(
     environmentId: store.getTaskRecord('task-1').environment.environmentId,
     workspace: project.canonicalRoot
   })
-  return { store, adapter, executor, gate, onSnapshot, onEvent, input }
+  return { store, adapter, executor, gate, onSnapshot, onEvent, input, inbox }
 }
 
 function startInput(identity: {

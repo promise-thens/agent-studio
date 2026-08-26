@@ -29,6 +29,7 @@ export interface AdmittedTurnFact {
   promptDisplayText: string
   model: TurnModelSnapshot
   acceptedAt: string
+  attachmentIds?: string[]
 }
 
 export type VersionedFactSlot<T> =
@@ -96,6 +97,7 @@ export type TaskTimelineFactAction =
 
 export type TaskTimelineNode =
   | TimelineTextNode
+  | TimelineAttachmentNode
   | TimelinePlanNode
   | TimelineToolNode
   | TimelineCommandNode
@@ -120,6 +122,14 @@ export interface TimelineTextNode extends TimelineNodeBase {
   kind: 'user-prompt' | 'message' | 'thought'
   text: string
   attachmentIds?: string[]
+}
+
+/** Runtime 图片在时间线中只保留 inbox 引用，实际预览继续走受限 Task IPC。 */
+export interface TimelineAttachmentNode extends TimelineNodeBase {
+  kind: 'attachment'
+  attachmentId: string
+  attachmentKind: 'image'
+  originalName: string
 }
 
 export interface TimelinePlanNode extends TimelineNodeBase {
@@ -397,15 +407,16 @@ function projectNodes(
 ): TaskTimelineNode[] {
   const nodes: TaskTimelineNode[] = []
   const prompt = record?.promptDisplayText ?? turn.admission?.promptDisplayText
-  if (prompt)
+  const promptAttachmentIds = record?.attachmentIds ?? turn.admission?.attachmentIds
+  if (prompt || promptAttachmentIds?.length)
     nodes.push({
       nodeId: `${turn.taskId}:${turn.turnId}:user`,
       taskId: turn.taskId,
       turnId: turn.turnId,
       source: record ? 'turn-record' : 'admission',
       kind: 'user-prompt',
-      text: prompt,
-      ...(record?.attachmentIds?.length ? { attachmentIds: record.attachmentIds } : {})
+      text: prompt ?? '',
+      ...(promptAttachmentIds?.length ? { attachmentIds: promptAttachmentIds } : {})
     })
   const messageNodes = new Map<string, TimelineTextNode>()
   let previousAnonymousText:
@@ -453,7 +464,18 @@ function projectNodes(
       continue
     }
     previousAnonymousText = undefined
-    if (event.kind === 'plan') {
+    if (event.kind === 'agent-attachment') {
+      // 同一 messageId 的文本不得跨图片继续拼接，否则图片会被错误挪到整段回复末尾。
+      messageNodes.clear()
+      nodes.push({
+        ...base,
+        nodeId: `${event.taskId}:${event.turnId}:attachment:${event.sequence}`,
+        kind: 'attachment',
+        attachmentId: event.attachmentId,
+        attachmentKind: event.attachmentKind,
+        originalName: event.originalName
+      })
+    } else if (event.kind === 'plan') {
       // ACP plan 是整表快照：同一 Turn 只保留一张卡，后到事件原地覆盖 entries。
       const existing = nodes.find(
         (node): node is TimelinePlanNode =>

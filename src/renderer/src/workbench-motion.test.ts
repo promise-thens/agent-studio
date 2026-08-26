@@ -17,11 +17,11 @@ const conversationTurnSource = readFileSync(join(cssDir, 'components/Conversatio
 describe('子 Agent 与 ToolRow/计划卡密度', () => {
   it('字号、圆角、工具缩进与计划卡同一套，失败走危险色', () => {
     const density = subagentSkinMatchesToolRowDensity(mainCss)
-    expect(extractCssRuleBlock(mainCss, '.tool-row')).toContain('font-size: 12px')
-    expect(extractCssRuleBlock(mainCss, '.subagent-card')).toContain('font-size: 12px')
-    expect(density.sharedFontSizePx).toBe(12)
-    expect(density.sharedRadiusPx).toBe(12)
-    expect(density.toolIndentPx).toBe(12)
+    expect(extractCssRuleBlock(mainCss, '.tool-row')).toContain('font-size: 13px')
+    expect(extractCssRuleBlock(mainCss, '.subagent-card')).toContain('font-size: 13px')
+    expect(density.sharedFontSizePx).toBe(13)
+    expect(density.sharedRadiusPx).toBe(10)
+    expect(density.toolIndentPx).toBe(16)
     expect(density.failedUsesDanger).toBe(true)
     expect(subagentSource).toContain('已运行')
     expect(subagentSource).toContain('点开查看')
@@ -39,6 +39,8 @@ describe('prefers-reduced-motion 关掉展开动画', () => {
     expect(reduced).toMatch(/\.workspace-layout\s*>\s*\.task-inspector[\s\S]*animation:\s*none/)
     expect(reduced).toMatch(/\.subagent-card[\s\S]*transition-duration:\s*0s/)
     expect(reduced).toMatch(/\.conversation-spinner[\s\S]*animation:\s*none/)
+    expect(reduced).toMatch(/\.conversation-run-orbit[\s\S]*animation:\s*none/)
+    expect(reduced).toMatch(/\.conversation-run-dots i[\s\S]*animation:\s*none/)
 
     expect(reducedMotionDisablesExpandAnimations('')).toBe(false)
     expect(
@@ -46,5 +48,21 @@ describe('prefers-reduced-motion 关掉展开动画', () => {
         '@media (prefers-reduced-motion: reduce) {\n  * { animation-duration: 1ms; }\n}'
       )
     ).toBe(false)
+  })
+})
+
+describe('运行态动效', () => {
+  it('只有非终态持续运动，并提供明确的文字尾标', () => {
+    expect(mainCss).toContain('@keyframes process-node-pulse')
+    expect(mainCss).toContain('@keyframes process-rail-flow')
+    expect(mainCss).toContain('@keyframes run-indicator-spin')
+    expect(mainCss).toContain('@keyframes run-dot-wave')
+    expect(mainCss).toMatch(
+      /\.conversation-process-step\[data-status='in_progress'\]::after[\s\S]*process-node-pulse/
+    )
+    expect(conversationTurnSource).toContain('conversation-run-indicator')
+    expect(conversationTurnSource).toContain("return '正在运行'")
+    expect(conversationTurnSource).toContain("return '等待你的确认'")
+    expect(conversationTurnSource).toContain('aria-live="polite"')
   })
 })

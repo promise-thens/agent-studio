@@ -29,6 +29,22 @@ type TaskDeletionRuntime = {
   deleteTask(taskId: string, token: string): Promise<void>
 }
 
+type RuntimeImageStoreInput = {
+  taskId: string
+  turnId: string
+  originalName: string
+  mimeType: string
+  bytes: Buffer
+}
+
+type RuntimeAdapterOptions = {
+  storeRuntimeImage?: (input: RuntimeImageStoreInput) => Promise<{
+    attachmentId: string
+    attachmentKind: 'image'
+    originalName: string
+  }>
+}
+
 type DeletionPreparation = {
   commit: ReturnType<typeof vi.fn<() => Promise<void>>>
   rollback: ReturnType<typeof vi.fn<() => boolean>>
@@ -137,6 +153,24 @@ const mocks = vi.hoisted(() => {
         runtimeId: 'grok',
         observedAt: '2026-08-17T00:00:00.000Z',
         capabilities: {}
+      }))
+    },
+    runtimeAdapterOptions: undefined as RuntimeAdapterOptions | undefined,
+    taskAttachmentInbox: {
+      importRuntimeBytes: vi.fn(async (input: RuntimeImageStoreInput) => ({
+        attachmentId: 'runtime-attachment-1',
+        taskId: input.taskId,
+        originalName: input.originalName,
+        storedName: input.originalName,
+        kind: 'image' as const,
+        mimeType: input.mimeType,
+        byteSize: input.bytes.byteLength,
+        contentHash: 'fake-hash',
+        source: 'runtime' as const,
+        binding: 'bound' as const,
+        turnId: input.turnId,
+        createdAt: '2026-08-25T00:00:00.000Z',
+        availability: 'ready' as const
       }))
     },
     projectRegistry: {
@@ -339,6 +373,13 @@ vi.mock('./agent/task-store', () => ({
     }
   }
 }))
+vi.mock('./agent/task-attachment-inbox', () => ({
+  TaskAttachmentInbox: class {
+    constructor() {
+      return mocks.taskAttachmentInbox
+    }
+  }
+}))
 vi.mock('./security/permission-audit-store', () => ({
   PermissionAuditStore: class {}
 }))
@@ -416,7 +457,8 @@ vi.mock('./mcp/mcp-server-to-acp', () => ({
 }))
 vi.mock('./runtime/grok/grok-acp-adapter', () => ({
   GrokAcpAdapter: class {
-    constructor() {
+    constructor(_sink: unknown, options: RuntimeAdapterOptions) {
+      mocks.runtimeAdapterOptions = options
       return mocks.runtimeAdapter
     }
   }
@@ -518,6 +560,7 @@ describe('Main 删除与权限失效编排', () => {
     mocks.agentService.getSelectedTaskId.mockReturnValue(null)
     mocks.agentService.ensureTaskSessionForTurn.mockReset()
     mocks.agentService.ensureTaskSessionForTurn.mockResolvedValue(undefined)
+    mocks.taskAttachmentInbox.importRuntimeBytes.mockClear()
     mocks.projectRegistry.findActiveProjectIdByRoot.mockReset()
     mocks.projectRegistry.findActiveProjectIdByRoot.mockImplementation((workspace) =>
       workspace === '/tmp/project-1' ? 'project-1' : null
@@ -532,6 +575,25 @@ describe('Main 删除与权限失效编排', () => {
     expect(typeof review?.listTurnCheckpoints).toBe('function')
     expect(typeof review?.previewLatestTurnRestore).toBe('function')
     expect(typeof review?.restoreLatestTurn).toBe('function')
+  })
+
+  it('组装层把 Runtime 图片原子写入 Task 附件柜后只返回有限引用', async () => {
+    const storeRuntimeImage = mocks.runtimeAdapterOptions?.storeRuntimeImage
+    expect(storeRuntimeImage).toBeTypeOf('function')
+    const input: RuntimeImageStoreInput = {
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      originalName: 'runtime-image.png',
+      mimeType: 'image/png',
+      bytes: Buffer.from('fake-image')
+    }
+
+    await expect(storeRuntimeImage!(input)).resolves.toEqual({
+      attachmentId: 'runtime-attachment-1',
+      attachmentKind: 'image',
+      originalName: 'runtime-image.png'
+    })
+    expect(mocks.taskAttachmentInbox.importRuntimeBytes).toHaveBeenCalledWith(input)
   })
 
   it('Task 删除成功后才失效授权，token 校验失败时保持原授权', async () => {

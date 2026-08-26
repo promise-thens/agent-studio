@@ -41,6 +41,38 @@ describe('projectPublicAgentEvent', () => {
     expect(JSON.stringify(projected)).not.toContain('rawPayload')
   })
 
+  it('附件事件只公开 inbox 引用并脱敏展示名称', () => {
+    const event = {
+      ...BASE_EVENT,
+      kind: 'agent-attachment',
+      attachmentId: 'attachment-1',
+      attachmentKind: 'image',
+      originalName: 'fake-secret.png',
+      bytes: 'private-base64',
+      uri: 'file:///private/image.png'
+    } as unknown as AgentEvent
+
+    const projected = projectPublicAgentEvent(event, (text) =>
+      text.replace('fake-secret', '[REDACTED]')
+    )
+
+    expect(projected).toEqual({
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-18T00:00:00.000Z',
+      kind: 'agent-attachment',
+      attachmentId: 'attachment-1',
+      attachmentKind: 'image',
+      originalName: '[REDACTED].png'
+    })
+    expect(JSON.stringify(projected)).not.toContain('runtime-session-private')
+    expect(JSON.stringify(projected)).not.toContain('private-base64')
+    expect(JSON.stringify(projected)).not.toContain('file:///')
+  })
+
   it('Diff 只生成有限审阅摘要，不公开正文', () => {
     const event: AgentEvent = {
       ...BASE_EVENT,

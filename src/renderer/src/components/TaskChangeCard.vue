@@ -2,10 +2,12 @@
 import { PhFiles as Files } from '@phosphor-icons/vue'
 import type { ChangeCardView } from '../task-changes-presentation'
 import { formatChangeLineDelta } from '../task-changes-presentation'
+import TaskChangeMediaThumbnail from './TaskChangeMediaThumbnail.vue'
 
 /** 对话里的变更入口：只负责展示与发出审核/撤销，不自己调 IPC。 */
 
 defineProps<{
+  taskId: string
   model: ChangeCardView
   restoreBusy?: boolean
 }>()
@@ -61,7 +63,15 @@ defineEmits<{
           :aria-label="`审阅 ${file.path}`"
           @click="$emit('reviewFile', file.path)"
         >
-          <span class="task-change-card-path">{{ file.path }}</span>
+          <span class="task-change-card-file-main">
+            <TaskChangeMediaThumbnail
+              v-if="file.mediaKind"
+              :task-id="taskId"
+              :path="file.path"
+              :kind="file.mediaKind"
+            />
+            <span class="task-change-card-path">{{ file.path }}</span>
+          </span>
           <span
             v-if="file.added !== undefined || file.deleted !== undefined"
             class="task-change-card-delta"

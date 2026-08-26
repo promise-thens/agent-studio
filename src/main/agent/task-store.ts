@@ -335,11 +335,13 @@ export class TaskStore {
     environmentId: string
     promptDisplayText: string
     model: TurnModelSnapshot
+    attachmentIds?: string[]
   }): Promise<TurnRecordV1> {
     return this.createTurnRecord({
       ...input,
       initialState: 'queued',
-      activeExecutionId: input.executionId
+      activeExecutionId: input.executionId,
+      ...(input.attachmentIds?.length ? { attachmentIds: input.attachmentIds } : {})
     })
   }
 
@@ -1680,6 +1682,7 @@ function stripTurnSchema(turn: TurnRecordV1): TurnHistoryRecord {
     ...(turn.truncationReason ? { truncationReason: turn.truncationReason } : {}),
     eventCount: turn.eventCount,
     eventBytes: turn.eventBytes,
+    ...(turn.attachmentIds ? { attachmentIds: turn.attachmentIds } : {}),
     ...(turn.artifactIds ? { artifactIds: turn.artifactIds } : {}),
     ...(turn.validationIds ? { validationIds: turn.validationIds } : {}),
     revision: turn.revision
@@ -2057,6 +2060,14 @@ export function projectPersistedAgentEvent(
         kind: event.kind,
         text: redactText(event.text),
         ...(event.messageId ? { messageId: redactText(event.messageId) } : {})
+      }
+    case 'agent-attachment':
+      return {
+        ...base,
+        kind: 'agent-attachment',
+        attachmentId: event.attachmentId,
+        attachmentKind: 'image',
+        originalName: redactText(event.originalName)
       }
     case 'tool-call':
       return {

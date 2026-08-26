@@ -37,6 +37,14 @@ export function projectPublicAgentEvent(
         text: redactText(event.text),
         ...(event.messageId ? { messageId: redactText(event.messageId) } : {})
       }
+    case 'agent-attachment':
+      return {
+        ...base,
+        kind: 'agent-attachment',
+        attachmentId: event.attachmentId,
+        attachmentKind: 'image',
+        originalName: redactText(event.originalName)
+      }
     case 'tool-call':
       return {
         ...base,

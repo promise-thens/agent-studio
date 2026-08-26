@@ -48,6 +48,7 @@ import {
   mapGrokInitializeCapabilitySnapshot,
   mapGrokPermissionRequest,
   mapGrokPromptResponse,
+  mapGrokRuntimeImageContent,
   mapGrokSessionUpdate,
   mergeGrokToolCallAuthorizationPatch,
   type GrokToolCallAuthorizationSnapshot
@@ -98,6 +99,12 @@ interface ActiveTurn {
   rejectAllToolPermissions: boolean
   cancelRequested: boolean
   outcome?: AgentTurnOutcome
+  /** Session update 串行队列，确保图片落盘与文本、工具、终态保持 ACP 到达顺序。 */
+  sessionUpdateQueue: Promise<void>
+  /** 仅在图片异步入库期间开启；普通文本与工具更新继续同步处理。 */
+  sessionUpdateQueueActive: boolean
+  /** 同一 Turn 的坏图片只提示一次，避免 Runtime 连续脏块刷满时间线。 */
+  runtimeAttachmentErrorReported: boolean
   /** 当前 Turn 内命令证据累积；测试夹具可能缺省，读取时必须惰性创建。 */
   commandEvidenceByToolCallId?: Map<string, GrokCommandToolFacts>
 }
@@ -140,6 +147,14 @@ export interface GrokAcpAdapterOptions {
     taskId: string,
     turnId: string
   ) => { environmentId: string } | null
+  /** Runtime 图片必须先由 Main inbox 持久化，Adapter 只接收可发布的有限引用。 */
+  storeRuntimeImage?: (input: {
+    taskId: string
+    turnId: string
+    originalName: string
+    mimeType: string
+    bytes: Buffer
+  }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
 }
 
 /**
@@ -527,6 +542,9 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       terminalToolCallIds: new Set(),
       rejectAllToolPermissions: false,
       cancelRequested: false,
+      sessionUpdateQueue: Promise.resolve(),
+      sessionUpdateQueueActive: false,
+      runtimeAttachmentErrorReported: false,
       commandEvidenceByToolCallId: new Map()
     }
     this.activeTurn = activeTurn
@@ -547,6 +565,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
           embeddedContext: this.promptMedia.embeddedContext
         })
       })
+      await this.waitForSessionUpdateQueue(activeTurn)
       if (!this.isActiveTurnCurrent(activeTurn)) {
         return { outcome: activeTurn.outcome ?? 'cancelled' }
       }
@@ -560,6 +579,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       this.restoreReadyStatus(activeTurn)
       return { outcome: terminal.outcome }
     } catch (error) {
+      await this.waitForSessionUpdateQueue(activeTurn)
       if (!this.isActiveTurnCurrent(activeTurn)) {
         return { outcome: activeTurn.outcome ?? 'cancelled' }
       }
@@ -806,6 +826,62 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       return
     }
 
+    const isRuntimeImage =
+      (update.sessionUpdate === 'agent_message_chunk' ||
+        update.sessionUpdate === 'agent_thought_chunk') &&
+      update.content.type === 'image'
+
+    if (!activeTurn.sessionUpdateQueueActive && !isRuntimeImage) {
+      void this.processSessionUpdate(params, sourceConnection, activeTurn)
+      return
+    }
+
+    this.enqueueSessionUpdate(activeTurn, params, sourceConnection)
+  }
+
+  /** 图片出现后才开启串行尾队列，避免改变既有同步文本与权限事件语义。 */
+  private enqueueSessionUpdate(
+    activeTurn: ActiveTurn,
+    params: acp.SessionNotification,
+    sourceConnection: acp.ClientSideConnection
+  ): void {
+    activeTurn.sessionUpdateQueueActive = true
+    const queued = activeTurn.sessionUpdateQueue.then(() =>
+      this.processSessionUpdate(params, sourceConnection, activeTurn)
+    )
+    const settled = queued.catch(() => undefined)
+    activeTurn.sessionUpdateQueue = settled
+    void settled.finally(() => {
+      if (activeTurn.sessionUpdateQueue === settled) {
+        activeTurn.sessionUpdateQueueActive = false
+      }
+    })
+  }
+
+  /** 等待动态增长的队列尾，确保等待期间追加的 update 也先于 Turn 终态完成。 */
+  private async waitForSessionUpdateQueue(activeTurn: ActiveTurn): Promise<void> {
+    while (true) {
+      const queue = activeTurn.sessionUpdateQueue
+      await queue
+      if (queue === activeTurn.sessionUpdateQueue) return
+    }
+  }
+
+  /** 串行处理单个 update；异步图片完成后会再次校验 Turn 代次，禁止晚到数据串台。 */
+  private async processSessionUpdate(
+    params: acp.SessionNotification,
+    sourceConnection: acp.ClientSideConnection,
+    activeTurn: ActiveTurn
+  ): Promise<void> {
+    if (
+      activeTurn.connection !== sourceConnection ||
+      !this.isActiveTurnCurrent(activeTurn) ||
+      activeTurn.runtimeSessionId !== params.sessionId
+    ) {
+      return
+    }
+
+    const update = params.update
     this.observe(summarizeSessionUpdate(update as unknown as Record<string, unknown>))
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       if (!isSafeGrokToolCallId(update.toolCallId)) {
@@ -834,9 +910,67 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       }
     }
 
+    if (
+      (update.sessionUpdate === 'agent_message_chunk' ||
+        update.sessionUpdate === 'agent_thought_chunk') &&
+      update.content.type === 'image'
+    ) {
+      const image = mapGrokRuntimeImageContent(update.content)
+      if (!image) {
+        this.reportRuntimeAttachmentFailure(activeTurn)
+        return
+      }
+      await this.persistRuntimeImage(activeTurn, image)
+      return
+    }
+
     for (const draft of mapGrokSessionUpdate(params, (text) => this.safeRedact(text))) {
       this.emitDraft(activeTurn, draft)
     }
+  }
+
+  /** 图片写入成功后才发布引用事件，避免历史出现无法打开的悬空 attachmentId。 */
+  private async persistRuntimeImage(
+    activeTurn: ActiveTurn,
+    image: { bytes: Buffer; mimeType: string; originalName: string }
+  ): Promise<void> {
+    const store = this.options.storeRuntimeImage
+    if (!store) {
+      this.reportRuntimeAttachmentFailure(activeTurn)
+      return
+    }
+    try {
+      const attachment = await store({
+        taskId: activeTurn.taskId,
+        turnId: activeTurn.turnId,
+        originalName: image.originalName,
+        mimeType: image.mimeType,
+        bytes: image.bytes
+      })
+      if (!this.isActiveTurnCurrent(activeTurn)) return
+      this.emitDraft(activeTurn, {
+        ...createGrokEventBase(activeTurn.runtimeSessionId, 'native'),
+        kind: 'agent-attachment',
+        attachmentId: attachment.attachmentId,
+        attachmentKind: attachment.attachmentKind,
+        originalName: attachment.originalName
+      })
+    } catch {
+      this.reportRuntimeAttachmentFailure(activeTurn)
+    }
+  }
+
+  /** Runtime 媒体失败只给有限提示，不回显 base64、URI、文件路径或原始异常。 */
+  private reportRuntimeAttachmentFailure(activeTurn: ActiveTurn): void {
+    if (activeTurn.runtimeAttachmentErrorReported || !this.isActiveTurnCurrent(activeTurn)) return
+    activeTurn.runtimeAttachmentErrorReported = true
+    this.emitDraft(activeTurn, {
+      ...createGrokEventBase(activeTurn.runtimeSessionId, 'native'),
+      kind: 'error',
+      message: 'Runtime 返回的图片无法安全保存，已跳过该图片。',
+      recoverable: true,
+      code: 'runtime-attachment-rejected'
+    })
   }
 
   /**
@@ -1377,6 +1511,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   private verifyEventCapability(event: AgentEvent): void {
     switch (event.kind) {
       case 'agent-message':
+      case 'agent-attachment':
         this.verifyCapability('event.agent-message', 'stable')
         break
       case 'agent-thought':

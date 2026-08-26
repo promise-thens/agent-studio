@@ -242,6 +242,7 @@ watch(
     >
       <ConversationTurn
         :turn="turn"
+        :active="isActiveConversationTurn(turn)"
         :permission="permissionForTurn(turn)"
         :permission-pending="permissionPending"
         :permission-task-title="permissionTaskTitle"
@@ -254,6 +255,7 @@ watch(
 
       <TaskChangeCard
         v-if="changeCard && index === (model?.turns.length ?? 0) - 1"
+        :task-id="turn.taskId"
         :model="changeCard"
         :restore-busy="restoreBusy"
         @review="$emit('reviewChanges')"

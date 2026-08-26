@@ -137,6 +137,25 @@ export class TaskAttachmentInbox {
     return this.persist(input.taskId, input.originalName, input.bytes, input.source ?? 'user')
   }
 
+  /** Runtime 图片直接绑定到当前 Turn，绝不进入 Composer draft。 */
+  async importRuntimeBytes(input: {
+    taskId: string
+    turnId: string
+    originalName: string
+    mimeType: string
+    bytes: Buffer
+  }): Promise<TaskAttachmentDescriptor> {
+    return this.persist(
+      input.taskId,
+      input.originalName,
+      input.bytes,
+      'runtime',
+      'bound',
+      input.turnId,
+      input.mimeType
+    )
+  }
+
   async importPath(input: {
     taskId: string
     filePath: string
@@ -196,7 +215,7 @@ export class TaskAttachmentInbox {
       throw new TaskAttachmentError('too-many', '本轮附件数量超过上限。')
     }
     const unique = [...new Set(attachmentIds)]
-    const bound: TaskAttachmentDescriptor[] = []
+    const drafts: TaskAttachmentDescriptor[] = []
     let total = 0
     for (const attachmentId of unique) {
       const descriptor = await this.getDescriptor(taskId, attachmentId)
@@ -207,15 +226,45 @@ export class TaskAttachmentInbox {
       if (total > ATTACHMENT_LIMITS.maxBytesPerTurn) {
         throw new TaskAttachmentError('too-large', '本轮附件总大小超过上限。')
       }
-      const next: TaskAttachmentDescriptor = {
-        ...descriptor,
-        binding: 'bound',
-        turnId
-      }
-      await this.writeMeta(taskId, next)
-      bound.push(next)
+      drafts.push(descriptor)
     }
-    return bound
+
+    const bound: TaskAttachmentDescriptor[] = []
+    try {
+      for (const descriptor of drafts) {
+        const next: TaskAttachmentDescriptor = {
+          ...descriptor,
+          binding: 'bound',
+          turnId
+        }
+        await this.writeMeta(taskId, next)
+        bound.push(next)
+      }
+      return bound
+    } catch (error) {
+      // 批量绑定中途失败时恢复已经改写的 draft，避免输入框附件半绑定。
+      await Promise.all(bound.map((descriptor) => this.writeMeta(taskId, toDraft(descriptor))))
+      throw error
+    }
+  }
+
+  /** admission 未提交时只回滚本轮用户附件；Runtime bound 附件不允许走此入口。 */
+  async releaseTurnBindings(taskId: string, attachmentIds: string[], turnId: string): Promise<void> {
+    const descriptors: TaskAttachmentDescriptor[] = []
+    for (const attachmentId of [...new Set(attachmentIds)]) {
+      const descriptor = await this.getDescriptor(taskId, attachmentId)
+      if (
+        descriptor.source !== 'user' ||
+        descriptor.binding !== 'bound' ||
+        descriptor.turnId !== turnId
+      ) {
+        throw new TaskAttachmentError('not-draft', '附件不属于本次待回滚 Turn。')
+      }
+      descriptors.push(descriptor)
+    }
+    for (const descriptor of descriptors) {
+      await this.writeMeta(taskId, toDraft(descriptor))
+    }
   }
 
   async removeDraft(taskId: string, attachmentId: string): Promise<void> {
@@ -250,11 +299,20 @@ export class TaskAttachmentInbox {
     taskId: string,
     originalName: string,
     bytes: Buffer,
-    source: TaskAttachmentSource
+    source: TaskAttachmentSource,
+    binding: TaskAttachmentBinding = 'draft',
+    turnId?: string,
+    declaredMimeType?: string
   ): Promise<TaskAttachmentDescriptor> {
     const classified = classifyTaskAttachmentBytes({ originalName, bytes })
     if (!classified.ok) {
       throw new TaskAttachmentError(classified.reason, rejectMessage(classified.reason))
+    }
+    if (
+      source === 'runtime' &&
+      (classified.kind !== 'image' || classified.mimeType !== declaredMimeType)
+    ) {
+      throw new TaskAttachmentError('mime-mismatch', 'Runtime 图片类型校验失败。')
     }
     if (classified.kind === 'image') {
       const pixels = this.probeImagePixels?.(bytes)
@@ -268,19 +326,29 @@ export class TaskAttachmentInbox {
     if (used + bytes.byteLength > this.maxInboxBytesPerTask) {
       throw new TaskAttachmentError('quota', '该对话附件柜已满。')
     }
-    if (
-      existing.filter((item) => item.binding === 'draft').length >= ATTACHMENT_LIMITS.maxPerTurn
-    ) {
-      throw new TaskAttachmentError('too-many', '待发送附件数量超过上限。')
+    if (binding === 'draft') {
+      if (
+        existing.filter((item) => item.binding === 'draft').length >= ATTACHMENT_LIMITS.maxPerTurn
+      ) {
+        throw new TaskAttachmentError('too-many', '待发送附件数量超过上限。')
+      }
+    } else {
+      const runtimeTurnItems = existing.filter(
+        (item) =>
+          item.source === 'runtime' && item.binding === 'bound' && item.turnId === turnId
+      )
+      if (runtimeTurnItems.length >= ATTACHMENT_LIMITS.maxPerTurn) {
+        throw new TaskAttachmentError('too-many', '本轮 Runtime 图片数量超过上限。')
+      }
+      const runtimeTurnBytes = runtimeTurnItems.reduce((sum, item) => sum + item.byteSize, 0)
+      if (runtimeTurnBytes + bytes.byteLength > ATTACHMENT_LIMITS.maxBytesPerTurn) {
+        throw new TaskAttachmentError('too-large', '本轮 Runtime 图片总大小超过上限。')
+      }
     }
 
     const attachmentId = this.createId()
     const storedName = sanitizeAttachmentFileName(classified.originalName)
     const directory = this.attachmentDirectory(taskId, attachmentId)
-    await this.writer.ensureDirectory(directory)
-    const filePath = join(directory, storedName)
-    await fs.writeFile(filePath, bytes, { mode: FILE_MODE })
-    await fs.chmod(filePath, FILE_MODE).catch(() => undefined)
     const descriptor: TaskAttachmentDescriptor = {
       attachmentId,
       taskId,
@@ -291,12 +359,23 @@ export class TaskAttachmentInbox {
       byteSize: bytes.byteLength,
       contentHash: createHash('sha256').update(bytes).digest('hex'),
       source,
-      binding: 'draft',
+      binding,
+      ...(turnId ? { turnId } : {}),
       createdAt: this.now(),
       availability: 'ready'
     }
-    await this.writeMeta(taskId, descriptor)
-    return descriptor
+    try {
+      await this.writer.ensureDirectory(directory)
+      const filePath = join(directory, storedName)
+      await fs.writeFile(filePath, bytes, { mode: FILE_MODE })
+      await fs.chmod(filePath, FILE_MODE).catch(() => undefined)
+      await this.writeMeta(taskId, descriptor)
+      return descriptor
+    } catch (error) {
+      // 文件或元数据任一步失败都清理本次目录，禁止留下不可索引的半成品附件。
+      await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined)
+      throw error
+    }
   }
 
   private async assertNotInboxSource(taskId: string, resolvedPath: string): Promise<void> {
@@ -335,6 +414,13 @@ export class TaskAttachmentInbox {
       return null
     }
   }
+}
+
+/** 将已绑定附件恢复为草稿，同时移除旧 Turn 身份，避免失败重试串入上一轮。 */
+function toDraft(descriptor: TaskAttachmentDescriptor): TaskAttachmentDescriptor {
+  const draft = { ...descriptor, binding: 'draft' as const }
+  delete draft.turnId
+  return draft
 }
 
 function rejectMessage(reason: TaskAttachmentRejectReason): string {

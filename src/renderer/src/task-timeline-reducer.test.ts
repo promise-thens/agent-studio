@@ -273,6 +273,37 @@ describe('Task Timeline reducer', () => {
     expect(nodes.filter((node) => node.kind === 'tool')).toHaveLength(1)
   })
 
+  it('同一 messageId 的文本不能跨 Runtime 图片合并', () => {
+    const events: PublicAgentEvent[] = [
+      { ...BASE, sequence: 1, kind: 'agent-message', text: '前', messageId: 'message-1' },
+      {
+        ...BASE,
+        sequence: 2,
+        kind: 'agent-attachment',
+        attachmentId: 'attachment-1',
+        attachmentKind: 'image',
+        originalName: 'runtime-image.png'
+      },
+      { ...BASE, sequence: 3, kind: 'agent-message', text: '后', messageId: 'message-1' }
+    ]
+    const state = reduceTaskTimelineFacts(
+      reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+        type: 'turns/upsert',
+        turns: [TURN]
+      }),
+      { type: 'events/ingest-public', events }
+    )
+    const nodes =
+      selectTaskTimeline(state, { executionSnapshot: snapshot() }).turns[0]?.nodes.filter(
+        (node) => node.kind === 'message' || node.kind === 'attachment'
+      ) ?? []
+
+    expect(nodes.map((node) => node.kind)).toEqual(['message', 'attachment', 'message'])
+    expect(nodes[0]).toMatchObject({ kind: 'message', text: '前' })
+    expect(nodes[1]).toMatchObject({ kind: 'attachment', attachmentId: 'attachment-1' })
+    expect(nodes[2]).toMatchObject({ kind: 'message', text: '后' })
+  })
+
   it('同一 Turn 连续三次 plan 快照只保留一张卡，entries 取最后一次且 nodeId 不含 sequence', () => {
     const firstEntries = [
       { content: '找现有 auth', priority: 'high' as const, status: 'pending' as const },

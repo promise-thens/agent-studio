@@ -12,6 +12,7 @@ import type {
   AgentTurnUsage
 } from '../../../shared/agent'
 import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
+import { ATTACHMENT_LIMITS } from '../../../shared/task-attachment'
 import type { AgentRuntimePermissionRequest } from '../../agent/agent-runtime-adapter'
 import type { AgentEventDraft, AgentEventDraftBase } from '../../agent/event-normalizer'
 import {
@@ -30,8 +31,22 @@ const MAX_TOOL_CALL_TARGET_PATHS = 32
 const MAX_TOOL_CALL_PATH_BYTES = 16 * 1024
 const MAX_TOOL_CALL_AUTHORIZATION_SNAPSHOT_BYTES = 64 * 1024
 const MAX_TOOL_CALL_DIFF_HASH_INPUT_BYTES = 256 * 1024
+const MAX_RUNTIME_IMAGE_BASE64_CHARS = Math.ceil(ATTACHMENT_LIMITS.maxBytesPerFile / 3) * 4 + 4
+
+const RUNTIME_IMAGE_EXTENSION_BY_MIME: Readonly<Record<string, string>> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif'
+}
 
 type TextRedactor = (text: string) => string
+
+export interface GrokRuntimeImagePayload {
+  bytes: Buffer
+  mimeType: string
+  originalName: string
+}
 
 /**
  * 当前 Turn 内可用于权限判断的 ACP 工具事实。
@@ -268,6 +283,42 @@ export function mapGrokSessionUpdate(
         }
       ]
   }
+}
+
+/**
+ * 只接受 ACP Image 的白名单 MIME 与严格 base64；uri、annotations、_meta 一律不参与文件名或事件。
+ * 图片魔数和像素仍由 TaskAttachmentInbox 在真正落盘前二次校验。
+ */
+export function mapGrokRuntimeImageContent(
+  content: acp.ContentBlock
+): GrokRuntimeImagePayload | null {
+  if (content.type !== 'image') return null
+  const mimeType = content.mimeType.trim().toLowerCase()
+  const extension = RUNTIME_IMAGE_EXTENSION_BY_MIME[mimeType]
+  if (!extension) return null
+  const bytes = decodeStrictBase64(content.data)
+  if (!bytes) return null
+  return {
+    bytes,
+    mimeType,
+    originalName: `runtime-image.${extension}`
+  }
+}
+
+/** Buffer.from(base64) 会宽松忽略脏字符，这里先校验规范编码再分配图片字节。 */
+function decodeStrictBase64(value: string): Buffer | null {
+  if (
+    !value ||
+    value.length > MAX_RUNTIME_IMAGE_BASE64_CHARS ||
+    value.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(value)
+  ) {
+    return null
+  }
+  const bytes = Buffer.from(value, 'base64')
+  if (bytes.length === 0 || bytes.length > ATTACHMENT_LIMITS.maxBytesPerFile) return null
+  const canonical = bytes.toString('base64').replace(/=+$/, '')
+  return canonical === value.replace(/=+$/, '') ? bytes : null
 }
 
 /**

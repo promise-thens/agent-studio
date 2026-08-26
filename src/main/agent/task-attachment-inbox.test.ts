@@ -1,7 +1,8 @@
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { AtomicJsonWriter } from '../storage/atomic-json-file'
 import { TaskAttachmentInbox } from './task-attachment-inbox'
 
 const temporaryDirectories: string[] = []
@@ -73,6 +74,10 @@ describe('TaskAttachmentInbox', () => {
     expect(bound[0]?.binding).toBe('bound')
     expect(bound[0]?.turnId).toBe('turn-1')
     expect(await inbox.listDrafts('task-1')).toEqual([])
+    await inbox.releaseTurnBindings('task-1', ['att-1'], 'turn-1')
+    expect(await inbox.listDrafts('task-1')).toMatchObject([
+      { attachmentId: 'att-1', binding: 'draft' }
+    ])
   })
 
   it('删除 draft、拦截把 inbox 当拖入源，并拒绝超量图片像素', async () => {
@@ -99,6 +104,92 @@ describe('TaskAttachmentInbox', () => {
     })
     await okInbox.removeDraft('task-1', saved.attachmentId)
     expect(await okInbox.listDrafts('task-1')).toEqual([])
+  })
+
+  it('Runtime 图片原子绑定到 Turn，且不占用用户 draft 名额', async () => {
+    const root = await createTemporaryDirectory()
+    const ids = Array.from({ length: 9 }, (_, index) => `att-${index + 1}`)
+    const inbox = createInbox(root, ids)
+    for (let index = 0; index < 8; index += 1) {
+      await inbox.importBytes({
+        taskId: 'task-1',
+        originalName: `user-${index}.png`,
+        bytes: PNG
+      })
+    }
+
+    const descriptor = await inbox.importRuntimeBytes({
+      taskId: 'task-1',
+      turnId: 'turn-runtime',
+      originalName: 'runtime-image.png',
+      mimeType: 'image/png',
+      bytes: PNG
+    })
+
+    expect(descriptor).toMatchObject({
+      attachmentId: 'att-9',
+      source: 'runtime',
+      binding: 'bound',
+      turnId: 'turn-runtime',
+      kind: 'image'
+    })
+    expect(await inbox.listDrafts('task-1')).toHaveLength(8)
+    expect((await inbox.getPreview('task-1', descriptor.attachmentId)).descriptor).toEqual(
+      descriptor
+    )
+  })
+
+  it('Runtime 图片使用独立的每 Turn 数量限制', async () => {
+    const root = await createTemporaryDirectory()
+    const ids = Array.from({ length: 9 }, (_, index) => `runtime-${index + 1}`)
+    const inbox = createInbox(root, ids)
+    for (let index = 0; index < 8; index += 1) {
+      await inbox.importRuntimeBytes({
+        taskId: 'task-1',
+        turnId: 'turn-runtime',
+        originalName: `runtime-${index}.png`,
+        mimeType: 'image/png',
+        bytes: PNG
+      })
+    }
+
+    await expect(
+      inbox.importRuntimeBytes({
+        taskId: 'task-1',
+        turnId: 'turn-runtime',
+        originalName: 'runtime-overflow.png',
+        mimeType: 'image/png',
+        bytes: PNG
+      })
+    ).rejects.toMatchObject({ code: 'too-many' })
+  })
+
+  it('Runtime 元数据写入失败时清理半成品目录', async () => {
+    const root = await createTemporaryDirectory()
+    const inbox = new TaskAttachmentInbox({
+      resolveTaskDirectory: (taskId) => join(root, taskId),
+      createId: () => 'runtime-failed',
+      probeImagePixels: () => ({ width: 8, height: 8 }),
+      writer: new AtomicJsonWriter({
+        fileSystem: {
+          rename: async () => {
+            throw new Error('模拟元数据提交失败')
+          }
+        }
+      })
+    })
+
+    await expect(
+      inbox.importRuntimeBytes({
+        taskId: 'task-1',
+        turnId: 'turn-runtime',
+        originalName: 'runtime-image.png',
+        mimeType: 'image/png',
+        bytes: PNG
+      })
+    ).rejects.toThrow('模拟元数据提交失败')
+    const entries = await readdir(join(root, 'task-1', 'inbox')).catch(() => [])
+    expect(entries).toEqual([])
   })
 })
 

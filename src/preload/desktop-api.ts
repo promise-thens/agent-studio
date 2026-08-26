@@ -61,6 +61,7 @@ import {
   parseTurnChangeCheckpointList
 } from '../shared/git-review'
 import { TASK_INVOKE_CHANNELS, type TaskDesktopApi } from '../shared/task-ipc'
+import { ATTACHMENT_LIMITS } from '../shared/task-attachment'
 
 export interface NarrowIpcRenderer {
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -238,6 +239,18 @@ function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
         kind: payload.kind,
         text,
         ...(messageId === undefined ? {} : { messageId })
+      }
+    }
+    case 'agent-attachment': {
+      const attachmentId = readBoundedText(payload.attachmentId, MAX_EVENT_FIELD_BYTES)
+      const originalName = readBoundedText(payload.originalName, MAX_EVENT_FIELD_BYTES)
+      if (!attachmentId || !originalName || payload.attachmentKind !== 'image') return null
+      return {
+        ...base,
+        kind: 'agent-attachment',
+        attachmentId,
+        attachmentKind: 'image',
+        originalName
       }
     }
     case 'tool-call': {
@@ -910,8 +923,23 @@ function parseCommandEvidencePageResult(
 }
 
 /** 创建不暴露存储路径的 Task 历史 API。 */
-export function createTaskDesktopApi(ipcRenderer: NarrowIpcRenderer): TaskDesktopApi {
+export function createTaskDesktopApi(
+  ipcRenderer: NarrowIpcRenderer,
+  getPathForFile: (file: File) => string = () => ''
+): TaskDesktopApi {
   return {
+    resolveDroppedFilePaths: (files) => {
+      const paths: string[] = []
+      for (const file of files.slice(0, ATTACHMENT_LIMITS.maxPerTurn)) {
+        try {
+          const path = getPathForFile(file)
+          if (path.trim() && !path.includes('\0')) paths.push(path)
+        } catch {
+          continue
+        }
+      }
+      return paths
+    },
     list: (projectId, cursor, limit) =>
       ipcRenderer.invoke(TASK_INVOKE_CHANNELS.list, {
         projectId,

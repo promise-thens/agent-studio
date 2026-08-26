@@ -85,7 +85,8 @@ function readMinWidthPx(block: string): string {
 }
 
 function looksLikeToolLog(toolRowSource: string, toolLabels: string): boolean {
-  if (!toolRowSource.includes('▸')) return true
+  // 自定义 caret 保留可展开语义，同时避免 details 原生 marker 与文字三角重复。
+  if (!toolRowSource.includes('tool-row-caret')) return true
   if (/Tool\s{2,}/.test(toolRowSource)) return true
   if (/(?:^|\n)Tool\s+/.test(toolLabels)) return true
   return /·\s*(?:in_progress|completed|failed)/.test(toolLabels)

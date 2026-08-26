@@ -156,7 +156,8 @@ describe('useTaskTimeline', () => {
       executionId: 'execution-1',
       promptDisplayText: '阅读 README.md，列出三条要点',
       model: { modelId: 'grok-4.6' },
-      acceptedAt: '2026-08-18T00:00:00.000Z'
+      acceptedAt: '2026-08-18T00:00:00.000Z',
+      attachmentIds: ['attachment-1']
     })
 
     expect(controller.activeTimeline.value?.turns[0]?.prompt).toBe('阅读 README.md，列出三条要点')
@@ -165,7 +166,8 @@ describe('useTaskTimeline', () => {
         expect.objectContaining({
           kind: 'user-prompt',
           text: '阅读 README.md，列出三条要点',
-          source: 'admission'
+          source: 'admission',
+          attachmentIds: ['attachment-1']
         }),
         expect.objectContaining({ kind: 'message', text: 'hello' })
       ])

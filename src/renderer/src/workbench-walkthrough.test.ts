@@ -166,7 +166,7 @@ describe('工作台对照走查（夹具，非桌面 GUI）', () => {
 
     expect(facts.titlebarHeight).toBe('46px')
     expect(facts.workspaceColumns).toBe('220px 1fr')
-    expect(facts.conversationMaxWidth).toBe('760px')
+    expect(facts.conversationMaxWidth).toBe('840px')
     expect(facts.toolLooksLikeLog).toBe(false)
     expect(facts.hasContinueTask).toBe(false)
     expect(facts.historyAllowsTyping).toBe(true)

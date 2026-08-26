@@ -22,6 +22,7 @@ const props = withDefaults(
     permission?: AgentPermissionRequest | null
     permissionPending?: boolean
     permissionTaskTitle?: string
+    active?: boolean
     hasMoreEvents?: boolean
     loadingMoreEvents?: boolean
   }>(),
@@ -30,6 +31,7 @@ const props = withDefaults(
     permission: null,
     permissionPending: false,
     permissionTaskTitle: '',
+    active: false,
     hasMoreEvents: false,
     loadingMoreEvents: false
   }
@@ -51,9 +53,28 @@ const blocks = computed(() => {
     (block) =>
       block.kind !== 'user' &&
       block.kind !== 'message' &&
+      block.kind !== 'attachment' &&
       block.kind !== 'permission' &&
       block.kind !== 'plan'
   )
+})
+
+/** 只为非终态 Turn 提供明确尾标，避免用户只能从顶部状态猜 Runtime 是否仍在工作。 */
+const activityLabel = computed(() => {
+  if (props.variant !== 'conversation' || !props.active) return ''
+  switch (props.turn.status) {
+    case 'pending':
+    case 'queued':
+      return '等待执行'
+    case 'running':
+      return '正在运行'
+    case 'waiting-permission':
+      return '等待你的确认'
+    case 'cancelling':
+      return '正在停止'
+    default:
+      return ''
+  }
 })
 
 function mergedReadFiles(block: ConversationToolBlock): string[] {
@@ -71,30 +92,53 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
           v-if="block.taskId && block.attachmentIds?.length"
           :task-id="block.taskId"
           :attachment-ids="block.attachmentIds"
+          variant="user"
+        />
+      </div>
+
+      <div
+        v-else-if="block.kind === 'attachment'"
+        class="conversation-assistant-media"
+        data-kind="attachment"
+      >
+        <ConversationMedia
+          :task-id="block.taskId"
+          :attachment-ids="block.attachmentIds"
+          variant="assistant"
         />
       </div>
 
       <details
         v-else-if="block.kind === 'thought'"
-        class="conversation-thought"
+        class="conversation-thought conversation-process-step"
         data-kind="thought"
+        data-process-kind="thought"
       >
-        <summary>{{ block.summary }}</summary>
+        <summary>
+          <span class="conversation-process-caret" aria-hidden="true" />
+          <span class="conversation-process-label">{{ block.summary }}</span>
+        </summary>
         <p class="conversation-thought-body">{{ block.text }}</p>
       </details>
 
       <details
         v-else-if="block.kind === 'plan'"
-        class="conversation-plan"
+        class="conversation-plan conversation-process-step"
         data-kind="plan"
+        data-process-kind="plan"
         :open="block.defaultExpanded"
       >
-        <summary>{{ block.summary }}</summary>
+        <summary>
+          <span class="conversation-process-caret" aria-hidden="true" />
+          <span class="conversation-process-label">{{ block.summary }}</span>
+        </summary>
         <PlanChecklist :entries="block.entries" :active="block.defaultExpanded" />
       </details>
 
       <ToolRow
         v-else-if="block.kind === 'tool'"
+        class="conversation-process-step"
+        data-process-kind="tool"
         :label="block.label"
         :status="block.status"
         :files="mergedReadFiles(block)"
@@ -104,6 +148,8 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
 
       <SubagentCard
         v-else-if="block.kind === 'subagent' && shouldMountSubagentCard(block)"
+        class="conversation-process-step"
+        data-process-kind="subagent"
         :name="block.name"
         :status="block.status"
         :tools="toSubagentToolRows(block.tools)"
@@ -131,8 +177,16 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
         @cancel-turn="$emit('cancelTurn')"
       />
 
-      <details v-else-if="block.kind === 'usage'" class="conversation-usage" data-kind="usage">
-        <summary>{{ block.summary }}</summary>
+      <details
+        v-else-if="block.kind === 'usage'"
+        class="conversation-usage conversation-process-step"
+        data-kind="usage"
+        data-process-kind="usage"
+      >
+        <summary>
+          <span class="conversation-process-caret" aria-hidden="true" />
+          <span class="conversation-process-label">{{ block.summary }}</span>
+        </summary>
       </details>
 
       <p
@@ -155,5 +209,21 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
     >
       {{ loadingMoreEvents ? '正在加载…' : '加载本轮更多事件' }}
     </button>
+
+    <div
+      v-if="activityLabel"
+      class="conversation-run-indicator"
+      :data-status="turn.status"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="conversation-run-orbit" aria-hidden="true" />
+      <span class="conversation-run-copy">{{ activityLabel }}</span>
+      <span class="conversation-run-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+    </div>
   </div>
 </template>

@@ -64,6 +64,30 @@ describe('AgentEventNormalizer', () => {
     expect(JSON.stringify(event)).not.toContain('fake-stack')
   })
 
+  it('附件事件只保留 inbox 引用并限制展示名称', () => {
+    const normalizer = createNormalizer()
+    const event = normalizer.normalize({
+      ...draftBase(),
+      kind: 'agent-attachment',
+      attachmentId: 'attachment-1',
+      attachmentKind: 'image',
+      originalName: '图'.repeat(5_000),
+      bytes: 'private-base64',
+      uri: 'file:///private/image.png'
+    } as unknown as AgentEventDraft)
+
+    expect(event).toMatchObject({
+      kind: 'agent-attachment',
+      attachmentId: 'attachment-1',
+      attachmentKind: 'image',
+      truncated: true
+    })
+    if (event?.kind !== 'agent-attachment') throw new Error('预期得到附件事件')
+    expect(Buffer.byteLength(event.originalName, 'utf8')).toBeLessThanOrEqual(4 * 1024)
+    expect(JSON.stringify(event)).not.toContain('private-base64')
+    expect(JSON.stringify(event)).not.toContain('file:///')
+  })
+
   it('限制 Plan 数量与正文，并限制 Diff 数量和共享正文预算', () => {
     const planNormalizer = createNormalizer()
     const plan = planNormalizer.normalize({

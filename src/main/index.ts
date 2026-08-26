@@ -33,6 +33,8 @@ import { registerAgentIpcHandlers } from './agent/ipc'
 import { registerTaskIpcHandlers } from './agent/task-ipc'
 import { TaskStore } from './agent/task-store'
 import { TaskAttachmentInbox } from './agent/task-attachment-inbox'
+import { TaskChangeMediaPreviewService } from './agent/task-change-media-preview'
+import { parseClipboardFilePaths } from './agent/clipboard-file-paths'
 import { ATTACHMENT_LIMITS } from '../shared/task-attachment'
 import { OperationGate, type OperationLease } from './agent/operation-gate'
 import { TaskExecutor } from './agent/task-executor'
@@ -111,6 +113,7 @@ let providerTester: ProviderConnectionTester | null = null
 let projectRegistry: ProjectRegistry | null = null
 let taskStore: TaskStore | null = null
 let taskAttachmentInbox: TaskAttachmentInbox | null = null
+let taskChangeMediaPreviewService: TaskChangeMediaPreviewService | null = null
 let permissionAuditStore: PermissionAuditStore | null = null
 let permissionBroker: PermissionBroker | null = null
 let appearanceController: AppearanceController | null = null
@@ -257,16 +260,7 @@ async function initializeServices(
       if (image.isEmpty()) return null
       return image.getSize()
     },
-    createThumbnail: (bytes) => {
-      const image = nativeImage.createFromBuffer(bytes)
-      if (image.isEmpty()) return null
-      const { width } = image.getSize()
-      const resized =
-        width > ATTACHMENT_LIMITS.maxPreviewEdge
-          ? image.resize({ width: ATTACHMENT_LIMITS.maxPreviewEdge, quality: 'good' })
-          : image
-      return { bytes: resized.toJPEG(80), mime: 'image/jpeg' }
-    }
+    createThumbnail: createImageThumbnail
   })
   permissionAuditStore = new PermissionAuditStore({
     projectRegistry,
@@ -380,6 +374,18 @@ async function initializeServices(
     broker: permissionBroker ?? undefined
   })
   gitReviewService = reviewService
+  taskChangeMediaPreviewService = new TaskChangeMediaPreviewService({
+    getChangeSet: (taskId) => reviewService.getChangeSet(taskId),
+    getExecutionRoot: (taskId) => {
+      try {
+        const task = requireTaskStore().getTaskRecord(taskId)
+        return task.environment.kind === 'local' ? task.environment.rootSnapshot : null
+      } catch {
+        return null
+      }
+    },
+    createImageThumbnail
+  })
   const adapter = new GrokAcpAdapter(
     {
       onStatus: (status) =>
@@ -423,6 +429,15 @@ async function initializeServices(
           return null
         }
       },
+      storeRuntimeImage: async (input) => {
+        // Runtime 图片只由主进程附件柜落盘；Adapter 收到的是不含路径和字节的有限引用。
+        const descriptor = await requireTaskAttachmentInbox().importRuntimeBytes(input)
+        return {
+          attachmentId: descriptor.attachmentId,
+          attachmentKind: 'image',
+          originalName: descriptor.originalName
+        }
+      },
       ...(controlledE2e ? { controlledFixture: controlledE2e.fixture } : {}),
       ...(gacp01Observe
         ? { protocolObserver: createGrokAcpFileObserver(gacp01Observe.observationFilePath) }
@@ -458,7 +473,8 @@ async function initializeServices(
         projectPublicAgentEvent(event, redactProviderText)
       ),
     ensureChangeBaseline,
-    recordTurnChangeCheckpoint: createRecordTurnChangeCheckpoint(reviewService)
+    recordTurnChangeCheckpoint: createRecordTurnChangeCheckpoint(reviewService),
+    attachmentInbox: taskAttachmentInbox ?? undefined
   })
   agentService = new AgentService(adapter, new TaskExecutionController(), {
     projectRegistry,
@@ -554,7 +570,7 @@ function registerIpcHandlers(): void {
         disconnect: () => service.disconnect(),
         createTask: (projectId) => service.createTask(projectId),
         enterTask: (taskId) => service.enterTask(taskId),
-        startTurn: async (taskId, prompt) => {
+        startTurn: async (taskId, prompt, attachmentIds = []) => {
           await service.waitForEnter(taskId)
           await service.ensureTaskSessionForTurn(taskId)
           const task = requireTaskStore().getTaskRecord(taskId)
@@ -571,6 +587,7 @@ function registerIpcHandlers(): void {
             resolvedExecutionRoot: task.environment.rootSnapshot,
             prompt,
             promptDisplayText: redactProviderText(prompt),
+            ...(attachmentIds.length ? { attachmentIds } : {}),
             model: (() => {
               const config = requireProviderRuntimeConfig()
               return {
@@ -765,6 +782,8 @@ function registerIpcHandlers(): void {
     getInbox: () => taskAttachmentInbox,
     pickFiles: pickAttachmentFiles,
     readClipboard: readClipboardAttachments,
+    getChangeMediaPreview: (taskId, path) =>
+      requireTaskChangeMediaPreviewService().getPreview(taskId, path),
     getHistory: () => {
       const store = taskStore
       const service = agentService
@@ -909,6 +928,18 @@ async function pickAttachmentFiles(): Promise<string[] | null> {
   return result.filePaths.slice(0, ATTACHMENT_LIMITS.maxPerTurn)
 }
 
+/** 统一生成受限 JPEG 缩略图，避免附件柜与 ChangeSet 预览使用不同尺寸策略。 */
+function createImageThumbnail(bytes: Buffer): { bytes: Buffer; mime: string } | null {
+  const image = nativeImage.createFromBuffer(bytes)
+  if (image.isEmpty()) return null
+  const { width } = image.getSize()
+  const resized =
+    width > ATTACHMENT_LIMITS.maxPreviewEdge
+      ? image.resize({ width: ATTACHMENT_LIMITS.maxPreviewEdge, quality: 'good' })
+      : image
+  return { bytes: resized.toJPEG(80), mime: 'image/jpeg' }
+}
+
 /** 剪贴板图片与 file URL；Finder 复制的文件走 file://。 */
 async function readClipboardAttachments(): Promise<Array<{ originalName: string; bytes: Buffer }>> {
   const items: Array<{ originalName: string; bytes: Buffer }> = []
@@ -919,11 +950,18 @@ async function readClipboardAttachments(): Promise<Array<{ originalName: string;
   const uriText = [clipboard.read('public.file-url'), clipboard.read('text/uri-list')]
     .filter((value) => value && value.trim())
     .join('\n')
-  for (const line of uriText.split(/\r?\n/)) {
-    const trimmed = line.trim()
-    if (!trimmed.startsWith('file://')) continue
+  const finderPaths = parseClipboardFilePaths(clipboard.read('NSFilenamesPboardType'))
+  const candidates = [...uriText.split(/\r?\n/), ...finderPaths]
+  const seen = new Set<string>()
+  for (const candidate of candidates) {
+    const trimmed = candidate.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
     try {
-      const filePath = fileURLToPath(trimmed)
+      const filePath = trimmed.startsWith('file://') ? fileURLToPath(trimmed) : trimmed
+      if (seen.has(filePath)) continue
+      seen.add(filePath)
+      const stats = await fs.lstat(filePath)
+      if (stats.isSymbolicLink() || !stats.isFile()) continue
       const bytes = await fs.readFile(filePath)
       items.push({ originalName: filePath, bytes })
     } catch {
@@ -1193,6 +1231,16 @@ function requireProjectRegistry(): ProjectRegistry {
 function requireTaskStore(): TaskStore {
   if (!taskStore) throw new Error('Task 历史服务尚未初始化。')
   return taskStore
+}
+
+function requireTaskAttachmentInbox(): TaskAttachmentInbox {
+  if (!taskAttachmentInbox) throw new Error('Task 附件柜尚未初始化。')
+  return taskAttachmentInbox
+}
+
+function requireTaskChangeMediaPreviewService(): TaskChangeMediaPreviewService {
+  if (!taskChangeMediaPreviewService) throw new Error('Task 变更媒体预览尚未初始化。')
+  return taskChangeMediaPreviewService
 }
 
 function requirePermissionAuditStore(): PermissionAuditStore {

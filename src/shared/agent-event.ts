@@ -31,6 +31,14 @@ export type PublicAgentThoughtEvent = PublicAgentEventBase & {
   messageId?: string
 }
 
+/** Renderer 只能拿到附件引用和有限展示名称，原始媒体仍留在主进程 inbox。 */
+export type PublicAgentAttachmentEvent = PublicAgentEventBase & {
+  kind: 'agent-attachment'
+  attachmentId: string
+  attachmentKind: 'image'
+  originalName: string
+}
+
 export type PublicAgentToolCallEvent = PublicAgentEventBase & {
   kind: 'tool-call'
   toolCallId: string
@@ -89,6 +97,7 @@ export type PublicAgentErrorEvent = PublicAgentEventBase & {
 export type PublicAgentEvent =
   | PublicAgentMessageEvent
   | PublicAgentThoughtEvent
+  | PublicAgentAttachmentEvent
   | PublicAgentToolEvent
   | PublicAgentPlanEvent
   | PublicAgentDiffEvent

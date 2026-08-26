@@ -7,11 +7,14 @@ import type {
   TaskExecutionSnapshot
 } from '../../shared/task-execution'
 import type { TurnModelSnapshot } from '../../shared/task-history'
+import type { TaskAttachmentDescriptor } from '../../shared/task-attachment'
 import type {
   AgentRuntimeAdapter,
   AgentRuntimeSessionRef,
+  AgentRuntimeTurnAttachment,
   AgentRuntimeTurnRef
 } from './agent-runtime-adapter'
+import type { TaskAttachmentInbox } from './task-attachment-inbox'
 import { OperationGate, type OperationLease } from './operation-gate'
 import { transitionTaskExecution, type TaskExecutionTransition } from './task-execution-state'
 import {
@@ -30,6 +33,7 @@ export interface TaskExecutorStartInput {
   resolvedExecutionRoot: string
   prompt: string
   promptDisplayText: string
+  attachmentIds?: string[]
   model: TurnModelSnapshot
   capabilitySnapshot: AgentRuntimeCapabilitySnapshot
   /** admission 激活后再准备 Runtime session，确保 connect/resume 复用同一 execution lease。 */
@@ -74,6 +78,8 @@ export interface TaskExecutorOptions {
     executionRoot: string
     phase: 'before' | 'after'
   }) => Promise<void>
+  /** 附件字节只在主进程读取，并在 admission 失败时恢复 draft。 */
+  attachmentInbox?: TaskAttachmentInbox
 }
 
 interface ActiveExecution {
@@ -82,6 +88,7 @@ interface ActiveExecution {
   dto: TaskExecutionDto
   lease: OperationLease
   prompt: string
+  attachments: AgentRuntimeTurnAttachment[]
   resolvedExecutionRoot: string
   capabilitySnapshot: AgentRuntimeCapabilitySnapshot
   prepareRuntime?: (lease: OperationLease) => Promise<void>
@@ -134,6 +141,7 @@ export class TaskExecutor {
   private readonly onCancelTimeout: NonNullable<TaskExecutorOptions['onCancelTimeout']>
   private readonly ensureChangeBaseline?: TaskExecutorOptions['ensureChangeBaseline']
   private readonly recordTurnChangeCheckpoint?: TaskExecutorOptions['recordTurnChangeCheckpoint']
+  private readonly attachmentInbox?: TaskAttachmentInbox
   private executionRevision = 0
   private active: ActiveExecution | null = null
   private lastExecution: TaskExecutionDto | null = null
@@ -155,6 +163,7 @@ export class TaskExecutor {
     this.onCancelTimeout = options.onCancelTimeout ?? (() => Promise.resolve())
     this.ensureChangeBaseline = options.ensureChangeBaseline
     this.recordTurnChangeCheckpoint = options.recordTurnChangeCheckpoint
+    this.attachmentInbox = options.attachmentInbox
   }
 
   getSnapshot(): TaskExecutionSnapshot {
@@ -227,6 +236,9 @@ export class TaskExecutor {
     }
 
     let activeLease: OperationLease | null = null
+    let boundAttachments: TaskAttachmentDescriptor[] = []
+    let turnAdmitted = false
+    let allocatedTurnId = ''
     try {
       const task = this.taskStore.getTaskRecord(input.taskId)
       if (
@@ -243,6 +255,20 @@ export class TaskExecutor {
       const acceptedAt = this.now()
       const executionId = this.createId()
       const turnId = this.createId()
+      allocatedTurnId = turnId
+      const attachmentIds = input.attachmentIds ?? []
+      if (attachmentIds.length > 0) {
+        if (!this.attachmentInbox) throw new Error('attachment-inbox-unavailable')
+        boundAttachments = await this.attachmentInbox.bindToTurn(
+          input.taskId,
+          attachmentIds,
+          turnId
+        )
+      }
+      const runtimeAttachments = await this.readTurnAttachments(input.taskId, boundAttachments)
+      const promptDisplayText =
+        input.promptDisplayText ||
+        (boundAttachments[0] ? `附件：${boundAttachments[0].originalName}` : '')
       const identity = { executionId, taskId: input.taskId, turnId }
       const queued: QueuedTaskExecution = {
         executionId,
@@ -259,9 +285,13 @@ export class TaskExecutor {
       await this.taskStore.admitExecutionTurn({
         ...identity,
         environmentId: input.environmentId,
-        promptDisplayText: input.promptDisplayText,
-        model: input.model
+        promptDisplayText,
+        model: input.model,
+        ...(boundAttachments.length
+          ? { attachmentIds: boundAttachments.map((item) => item.attachmentId) }
+          : {})
       })
+      turnAdmitted = true
       activeLease = admission.activate()
       if (!activeLease) {
         await this.taskStore.commitExecutionTerminal(identity, {
@@ -309,6 +339,7 @@ export class TaskExecutor {
         dto: queued,
         lease: activeLease,
         prompt: input.prompt,
+        attachments: runtimeAttachments,
         resolvedExecutionRoot: input.resolvedExecutionRoot,
         capabilitySnapshot: structuredClone(input.capabilitySnapshot),
         ...(input.prepareRuntime ? { prepareRuntime: input.prepareRuntime } : {}),
@@ -331,6 +362,15 @@ export class TaskExecutor {
       void this.dispatch(active).catch(() => undefined)
       return this.getSnapshot()
     } catch (error) {
+      if (!turnAdmitted && boundAttachments.length > 0 && this.attachmentInbox) {
+        await this.attachmentInbox
+          .releaseTurnBindings(
+            input.taskId,
+            boundAttachments.map((item) => item.attachmentId),
+            allocatedTurnId
+          )
+          .catch(() => undefined)
+      }
       activeLease?.release()
       admission.release()
       throw error
@@ -462,7 +502,8 @@ export class TaskExecutor {
       const outcome = await this.adapter.startTurn({
         ...active.runtimeTurn,
         workspace: active.resolvedExecutionRoot,
-        prompt: active.prompt
+        prompt: active.prompt,
+        ...(active.attachments.length ? { attachments: active.attachments } : {})
       })
       await this.complete(active, toTerminalTransition(outcome.outcome, this.now()))
     } catch {
@@ -486,6 +527,25 @@ export class TaskExecutor {
     } catch {
       return false
     }
+  }
+
+  /** 读取已绑定附件的字节；任何失败都在 admission 前暴露并触发 draft 回滚。 */
+  private async readTurnAttachments(
+    taskId: string,
+    descriptors: readonly TaskAttachmentDescriptor[]
+  ): Promise<AgentRuntimeTurnAttachment[]> {
+    if (descriptors.length === 0) return []
+    if (!this.attachmentInbox) throw new Error('attachment-inbox-unavailable')
+    const attachments: AgentRuntimeTurnAttachment[] = []
+    for (const descriptor of descriptors) {
+      attachments.push({
+        fileName: descriptor.originalName,
+        mimeType: descriptor.mimeType,
+        kind: descriptor.kind,
+        bytes: await this.attachmentInbox.readBytes(taskId, descriptor.attachmentId)
+      })
+    }
+    return attachments
   }
 
   private complete(

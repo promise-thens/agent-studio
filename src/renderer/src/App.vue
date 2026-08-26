@@ -47,6 +47,7 @@ import TaskInspector from './components/TaskInspector.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
 import { useTaskChanges } from './composables/useTaskChanges'
 import { useTaskTimeline } from './composables/useTaskTimeline'
+import { createAttachmentPreviewUrl } from './attachment-preview-url'
 import { useTaskWorkbench } from './composables/useTaskWorkbench'
 import {
   evaluateTaskComposerSend,
@@ -1239,7 +1240,8 @@ async function sendPrompt(): Promise<void> {
           executionId: execution.executionId,
           promptDisplayText: displayText,
           model: execution.model,
-          acceptedAt: execution.acceptedAt
+          acceptedAt: execution.acceptedAt,
+          ...(attachmentIds.length ? { attachmentIds } : {})
         })
       }
       await taskHistory.refreshTasks()
@@ -1277,9 +1279,6 @@ async function cancelTurn(): Promise<void> {
 }
 
 function clearDraftAttachmentPreviews(): void {
-  for (const url of Object.values(draftPreviewUrls.value)) {
-    URL.revokeObjectURL(url)
-  }
   draftPreviewUrls.value = {}
 }
 
@@ -1292,12 +1291,8 @@ async function hydrateDraftPreviews(items: TaskAttachmentDescriptor[]): Promise<
         await window.task.getAttachmentPreview(item.taskId, item.attachmentId)
       )
       if (!preview.thumbnailBase64 || !preview.thumbnailMime) continue
-      const binary = atob(preview.thumbnailBase64)
-      const bytes = new Uint8Array(binary.length)
-      for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
-      next[item.attachmentId] = URL.createObjectURL(
-        new Blob([bytes], { type: preview.thumbnailMime })
-      )
+      const url = createAttachmentPreviewUrl(preview.thumbnailBase64, preview.thumbnailMime)
+      if (url) next[item.attachmentId] = url
     } catch {
       continue
     }

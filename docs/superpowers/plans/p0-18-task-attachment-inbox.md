@@ -19,9 +19,9 @@
 - 新增代码块必须有中文备注。
 - 不覆盖用户已有未提交文件。
 
-## 进度（2026-08-23）
+## 进度（2026-08-25）
 
-主路径已落地（自动测试 + typecheck 已过，开发版 GUI 未跑）：Task 1–4、Task 6、用户气泡预览、文档快照。
+主路径与 P0/P1 缺口已落地：用户附件输入、Runtime 图片输出入库、对话媒体、ChangeSet 媒体预览、sandbox 拖放、Finder 剪贴板和 admission 失败回滚。2026-08-25 自动验证：`pnpm test` 123 个文件、1063 项通过，`pnpm typecheck`、`pnpm build`、`git diff --check` 通过，ESLint 0 error / 10 条格式 warning；开发版已验证截图粘贴、仅附件发送、用户气泡预览与 Runtime 识图。
 
 ### 已完成
 
@@ -33,39 +33,23 @@
 - Composer：回形针、芯片、粘贴、拖放、识图提示
 - 用户气泡用 `ConversationMedia` 预览 inbox 附件
 - Turn 历史可选 `attachmentIds`
+- Runtime `Image` 严格解码后直接以 `source: 'runtime'`、`binding: 'bound'` 入库，并发布 `agent-attachment`
+- 助手图片进入 Timeline / Conversation，图片落盘队列先于后续文本和 Turn 终态完成
+- ChangeSet 图片/PDF 预览只允许当前变更路径，且 `realpath` 必须留在 execution root
+- sandbox 拖放使用 Preload `webUtils.getPathForFile`；Finder 文件剪贴板支持 `NSFilenamesPboardType`
+- 新执行链真实绑定附件、读取字节并传给 Adapter；admission 未提交时恢复用户 draft
+- 缩略图使用 CSP 已允许的受限 `data:image/*;base64`，不放宽 `img-src`
+- Composer 横向截图缩略图使用 `object-fit: contain`，避免方形容器裁掉两侧后误显示为破图
+- Composer 图片附件改为无文件名的大图卡片，删除按钮悬浮在右上角；非图片附件仍保留名称
+- 图片附件点击后可在灯箱中查看大图，支持遮罩、关闭按钮和 `Esc` 退出
 
 ### 未完成（按优先级）
 
-**P0 — 对话出图还没闭环**
+**P2 — 剩余走查与自动化**
 
-1. **Runtime image 块入库**（原 Task 5）
-   `agent_message_chunk` / `agent_thought_chunk` 非 text 目前直接丢弃。需要把 `ContentBlock::Image` 写入 inbox（`source: 'runtime'`），发 `agent-attachment` 事件，助手气泡渲染。涉及 `grok-acp-mappers`、adapter session update、`AgentEvent` / `PublicAgentEvent`、event-normalizer、preload parse、timeline、ConversationTurn。
-
-2. **本轮 Changes 图片/PDF 缩略图**（原 Task 7 后半）
-   `task:get-change-media-preview` 通道有了，但 `src/main/index.ts` **没有注入实现**，调用会 `runtime-unavailable`。需要：path 必须在当前 ChangeSet，`realpath` 落在 execution root，再出缩略图。`TaskChangeCard` 尚未接缩略图。
-
-**P1 — 输入体验缺口**
-
-3. **拖放在 sandbox 下可能拿不到路径**
-   Composer 只读 `File.path`。Electron 新版本要用 `webUtils.getPathForFile`（preload 窄接口），否则拖放无路径、静默失败。
-
-4. **剪贴板文件不完整**
-   现在只读 `clipboard.readImage()` + `public.file-url` / `text/uri-list`。macOS Finder 复制常用 `NSFilenamesPboardType`，未接。
-
-5. **实时用户气泡可能看不到刚发的图**
-   `acceptAdmission` 没带 `attachmentIds`，时间线用户节点主要靠 Turn 历史回放。发送当下可能只有文字，刷新/水合后才出图。
-
-6. **发送失败后 draft 可能已被 bind**
-   `bindToTurn` 发生在 Adapter 调用前。失败后 Composer 仍显示 draft，但 inbox 已是 `bound`，移除会 `not-draft`。需要失败回滚或允许清理已 bind 未成功的附件。
-
-**P2 — 测试与走查**
-
-7. 没有 `task-attachment-ipc.test.ts`（计划里有，未建）。
-8. 对话投影「user 带 attachmentIds / agent-attachment 成块」测试未写。
-9. 变更媒体越界/不在 ChangeSet 的拒绝测试未写。
-10. 开发版 GUI 走查：选文件、拖放、粘贴截图、仅附件发送、重启后预览、识图提示。
-11. 受控 e2e 未覆盖附件。
-12. README 未写附件能力（GUI 未验证前不要写「已支持」）。
+1. 开发版 GUI 仍需补跑：Finder 文件复制、真实文件拖放、Runtime 实际输出图片、ChangeSet 真实图片/PDF 卡片。
+2. 受控 e2e 尚未覆盖附件输入与 Runtime 图片输出。
+3. README 暂不写附件能力，等上述 GUI / e2e 边界验证后再描述为已支持。
 
 **明确不做（仍有效）**
 
@@ -118,8 +102,8 @@
 - Create/Modify: task-attachment-ipc、task-ipc channels、preload、agent-ipc.test.ts 静态表
 
 - [x] 通道与 preload 已接
-- [ ] `task-attachment-ipc.test.ts` 未建
-- [ ] `getChangeMediaPreview` 未在 `index.ts` 注入实现
+- [x] `task-attachment-ipc.test.ts` 已覆盖固定通道、发送方门禁和预览投影
+- [x] `getChangeMediaPreview` 已在 `index.ts` 注入安全实现
 
 ### Task 4: startTurn 带附件
 
@@ -133,7 +117,7 @@
 **Files:**
 - Modify: grok-acp-mappers / adapter session update；shared AgentEvent 联合
 
-- [ ] **未开始。** 非 text chunk 仍被丢掉。
+- [x] Runtime `Image` 已严格解析、原子入库、发布事件并进入助手媒体块
 
 ### Task 6: Composer UI
 
@@ -141,7 +125,7 @@
 - Modify: TaskComposer.vue、task-composer-actions、App.vue、main.css
 
 - [x] 回形针 / 芯片 / 粘贴 / 拖放已接（未拆 `ComposerAttachments.vue`）
-- [ ] sandbox 拖放路径、Finder 剪贴板文件、发送失败回滚 draft 未收口
+- [x] sandbox 拖放路径、Finder 剪贴板文件、admission 失败 draft 回滚已收口
 
 ### Task 7: 对话与变更媒体
 
@@ -149,9 +133,9 @@
 - Modify: conversation-turn-view、ConversationTurn.vue、task-timeline-reducer、TaskChangeCard、task-changes-presentation
 
 - [x] 用户气泡可预览 inbox 附件
-- [ ] 助手 `agent-attachment` 块
-- [ ] 实时 admission 带 `attachmentIds`
-- [ ] ChangeSet 缩略图 / TaskChangeCard
+- [x] 助手 `agent-attachment` 块
+- [x] 实时 admission 带 `attachmentIds`
+- [x] ChangeSet 缩略图 / TaskChangeCard
 
 ### Task 8: 文档快照
 
@@ -159,4 +143,5 @@
 - Modify: Agents.md / Claude.md 第 15 节进度；README 仅写已验证能力
 
 - [x] Agents.md / Claude.md 进度已更新
-- [ ] README 等 GUI 走查后再写
+- [x] Agents.md / Claude.md 同步到当前完成边界
+- [ ] README 等剩余 GUI / e2e 走查后再写

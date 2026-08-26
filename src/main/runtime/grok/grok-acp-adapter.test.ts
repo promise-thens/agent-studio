@@ -793,6 +793,115 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
   })
 
+  it('Runtime 图片落盘后按 text → attachment → text → terminal 顺序发布', async () => {
+    const prompt = vi.fn()
+    const stored = deferred<{
+      attachmentId: string
+      attachmentKind: 'image'
+      originalName: string
+    }>()
+    const storeRuntimeImage = vi.fn(() => stored.promise)
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, { storeRuntimeImage })
+    prompt.mockImplementation(async () => {
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'agent_message_chunk',
+          messageId: 'message-1',
+          content: { type: 'text', text: '前' }
+        }),
+        connection
+      )
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'agent_message_chunk',
+          messageId: 'message-1',
+          content: {
+            type: 'image',
+            data: 'iVBORw0KGgoBAgME',
+            mimeType: 'image/png',
+            uri: 'file:///private/secret.png'
+          }
+        }),
+        connection
+      )
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'agent_message_chunk',
+          messageId: 'message-1',
+          content: { type: 'text', text: '后' }
+        }),
+        connection
+      )
+      return { stopReason: 'end_turn' as const }
+    })
+
+    const execution = harness.adapter.startTurn(turnContext('task-image', 'turn-image'))
+    await vi.waitFor(() => expect(storeRuntimeImage).toHaveBeenCalledTimes(1))
+    expect(harness.events.map((event) => event.kind)).toEqual(['agent-message'])
+    stored.resolve({
+      attachmentId: 'attachment-runtime-1',
+      attachmentKind: 'image',
+      originalName: 'runtime-image.png'
+    })
+    await expect(execution).resolves.toEqual({ outcome: 'completed' })
+
+    expect(storeRuntimeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-image',
+        turnId: 'turn-image',
+        originalName: 'runtime-image.png',
+        mimeType: 'image/png'
+      })
+    )
+    expect(harness.events.map((event) => [event.sequence, event.kind])).toEqual([
+      [1, 'agent-message'],
+      [2, 'agent-attachment'],
+      [3, 'agent-message'],
+      [4, 'turn-complete']
+    ])
+    expect(JSON.stringify(harness.events)).not.toContain('private/secret')
+    expect(JSON.stringify(harness.events)).not.toContain('iVBOR')
+  })
+
+  it('Runtime 图片入库失败只产生一次可恢复错误，不阻断 Turn 终态', async () => {
+    const prompt = vi.fn()
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, {
+      storeRuntimeImage: vi.fn(async () => {
+        throw new Error(`private ${FAKE_SECRET}`)
+      })
+    })
+    prompt.mockImplementation(async () => {
+      for (let index = 0; index < 2; index += 1) {
+        harness.internal.handleSessionUpdate(
+          notification({
+            sessionUpdate: 'agent_message_chunk',
+            content: {
+              type: 'image',
+              data: 'iVBORw0KGgoBAgME',
+              mimeType: 'image/png'
+            }
+          }),
+          connection
+        )
+      }
+      return { stopReason: 'end_turn' as const }
+    })
+
+    await expect(harness.adapter.startTurn(turnContext('task-image', 'turn-image'))).resolves.toEqual(
+      { outcome: 'completed' }
+    )
+    expect(harness.events.filter((event) => event.kind === 'error')).toEqual([
+      expect.objectContaining({
+        code: 'runtime-attachment-rejected',
+        recoverable: true
+      })
+    ])
+    expect(harness.events.at(-1)).toMatchObject({ kind: 'turn-complete', outcome: 'completed' })
+    expect(JSON.stringify(harness.events)).not.toContain(FAKE_SECRET)
+  })
+
   it('同一 Task 的第二轮继续使用同一 Runtime session，但 turnId 由服务层更新', async () => {
     const prompt = vi
       .fn()
@@ -2338,6 +2447,9 @@ interface TestActiveTurn {
   rejectAllToolPermissions: boolean
   cancelRequested: boolean
   outcome?: AgentTurnOutcome
+  sessionUpdateQueue: Promise<void>
+  sessionUpdateQueueActive: boolean
+  runtimeAttachmentErrorReported: boolean
 }
 
 interface TestPendingPermission {
@@ -2567,6 +2679,13 @@ function createAdapterHarness(
   extraOptions: {
     commandEvidenceStore?: CommandEvidenceStore
     resolveCommandEvidenceContext?: () => { environmentId: string } | null
+    storeRuntimeImage?: (input: {
+      taskId: string
+      turnId: string
+      originalName: string
+      mimeType: string
+      bytes: Buffer
+    }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
   } = {}
 ): {
   adapter: GrokAcpAdapter
@@ -2641,7 +2760,10 @@ function createActiveTurn(
     toolCallAuthorizationSnapshots: new Map(),
     terminalToolCallIds: new Set(),
     rejectAllToolPermissions: false,
-    cancelRequested: false
+    cancelRequested: false,
+    sessionUpdateQueue: Promise.resolve(),
+    sessionUpdateQueueActive: false,
+    runtimeAttachmentErrorReported: false
   }
 }
 

@@ -14,6 +14,7 @@ import {
 import { isReadToolTitle, presentToolTitle } from './conversation-tool-presentation'
 import { isActiveConversationTurn } from './task-conversation-view'
 import type {
+  TimelineAttachmentNode,
   TimelineTextNode,
   TimelineToolNode,
   TurnTimelineViewModel
@@ -77,6 +78,13 @@ export interface ConversationMessageBlock {
   render: 'markdown'
 }
 
+export interface ConversationAttachmentBlock {
+  kind: 'attachment'
+  nodeId: string
+  taskId: string
+  attachmentIds: string[]
+}
+
 export interface ConversationErrorBlock {
   kind: 'error'
   nodeId: string
@@ -118,6 +126,7 @@ export type ConversationBlock =
   | ConversationToolBlock
   | ConversationSubagentBlock
   | ConversationMessageBlock
+  | ConversationAttachmentBlock
   | ConversationErrorBlock
   | ConversationPermissionBlock
   | ConversationUsageBlock
@@ -204,6 +213,21 @@ export function projectConversationTurn(
   let index = 0
   while (index < rest.length) {
     const node = rest[index]
+    if (node.kind === 'attachment') {
+      const run: TimelineAttachmentNode[] = [node]
+      while (index + 1 < rest.length && rest[index + 1]?.kind === 'attachment') {
+        index += 1
+        run.push(rest[index] as TimelineAttachmentNode)
+      }
+      blocks.push({
+        kind: 'attachment',
+        nodeId: node.nodeId,
+        taskId: node.taskId,
+        attachmentIds: run.map((item) => item.attachmentId)
+      })
+      index += 1
+      continue
+    }
     if (node.kind === 'command-evidence') {
       blocks.push({
         kind: 'tool',

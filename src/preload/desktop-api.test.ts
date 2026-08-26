@@ -24,6 +24,27 @@ function createIpcRenderer(): MockIpcRenderer {
 }
 
 describe('窄 Preload API', () => {
+  it('拖入文件只经 webUtils 路径解析器转换，并限制单轮数量', () => {
+    const ipcRenderer = createIpcRenderer()
+    const files = Array.from({ length: 10 }, (_, index) => ({ name: `file-${index}` }) as File)
+    const getPathForFile = vi.fn((file: File) =>
+      file === files[2] ? '' : `/tmp/${String((file as { name: string }).name)}`
+    )
+    const task = createTaskDesktopApi(ipcRenderer, getPathForFile)
+
+    expect(task.resolveDroppedFilePaths(files)).toEqual([
+      '/tmp/file-0',
+      '/tmp/file-1',
+      '/tmp/file-3',
+      '/tmp/file-4',
+      '/tmp/file-5',
+      '/tmp/file-6',
+      '/tmp/file-7'
+    ])
+    expect(getPathForFile).toHaveBeenCalledTimes(8)
+    expect(ipcRenderer.invoke).not.toHaveBeenCalled()
+  })
+
   it('Agent/App/Task 方法只调用固定 channel 并包装对象请求', async () => {
     const ipcRenderer = createIpcRenderer()
     const agent = createAgentDesktopApi(ipcRenderer)
@@ -286,6 +307,34 @@ describe('窄 Preload API', () => {
     expect(JSON.stringify(listener.mock.calls)).not.toContain('private-patch')
     expect(JSON.stringify(listener.mock.calls)).not.toContain('private-before')
     expect(JSON.stringify(listener.mock.calls)).not.toContain('fake-secret')
+  })
+
+  it('附件事件只重建 inbox 引用，缺字段或非图片类型时拒绝', () => {
+    const ipcRenderer = createIpcRenderer()
+    const agent = createAgentDesktopApi(ipcRenderer)
+    const listener = vi.fn()
+    agent.onEvent(listener)
+    const eventHandler = ipcRenderer.on.mock.calls[0]?.[1]
+    const base = {
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-18T00:00:00.000Z',
+      kind: 'agent-attachment',
+      attachmentId: 'attachment-1',
+      attachmentKind: 'image',
+      originalName: 'runtime-image.png'
+    }
+
+    eventHandler?.({}, { ...base, runtimeSessionId: 'private', bytes: 'private-base64' })
+    eventHandler?.({}, { ...base, sequence: 2, attachmentId: '' })
+    eventHandler?.({}, { ...base, sequence: 3, attachmentKind: 'pdf' })
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledWith(base)
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('private')
   })
 
   it('进入对话只重建公开恢复状态，剥掉 runtimeSessionId', async () => {

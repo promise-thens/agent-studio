@@ -305,6 +305,14 @@ export type AgentThoughtEvent = AgentEventBase & {
   messageId?: string
 }
 
+/** Runtime 产出的附件事件只携带 inbox 引用，禁止把图片字节或协议 URI 放进事件流。 */
+export type AgentAttachmentEvent = AgentEventBase & {
+  kind: 'agent-attachment'
+  attachmentId: string
+  attachmentKind: 'image'
+  originalName: string
+}
+
 export type AgentToolCallEvent = AgentEventBase & {
   kind: 'tool-call'
   toolCallId: string
@@ -356,6 +364,7 @@ export type AgentErrorEvent = AgentEventBase & {
 export type AgentEvent =
   | AgentMessageEvent
   | AgentThoughtEvent
+  | AgentAttachmentEvent
   | AgentToolEvent
   | AgentPlanEvent
   | AgentDiffEvent

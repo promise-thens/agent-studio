@@ -152,6 +152,46 @@ describe('TaskStore', () => {
     expect(disk).not.toContain('fake-secret')
   })
 
+  it('附件事件持久化后仍只保存 inbox 引用', async () => {
+    const { store } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '生成图片',
+      model: { modelId: 'model-1' }
+    })
+    await store.appendEvent(
+      projectPersistedAgentEvent(
+        {
+          runtimeId: 'grok',
+          capabilityState: 'native',
+          runtimeSessionId: 'private-session',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          sequence: 1,
+          observedAt: '2026-08-12T00:00:00.000Z',
+          kind: 'agent-attachment',
+          attachmentId: 'attachment-1',
+          attachmentKind: 'image',
+          originalName: 'fake-secret.png'
+        },
+        (text) => text.replaceAll('fake-secret', '[REDACTED]')
+      )
+    )
+
+    const page = await store.listEvents('task-1', 'turn-1')
+    expect(page.items).toEqual([
+      expect.objectContaining({
+        kind: 'agent-attachment',
+        attachmentId: 'attachment-1',
+        attachmentKind: 'image',
+        originalName: '[REDACTED].png'
+      })
+    ])
+    expect(JSON.stringify(page)).not.toContain('private-session')
+    expect(JSON.stringify(page)).not.toContain('base64')
+  })
+
   it('同 Task 重绑 Runtime session 时保留历史身份，且详情 DTO 仍不暴露 session ID', async () => {
     const { store, project } = await createStore()
     await store.createTurn({
