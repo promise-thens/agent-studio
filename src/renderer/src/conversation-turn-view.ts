@@ -13,14 +13,21 @@ import {
 } from './command-evidence-presentation'
 import { isReadToolTitle, presentToolTitle } from './conversation-tool-presentation'
 import { isActiveConversationTurn } from './task-conversation-view'
-import type {
-  TimelineAttachmentNode,
-  TimelineTextNode,
-  TimelineToolNode,
-  TurnTimelineViewModel
+import {
+  formatSilentPermissionSummary,
+  isSilentPermissionAuditReason,
+  type TimelineAttachmentNode,
+  type TimelinePermissionNode,
+  type TimelineTextNode,
+  type TimelineToolNode,
+  type TurnTimelineViewModel
 } from './task-timeline-reducer'
 
 export { formatToolVerbPhrase, isReadToolTitle } from './conversation-tool-presentation'
+export {
+  formatSilentPermissionSummary,
+  isSilentPermissionAuditReason
+} from './task-timeline-reducer'
 
 export const PERMISSION_ALLOW_TASK_LABEL = '本任务允许'
 export const PERMISSION_INSUFFICIENT_EVIDENCE_NOTICE = '证据不够，不能自动过'
@@ -100,6 +107,13 @@ export interface ConversationPermissionBlock {
   primaryLabel: string
 }
 
+export interface ConversationPermissionAuditBlock {
+  kind: 'permission-audit'
+  nodeId: string
+  summary: string
+  count: number
+}
+
 export interface ConversationUsageBlock {
   kind: 'usage'
   nodeId: string
@@ -130,6 +144,7 @@ export type ConversationBlock =
   | ConversationAttachmentBlock
   | ConversationErrorBlock
   | ConversationPermissionBlock
+  | ConversationPermissionAuditBlock
   | ConversationUsageBlock
   | ConversationAvailabilityBlock
 
@@ -343,6 +358,35 @@ export function projectConversationTurn(
       index += 1
       continue
     }
+    if (node.kind === 'permission-audit') {
+      // 静默允许收成摘要；人工审批只留 live PermissionPrompt，避免历史里再铺大红牌。
+      if (!isSilentPermissionAuditReason(node.audit.reason)) {
+        index += 1
+        continue
+      }
+      const run: TimelinePermissionNode[] = [node]
+      while (
+        index + 1 < rest.length &&
+        rest[index + 1]?.kind === 'permission-audit' &&
+        isSilentPermissionAuditReason((rest[index + 1] as TimelinePermissionNode).audit.reason) &&
+        (rest[index + 1] as TimelinePermissionNode).audit.operationType === node.audit.operationType
+      ) {
+        index += 1
+        run.push(rest[index] as TimelinePermissionNode)
+      }
+      const count = run.reduce((total, item) => total + item.foldedCount, 0)
+      blocks.push({
+        kind: 'permission-audit',
+        nodeId: node.nodeId,
+        summary:
+          run.length === 1 && node.summary
+            ? node.summary
+            : formatSilentPermissionSummary(node.audit.operationType, count),
+        count
+      })
+      index += 1
+      continue
+    }
     if (node.kind === 'tool') {
       const run: TimelineToolNode[] = [node]
       if (isReadToolTitle(node.title)) {
@@ -455,7 +499,8 @@ function insertPermissionAfterProcess(
         block.kind === 'plan' ||
         block.kind === 'tool' ||
         block.kind === 'thought' ||
-        block.kind === 'subagent'
+        block.kind === 'subagent' ||
+        block.kind === 'permission-audit'
     )
   if (fromEnd < 0) {
     blocks.push(permission)

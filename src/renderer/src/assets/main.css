@@ -477,11 +477,17 @@ button:disabled {
 
 .conversation-thought,
 .conversation-plan,
-.conversation-usage {
+.conversation-usage,
+.conversation-permission-audit {
   min-width: 0;
   color: var(--text-2);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.conversation-permission-audit {
+  display: flex;
+  align-items: center;
 }
 
 /* 执行过程共用一条连续细轨，让思考、计划和工具形成可扫描的调用链。 */
@@ -3396,6 +3402,7 @@ button:disabled {
   .conversation-thought,
   .conversation-plan,
   .conversation-usage,
+  .conversation-permission-audit,
   .tool-row-details,
   .subagent-card {
     transition-duration: 0s;

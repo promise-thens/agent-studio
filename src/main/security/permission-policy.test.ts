@@ -434,11 +434,16 @@ describe('Permission 路径边界', () => {
       minimumRisk: 'L3'
     })
 
+    const writeFile = await resolveOperationIntentTargets(
+      createIntent('write-file', root, [{ kind: 'path', value: 'src/a.ts' }])
+    )
     expect(createOperationGrantKey(execA)).not.toBe(createOperationGrantKey(execB))
     expect(createOperationGrantKey(execA)).toBe(createOperationGrantKey(execSameFingerprint))
     expect(createOperationGrantKey(unknownA)).not.toBe(createOperationGrantKey(unknownB))
     expect(createOperationGrantKey(execA)).not.toBe(createOperationGrantKey(unknownA))
     expect(createOperationGrantKey(fetchUnknown)).not.toBe(createOperationGrantKey(unknownA))
+    expect(createOperationGrantKey(writeFile)).not.toBe(createOperationGrantKey(fetchUnknown))
+    expect(createOperationGrantKey(writeFile)).not.toBe(createOperationGrantKey(unknownA))
 
     const withRawInput = {
       ...execA,

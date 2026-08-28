@@ -182,6 +182,11 @@ describe('工作台对照走查（夹具，非桌面 GUI）', () => {
     expect(permissionSource).toContain('resolvePermissionCardKeyDecision')
     expect(permissionSource).toContain('resolvePermissionEvidenceNotice')
     expect(conversationTurnViewSource).toContain('证据不够，不能自动过')
+    expect(conversationTurnViewSource).toContain('formatSilentPermissionSummary')
+    expect(conversationTurnSource).toContain("block.kind === 'permission-audit'")
+    expect(conversationTurnSource).not.toMatch(
+      /block\.kind === 'permission-audit'[\s\S]{0,200}PermissionPrompt/
+    )
     expect(permissionSource).not.toContain('role="dialog"')
   })
 })

@@ -26,6 +26,8 @@ export interface TimelineCommandEvidenceView {
   logIncompleteReason?: string
   outputFileNotIngested?: true
   inconsistency?: CommandEvidenceInconsistency
+  /** 仅 Runtime 未上报审批时出现；不得把有 approvalId 的自动过说成 Broker 没拦。 */
+  brokerGateLabel?: string
 }
 
 /** Runtime 上报不得被说成 App 沙箱或 Broker 强制。 */
@@ -58,6 +60,18 @@ export function presentCommandEvidenceInconsistency(view: TimelineCommandEvidenc
 /**
  * cwd `.` 对 App 命令表示执行根；对 Runtime 命令只表示未冻结，不得暗示沙箱。
  */
+/**
+ * 未走 ACP request_permission 的 Runtime 命令不能写成 Broker 已授权或沙箱执行。
+ * 自动过仍有 approvalId，只标明「没拦」给完全没上报的私自动作。
+ */
+export function commandBrokerGateLabel(
+  evidence: Pick<CommandExecutionEvidence, 'source' | 'approvalId'>
+): string | undefined {
+  if (evidence.source !== 'runtime-tool') return undefined
+  if (evidence.approvalId) return undefined
+  return 'Broker 没拦'
+}
+
 export function commandCwdLabel(source: CommandExecutionSource, cwd: string): string {
   if (source === 'runtime-tool' && cwd === '.') {
     return 'Runtime 未冻结工作目录（相对路径 .，并非 App 沙箱）'
@@ -115,6 +129,8 @@ export function toCommandEvidenceView(
   if (logIncompleteReason) view.logIncompleteReason = logIncompleteReason
   if (evidence.outputFileNotIngested) view.outputFileNotIngested = true
   if (evidence.inconsistency) view.inconsistency = evidence.inconsistency
+  const brokerGateLabel = commandBrokerGateLabel(evidence)
+  if (brokerGateLabel) view.brokerGateLabel = brokerGateLabel
   return view
 }
 
@@ -130,5 +146,6 @@ export function presentCommandEvidenceSummary(view: TimelineCommandEvidenceView)
   if (view.timedOut) lines.push('已超时')
   if (view.inconsistency) lines.push(presentCommandEvidenceInconsistency(view))
   if (view.logIncompleteReason) lines.push(view.logIncompleteReason)
+  if (view.brokerGateLabel) lines.push(view.brokerGateLabel)
   return lines.join('\n')
 }

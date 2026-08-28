@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AgentPermissionRequest, OperationIntent } from '../../shared/agent'
 import type { PermissionAuditRecord } from '../../shared/task-history'
 import type { PermissionAuditStore } from './permission-audit-store'
-import { PermissionBroker, PERMISSION_APPROVAL_TTL_MS } from './permission-broker'
+import {
+  PermissionBroker,
+  PERMISSION_APPROVAL_TTL_MS,
+  type PermissionAuthorizationResult
+} from './permission-broker'
 import { createLocalEnvironmentId } from './permission-policy'
 
 describe('PermissionBroker', () => {
@@ -80,6 +84,85 @@ describe('PermissionBroker', () => {
     }
     await fixture.broker.shutdown()
     await expect(deletePromise).resolves.toEqual({ ok: false, reason: 'cancelled' })
+  })
+
+  it('写文件宽 grant 不能捎带删除、未知出网或 Computer Use', async () => {
+    const fixture = createFixture()
+    const first = fixture.broker.authorizeOperation(createIntent('write-file'), vi.fn())
+    const firstApproval = await waitForApproval(fixture.approvals, 0)
+    await fixture.broker.respond({
+      approvalId: firstApproval.approvalId,
+      taskId: firstApproval.taskId,
+      turnId: firstApproval.turnId,
+      decision: 'allow-task'
+    })
+    await expect(first).resolves.toMatchObject({ ok: true, reason: 'user-allowed', scope: 'task' })
+
+    await expect(
+      fixture.broker.authorizeOperation(
+        { ...createIntent('write-file'), turnId: 'turn-2' },
+        vi.fn(() => 'write-again')
+      )
+    ).resolves.toMatchObject({ ok: true, value: 'write-again', reason: 'grant-reused' })
+
+    const network = fixture.broker.authorizeOperation(
+      {
+        ...createIntent('network-egress'),
+        turnId: 'turn-2',
+        targets: [{ kind: 'unknown', value: '目标未确认' }],
+        minimumRisk: 'L3'
+      },
+      vi.fn()
+    )
+    const deletePath = fixture.broker.authorizeOperation(
+      { ...createIntent('delete-path'), turnId: 'turn-2' },
+      vi.fn()
+    )
+    const computerUse = fixture.broker.authorizeOperation(
+      {
+        ...createIntent('unknown'),
+        turnId: 'turn-2',
+        targets: [{ kind: 'unknown', value: 'computer-use' }]
+      },
+      vi.fn()
+    )
+
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-2') === 3)
+    const networkCard = await waitForUniqueApproval(fixture.approvals, 1)
+    expect(networkCard).toMatchObject({
+      operationType: 'network-egress',
+      risk: 'L3',
+      allowedScopes: ['once']
+    })
+    await fixture.broker.respond({
+      approvalId: networkCard.approvalId,
+      taskId: networkCard.taskId,
+      turnId: networkCard.turnId,
+      decision: 'deny'
+    })
+    await expect(network).resolves.toEqual({ ok: false, reason: 'user-denied' })
+
+    const deleteCard = await waitForUniqueApproval(fixture.approvals, 2)
+    expect(deleteCard).toMatchObject({ operationType: 'delete-path' })
+    await fixture.broker.respond({
+      approvalId: deleteCard.approvalId,
+      taskId: deleteCard.taskId,
+      turnId: deleteCard.turnId,
+      decision: 'deny'
+    })
+    await expect(deletePath).resolves.toEqual({ ok: false, reason: 'user-denied' })
+
+    const computerCard = await waitForUniqueApproval(fixture.approvals, 3)
+    expect(computerCard).toMatchObject({
+      operationType: 'unknown',
+      risk: 'L3',
+      allowedScopes: ['once']
+    })
+    expect(JSON.stringify(uniqueApprovals(fixture.approvals))).not.toContain('allow_always')
+    expect(JSON.stringify(uniqueApprovals(fixture.approvals))).not.toContain('rawInput')
+
+    await fixture.broker.shutdown()
+    await expect(computerUse).resolves.toEqual({ ok: false, reason: 'cancelled' })
   })
 
   it('受控执行只接收 canonical intent，执行失败不会留下 Task grant', async () => {
@@ -913,7 +996,7 @@ describe('PermissionBroker', () => {
 
   it('同一 Task 连续 15 次项目内读取零审批卡，且每条都记 auto-allowed', async () => {
     const fixture = createFixture()
-    const results = []
+    const results: PermissionAuthorizationResult<string>[] = []
     for (let index = 0; index < 15; index += 1) {
       results.push(
         await fixture.broker.authorizeOperation(

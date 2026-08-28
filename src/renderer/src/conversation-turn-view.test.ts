@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentPermissionRequest } from '../../shared/agent'
-import type { TimelineToolNode, TurnTimelineViewModel } from './task-timeline-reducer'
+import type { PermissionAuditRecord } from '../../shared/task-history'
+import type {
+  TimelinePermissionNode,
+  TimelineToolNode,
+  TurnTimelineViewModel
+} from './task-timeline-reducer'
 import {
   PERMISSION_ALLOW_TASK_LABEL,
   PERMISSION_INSUFFICIENT_EVIDENCE_NOTICE,
   formatMergedReadLabel,
+  formatSilentPermissionSummary,
   hasConversationUsageData,
   projectConversationTurn,
   resolvePermissionCardKeyDecision,
@@ -426,18 +432,12 @@ describe('权限卡主按钮', () => {
     expect(resolvePermissionEvidenceNotice(unknownExecute)).toBe('证据不够，不能自动过')
     expect(
       resolvePermissionEvidenceNotice({
-        ...unknownExecute,
-        operationType: 'network-egress',
         targets: ['unknown: Runtime 未提供可信的目标 origin。']
       })
     ).toBe('证据不够，不能自动过')
     expect(
       resolvePermissionEvidenceNotice({
-        ...unknownExecute,
-        operationType: 'execute-command',
-        risk: 'L2',
-        targets: ['command: pnpm test'],
-        allowedScopes: ['once', 'task']
+        targets: ['command: pnpm test']
       })
     ).toBeNull()
 
@@ -580,3 +580,98 @@ describe('用量块', () => {
     ).toBe(false)
   })
 })
+
+describe('静默权限折叠摘要', () => {
+  it('连续自动允许读取合成「已自动允许 12 次读取」，不是 12 张审批卡', () => {
+    expect(formatSilentPermissionSummary('read-project', 12)).toBe('已自动允许 12 次读取')
+    const silentReads = Array.from({ length: 12 }, (_, index) =>
+      permissionAuditNode({
+        auditId: `read-${index + 1}`,
+        operationType: 'read-project',
+        reason: index === 0 ? 'auto-allowed' : 'grant-reused'
+      })
+    )
+    const writeRequest: AgentPermissionRequest = {
+      approvalId: 'approval-write',
+      initiator: 'runtime',
+      runtimeId: 'grok',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      projectId: 'project-1',
+      environmentId: 'local:test',
+      operationType: 'write-file',
+      risk: 'L1',
+      title: '修改文件',
+      impact: '写入 Project 文件。',
+      targets: ['path: src/auth.ts'],
+      allowedScopes: ['once', 'task'],
+      expiresAt: '2099-01-01T00:00:00.000Z'
+    }
+    const blocks = projectConversationTurn(
+      turn('waiting-permission', [
+        {
+          nodeId: 'task-1:turn-1:user',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'admission',
+          kind: 'user-prompt',
+          text: '请改登录'
+        },
+        ...silentReads,
+        permissionAuditNode({
+          auditId: 'write-user',
+          operationType: 'write-file',
+          reason: 'user-allowed',
+          risk: 'L1'
+        })
+      ]),
+      { pendingPermission: writeRequest }
+    )
+    const auditBlocks = blocks.filter((block) => block.kind === 'permission-audit')
+    const liveCards = blocks.filter((block) => block.kind === 'permission')
+
+    expect(auditBlocks).toHaveLength(1)
+    expect(auditBlocks[0]).toMatchObject({
+      kind: 'permission-audit',
+      summary: '已自动允许 12 次读取',
+      count: 12
+    })
+    expect(liveCards).toHaveLength(1)
+    expect(liveCards[0]).toMatchObject({
+      kind: 'permission',
+      primaryLabel: '本任务允许',
+      request: expect.objectContaining({ approvalId: 'approval-write' })
+    })
+    expect(JSON.stringify(auditBlocks)).not.toContain('user-allowed')
+    expect(JSON.stringify(blocks)).not.toContain('allow_always')
+  })
+})
+
+function permissionAuditNode(
+  overrides: Partial<PermissionAuditRecord> &
+    Pick<PermissionAuditRecord, 'auditId' | 'operationType' | 'reason'>
+): TimelinePermissionNode {
+  const audit: PermissionAuditRecord = {
+    taskId: 'task-1',
+    turnId: 'turn-1',
+    projectId: 'project-1',
+    environmentId: 'local:test',
+    initiator: 'runtime',
+    runtimeId: 'grok',
+    risk: 'L0',
+    targetSummaries: [`path: src/${overrides.auditId}.ts`],
+    title: '权限决策',
+    impact: '测试审计折叠',
+    createdAt: '2026-08-18T00:00:02.000Z',
+    ...overrides
+  }
+  return {
+    nodeId: `task-1:turn-1:audit:${audit.auditId}`,
+    taskId: 'task-1',
+    turnId: 'turn-1',
+    source: 'permission-audit',
+    kind: 'permission-audit',
+    audit,
+    foldedCount: 1
+  }
+}

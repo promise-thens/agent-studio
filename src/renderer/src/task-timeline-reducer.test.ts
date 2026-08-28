@@ -562,4 +562,111 @@ describe('Task Timeline reducer', () => {
       availability: 'not-observed'
     })
   })
+
+  it('连续 12 次自动允许读取折叠成一条摘要，不产出 12 张独立审批节点', () => {
+    const audits = Array.from({ length: 12 }, (_, index) =>
+      permissionAudit({
+        auditId: `read-${index + 1}`,
+        operationType: 'read-project',
+        reason: index === 0 ? 'auto-allowed' : 'grant-reused',
+        createdAt: `2026-08-18T00:00:${String(index + 1).padStart(2, '0')}.000Z`,
+        targetSummaries: [`path: src/read-${index + 1}.ts`]
+      })
+    )
+    const state = reduceTaskTimelineFacts(
+      reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+        type: 'turns/upsert',
+        turns: [TURN]
+      }),
+      { type: 'permission-audits/merge', audits }
+    )
+    const nodes = selectTaskTimeline(state, { executionSnapshot: snapshot() }).turns[0]?.nodes ?? []
+    const permissionNodes = nodes.filter((node) => node.kind === 'permission-audit')
+
+    expect(nodes[0]?.kind).toBe('user-prompt')
+    expect(permissionNodes).toHaveLength(1)
+    expect(permissionNodes[0]).toMatchObject({
+      kind: 'permission-audit',
+      foldedCount: 12,
+      summary: '已自动允许 12 次读取'
+    })
+    expect(JSON.stringify(permissionNodes)).not.toContain('allow_always')
+  })
+
+  it('人工审批打断静默折叠，且写授权摘要不能把删除混进去', () => {
+    const audits = [
+      ...Array.from({ length: 3 }, (_, index) =>
+        permissionAudit({
+          auditId: `read-${index + 1}`,
+          operationType: 'read-project',
+          reason: 'auto-allowed',
+          createdAt: `2026-08-18T00:00:0${index + 1}.000Z`
+        })
+      ),
+      permissionAudit({
+        auditId: 'write-1',
+        operationType: 'write-file',
+        reason: 'user-allowed',
+        risk: 'L1',
+        createdAt: '2026-08-18T00:00:04.000Z'
+      }),
+      ...Array.from({ length: 2 }, (_, index) =>
+        permissionAudit({
+          auditId: `write-auto-${index + 1}`,
+          operationType: 'write-file',
+          reason: 'grant-reused',
+          risk: 'L1',
+          createdAt: `2026-08-18T00:00:0${index + 5}.000Z`
+        })
+      ),
+      permissionAudit({
+        auditId: 'delete-1',
+        operationType: 'delete-path',
+        reason: 'auto-allowed',
+        risk: 'L1',
+        createdAt: '2026-08-18T00:00:07.000Z'
+      })
+    ]
+    const state = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+      type: 'permission-audits/merge',
+      audits
+    })
+    const permissionNodes =
+      selectTaskTimeline(state, {
+        executionSnapshot: { executorEpoch: 'epoch', executionRevision: 0, execution: null }
+      }).turns[0]?.nodes.filter((node) => node.kind === 'permission-audit') ?? []
+
+    expect(permissionNodes).toHaveLength(4)
+    expect(permissionNodes.map((node) => node.summary ?? node.audit.reason)).toEqual([
+      '已自动允许 3 次读取',
+      'user-allowed',
+      '已自动允许 2 次写入',
+      '已自动允许 1 次删除'
+    ])
+    expect(permissionNodes[1]).toMatchObject({
+      foldedCount: 1,
+      audit: { reason: 'user-allowed', operationType: 'write-file' }
+    })
+    expect(permissionNodes[1]?.summary).toBeUndefined()
+  })
 })
+
+function permissionAudit(
+  overrides: Partial<PermissionAuditRecord> &
+    Pick<PermissionAuditRecord, 'auditId' | 'operationType' | 'reason'>
+): PermissionAuditRecord {
+  return {
+    taskId: 'task-1',
+    turnId: 'turn-1',
+    projectId: 'project-1',
+    environmentId: 'local:test',
+    initiator: 'runtime',
+    runtimeId: 'grok',
+    risk: 'L0',
+    targetSummaries: [`path: src/${overrides.auditId}.ts`],
+    title: '权限决策',
+    impact: '测试审计折叠',
+    createdAt: '2026-08-18T00:00:02.000Z',
+    ...overrides
+  }
+}

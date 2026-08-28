@@ -168,6 +168,15 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
         {{ block.message }}
       </p>
 
+      <div
+        v-else-if="block.kind === 'permission-audit'"
+        class="conversation-permission-audit conversation-process-step"
+        data-kind="permission-audit"
+        data-process-kind="permission-audit"
+      >
+        <span class="conversation-process-label">{{ block.summary }}</span>
+      </div>
+
       <PermissionPrompt
         v-else-if="block.kind === 'permission'"
         :request="block.request"

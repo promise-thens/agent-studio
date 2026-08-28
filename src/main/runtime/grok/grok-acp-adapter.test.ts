@@ -2439,6 +2439,48 @@ describe('Grok Runtime 命令证据持久化', () => {
     expect(evidence?.approvalId).toBeUndefined()
   })
 
+  it('自动过路径下 execute 仍写 runtime-tool 证据，不等用户点审批卡', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const { adapter, internal, store, permissions } = await createEvidenceHarness(connection)
+    const responsePromise = internal.requestPermission(
+      permissionRequest({
+        optionId: 'allow-once',
+        toolCallId: 'tool-auto-allowed',
+        kind: 'execute'
+      }),
+      connection
+    )
+    internal.handleSessionUpdate(
+      notification({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tool-auto-allowed',
+        kind: 'execute',
+        status: 'completed',
+        rawInput: { command: 'pnpm test' },
+        rawOutput: { exit_code: 0, timed_out: false, output: 'ok' }
+      }),
+      connection
+    )
+    await adapter.waitForCommandEvidenceWrites()
+
+    const commandId = deriveGrokRuntimeCommandId(
+      'task-current',
+      'turn-current',
+      'tool-auto-allowed'
+    )
+    const evidence = await store.readEvidence('task-current', commandId)
+    expect(parseCommandExecutionEvidence(evidence)).toMatchObject({
+      source: 'runtime-tool',
+      trustLevel: 'runtime-reported',
+      status: 'succeeded',
+      displayCommand: 'pnpm test',
+      toolCallId: 'tool-auto-allowed',
+      approvalId: permissions[0]?.requestId
+    })
+    adapter.respondPermission(permissions[0].requestId, 'allow-once')
+    await responsePromise
+  })
+
   it('未见 ACP permission request 时不发明 approvalId', async () => {
     const connection = {} as acp.ClientSideConnection
     const { adapter, internal, store } = await createEvidenceHarness(connection)
