@@ -1106,6 +1106,11 @@ export function createTaskDesktopApi(
         taskId,
         attachmentId
       }) as ReturnType<TaskDesktopApi['getAttachmentPreview']>,
+    getAttachmentImage: (taskId, attachmentId) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getAttachmentImage, {
+        taskId,
+        attachmentId
+      }) as ReturnType<TaskDesktopApi['getAttachmentImage']>,
     getChangeMediaPreview: (taskId, path) =>
       ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getChangeMediaPreview, {
         taskId,

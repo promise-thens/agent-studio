@@ -34,6 +34,7 @@ import type { ProviderRuntimeConfig } from '../../provider/provider-config-store
 import {
   AGENT_STUDIO_MODEL_ALIAS,
   AGENT_STUDIO_MODEL_API_KEY_ENV,
+  getManagedGrokHome,
   writeGrokProviderConfig
 } from '../../provider/grok-provider-config'
 import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
@@ -54,6 +55,12 @@ import {
   type GrokToolCallAuthorizationSnapshot
 } from './grok-acp-mappers'
 import { buildGrokPromptContentBlocks } from './grok-acp-prompt-blocks'
+import {
+  DEFAULT_GROK_SESSION_MEDIA_ROOT,
+  extractGrokRuntimeMediaPaths,
+  readGrokSessionMediaFile,
+  toolCallHasGrokRuntimeMedia
+} from './grok-runtime-media'
 import {
   accumulateGrokCommandToolFacts,
   isGrokCommandEvidenceCandidate,
@@ -105,6 +112,8 @@ interface ActiveTurn {
   sessionUpdateQueueActive: boolean
   /** 同一 Turn 的坏图片只提示一次，避免 Runtime 连续脏块刷满时间线。 */
   runtimeAttachmentErrorReported: boolean
+  /** 同一 Turn 已入库的 session 媒体路径，避免 tool_call 与 update 重复落盘。 */
+  ingestedRuntimeMediaKeys: Set<string>
   /** 当前 Turn 内命令证据累积；测试夹具可能缺省，读取时必须惰性创建。 */
   commandEvidenceByToolCallId?: Map<string, GrokCommandToolFacts>
 }
@@ -155,6 +164,8 @@ export interface GrokAcpAdapterOptions {
     mimeType: string
     bytes: Buffer
   }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
+  /** 仅测试注入 Grok session 媒体根；生产固定 /tmp/sessions。 */
+  grokSessionMediaRoot?: string
 }
 
 /**
@@ -545,6 +556,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       sessionUpdateQueue: Promise.resolve(),
       sessionUpdateQueueActive: false,
       runtimeAttachmentErrorReported: false,
+      ingestedRuntimeMediaKeys: new Set(),
       commandEvidenceByToolCallId: new Map()
     }
     this.activeTurn = activeTurn
@@ -830,8 +842,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       (update.sessionUpdate === 'agent_message_chunk' ||
         update.sessionUpdate === 'agent_thought_chunk') &&
       update.content.type === 'image'
+    const isSessionMediaTool =
+      (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') &&
+      toolCallHasGrokRuntimeMedia(update.content)
 
-    if (!activeTurn.sessionUpdateQueueActive && !isRuntimeImage) {
+    if (!activeTurn.sessionUpdateQueueActive && !isRuntimeImage && !isSessionMediaTool) {
       void this.processSessionUpdate(params, sourceConnection, activeTurn)
       return
     }
@@ -926,6 +941,42 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
     for (const draft of mapGrokSessionUpdate(params, (text) => this.safeRedact(text))) {
       this.emitDraft(activeTurn, draft)
+    }
+
+    if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
+      await this.ingestGrokSessionMedia(activeTurn, update.content)
+    }
+  }
+
+  /** 测试可替换媒体根；生产同时认 App grok-home/sessions 与 Grok 默认 /tmp/sessions。 */
+  private grokSessionMediaRoots(): string[] {
+    if (this.options.grokSessionMediaRoot) return [this.options.grokSessionMediaRoot]
+    return [
+      join(getManagedGrokHome(this.options.userDataPath), 'sessions'),
+      DEFAULT_GROK_SESSION_MEDIA_ROOT
+    ]
+  }
+
+  /**
+   * Grok image_gen 只在 tool_call 正文里给 session 相对路径，不发 ACP Image 块。
+   * 主进程限定目录读盘后走既有 inbox，绝对路径不得进入事件。
+   */
+  private async ingestGrokSessionMedia(
+    activeTurn: ActiveTurn,
+    content: acp.ToolCallContent[] | null | undefined
+  ): Promise<void> {
+    const candidates = extractGrokRuntimeMediaPaths(content)
+    for (const candidate of candidates) {
+      if (activeTurn.ingestedRuntimeMediaKeys.has(candidate.absolutePath)) continue
+      activeTurn.ingestedRuntimeMediaKeys.add(candidate.absolutePath)
+      const image = await readGrokSessionMediaFile(candidate, {
+        mediaRoots: this.grokSessionMediaRoots()
+      })
+      if (!image) {
+        this.reportRuntimeAttachmentFailure(activeTurn)
+        continue
+      }
+      await this.persistRuntimeImage(activeTurn, image)
     }
   }
 
@@ -1856,6 +1907,7 @@ const RUNTIME_ENV_ALLOWLIST = [
 /**
  * 构造 Grok Runtime 专属的最小环境，避免宿主密钥、npm 凭据和其他无关变量被子进程继承。
  * Provider Key 只进入 Grok Runtime，并由生成的 shell_environment_policy 从工具子进程中剔除。
+ * GROK_XAI_API_BASE_URL 与聊天 Base URL 同源，供 Imagine 等媒体接口使用。
  */
 export function buildGrokRuntimeEnvironment(
   providerConfig: ProviderRuntimeConfig,
@@ -1875,6 +1927,8 @@ export function buildGrokRuntimeEnvironment(
   environment.GROK_HOME = grokHome
   // 显式写入，不继承宿主 GROK_MEMORY=0；设置页关闭记忆时才传 '0'。
   environment.GROK_MEMORY = options.memoryEnabled === false ? '0' : '1'
+  // Imagine 跟聊天走同一 Provider URL，不继承宿主 GROK_XAI_API_BASE_URL。
+  environment.GROK_XAI_API_BASE_URL = providerConfig.baseUrl
   if (providerConfig.authMode === 'bearer' && providerConfig.apiKey) {
     environment[AGENT_STUDIO_MODEL_API_KEY_ENV] = providerConfig.apiKey
   }

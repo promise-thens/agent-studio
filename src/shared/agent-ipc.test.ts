@@ -83,6 +83,7 @@ describe('桌面 IPC 静态契约', () => {
       'task:list-draft-attachments',
       'task:remove-attachment',
       'task:get-attachment-preview',
+      'task:get-attachment-image',
       'task:get-change-media-preview'
     ])
   })

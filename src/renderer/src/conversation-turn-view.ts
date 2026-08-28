@@ -188,6 +188,67 @@ export function formatMergedReadLabel(count: number): string {
   return `读了 ${count} 个文件`
 }
 
+const SESSION_MEDIA_PATH_LINE = /^(?:images|videos)\/\d+\.(?:jpe?g|png|webp|gif|mp4)$/i
+
+function isSessionMediaPathLine(line: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed) return false
+  const candidates = [trimmed, trimmed.replace(/^`+|`+$/g, '')]
+  const markdown = /^(?:!)?\[([^\]]*)\]\(([^)]+)\)$/.exec(trimmed)
+  if (markdown) {
+    candidates.push(markdown[1].trim())
+    const href = markdown[2].trim().replace(/^[a-z]+:\/\//i, '')
+    candidates.push(href)
+    candidates.push(href.split('/').slice(-2).join('/'))
+  }
+  return candidates.some((value) => SESSION_MEDIA_PATH_LINE.test(value))
+}
+
+/** 去掉 Grok 生图写在正文里的独立路径行，图已经由附件块展示。 */
+export function stripDisplayedSessionMediaPaths(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !isSessionMediaPathLine(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+/** 把说明和后续句子拆开，方便把图片插到路径原来的位置。 */
+export function splitAssistantMessageAroundMedia(text: string): { before: string; after: string } {
+  const stripped = stripDisplayedSessionMediaPaths(text)
+  const match = stripped.match(/^(.*?)\n\s*\n([\s\S]*)$/)
+  if (!match) return { before: stripped, after: '' }
+  return { before: match[1].trim(), after: match[2].trim() }
+}
+
+function collectRuntimeMediaBlocks(
+  nodes: TurnTimelineViewModel['nodes']
+): ConversationAttachmentBlock[] {
+  const blocks: ConversationAttachmentBlock[] = []
+  let index = 0
+  while (index < nodes.length) {
+    const node = nodes[index]
+    if (node.kind !== 'attachment') {
+      index += 1
+      continue
+    }
+    const run: TimelineAttachmentNode[] = [node]
+    while (index + 1 < nodes.length && nodes[index + 1]?.kind === 'attachment') {
+      index += 1
+      run.push(nodes[index] as TimelineAttachmentNode)
+    }
+    blocks.push({
+      kind: 'attachment',
+      nodeId: node.nodeId,
+      taskId: node.taskId,
+      attachmentIds: run.map((item) => item.attachmentId)
+    })
+    index += 1
+  }
+  return blocks
+}
+
 /**
  * 把 P0-09 Turn 节点收成主列对话块。
  * 用户句只保留一处；无父子字段时不产出 subagent 组，工具保持扁平。
@@ -210,21 +271,18 @@ export function projectConversationTurn(
   }
 
   const rest = turn.nodes.filter((node) => node.kind !== 'user-prompt')
+  const mediaBlocks = collectRuntimeMediaBlocks(rest)
+  let mediaInserted = false
+  const insertRuntimeMedia = (): void => {
+    if (mediaInserted || mediaBlocks.length === 0) return
+    mediaInserted = true
+    blocks.push(...mediaBlocks)
+  }
   let index = 0
   while (index < rest.length) {
     const node = rest[index]
     if (node.kind === 'attachment') {
-      const run: TimelineAttachmentNode[] = [node]
-      while (index + 1 < rest.length && rest[index + 1]?.kind === 'attachment') {
-        index += 1
-        run.push(rest[index] as TimelineAttachmentNode)
-      }
-      blocks.push({
-        kind: 'attachment',
-        nodeId: node.nodeId,
-        taskId: node.taskId,
-        attachmentIds: run.map((item) => item.attachmentId)
-      })
+      while (index + 1 < rest.length && rest[index + 1]?.kind === 'attachment') index += 1
       index += 1
       continue
     }
@@ -266,13 +324,41 @@ export function projectConversationTurn(
       })
     } else if (node.kind === 'plan') {
       blocks.push(toPlanBlock(turn, node.entries, node.nodeId))
-    } else if (node.kind === 'message' && node.text.trim()) {
-      blocks.push({
-        kind: 'message',
-        nodeId: node.nodeId,
-        text: node.text,
-        render: 'markdown'
-      })
+    } else if (node.kind === 'message') {
+      if (mediaBlocks.length > 0 && !mediaInserted) {
+        const { before, after } = splitAssistantMessageAroundMedia(node.text)
+        if (before) {
+          blocks.push({
+            kind: 'message',
+            nodeId: node.nodeId,
+            text: before,
+            render: 'markdown'
+          })
+        }
+        insertRuntimeMedia()
+        if (after) {
+          blocks.push({
+            kind: 'message',
+            nodeId: `${node.nodeId}:after-media`,
+            text: after,
+            render: 'markdown'
+          })
+        }
+      } else {
+        const text = mediaInserted
+          ? stripDisplayedSessionMediaPaths(node.text)
+          : node.text.trim()
+            ? node.text
+            : ''
+        if (text.trim()) {
+          blocks.push({
+            kind: 'message',
+            nodeId: node.nodeId,
+            text,
+            render: 'markdown'
+          })
+        }
+      }
     } else if (node.kind === 'error' && node.message.trim()) {
       blocks.push({
         kind: 'error',
@@ -296,6 +382,8 @@ export function projectConversationTurn(
     }
     index += 1
   }
+
+  insertRuntimeMedia()
 
   const pending = options?.pendingPermission
   if (pending && pending.taskId === turn.taskId && pending.turnId === turn.turnId) {

@@ -94,6 +94,7 @@ ProviderRuntimeConfig（主进程已校验）
 
 - `GROK_HOME` = App grok-home
 - `PATH` = `~/.grok/bin` + 原 PATH（只为解析二进制）
+- `GROK_XAI_API_BASE_URL` = 当前 Provider Base URL（Imagine 与聊天同源，不继承宿主）
 - bearer 时的模型 Key
 
 禁止再放进：`npm` token、用户 shell 里的其它云厂商 Key、Electron 调试变量（受控 E2E 除外）。

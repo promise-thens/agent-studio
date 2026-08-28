@@ -1,5 +1,5 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as acp from '@agentclientprotocol/sdk'
@@ -900,6 +900,81 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     ])
     expect(harness.events.at(-1)).toMatchObject({ kind: 'turn-complete', outcome: 'completed' })
     expect(JSON.stringify(harness.events)).not.toContain(FAKE_SECRET)
+  })
+
+  it('Grok 生图 tool_call 把 session 图片入库，事件不含绝对路径', async () => {
+    const mediaRoot = await mkdtemp(join(tmpdir(), 'grok-session-media-'))
+    const relative = join('sess-1', 'images', '1.png')
+    const filePath = join(mediaRoot, relative)
+    await mkdir(join(mediaRoot, 'sess-1', 'images'), { recursive: true })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    await writeFile(filePath, png)
+    const prompt = vi.fn()
+    const storeRuntimeImage = vi.fn(async () => ({
+      attachmentId: 'attachment-session-1',
+      attachmentKind: 'image' as const,
+      originalName: '1.png'
+    }))
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, {
+      storeRuntimeImage,
+      grokSessionMediaRoot: mediaRoot
+    })
+    prompt.mockImplementation(async () => {
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tool-image-1',
+          title: 'image_gen',
+          status: 'completed',
+          content: [
+            {
+              type: 'content',
+              content: {
+                type: 'text',
+                text: JSON.stringify({
+                  path: filePath,
+                  filename: '1.png',
+                  session_folder: 'images',
+                  message: `Image generated and saved to ${filePath}.`
+                })
+              }
+            }
+          ]
+        }),
+        connection
+      )
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text: 'images/1.png' }
+        }),
+        connection
+      )
+      return { stopReason: 'end_turn' as const }
+    })
+
+    await expect(
+      harness.adapter.startTurn(turnContext('task-image', 'turn-image'))
+    ).resolves.toEqual({ outcome: 'completed' })
+    expect(storeRuntimeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-image',
+        turnId: 'turn-image',
+        originalName: '1.png',
+        mimeType: 'image/png'
+      })
+    )
+    expect(harness.events.map((event) => event.kind)).toEqual([
+      'tool-update',
+      'agent-attachment',
+      'agent-message',
+      'turn-complete'
+    ])
+    const serialized = JSON.stringify(harness.events)
+    expect(serialized).not.toContain(filePath)
+    expect(serialized).not.toContain(mediaRoot)
+    await rm(mediaRoot, { recursive: true, force: true })
   })
 
   it('同一 Task 的第二轮继续使用同一 Runtime session，但 turnId 由服务层更新', async () => {
@@ -2202,6 +2277,20 @@ describe('Grok Runtime 环境隔离', () => {
     )
     expect(disabled.GROK_MEMORY).toBe('0')
   })
+
+  it('生图 Base URL 跟 Provider 同源，不继承宿主 GROK_XAI_API_BASE_URL', () => {
+    const environment = buildGrokRuntimeEnvironment(
+      providerConfig(),
+      '/tmp/agent-studio-grok-home',
+      {
+        PATH: '/usr/bin',
+        GROK_XAI_API_BASE_URL: 'https://hostile.example/v1'
+      }
+    )
+
+    expect(environment.GROK_XAI_API_BASE_URL).toBe('https://api.example.com/v1')
+    expect(JSON.stringify(environment)).not.toContain('hostile.example')
+  })
 })
 
 describe('Grok Runtime 命令证据持久化', () => {
@@ -2450,6 +2539,7 @@ interface TestActiveTurn {
   sessionUpdateQueue: Promise<void>
   sessionUpdateQueueActive: boolean
   runtimeAttachmentErrorReported: boolean
+  ingestedRuntimeMediaKeys: Set<string>
 }
 
 interface TestPendingPermission {
@@ -2686,6 +2776,7 @@ function createAdapterHarness(
       mimeType: string
       bytes: Buffer
     }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
+    grokSessionMediaRoot?: string
   } = {}
 ): {
   adapter: GrokAcpAdapter
@@ -2763,7 +2854,8 @@ function createActiveTurn(
     cancelRequested: false,
     sessionUpdateQueue: Promise.resolve(),
     sessionUpdateQueueActive: false,
-    runtimeAttachmentErrorReported: false
+    runtimeAttachmentErrorReported: false,
+    ingestedRuntimeMediaKeys: new Set()
   }
 }
 

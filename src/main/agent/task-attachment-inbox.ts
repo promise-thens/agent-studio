@@ -295,6 +295,23 @@ export class TaskAttachmentInbox {
     }
   }
 
+  /** 灯箱和大图下载只给原图字节和展示名，不暴露磁盘路径。 */
+  async getOriginalImage(
+    taskId: string,
+    attachmentId: string
+  ): Promise<{ originalName: string; mimeType: string; bytes: Buffer }> {
+    const descriptor = await this.getDescriptor(taskId, attachmentId)
+    if (descriptor.kind !== 'image') {
+      throw new TaskAttachmentError('mime-mismatch', '只有图片可以打开原图。')
+    }
+    const bytes = await this.readBytes(taskId, attachmentId)
+    return {
+      originalName: descriptor.originalName,
+      mimeType: descriptor.mimeType,
+      bytes
+    }
+  }
+
   private async persist(
     taskId: string,
     originalName: string,

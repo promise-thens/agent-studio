@@ -13,6 +13,10 @@ import {
 const rendererDir = dirname(fileURLToPath(import.meta.url))
 const baseCss = readFileSync(join(rendererDir, 'assets/base.css'), 'utf8')
 const settingsSource = readFileSync(join(rendererDir, 'components/SettingsDialog.vue'), 'utf8')
+const onboardingSource = readFileSync(
+  join(rendererDir, 'components/ProviderOnboarding.vue'),
+  'utf8'
+)
 
 describe('设置弹窗与外观应用', () => {
   it('非法栏目回到供应商', () => {
@@ -61,5 +65,10 @@ describe('设置弹窗与外观应用', () => {
     expect(baseCss).toContain('--text-1: #1c1c1e')
     expect(settingsSource).toContain(lightBg)
     expect(settingsSource).not.toContain('#f4efe6')
+  })
+
+  it('供应商页说明生图走同一 Base URL', () => {
+    expect(onboardingSource).toContain('/v1/images/generations')
+    expect(onboardingSource).toContain('生图走同一 Base URL')
   })
 })

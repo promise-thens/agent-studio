@@ -1,6 +1,10 @@
 import { ATTACHMENT_LIMITS, type TaskAttachmentDescriptor } from '../../shared/task-attachment'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
-import { TASK_INVOKE_CHANNELS, type TaskAttachmentPreview } from '../../shared/task-ipc'
+import {
+  TASK_INVOKE_CHANNELS,
+  type TaskAttachmentImage,
+  type TaskAttachmentPreview
+} from '../../shared/task-ipc'
 import type { DesktopIpcMain } from '../ipc-types'
 import {
   DesktopIpcFailure,
@@ -183,6 +187,20 @@ export function registerTaskAttachmentIpcHandlers(
       readText(request, 'attachmentId')
     )
     return toPreview(preview.descriptor, preview.thumbnailBytes, preview.thumbnailMime)
+  })
+
+  register(TASK_INVOKE_CHANNELS.getAttachmentImage, async (args) => {
+    const request = readRequest(args, ['taskId', 'attachmentId'])
+    const image = await requireInbox(dependencies.getInbox).getOriginalImage(
+      readText(request, 'taskId'),
+      readText(request, 'attachmentId')
+    )
+    const payload: TaskAttachmentImage = {
+      originalName: image.originalName,
+      mimeType: image.mimeType,
+      imageBase64: image.bytes.toString('base64')
+    }
+    return payload
   })
 
   register(TASK_INVOKE_CHANNELS.getChangeMediaPreview, async (args) => {

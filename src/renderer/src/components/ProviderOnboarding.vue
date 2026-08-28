@@ -299,7 +299,11 @@ function hasSameOrigin(left: string, right?: string): boolean {
             :disabled="isBusy"
             :aria-invalid="Boolean(errors.baseUrl)"
             :aria-describedby="
-              errors.baseUrl ? 'provider-url-error' : usesHttp ? 'provider-http-warning' : undefined
+              errors.baseUrl
+                ? 'provider-url-error'
+                : usesHttp
+                  ? 'provider-http-warning provider-url-media-hint'
+                  : 'provider-url-media-hint'
             "
             @input="handleConnectionChange('baseUrl')"
           />
@@ -311,6 +315,9 @@ function hasSameOrigin(left: string, right?: string): boolean {
             <span>HTTP 连接未加密，API Key 和请求内容可能被截获。请仅连接你信任的服务。</span>
           </small>
           <small v-else>保留服务商要求的路径，例如 /v1。</small>
+          <small v-if="!errors.baseUrl" id="provider-url-media-hint">
+            生图走同一 Base URL，服务需提供 /v1/images/generations。
+          </small>
         </label>
 
         <fieldset class="field auth-field">

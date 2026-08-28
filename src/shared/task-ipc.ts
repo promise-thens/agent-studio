@@ -47,6 +47,7 @@ export const TASK_INVOKE_CHANNELS = {
   listDraftAttachments: 'task:list-draft-attachments',
   removeAttachment: 'task:remove-attachment',
   getAttachmentPreview: 'task:get-attachment-preview',
+  getAttachmentImage: 'task:get-attachment-image',
   getChangeMediaPreview: 'task:get-change-media-preview'
 } as const
 
@@ -60,6 +61,12 @@ export interface TaskAttachmentPreview {
   descriptor: TaskAttachmentDescriptor
   thumbnailBase64?: string
   thumbnailMime?: string
+}
+
+export interface TaskAttachmentImage {
+  originalName: string
+  mimeType: string
+  imageBase64: string
 }
 
 export interface TaskDesktopApi {
@@ -120,6 +127,10 @@ export interface TaskDesktopApi {
     taskId: string,
     attachmentId: string
   ) => Promise<DesktopIpcResult<TaskAttachmentPreview>>
+  getAttachmentImage: (
+    taskId: string,
+    attachmentId: string
+  ) => Promise<DesktopIpcResult<TaskAttachmentImage>>
   getChangeMediaPreview: (
     taskId: string,
     path: string

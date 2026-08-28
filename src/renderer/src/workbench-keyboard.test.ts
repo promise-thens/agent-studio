@@ -127,6 +127,10 @@ describe('overlayConsumesEscape', () => {
     expect(overlayConsumesEscape(childInsideClass('modal-backdrop'))).toBe(true)
   })
 
+  it('图片灯箱吃掉 Esc，不停止 Task', () => {
+    expect(overlayConsumesEscape(childInsideClass('attachment-image-backdrop'))).toBe(true)
+  })
+
   it('无关节点和空目标不吃掉 Esc', () => {
     expect(overlayConsumesEscape(null)).toBe(false)
     expect(overlayConsumesEscape(childInsideClass('task-composer'))).toBe(false)

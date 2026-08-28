@@ -8,7 +8,8 @@ import {
   projectConversationTurn,
   resolvePermissionCardPresentation,
   resolvePermissionOriginLabel,
-  resolvePermissionPrimaryAction
+  resolvePermissionPrimaryAction,
+  stripDisplayedSessionMediaPaths
 } from './conversation-turn-view'
 
 function tool(
@@ -49,6 +50,19 @@ function turn(
     historyTruncated: false
   }
 }
+
+describe('stripDisplayedSessionMediaPaths', () => {
+  it('去掉独立的 images/N.jpg 行，保留说明文字', () => {
+    expect(
+      stripDisplayedSessionMediaPaths('趴着这张来了：\n\nimages/3.jpg\n\n还想伸懒腰或回头看。')
+    ).toBe('趴着这张来了：\n\n还想伸懒腰或回头看。')
+    expect(stripDisplayedSessionMediaPaths('`images/1.jpg`')).toBe('')
+    expect(
+      stripDisplayedSessionMediaPaths('[images/4.jpg](file:///tmp/sessions/x/images/4.jpg)')
+    ).toBe('')
+    expect(stripDisplayedSessionMediaPaths('图在 images/3.jpg 里')).toBe('图在 images/3.jpg 里')
+  })
+})
 
 describe('对话块投影', () => {
   it('同一轮用户句只出现一次，助手句走 markdown 字段，思考默认折叠且不含 Tool/Plan 标签', () => {
@@ -259,9 +273,27 @@ describe('对话块投影', () => {
     expect(toolBlocks[1]?.label).not.toContain('ls -la')
   })
 
-  it('Runtime 图片投影为助手媒体块，只合并相邻附件', () => {
+  it('Runtime 图片插在说明文字和后续句子之间，不显示 images/N.jpg', () => {
     const blocks = projectConversationTurn(
       turn('completed', [
+        {
+          nodeId: 'task-1:turn-1:thought:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'thought',
+          text: '先画'
+        },
+        {
+          nodeId: 'task-1:turn-1:tool:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'tool',
+          toolCallId: 'tool-1',
+          title: 'image_gen',
+          status: 'completed'
+        },
         {
           nodeId: 'task-1:turn-1:attachment:1',
           taskId: 'task-1',
@@ -270,53 +302,44 @@ describe('对话块投影', () => {
           kind: 'attachment',
           attachmentId: 'attachment-1',
           attachmentKind: 'image',
-          originalName: 'runtime-image.png'
+          originalName: '1.jpg'
         },
         {
-          nodeId: 'task-1:turn-1:attachment:2',
+          nodeId: 'task-1:turn-1:thought:2',
           taskId: 'task-1',
           turnId: 'turn-1',
           source: 'agent-event',
-          kind: 'attachment',
-          attachmentId: 'attachment-2',
-          attachmentKind: 'image',
-          originalName: 'runtime-image.png'
+          kind: 'thought',
+          text: '再写一句'
         },
         {
-          nodeId: 'task-1:turn-1:message:3',
+          nodeId: 'task-1:turn-1:message:1',
           taskId: 'task-1',
           turnId: 'turn-1',
           source: 'agent-event',
           kind: 'message',
-          text: '图片说明'
-        },
-        {
-          nodeId: 'task-1:turn-1:attachment:4',
-          taskId: 'task-1',
-          turnId: 'turn-1',
-          source: 'agent-event',
-          kind: 'attachment',
-          attachmentId: 'attachment-3',
-          attachmentKind: 'image',
-          originalName: 'runtime-image.png'
+          text: '伸懒腰这张好了：\n\nimages/4.jpg\n\n还想回头看，直接说。'
         }
       ])
     )
-    const media = blocks.filter((block) => block.kind === 'attachment')
 
-    expect(media).toEqual([
-      expect.objectContaining({
-        taskId: 'task-1',
-        attachmentIds: ['attachment-1', 'attachment-2']
-      }),
-      expect.objectContaining({ taskId: 'task-1', attachmentIds: ['attachment-3'] })
-    ])
     expect(blocks.map((block) => block.kind)).toEqual([
       'user',
-      'attachment',
+      'thought',
+      'tool',
+      'thought',
       'message',
-      'attachment'
+      'attachment',
+      'message'
     ])
+    expect(blocks.filter((block) => block.kind === 'message')).toEqual([
+      expect.objectContaining({ text: '伸懒腰这张好了：' }),
+      expect.objectContaining({ text: '还想回头看，直接说。' })
+    ])
+    expect(blocks.find((block) => block.kind === 'attachment')).toMatchObject({
+      attachmentIds: ['attachment-1']
+    })
+    expect(JSON.stringify(blocks)).not.toContain('images/4.jpg')
   })
 })
 

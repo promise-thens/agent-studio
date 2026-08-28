@@ -35,6 +35,7 @@ function createFixture(): {
     listDrafts: ReturnType<typeof vi.fn>
     removeDraft: ReturnType<typeof vi.fn>
     getPreview: ReturnType<typeof vi.fn>
+    getOriginalImage: ReturnType<typeof vi.fn>
   }
   assertTrustedSender: ReturnType<typeof vi.fn>
   getChangeMediaPreview: ReturnType<typeof vi.fn>
@@ -50,6 +51,11 @@ function createFixture(): {
       descriptor: descriptor(),
       thumbnailBytes: Buffer.from('thumb'),
       thumbnailMime: 'image/jpeg'
+    })),
+    getOriginalImage: vi.fn(async () => ({
+      originalName: 'preview.png',
+      mimeType: 'image/png',
+      bytes: Buffer.from('png-bytes')
     }))
   }
   const assertTrustedSender = vi.fn()
@@ -90,6 +96,7 @@ describe('Task 附件 IPC', () => {
       TASK_INVOKE_CHANNELS.listDraftAttachments,
       TASK_INVOKE_CHANNELS.removeAttachment,
       TASK_INVOKE_CHANNELS.getAttachmentPreview,
+      TASK_INVOKE_CHANNELS.getAttachmentImage,
       TASK_INVOKE_CHANNELS.getChangeMediaPreview
     ])
     fixture.assertTrustedSender.mockImplementationOnce(() => {
@@ -137,6 +144,24 @@ describe('Task 附件 IPC', () => {
       }
     })
     expect(JSON.stringify(result)).not.toContain('/tmp')
+  })
+
+  it('原图查询只返回文件名、MIME 和 base64，不返回路径', async () => {
+    const fixture = createFixture()
+    const result = await fixture.invoke(TASK_INVOKE_CHANNELS.getAttachmentImage, {
+      taskId: 'task-1',
+      attachmentId: 'att-1'
+    })
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        originalName: 'preview.png',
+        mimeType: 'image/png',
+        imageBase64: Buffer.from('png-bytes').toString('base64')
+      }
+    })
+    expect(JSON.stringify(result)).not.toContain('/tmp')
+    expect(fixture.inbox.getOriginalImage).toHaveBeenCalledWith('task-1', 'att-1')
   })
 
   it('变更媒体路径必须通过窄参数校验后才委托安全预览服务', async () => {

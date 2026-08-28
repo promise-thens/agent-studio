@@ -137,6 +137,11 @@ describe('TaskAttachmentInbox', () => {
     expect((await inbox.getPreview('task-1', descriptor.attachmentId)).descriptor).toEqual(
       descriptor
     )
+    await expect(inbox.getOriginalImage('task-1', descriptor.attachmentId)).resolves.toEqual({
+      originalName: 'runtime-image.png',
+      mimeType: 'image/png',
+      bytes: PNG
+    })
   })
 
   it('Runtime 图片使用独立的每 Turn 数量限制', async () => {
