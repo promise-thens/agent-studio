@@ -2,7 +2,6 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   PhCircleNotch as CircleNotch,
-  PhRobot as Robot,
   PhSidebarSimple as SidebarSimple,
   PhWarningCircle as WarningCircle
 } from '@phosphor-icons/vue'
@@ -35,6 +34,7 @@ import {
 } from './agent-event-consumer'
 import { unwrapDesktopIpcResult, type RendererDesktopIpcError } from './desktop-ipc-result'
 import { describeProjectFolderRevealFailure } from './project-folder-reveal'
+import BrandMark from './components/BrandMark.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import ExecutionSurfaceBanner from './components/ExecutionSurfaceBanner.vue'
@@ -1685,7 +1685,7 @@ function scrollMessagesToBottom(): void {
     <header class="titlebar">
       <div class="titlebar-spacer" />
       <div class="titlebar-brand">
-        <Robot :size="16" weight="fill" />
+        <BrandMark :size="16" />
         <span>Agent Studio</span>
       </div>
       <button

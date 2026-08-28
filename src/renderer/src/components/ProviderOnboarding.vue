@@ -5,7 +5,6 @@ import {
   PhCheckCircle as CheckCircle,
   PhCircleNotch as CircleNotch,
   PhPlugsConnected as PlugsConnected,
-  PhRobot as Robot,
   PhWarningCircle as WarningCircle
 } from '@phosphor-icons/vue'
 import type {
@@ -16,6 +15,7 @@ import type {
   ProviderModelOption,
   ProviderTestResult
 } from '../../../shared/provider'
+import BrandMark from './BrandMark.vue'
 
 type LoadingAction = 'models' | 'save' | 'clear' | null
 type FieldName = 'baseUrl' | 'apiKey' | 'modelId'
@@ -277,7 +277,7 @@ function hasSameOrigin(left: string, right?: string): boolean {
       :aria-label="layout === 'embedded' ? '供应商配置' : undefined"
     >
       <header v-if="layout === 'page'" class="onboarding-header">
-        <span class="brand-mark" aria-hidden="true"><Robot :size="22" weight="fill" /></span>
+        <span class="brand-mark" aria-hidden="true"><BrandMark :size="22" /></span>
         <div>
           <p>Agent Studio</p>
           <h1 id="provider-title">连接你的模型服务</h1>
