@@ -214,6 +214,7 @@ export class PermissionBroker {
       }
 
       const policy = evaluatePermissionPolicy(resolved)
+      // 没有唯一 allow_once 时不能把 L0 读取或已有 grant 当成自动过；ACP 侧永远不回 allow_always。
       if (options.executionSupported === false || policy.kind === 'deny') {
         admission.release()
         await this.auditBestEffort(
@@ -221,7 +222,9 @@ export class PermissionBroker {
           policy.risk,
           'unsupported',
           undefined,
-          '当前调用方没有安全的单次执行映射。'
+          options.executionSupported === false
+            ? 'Runtime 没提供一次性允许。'
+            : '当前调用方没有安全的单次执行映射。'
         )
         return { ok: false, reason: 'unsupported' }
       }

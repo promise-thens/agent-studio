@@ -157,15 +157,15 @@ GACP-03 不是另写一套风险哲学，而是：
 
 ## 任务 1: 让自动过在真 Grok 读/写上生效
 
-- [ ] **第 1 步: 对照 GACP-01 修正 kind 映射**
+- [x] **第 1 步: 对照 GACP-01 修正 kind 映射**
       说明：真实 `read`/`search` + root 内 path 必须进 `read-project` L0。不要再落到 unknown L3。
       预期：一次「读 15 个文件」的 Turn，PermissionPrompt 出现 0 次，Audit 有 15 条 `auto-allowed`。
 
-- [ ] **第 2 步: 放宽写/读的 grant 粒度**
+- [x] **第 2 步: 放宽写/读的 grant 粒度**
       说明：按上表改 `createOperationGrantKey`。补测试：write grant 之后 delete 仍要弹；execute grant 不能覆盖另一条不同指纹的命令。
       预期：同一 Task 第二次写项目文件不再弹窗。
 
-- [ ] **第 3 步: 没有 allow_once 时不能假装自动过**
+- [x] **第 3 步: 没有 allow_once 时不能假装自动过**
       说明：Grok 若只给 `allow_always`，保持现在的 cancelled / 不可执行，并在状态里说「Runtime 没提供一次性允许」。不要为了少点击去回 always。
       预期：安全门与少打断同时成立。
 

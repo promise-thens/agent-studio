@@ -18,7 +18,7 @@ describe('PermissionBroker', () => {
     expect(fixture.audits[0]).toMatchObject({ reason: 'auto-allowed', risk: 'L0' })
   })
 
-  it('允许当前 Task 后跨 Turn 精确复用，但 Task/Project/environment/目标/参数任一变化都不命中', async () => {
+  it('允许当前 Task 后跨 Turn 复用同类写，目标/参数变化仍命中，身份变化不命中', async () => {
     const fixture = createFixture()
     const firstPromise = fixture.broker.authorizeOperation(createIntent('write-file'), vi.fn())
     const first = await waitForApproval(fixture.approvals, 0)
@@ -41,19 +41,34 @@ describe('PermissionBroker', () => {
       )
     ).resolves.toMatchObject({ ok: true, value: 'reused', reason: 'grant-reused' })
 
-    const approvalVariants: OperationIntent[] = [
-      {
-        ...createIntent('write-file'),
-        turnId: 'turn-2',
-        targets: [{ kind: 'path', value: 'src/other.ts' }]
-      },
-      { ...createIntent('write-file'), turnId: 'turn-2', parameterFingerprint: 'edit:v2' }
-    ]
-    for (const variant of approvalVariants) {
-      const count = fixture.approvals.length
-      void fixture.broker.authorizeOperation(variant, vi.fn())
-      await waitForApproval(fixture.approvals, count)
-    }
+    await expect(
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('write-file'),
+          turnId: 'turn-2',
+          targets: [{ kind: 'path', value: 'src/other.ts' }]
+        },
+        vi.fn(() => 'other-path')
+      )
+    ).resolves.toMatchObject({ ok: true, value: 'other-path', reason: 'grant-reused' })
+    await expect(
+      fixture.broker.authorizeOperation(
+        { ...createIntent('write-file'), turnId: 'turn-2', parameterFingerprint: 'edit:v2' },
+        vi.fn(() => 'other-fingerprint')
+      )
+    ).resolves.toMatchObject({
+      ok: true,
+      value: 'other-fingerprint',
+      reason: 'grant-reused'
+    })
+
+    const deletePromise = fixture.broker.authorizeOperation(
+      { ...createIntent('delete-path'), turnId: 'turn-2' },
+      vi.fn()
+    )
+    await waitForApproval(fixture.approvals, 1)
+    expect(fixture.approvals[1]).toMatchObject({ operationType: 'delete-path' })
+
     for (const invalidIdentity of [
       { ...createIntent('write-file'), taskId: 'task-2', turnId: 'turn-2' },
       { ...createIntent('write-file'), projectId: 'project-2', turnId: 'turn-2' },
@@ -64,6 +79,7 @@ describe('PermissionBroker', () => {
       ).resolves.toMatchObject({ ok: false })
     }
     await fixture.broker.shutdown()
+    await expect(deletePromise).resolves.toEqual({ ok: false, reason: 'cancelled' })
   })
 
   it('受控执行只接收 canonical intent，执行失败不会留下 Task grant', async () => {
@@ -365,7 +381,7 @@ describe('PermissionBroker', () => {
 
     const next = fixture.broker.authorizeOperation(
       {
-        ...createIntent('write-file'),
+        ...createIntent('delete-path'),
         turnId: 'turn-race',
         targets: [{ kind: 'path', value: 'src/main/index.ts' }]
       },
@@ -446,7 +462,7 @@ describe('PermissionBroker', () => {
   it('拒绝、重复响应、错误身份和 L3 allow-task 均不执行副作用', async () => {
     const fixture = createFixture()
     const execute = vi.fn()
-    const promise = fixture.broker.authorizeOperation(createIntent('delete-path'), execute)
+    const promise = fixture.broker.authorizeOperation(createIntent('unknown'), execute)
     const approval = await waitForApproval(fixture.approvals, 0)
     expect(approval.allowedScopes).toEqual(['once'])
 
@@ -506,7 +522,19 @@ describe('PermissionBroker', () => {
         executionSupported: false
       })
     ).resolves.toEqual({ ok: false, reason: 'unsupported' })
+    await expect(
+      fixture.broker.authorizeOperation(createIntent('read-project'), execute, {
+        executionSupported: false
+      })
+    ).resolves.toEqual({ ok: false, reason: 'unsupported' })
     expect(execute).not.toHaveBeenCalled()
+    expect(fixture.audits.at(-1)).toMatchObject({
+      reason: 'unsupported',
+      detail: 'Runtime 没提供一次性允许。'
+    })
+    expect(
+      fixture.approvals.some((approval) => JSON.stringify(approval).includes('allow_always'))
+    ).toBe(false)
   })
 
   it('executionSupported=false 即使存在精确 Task grant 也只记 unsupported，不复用副作用', async () => {
@@ -873,6 +901,188 @@ describe('PermissionBroker', () => {
     await inFlight
     const lease = await deletion
     lease.rollback()
+  })
+
+  it('同一 Task 连续 15 次项目内读取零审批卡，且每条都记 auto-allowed', async () => {
+    const fixture = createFixture()
+    const results = []
+    for (let index = 0; index < 15; index += 1) {
+      results.push(
+        await fixture.broker.authorizeOperation(
+          {
+            ...createIntent('read-project'),
+            targets: [{ kind: 'path', value: `src/read-${index}.ts` }]
+          },
+          vi.fn(() => `read-${index}`)
+        )
+      )
+    }
+
+    expect(fixture.approvals).toHaveLength(0)
+    expect(results).toEqual(
+      Array.from({ length: 15 }, (_, index) => ({
+        ok: true,
+        value: `read-${index}`,
+        reason: 'auto-allowed',
+        scope: 'once'
+      }))
+    )
+    expect(fixture.audits).toHaveLength(15)
+    expect(fixture.audits.every((audit) => audit.reason === 'auto-allowed')).toBe(true)
+    expect(JSON.stringify(fixture.audits)).not.toContain('rawInput')
+    expect(JSON.stringify(fixture.audits)).not.toContain('allow_always')
+  })
+
+  it('普通删除本任务授权后同类可复用，但不能捎带 .git、越界或 Computer Use', async () => {
+    const fixture = createFixture()
+    const first = fixture.broker.authorizeOperation(createIntent('delete-path'), vi.fn())
+    const firstApproval = await waitForApproval(fixture.approvals, 0)
+    expect(firstApproval.allowedScopes).toEqual(['once', 'task'])
+    expect(firstApproval.risk).toBe('L1')
+    await fixture.broker.respond({
+      approvalId: firstApproval.approvalId,
+      taskId: firstApproval.taskId,
+      turnId: firstApproval.turnId,
+      decision: 'allow-task'
+    })
+    await expect(first).resolves.toMatchObject({ ok: true, reason: 'user-allowed', scope: 'task' })
+
+    await expect(
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('delete-path'),
+          turnId: 'turn-2',
+          targets: [{ kind: 'path', value: 'src/other.ts' }]
+        },
+        vi.fn(() => 'deleted-other')
+      )
+    ).resolves.toMatchObject({ ok: true, value: 'deleted-other', reason: 'grant-reused' })
+
+    const gitDelete = fixture.broker.authorizeOperation(
+      {
+        ...createIntent('delete-path'),
+        turnId: 'turn-2',
+        targets: [{ kind: 'path', value: '.git' }]
+      },
+      vi.fn()
+    )
+    const gitApproval = await waitForApproval(fixture.approvals, 1)
+    expect(gitApproval).toMatchObject({
+      operationType: 'delete-path',
+      risk: 'L3',
+      allowedScopes: ['once']
+    })
+
+    await expect(
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('delete-path'),
+          turnId: 'turn-2',
+          targets: [{ kind: 'path', value: '/tmp/outside-agent-studio/secret.ts' }]
+        },
+        vi.fn()
+      )
+    ).resolves.toMatchObject({ ok: false, reason: 'invalid-target' })
+
+    const computerUse = fixture.broker.authorizeOperation(
+      {
+        ...createIntent('unknown'),
+        turnId: 'turn-2',
+        targets: [{ kind: 'unknown', value: 'computer-use' }]
+      },
+      vi.fn()
+    )
+    const computerApproval = await waitForApproval(fixture.approvals, 2)
+    expect(computerApproval).toMatchObject({
+      operationType: 'unknown',
+      risk: 'L3',
+      allowedScopes: ['once']
+    })
+
+    await fixture.broker.shutdown()
+    await expect(gitDelete).resolves.toEqual({ ok: false, reason: 'cancelled' })
+    await expect(computerUse).resolves.toEqual({ ok: false, reason: 'cancelled' })
+  })
+
+  it('未知 execute 为 L3 仅本次，误发 allow-task 不能登记宽 grant', async () => {
+    const fixture = createFixture()
+    const execute = vi.fn(() => 'ran')
+    const unknownExecute = {
+      ...createIntent('execute-command'),
+      minimumRisk: 'L3' as const,
+      targets: [{ kind: 'command' as const, value: 'Runtime 未提供可信的结构化命令。' }],
+      parameterFingerprint: 'grok-acp:execute:unknown-command:v1'
+    }
+    const first = fixture.broker.authorizeOperation(unknownExecute, execute)
+    const approval = await waitForApproval(fixture.approvals, 0)
+    expect(approval).toMatchObject({ risk: 'L3', allowedScopes: ['once'] })
+
+    await fixture.broker.respond({
+      approvalId: approval.approvalId,
+      taskId: approval.taskId,
+      turnId: approval.turnId,
+      decision: 'allow-task'
+    })
+    expect(execute).not.toHaveBeenCalled()
+
+    await fixture.broker.respond({
+      approvalId: approval.approvalId,
+      taskId: approval.taskId,
+      turnId: approval.turnId,
+      decision: 'allow-once'
+    })
+    await expect(first).resolves.toMatchObject({
+      ok: true,
+      reason: 'user-allowed',
+      scope: 'once'
+    })
+
+    const second = fixture.broker.authorizeOperation(
+      { ...unknownExecute, turnId: 'turn-2' },
+      vi.fn()
+    )
+    await waitForApproval(fixture.approvals, 1)
+    await fixture.broker.shutdown()
+    await expect(second).resolves.toEqual({ ok: false, reason: 'cancelled' })
+  })
+
+  it('可信命令的 Task grant 不能覆盖另一条不同指纹的命令', async () => {
+    const fixture = createFixture()
+    const first = fixture.broker.authorizeOperation(
+      { ...createIntent('execute-command'), parameterFingerprint: 'cmd-a' },
+      vi.fn(() => 'a')
+    )
+    const approval = await waitForApproval(fixture.approvals, 0)
+    await fixture.broker.respond({
+      approvalId: approval.approvalId,
+      taskId: approval.taskId,
+      turnId: approval.turnId,
+      decision: 'allow-task'
+    })
+    await expect(first).resolves.toMatchObject({ ok: true, value: 'a', scope: 'task' })
+
+    await expect(
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('execute-command'),
+          turnId: 'turn-2',
+          parameterFingerprint: 'cmd-a'
+        },
+        vi.fn(() => 'a-again')
+      )
+    ).resolves.toMatchObject({ ok: true, value: 'a-again', reason: 'grant-reused' })
+
+    const otherCommand = fixture.broker.authorizeOperation(
+      {
+        ...createIntent('execute-command'),
+        turnId: 'turn-2',
+        parameterFingerprint: 'cmd-b'
+      },
+      vi.fn()
+    )
+    await waitForApproval(fixture.approvals, 1)
+    await fixture.broker.shutdown()
+    await expect(otherCommand).resolves.toEqual({ ok: false, reason: 'cancelled' })
   })
 })
 

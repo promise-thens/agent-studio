@@ -611,7 +611,7 @@ function haveSameStringSet(left: string[], right: string[]): boolean {
 
 /**
  * ACP Diff 是当前唯一稳定的编辑参数来源；只保存 SHA-256 摘要。
- * 没有可信 Diff 时绑定 toolCallId，使产品级 Task grant 无法扩展到后续编辑请求。
+ * 没有可信 Diff 时绑定 toolCallId，仅隔离参数摘要，不阻止同一 Task 内的写文件 grant 复用。
  */
 function createGrokEditFingerprint(snapshot: GrokToolCallAuthorizationSnapshot): string {
   if (snapshot.integrity === 'invalid') return `grok-acp:invalid:${snapshot.reason}:v1`

@@ -22,7 +22,7 @@ afterEach(async () => {
 })
 
 describe('Permission 风险策略', () => {
-  it('只读自动允许，写入和命令允许精确 Task 授权，高风险只允许单次', () => {
+  it('只读自动允许，写入和普通删除允许本任务授权，高风险只允许单次', () => {
     expect(evaluatePermissionPolicy(createIntent('read-project'))).toEqual({
       kind: 'allow',
       risk: 'L0',
@@ -40,8 +40,8 @@ describe('Permission 风险策略', () => {
     })
     expect(evaluatePermissionPolicy(createIntent('delete-path'))).toMatchObject({
       kind: 'approval',
-      risk: 'L3',
-      allowedScopes: ['once']
+      risk: 'L1',
+      allowedScopes: ['once', 'task']
     })
   })
 
@@ -146,7 +146,7 @@ describe('Permission 风险策略', () => {
 })
 
 describe('Permission 路径边界', () => {
-  it('接受 root 内相对、绝对和不存在叶子，并生成精确授权键', async () => {
+  it('接受 root 内相对、绝对和不存在叶子，同一 Task 写授权可跨文件复用', async () => {
     const root = await fs.realpath(await createTemporaryDirectory('policy-root-'))
     await fs.mkdir(join(root, 'src'))
     await fs.writeFile(join(root, 'src', 'index.ts'), 'export {}')
@@ -167,11 +167,17 @@ describe('Permission 路径边界', () => {
     expect(resolvedAbsolute.targets).toEqual([
       { kind: 'path', value: join(canonicalRoot, 'src', 'new.ts') }
     ])
-    expect(createOperationGrantKey(resolvedRelative)).not.toBe(
+    expect(createOperationGrantKey(resolvedRelative)).toBe(
       createOperationGrantKey(resolvedAbsolute)
+    )
+    expect(createOperationGrantKey(resolvedRelative)).toBe(
+      createOperationGrantKey({ ...resolvedRelative, parameterFingerprint: 'edit:v2' })
     )
     expect(createOperationGrantKey(resolvedRelative)).not.toBe(
       createOperationGrantKey({ ...resolvedRelative, taskId: 'task-2' })
+    )
+    expect(createOperationGrantKey(resolvedRelative)).not.toBe(
+      createOperationGrantKey({ ...resolvedRelative, environmentId: 'local:other' })
     )
   })
 
@@ -338,7 +344,123 @@ describe('Permission 路径边界', () => {
       risk: 'L1'
     })
   })
+
+  it('普通删除为 L1 且宽 grant，删 .git、非空目录和 root 外路径不能复用', async () => {
+    const root = await fs.realpath(await createTemporaryDirectory('policy-delete-'))
+    await fs.mkdir(join(root, 'src'))
+    await fs.writeFile(join(root, 'src', 'a.ts'), 'export {}')
+    await fs.writeFile(join(root, 'src', 'b.ts'), 'export {}')
+    await fs.mkdir(join(root, 'empty'))
+    await fs.mkdir(join(root, 'full'))
+    await fs.writeFile(join(root, 'full', 'keep.ts'), 'export {}')
+    await fs.mkdir(join(root, '.git'))
+    await fs.writeFile(join(root, '.git', 'config'), '[core]\n')
+
+    const normalFile = await resolveOperationIntentTargets(
+      createIntent('delete-path', root, [{ kind: 'path', value: 'src/a.ts' }])
+    )
+    const otherFile = await resolveOperationIntentTargets(
+      createIntent('delete-path', root, [{ kind: 'path', value: 'src/b.ts' }])
+    )
+    const emptyDir = await resolveOperationIntentTargets(
+      createIntent('delete-path', root, [{ kind: 'path', value: 'empty' }])
+    )
+    const gitDir = await resolveOperationIntentTargets(
+      createIntent('delete-path', root, [{ kind: 'path', value: '.git' }])
+    )
+    const gitFile = await resolveOperationIntentTargets(
+      createIntent('delete-path', root, [{ kind: 'path', value: '.git/config' }])
+    )
+    const fullDir = await resolveOperationIntentTargets(
+      createIntent('delete-path', root, [{ kind: 'path', value: 'full' }])
+    )
+    const writeFile = await resolveOperationIntentTargets(
+      createIntent('write-file', root, [{ kind: 'path', value: 'src/a.ts' }])
+    )
+
+    expect(evaluatePermissionPolicy(normalFile)).toMatchObject({
+      kind: 'approval',
+      risk: 'L1',
+      allowedScopes: ['once', 'task']
+    })
+    expect(evaluatePermissionPolicy(emptyDir)).toMatchObject({
+      kind: 'approval',
+      risk: 'L1',
+      allowedScopes: ['once', 'task']
+    })
+    for (const dangerous of [gitDir, gitFile, fullDir]) {
+      expect(evaluatePermissionPolicy(dangerous)).toMatchObject({
+        kind: 'approval',
+        risk: 'L3',
+        allowedScopes: ['once']
+      })
+    }
+
+    expect(createOperationGrantKey(normalFile)).toBe(createOperationGrantKey(otherFile))
+    expect(createOperationGrantKey(normalFile)).toBe(createOperationGrantKey(emptyDir))
+    expect(createOperationGrantKey(normalFile)).not.toBe(createOperationGrantKey(gitDir))
+    expect(createOperationGrantKey(gitDir)).not.toBe(createOperationGrantKey(gitFile))
+    expect(createOperationGrantKey(writeFile)).not.toBe(createOperationGrantKey(normalFile))
+
+    await expect(
+      resolveOperationIntentTargets(
+        createIntent('delete-path', root, [{ kind: 'path', value: join(root, '..', 'outside.ts') }])
+      )
+    ).rejects.toMatchObject({ code: 'invalid-target' } satisfies Partial<PermissionPolicyError>)
+  })
+
+  it('execute grant 只绑定命令指纹，未知/出网保持精确目标且不受 rawInput 影响', async () => {
+    const root = await fs.realpath(await createTemporaryDirectory('policy-grant-'))
+    const execA = await resolveOperationIntentTargets({
+      ...createIntent('execute-command', root),
+      parameterFingerprint: 'cmd-a'
+    })
+    const execB = await resolveOperationIntentTargets({
+      ...createIntent('execute-command', root),
+      parameterFingerprint: 'cmd-b'
+    })
+    const execSameFingerprint = await resolveOperationIntentTargets({
+      ...createIntent('execute-command', root, [{ kind: 'command', value: '另一条命令' }]),
+      parameterFingerprint: 'cmd-a'
+    })
+    const unknownA = await resolveOperationIntentTargets({
+      ...createIntent('unknown', root, [{ kind: 'unknown', value: 'computer-use' }])
+    })
+    const unknownB = await resolveOperationIntentTargets({
+      ...createIntent('unknown', root, [{ kind: 'unknown', value: 'screen-capture' }])
+    })
+    const fetchUnknown = await resolveOperationIntentTargets({
+      ...createIntent('network-egress', root, [{ kind: 'unknown', value: '目标未确认' }]),
+      minimumRisk: 'L3'
+    })
+
+    expect(createOperationGrantKey(execA)).not.toBe(createOperationGrantKey(execB))
+    expect(createOperationGrantKey(execA)).toBe(createOperationGrantKey(execSameFingerprint))
+    expect(createOperationGrantKey(unknownA)).not.toBe(createOperationGrantKey(unknownB))
+    expect(createOperationGrantKey(execA)).not.toBe(createOperationGrantKey(unknownA))
+    expect(createOperationGrantKey(fetchUnknown)).not.toBe(createOperationGrantKey(unknownA))
+
+    const withRawInput = {
+      ...execA,
+      rawInput: { command: 'rm -rf /', apiKey: 'sk-fake-not-for-grant' }
+    } as typeof execA & { rawInput: { command: string; apiKey: string } }
+    expect(createOperationGrantKey(withRawInput)).toBe(createOperationGrantKey(execA))
+    expect(JSON.stringify(createGrantKeyInspection(execA))).not.toContain('rawInput')
+    expect(JSON.stringify(createGrantKeyInspection(execA))).not.toContain('sk-fake')
+  })
 })
+
+function createGrantKeyInspection(intent: Parameters<typeof createOperationGrantKey>[0]): unknown {
+  return {
+    initiator: intent.initiator,
+    taskId: intent.taskId,
+    projectId: intent.projectId,
+    environmentId: intent.environmentId,
+    operationType: intent.operationType,
+    targets: intent.targets,
+    parameterFingerprint: intent.parameterFingerprint
+  }
+}
 
 function createIntent(
   operationType: OperationIntent['operationType'],
