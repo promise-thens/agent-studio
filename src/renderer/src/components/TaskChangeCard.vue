@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { PhFiles as Files } from '@phosphor-icons/vue'
+import { computed } from 'vue'
 import type { ChangeCardView } from '../task-changes-presentation'
 import { formatChangeLineDelta } from '../task-changes-presentation'
 import TaskChangeMediaThumbnail from './TaskChangeMediaThumbnail.vue'
 
 /** 对话里的变更入口：只负责展示与发出审核/撤销，不自己调 IPC。 */
 
-defineProps<{
+const props = defineProps<{
   taskId: string
   model: ChangeCardView
   restoreBusy?: boolean
@@ -17,6 +18,13 @@ defineEmits<{
   restore: []
   reviewFile: [path: string]
 }>()
+
+/** 对话中只保留少量文件预览，完整列表统一交给 Changes 审阅工作区。 */
+const CHANGE_CARD_PREVIEW_LIMIT = 6
+const previewFiles = computed(() => props.model.files.slice(0, CHANGE_CARD_PREVIEW_LIMIT))
+const hiddenFileCount = computed(() =>
+  Math.max(0, props.model.files.length - previewFiles.value.length)
+)
 </script>
 
 <template>
@@ -55,7 +63,7 @@ defineEmits<{
     </header>
 
     <ul class="task-change-card-files">
-      <li v-for="file in model.files" :key="file.path">
+      <li v-for="file in previewFiles" :key="file.path">
         <button
           class="task-change-card-file"
           type="button"
@@ -82,5 +90,17 @@ defineEmits<{
         </button>
       </li>
     </ul>
+
+    <button
+      v-if="hiddenFileCount > 0"
+      class="task-change-card-more"
+      type="button"
+      :title="`打开变更审阅，查看其余 ${hiddenFileCount} 个文件`"
+      :aria-label="`打开变更审阅，查看其余 ${hiddenFileCount} 个文件`"
+      @click="$emit('review')"
+    >
+      <span>查看其余 {{ hiddenFileCount }} 个文件</span>
+      <span aria-hidden="true">→</span>
+    </button>
   </section>
 </template>

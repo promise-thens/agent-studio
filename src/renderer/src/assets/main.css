@@ -1113,6 +1113,36 @@ button:disabled {
   background: var(--hover-fill);
 }
 
+.task-change-card-more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 28px;
+  padding: 5px 4px 1px;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 74%, transparent);
+  color: var(--text-3);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    color 140ms ease,
+    background 140ms ease;
+}
+
+.task-change-card-more:hover {
+  color: var(--text-1);
+  background: var(--hover-fill);
+}
+
+.task-change-card-more:focus-visible {
+  border-radius: var(--radius-control);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .task-change-card-file-main {
   gap: 8px;
   flex: 1;
