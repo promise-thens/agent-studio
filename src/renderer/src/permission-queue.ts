@@ -43,7 +43,7 @@ export function clearRespondingPermission(
     : respondingPermission
 }
 
-/** 审批队列只接受尚未过期且三元组身份未出现过的请求，保持 Runtime 到达顺序。 */
+/** 审批队列只接受尚未过期的请求；同一张卡补路径时原地替换，不新增 FIFO 项。 */
 export function enqueuePermissionRequest(
   queue: AgentPermissionRequest[],
   request: AgentPermissionRequest,
@@ -51,7 +51,12 @@ export function enqueuePermissionRequest(
 ): AgentPermissionRequest[] {
   const expiresAt = Date.parse(request.expiresAt)
   if (!Number.isFinite(expiresAt) || expiresAt <= now) return queue
-  if (queue.some((item) => matchesPermissionIdentity(item, request))) return queue
+  const existingIndex = queue.findIndex((item) => matchesPermissionIdentity(item, request))
+  if (existingIndex >= 0) {
+    const next = [...queue]
+    next[existingIndex] = request
+    return next
+  }
   return [...queue, request]
 }
 

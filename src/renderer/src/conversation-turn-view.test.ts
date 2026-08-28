@@ -3,10 +3,13 @@ import type { AgentPermissionRequest } from '../../shared/agent'
 import type { TimelineToolNode, TurnTimelineViewModel } from './task-timeline-reducer'
 import {
   PERMISSION_ALLOW_TASK_LABEL,
+  PERMISSION_INSUFFICIENT_EVIDENCE_NOTICE,
   formatMergedReadLabel,
   hasConversationUsageData,
   projectConversationTurn,
+  resolvePermissionCardKeyDecision,
   resolvePermissionCardPresentation,
+  resolvePermissionEvidenceNotice,
   resolvePermissionOriginLabel,
   resolvePermissionPrimaryAction,
   stripDisplayedSessionMediaPaths
@@ -345,14 +348,119 @@ describe('对话块投影', () => {
 
 describe('权限卡主按钮', () => {
   it('L1/L2 主按钮文案是「本任务允许」且决策为本任务授权', () => {
-    const request: Pick<AgentPermissionRequest, 'allowedScopes' | 'risk'> = {
-      allowedScopes: ['once', 'task'],
-      risk: 'L1'
-    }
     expect(PERMISSION_ALLOW_TASK_LABEL).toBe('本任务允许')
-    expect(resolvePermissionPrimaryAction(request)).toEqual({
-      decision: 'allow-task',
-      label: '本任务允许'
+    expect(resolvePermissionPrimaryAction({ allowedScopes: ['once', 'task'], risk: 'L1' })).toEqual(
+      {
+        decision: 'allow-task',
+        label: '本任务允许'
+      }
+    )
+    expect(resolvePermissionPrimaryAction({ allowedScopes: ['once', 'task'], risk: 'L2' })).toEqual(
+      {
+        decision: 'allow-task',
+        label: '本任务允许'
+      }
+    )
+  })
+
+  it('L3 主按钮不是本任务允许，只能仅本次', () => {
+    expect(resolvePermissionPrimaryAction({ allowedScopes: ['once'], risk: 'L3' })).toEqual({
+      decision: 'allow-once',
+      label: '仅允许这一次'
+    })
+    expect(
+      resolvePermissionPrimaryAction({ allowedScopes: ['once', 'task'], risk: 'L3' }).decision
+    ).not.toBe('allow-task')
+  })
+
+  it('Enter 走主按钮，Esc 拒绝，输入法确认中不触发', () => {
+    expect(resolvePermissionCardKeyDecision({ key: 'Enter' }, 'allow-task')).toBe('allow-task')
+    expect(resolvePermissionCardKeyDecision({ key: 'Enter' }, 'allow-once')).toBe('allow-once')
+    expect(resolvePermissionCardKeyDecision({ key: 'Escape' }, 'allow-task')).toBe('deny')
+    expect(
+      resolvePermissionCardKeyDecision({ key: 'Enter', isComposing: true }, 'allow-task')
+    ).toBeNull()
+    expect(
+      resolvePermissionCardKeyDecision({ key: 'Enter', keyCode: 229 }, 'allow-task')
+    ).toBeNull()
+    expect(
+      resolvePermissionCardKeyDecision({ key: 'Enter', shiftKey: true }, 'allow-task')
+    ).toBeNull()
+    expect(
+      resolvePermissionCardKeyDecision({ key: 'Enter' }, 'allow-task', {
+        targetIsNonPrimaryButton: true
+      })
+    ).toBeNull()
+  })
+
+  it('卡上能看到操作类型；证据不够时写明不能自动过', () => {
+    const writeRequest: AgentPermissionRequest = {
+      approvalId: 'approval-write',
+      initiator: 'runtime',
+      runtimeId: 'grok',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      projectId: 'project-1',
+      environmentId: 'local:test',
+      operationType: 'write-file',
+      risk: 'L1',
+      title: '修改文件',
+      impact: '写入 Project 文件。',
+      targets: ['path: src/auth.ts', 'path: src/main/index.ts'],
+      allowedScopes: ['once', 'task'],
+      expiresAt: '2099-01-01T00:00:00.000Z'
+    }
+    const unknownExecute: AgentPermissionRequest = {
+      ...writeRequest,
+      approvalId: 'approval-unknown',
+      operationType: 'execute-command',
+      risk: 'L3',
+      title: '执行命令',
+      impact: 'Runtime 请求执行命令，但当前 ACP 请求无法准确展示命令与参数。',
+      targets: ['command: Runtime 未提供可信的结构化命令。'],
+      allowedScopes: ['once']
+    }
+
+    expect(PERMISSION_INSUFFICIENT_EVIDENCE_NOTICE).toBe('证据不够，不能自动过')
+    expect(resolvePermissionEvidenceNotice(writeRequest)).toBeNull()
+    expect(resolvePermissionEvidenceNotice(unknownExecute)).toBe('证据不够，不能自动过')
+    expect(
+      resolvePermissionEvidenceNotice({
+        ...unknownExecute,
+        operationType: 'network-egress',
+        targets: ['unknown: Runtime 未提供可信的目标 origin。']
+      })
+    ).toBe('证据不够，不能自动过')
+    expect(
+      resolvePermissionEvidenceNotice({
+        ...unknownExecute,
+        operationType: 'execute-command',
+        risk: 'L2',
+        targets: ['command: pnpm test'],
+        allowedScopes: ['once', 'task']
+      })
+    ).toBeNull()
+
+    const blocks = projectConversationTurn(
+      turn('waiting-permission', [
+        {
+          nodeId: 'task-1:turn-1:agent-message:id:',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'message',
+          text: '准备改文件'
+        }
+      ]),
+      { pendingPermission: writeRequest }
+    )
+    const permission = blocks.find((block) => block.kind === 'permission')
+    expect(permission).toMatchObject({
+      kind: 'permission',
+      request: expect.objectContaining({
+        operationType: 'write-file',
+        targets: ['path: src/auth.ts', 'path: src/main/index.ts']
+      })
     })
   })
 

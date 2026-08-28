@@ -6,7 +6,9 @@ import type {
   AgentPermissionRisk
 } from '../../../shared/agent'
 import {
+  resolvePermissionCardKeyDecision,
   resolvePermissionCardPresentation,
+  resolvePermissionEvidenceNotice,
   resolvePermissionOriginLabel,
   resolvePermissionPrimaryAction
 } from '../conversation-turn-view'
@@ -39,9 +41,15 @@ const originLabel = computed(() =>
     attachedToViewedTurn: props.attachedToViewedTurn
   })
 )
-const describedBy = computed(() =>
-  originLabel.value ? 'permission-origin permission-description' : 'permission-description'
-)
+const evidenceNotice = computed(() => resolvePermissionEvidenceNotice(props.request))
+const describedBy = computed(() => {
+  const parts = [
+    originLabel.value ? 'permission-origin' : null,
+    'permission-description',
+    evidenceNotice.value ? 'permission-evidence' : null
+  ]
+  return parts.filter(Boolean).join(' ')
+})
 
 const riskLabel = computed(() => {
   const labels: Record<AgentPermissionRisk, string> = {
@@ -96,11 +104,17 @@ function cancelTurn(): void {
   if (!props.pending) emit('cancelTurn')
 }
 
-/** Esc 只在焦点位于本卡时拒绝，不锁 Tab，也不在挂载时抢焦点。 */
+/** Esc 拒绝；Enter 走主按钮。焦点在次按钮上时不抢原生激活。 */
 function handleCardKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Escape') return
+  const target = event.target
+  const targetIsNonPrimaryButton =
+    target instanceof HTMLButtonElement && !target.classList.contains('primary-button')
+  const decision = resolvePermissionCardKeyDecision(event, primaryAction.value.decision, {
+    targetIsNonPrimaryButton
+  })
+  if (!decision) return
   event.preventDefault()
-  respond('deny')
+  respond(decision)
 }
 </script>
 
@@ -111,6 +125,7 @@ function handleCardKeydown(event: KeyboardEvent): void {
     :data-variant="presentation.variant"
     :data-density="presentation.density"
     :aria-busy="pending"
+    tabindex="0"
     aria-labelledby="permission-title"
     :aria-describedby="describedBy"
     @keydown="handleCardKeydown"
@@ -122,7 +137,18 @@ function handleCardKeydown(event: KeyboardEvent): void {
     <p id="permission-description" class="permission-inline-meta">
       {{ compactMeta }}
     </p>
+    <ul v-if="request.targets.length > 1" class="permission-inline-targets">
+      <li v-for="target in request.targets" :key="target">{{ target }}</li>
+    </ul>
     <p v-if="request.impact" class="permission-inline-impact">{{ request.impact }}</p>
+    <p
+      v-if="evidenceNotice"
+      id="permission-evidence"
+      class="permission-inline-warning"
+      role="status"
+    >
+      {{ evidenceNotice }}
+    </p>
     <p v-if="request.risk === 'L3'" class="permission-inline-warning" role="alert">
       高风险操作只能允许本次，请确认目标后再继续。
     </p>

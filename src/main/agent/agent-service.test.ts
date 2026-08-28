@@ -461,8 +461,10 @@ describe('AgentService Task / Turn 编排', () => {
         )
       )
       const firstApproval = await waitForApproval(fixture.approvals, 0)
-      const secondApproval = await waitForApproval(fixture.approvals, 1)
-      expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(2)
+      await vi.waitFor(() =>
+        expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(2)
+      )
+      expect(uniqueApprovals(fixture.approvals)).toHaveLength(1)
       expect(fixture.service.getTaskRuntimeState(fixture.taskId).state).toBe('waiting-permission')
 
       await fixture.service.respondPermission({
@@ -473,6 +475,7 @@ describe('AgentService Task / Turn 编排', () => {
       })
       expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(1)
       expect(fixture.service.getTaskRuntimeState(fixture.taskId).state).toBe('waiting-permission')
+      const secondApproval = await waitForUniqueApproval(fixture.approvals, 1)
 
       await fixture.service.respondPermission({
         approvalId: secondApproval.approvalId,
@@ -523,12 +526,15 @@ describe('AgentService Task / Turn 编排', () => {
         )
       )
       const first = await waitForApproval(fixture.approvals, 0)
-      const second = await waitForApproval(fixture.approvals, 1)
+      await vi.waitFor(() =>
+        expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(2)
+      )
+      expect(uniqueApprovals(fixture.approvals)).toHaveLength(1)
 
       await fixture.service.respondPermission({
-        approvalId: second.approvalId,
-        taskId: second.taskId,
-        turnId: second.turnId,
+        approvalId: 'broker-not-head',
+        taskId: first.taskId,
+        turnId: first.turnId,
         decision: 'allow-once'
       })
       expect(fixture.adapter.respondPermission).not.toHaveBeenCalled()
@@ -540,6 +546,7 @@ describe('AgentService Task / Turn 编排', () => {
         turnId: first.turnId,
         decision: 'deny'
       })
+      const second = await waitForUniqueApproval(fixture.approvals, 1)
       await fixture.service.respondPermission({
         approvalId: second.approvalId,
         taskId: second.taskId,
@@ -1443,6 +1450,29 @@ async function waitForApproval(
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
   }
   throw new Error('审批未在预期时间内登记。')
+}
+
+function uniqueApprovals(approvals: AgentPermissionRequest[]): AgentPermissionRequest[] {
+  const seen = new Set<string>()
+  const unique: AgentPermissionRequest[] = []
+  for (const approval of approvals) {
+    if (seen.has(approval.approvalId)) continue
+    seen.add(approval.approvalId)
+    unique.push(approval)
+  }
+  return unique
+}
+
+async function waitForUniqueApproval(
+  approvals: AgentPermissionRequest[],
+  index: number
+): Promise<AgentPermissionRequest> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const approval = uniqueApprovals(approvals)[index]
+    if (approval) return approval
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error('唯一审批卡未在预期时间内出现。')
 }
 
 /** 构造可控结果，验证取消、权限和断开的异步收束。 */

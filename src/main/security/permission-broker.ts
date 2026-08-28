@@ -104,6 +104,8 @@ interface PendingApproval {
   intent: ResolvedOperationIntent
   policyRisk: AgentPermissionRisk
   grantKey: string
+  /** 该次请求自己的目标，合并展示时不得被队首卡的累计列表覆盖。 */
+  ownTargets: string[]
   execute: (intent: ResolvedOperationIntent) => Promise<unknown>
   isActive?: () => boolean
   onPendingChange?: (count: number) => void
@@ -114,6 +116,7 @@ interface PendingApproval {
   settlement?: Promise<void>
   cancelReason?: Extract<AgentPermissionResolutionReason, 'cancelled' | 'expired'>
   cancellationNotified: boolean
+  deliveredToUi: boolean
 }
 
 interface ActiveAuthorization {
@@ -142,6 +145,8 @@ export class PermissionBroker {
   private readonly setTimer: NonNullable<PermissionBrokerOptions['setTimer']>
   private readonly clearTimer: NonNullable<PermissionBrokerOptions['clearTimer']>
   private readonly pending = new Map<string, PendingApproval>()
+  /** 同 Task/Turn 的可见顺序；同类 L1/L2 会插到已有 grantKey 队列后面。 */
+  private readonly pendingOrder: string[] = []
   private readonly taskGrants = new Map<string, TaskGrant>()
   private readonly activeAuthorizations = new Map<symbol, ActiveAuthorization>()
   private readonly approvalAdmissionTails = new Map<string, Promise<void>>()
@@ -282,6 +287,7 @@ export class PermissionBroker {
     ) {
       if (pending && this.now() >= Date.parse(pending.approval.expiresAt)) {
         await this.settlePending(pending, 'expired')
+        this.maybeDeliverQueueHead(pending.approval.taskId, pending.approval.turnId)
       }
       return
     }
@@ -297,13 +303,18 @@ export class PermissionBroker {
     }
     if (response.decision === 'deny') {
       await this.settlePending(pending, 'user-denied')
+      this.maybeDeliverQueueHead(response.taskId, response.turnId)
       return
     }
-    await this.settlePending(
-      pending,
-      'user-allowed',
-      response.decision === 'allow-task' ? 'task' : 'once'
-    )
+    if (response.decision === 'allow-task') {
+      // 先同步把同类挂起项标成 settling，避免队首收束时把其余成员再推成新卡。
+      const cohort = this.collectMergeableCohort(pending)
+      await Promise.all(cohort.map((item) => this.settlePending(item, 'user-allowed', 'task')))
+      this.maybeDeliverQueueHead(response.taskId, response.turnId)
+      return
+    }
+    await this.settlePending(pending, 'user-allowed', 'once')
+    this.maybeDeliverQueueHead(response.taskId, response.turnId)
   }
 
   /** Turn 终态只取消该 Turn 的等待审批；已确认的 Task grant 可继续跨 Turn 使用。 */
@@ -316,6 +327,7 @@ export class PermissionBroker {
       (pending) => pending.approval.taskId === taskId && pending.approval.turnId === turnId
     )
     await Promise.all(matches.map((pending) => this.settlePending(pending, reason)))
+    this.maybeDeliverQueueHead(taskId, turnId)
   }
 
   /** Runtime ToolCall 终止时只撤销完整匹配的单个审批，晚到用户响应会因 pending 已删除而忽略。 */
@@ -328,7 +340,8 @@ export class PermissionBroker {
     )
     if (!pending) return
 
-    const shouldNotify = pending.phase === 'waiting' || pending.phase === 'settling'
+    const shouldNotify =
+      pending.deliveredToUi && (pending.phase === 'waiting' || pending.phase === 'settling')
     const settlement = this.settlePending(pending, 'cancelled')
     if (shouldNotify && !pending.cancellationNotified) {
       pending.cancellationNotified = true
@@ -344,6 +357,7 @@ export class PermissionBroker {
       }
     }
     await settlement
+    this.maybeDeliverQueueHead(taskId, turnId)
   }
 
   /** Task 显式关闭或身份边界变化时，同时清除等待审批和内存授权。 */
@@ -462,6 +476,7 @@ export class PermissionBroker {
         intent,
         policyRisk: risk,
         grantKey,
+        ownTargets: [...approval.targets],
         execute: async (resolvedIntent) => execute(resolvedIntent),
         ...(options.isActive ? { isActive: options.isActive } : {}),
         ...(options.onPendingChange ? { onPendingChange: options.onPendingChange } : {}),
@@ -469,18 +484,17 @@ export class PermissionBroker {
         timer,
         resolve: (result) => resolve(result as PermissionAuthorizationResult<T>),
         phase: 'waiting',
-        cancellationNotified: false
+        cancellationNotified: false,
+        deliveredToUi: false
       }
-      this.pending.set(approvalId, pending)
+      const leader = this.findMergeableLeader(intent, grantKey, risk)
+      this.registerPending(
+        pending,
+        leader ? this.findCohortTail(leader).approval.approvalId : undefined
+      )
       this.publishPendingCount(pending)
-
-      let delivered = false
-      try {
-        delivered = this.onApproval(approval)
-      } catch {
-        delivered = false
-      }
-      if (!delivered) void this.settlePending(pending, 'cancelled')
+      if (leader?.deliveredToUi) this.refreshDeliveredCard(leader)
+      this.maybeDeliverQueueHead(intent.taskId, intent.turnId)
     })
   }
 
@@ -604,9 +618,169 @@ export class PermissionBroker {
 
   /** 队列头以 Task + Turn 为作用域，无关 Turn 不因全局 FIFO 互相阻塞。 */
   private getQueueHead(taskId: string, turnId: string): PendingApproval | undefined {
-    return [...this.pending.values()].find(
-      (pending) => pending.approval.taskId === taskId && pending.approval.turnId === turnId
+    for (const approvalId of this.pendingOrder) {
+      const pending = this.pending.get(approvalId)
+      if (!pending) continue
+      if (pending.approval.taskId === taskId && pending.approval.turnId === turnId) return pending
+    }
+    return undefined
+  }
+
+  private getWaitingQueueHead(taskId: string, turnId: string): PendingApproval | undefined {
+    for (const approvalId of this.pendingOrder) {
+      const pending = this.pending.get(approvalId)
+      if (!pending || pending.phase !== 'waiting') continue
+      if (pending.approval.taskId === taskId && pending.approval.turnId === turnId) return pending
+    }
+    return undefined
+  }
+
+  /**
+   * 只有队首、且本 Turn 没有正在结算的审批时才推 UI。
+   * 同类 L1/L2 挂在已有卡后面，避免每个 path 一张 FIFO 卡。
+   */
+  private maybeDeliverQueueHead(taskId: string, turnId: string): void {
+    if (this.hasBusyApproval(taskId, turnId)) return
+    const head = this.getWaitingQueueHead(taskId, turnId)
+    if (!head) return
+    this.rebuildMergedTargets(head)
+    if (head.deliveredToUi) return
+    head.deliveredToUi = true
+    let delivered = false
+    try {
+      delivered = this.onApproval(head.approval)
+    } catch {
+      delivered = false
+    }
+    if (!delivered) void this.settlePending(head, 'cancelled')
+  }
+
+  /** 已展示的队首补上后续 path 时复用同一 approvalId，Renderer 按身份原地更新。 */
+  private refreshDeliveredCard(pending: PendingApproval): void {
+    if (!pending.deliveredToUi || pending.phase !== 'waiting') return
+    this.rebuildMergedTargets(pending)
+    try {
+      this.onApproval(pending.approval)
+    } catch {
+      // 更新已展示卡失败不能取消原审批，用户仍可对当前 approvalId 作答。
+    }
+  }
+
+  private hasBusyApproval(taskId: string, turnId: string): boolean {
+    return [...this.pending.values()].some(
+      (pending) =>
+        pending.approval.taskId === taskId &&
+        pending.approval.turnId === turnId &&
+        (pending.phase === 'settling' || pending.phase === 'executing')
     )
+  }
+
+  /** L3 / 未知 execute 不能并进写文件或普通删除卡。 */
+  private canMergeRisk(risk: AgentPermissionRisk): boolean {
+    return risk === 'L1' || risk === 'L2'
+  }
+
+  private findMergeableLeader(
+    intent: ResolvedOperationIntent,
+    grantKey: string,
+    risk: AgentPermissionRisk
+  ): PendingApproval | undefined {
+    if (!this.canMergeRisk(risk)) return undefined
+    for (const approvalId of this.pendingOrder) {
+      const pending = this.pending.get(approvalId)
+      if (!pending || pending.phase !== 'waiting') continue
+      if (pending.approval.taskId !== intent.taskId || pending.approval.turnId !== intent.turnId) {
+        continue
+      }
+      if (pending.grantKey !== grantKey) continue
+      if (!this.canMergeRisk(pending.policyRisk)) continue
+      if (!pending.approval.allowedScopes.includes('task')) continue
+      return pending
+    }
+    return undefined
+  }
+
+  private findCohortTail(leader: PendingApproval): PendingApproval {
+    let tail = leader
+    let seenLeader = false
+    for (const approvalId of this.pendingOrder) {
+      const pending = this.pending.get(approvalId)
+      if (!pending) continue
+      if (pending === leader) {
+        seenLeader = true
+        continue
+      }
+      if (!seenLeader) continue
+      if (
+        pending.approval.taskId !== leader.approval.taskId ||
+        pending.approval.turnId !== leader.approval.turnId
+      ) {
+        continue
+      }
+      if (pending.phase !== 'waiting') continue
+      if (pending.grantKey !== leader.grantKey) break
+      tail = pending
+    }
+    return tail
+  }
+
+  private collectMergeableCohort(leader: PendingApproval): PendingApproval[] {
+    if (!this.canMergeRisk(leader.policyRisk) || !leader.approval.allowedScopes.includes('task')) {
+      return [leader]
+    }
+    const cohort: PendingApproval[] = []
+    for (const approvalId of this.pendingOrder) {
+      const pending = this.pending.get(approvalId)
+      if (!pending || pending.phase !== 'waiting') continue
+      if (
+        pending.approval.taskId !== leader.approval.taskId ||
+        pending.approval.turnId !== leader.approval.turnId
+      ) {
+        continue
+      }
+      if (pending.grantKey !== leader.grantKey) continue
+      if (!this.canMergeRisk(pending.policyRisk)) continue
+      cohort.push(pending)
+    }
+    return cohort.length > 0 ? cohort : [leader]
+  }
+
+  private rebuildMergedTargets(leader: PendingApproval): void {
+    const cohort = this.collectMergeableCohort(leader)
+    const seen = new Set<string>()
+    const values: string[] = []
+    let truncated = Boolean(leader.approval.truncated)
+    for (const item of cohort) {
+      for (const target of item.ownTargets) {
+        if (seen.has(target)) continue
+        if (values.length >= 32) {
+          truncated = true
+          break
+        }
+        seen.add(target)
+        values.push(target)
+      }
+      if (item.approval.truncated) truncated = true
+      if (truncated && values.length >= 32) break
+    }
+    leader.approval.targets = values
+    if (truncated) leader.approval.truncated = true
+  }
+
+  private registerPending(pending: PendingApproval, insertAfterId?: string): void {
+    const approvalId = pending.approval.approvalId
+    this.pending.set(approvalId, pending)
+    if (!insertAfterId) {
+      this.pendingOrder.push(approvalId)
+      return
+    }
+    const index = this.pendingOrder.indexOf(insertAfterId)
+    this.pendingOrder.splice(index >= 0 ? index + 1 : this.pendingOrder.length, 0, approvalId)
+  }
+
+  private unregisterPendingOrder(approvalId: string): void {
+    const index = this.pendingOrder.indexOf(approvalId)
+    if (index >= 0) this.pendingOrder.splice(index, 1)
   }
 
   private getPendingCancellationReason(
@@ -629,12 +803,17 @@ export class PermissionBroker {
   ): void {
     if (pending.phase === 'settled') return
     pending.phase = 'settled'
+    const { taskId, turnId } = pending.approval
     if (this.pending.get(pending.approval.approvalId) === pending) {
       this.pending.delete(pending.approval.approvalId)
     }
+    this.unregisterPendingOrder(pending.approval.approvalId)
     this.clearTimer(pending.timer)
     this.publishPendingCount(pending)
     pending.resolve(result)
+    this.maybeDeliverQueueHead(taskId, turnId)
+    const waitingHead = this.getWaitingQueueHead(taskId, turnId)
+    if (waitingHead?.deliveredToUi) this.refreshDeliveredCard(waitingHead)
   }
 
   private async executeAllowed<T>(

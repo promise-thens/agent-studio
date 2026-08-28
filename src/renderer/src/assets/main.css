@@ -986,12 +986,17 @@ button:disabled {
 .permission-inline-origin,
 .permission-inline-meta,
 .permission-inline-impact,
-.permission-inline-warning {
+.permission-inline-warning,
+.permission-inline-targets {
   margin: 4px 0 0;
   color: var(--text-3);
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.permission-inline-targets {
+  padding-left: 1.1em;
 }
 
 .permission-inline-origin {

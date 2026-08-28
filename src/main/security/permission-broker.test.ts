@@ -129,7 +129,8 @@ describe('PermissionBroker', () => {
       vi.fn(),
       { onPendingChange: (count) => pendingCounts.push(count) }
     )
-    await waitForApproval(fixture.approvals, 1)
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-1') === 2)
+    expect(uniqueApprovals(fixture.approvals)).toHaveLength(1)
     expect(fixture.broker.getPendingCount('task-1', 'turn-1')).toBe(2)
     await fixture.broker.invalidateTask('task-1')
     await expect(Promise.all([first, second])).resolves.toEqual([
@@ -142,7 +143,7 @@ describe('PermissionBroker', () => {
     const stale = fixture.broker.authorizeOperation(createIntent('write-file'), vi.fn(), {
       isActive: () => active
     })
-    const approval = await waitForApproval(fixture.approvals, 2)
+    const approval = await waitForUniqueApproval(fixture.approvals, 1)
     active = false
     await fixture.broker.respond({
       approvalId: approval.approvalId,
@@ -153,12 +154,12 @@ describe('PermissionBroker', () => {
     await expect(stale).resolves.toEqual({ ok: false, reason: 'cancelled' })
 
     const projectPending = fixture.broker.authorizeOperation(createIntent('write-file'), vi.fn())
-    await waitForApproval(fixture.approvals, 3)
+    await waitForUniqueApproval(fixture.approvals, 2)
     await fixture.broker.invalidateProject('project-1')
     await expect(projectPending).resolves.toEqual({ ok: false, reason: 'cancelled' })
 
     const shutdownPending = fixture.broker.authorizeOperation(createIntent('write-file'), vi.fn())
-    await waitForApproval(fixture.approvals, 4)
+    await waitForUniqueApproval(fixture.approvals, 3)
     await fixture.broker.shutdown()
     await expect(shutdownPending).resolves.toEqual({ ok: false, reason: 'cancelled' })
   })
@@ -177,17 +178,18 @@ describe('PermissionBroker', () => {
       vi.fn(),
       { cancellationId: 'runtime-request-2' }
     )
-    await waitForApproval(fixture.approvals, 1)
-    const cancelledApproval = fixture.approvals.find(
-      (approval) => approval.targets[0] === 'path: src/shared/agent.ts'
-    )!
-    const siblingApproval = fixture.approvals.find(
-      (approval) => approval.targets[0] === 'path: src/main/index.ts'
-    )!
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-1') === 2)
+    const cancelledApproval = uniqueApprovals(fixture.approvals)[0]!
+    expect(cancelledApproval.targets).toEqual([
+      'path: src/shared/agent.ts',
+      'path: src/main/index.ts'
+    ])
 
     await fixture.broker.cancelAuthorization('runtime-request-1', 'task-1', 'turn-1')
     await expect(cancelled).resolves.toEqual({ ok: false, reason: 'cancelled' })
     expect(fixture.broker.getPendingCount('task-1', 'turn-1')).toBe(1)
+    const siblingApproval = await waitForUniqueApproval(fixture.approvals, 1)
+    expect(siblingApproval.targets[0]).toBe('path: src/main/index.ts')
     await fixture.broker.respond({
       approvalId: cancelledApproval.approvalId,
       taskId: cancelledApproval.taskId,
@@ -200,7 +202,7 @@ describe('PermissionBroker', () => {
       { ...createIntent('write-file'), turnId: 'turn-2' },
       vi.fn()
     )
-    await waitForApproval(fixture.approvals, 2)
+    await waitForUniqueApproval(fixture.approvals, 2)
     await fixture.broker.respond({
       approvalId: siblingApproval.approvalId,
       taskId: siblingApproval.taskId,
@@ -218,18 +220,22 @@ describe('PermissionBroker', () => {
     const secondExecute = vi.fn(() => 'second')
     const first = fixture.broker.authorizeOperation(createIntent('write-file'), firstExecute)
     const second = fixture.broker.authorizeOperation(
-      { ...createIntent('write-file'), targets: [{ kind: 'path', value: 'src/main/index.ts' }] },
+      {
+        ...createIntent('delete-path'),
+        targets: [{ kind: 'path', value: 'src/main/index.ts' }]
+      },
       secondExecute
     )
     const firstApproval = await waitForApproval(fixture.approvals, 0)
-    const secondApproval = await waitForApproval(fixture.approvals, 1)
-    expect(firstApproval.targets[0]).toBe('path: src/shared/agent.ts')
-    expect(secondApproval.targets[0]).toBe('path: src/main/index.ts')
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-1') === 2)
+    expect(uniqueApprovals(fixture.approvals)).toHaveLength(1)
+    expect(firstApproval.operationType).toBe('write-file')
 
     await fixture.broker.respond({
-      approvalId: secondApproval.approvalId,
-      taskId: secondApproval.taskId,
-      turnId: secondApproval.turnId,
+      // 夹具 createId 为 id-N；删除虽已挂起但未交付，不能靠这条 id 越过队首。
+      approvalId: 'id-2',
+      taskId: firstApproval.taskId,
+      turnId: firstApproval.turnId,
       decision: 'allow-once'
     })
     expect(secondExecute).not.toHaveBeenCalled()
@@ -242,6 +248,8 @@ describe('PermissionBroker', () => {
       decision: 'deny'
     })
     await expect(first).resolves.toEqual({ ok: false, reason: 'user-denied' })
+    const secondApproval = await waitForUniqueApproval(fixture.approvals, 1)
+    expect(secondApproval.operationType).toBe('delete-path')
     await fixture.broker.respond({
       approvalId: secondApproval.approvalId,
       taskId: secondApproval.taskId,
@@ -992,7 +1000,20 @@ describe('PermissionBroker', () => {
       },
       vi.fn()
     )
-    const computerApproval = await waitForApproval(fixture.approvals, 2)
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-2') === 2)
+    expect(uniqueApprovals(fixture.approvals).map((card) => card.operationType)).toEqual([
+      'delete-path',
+      'delete-path'
+    ])
+
+    await fixture.broker.respond({
+      approvalId: gitApproval.approvalId,
+      taskId: gitApproval.taskId,
+      turnId: gitApproval.turnId,
+      decision: 'deny'
+    })
+    await expect(gitDelete).resolves.toEqual({ ok: false, reason: 'user-denied' })
+    const computerApproval = await waitForUniqueApproval(fixture.approvals, 2)
     expect(computerApproval).toMatchObject({
       operationType: 'unknown',
       risk: 'L3',
@@ -1000,8 +1021,157 @@ describe('PermissionBroker', () => {
     })
 
     await fixture.broker.shutdown()
-    await expect(gitDelete).resolves.toEqual({ ok: false, reason: 'cancelled' })
     await expect(computerUse).resolves.toEqual({ ok: false, reason: 'cancelled' })
+  })
+
+  it('8 个不同 path 的 write-file 未响应前只产生 1 张卡，allow-task 后全部执行且第 9 次复用', async () => {
+    const fixture = createFixture()
+    const executes = Array.from({ length: 8 }, (_, index) => vi.fn(() => `write-${index}`))
+    const promises = executes.map((execute, index) =>
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('write-file'),
+          targets: [{ kind: 'path', value: `src/write-${index}.ts` }]
+        },
+        execute
+      )
+    )
+
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-1') === 8)
+    const cards = uniqueApprovals(fixture.approvals)
+    expect(cards).toHaveLength(1)
+    expect(cards[0]?.operationType).toBe('write-file')
+    expect(cards[0]?.targets).toEqual(
+      Array.from({ length: 8 }, (_, index) => `path: src/write-${index}.ts`)
+    )
+    expect(executes.every((execute) => execute.mock.calls.length === 0)).toBe(true)
+
+    await fixture.broker.respond({
+      approvalId: cards[0]!.approvalId,
+      taskId: cards[0]!.taskId,
+      turnId: cards[0]!.turnId,
+      decision: 'allow-task'
+    })
+    await expect(Promise.all(promises)).resolves.toEqual(
+      executes.map((_, index) => ({
+        ok: true,
+        value: `write-${index}`,
+        reason: 'user-allowed',
+        scope: 'task'
+      }))
+    )
+    executes.forEach((execute) => expect(execute).toHaveBeenCalledOnce())
+
+    await expect(
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('write-file'),
+          turnId: 'turn-2',
+          targets: [{ kind: 'path', value: 'src/write-8.ts' }]
+        },
+        vi.fn(() => 'write-8')
+      )
+    ).resolves.toMatchObject({ ok: true, value: 'write-8', reason: 'grant-reused' })
+  })
+
+  it('合并写文件卡点 allow-once 只执行队首，其余继续排队且不得一起跑', async () => {
+    const fixture = createFixture()
+    const executes = Array.from({ length: 8 }, (_, index) => vi.fn(() => `write-${index}`))
+    const promises = executes.map((execute, index) =>
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('write-file'),
+          targets: [{ kind: 'path', value: `src/write-${index}.ts` }]
+        },
+        execute
+      )
+    )
+
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-1') === 8)
+    const cards = uniqueApprovals(fixture.approvals)
+    expect(cards).toHaveLength(1)
+    const firstCard = cards[0]!
+    await fixture.broker.respond({
+      approvalId: firstCard.approvalId,
+      taskId: firstCard.taskId,
+      turnId: firstCard.turnId,
+      decision: 'allow-once'
+    })
+
+    await expect(promises[0]).resolves.toMatchObject({
+      ok: true,
+      value: 'write-0',
+      reason: 'user-allowed',
+      scope: 'once'
+    })
+    expect(executes[0]).toHaveBeenCalledOnce()
+    executes.slice(1).forEach((execute) => expect(execute).not.toHaveBeenCalled())
+    expect(fixture.broker.getPendingCount('task-1', 'turn-1')).toBe(7)
+
+    const nextCard = await waitForUniqueApproval(fixture.approvals, 1)
+    expect(nextCard.approvalId).not.toBe(firstCard.approvalId)
+    expect(nextCard.operationType).toBe('write-file')
+    expect(nextCard.targets[0]).toBe('path: src/write-1.ts')
+    expect(nextCard.targets).not.toEqual(firstCard.targets)
+
+    await fixture.broker.shutdown()
+    await expect(Promise.all(promises.slice(1))).resolves.toEqual(
+      Array.from({ length: 7 }, () => ({ ok: false, reason: 'cancelled' }))
+    )
+  })
+
+  it('write 挂起时到来的 delete-path / unknown execute 不得并进写文件卡', async () => {
+    const fixture = createFixture()
+    const writeExecute = vi.fn(() => 'written')
+    const deleteExecute = vi.fn(() => 'deleted')
+    const unknownExecute = vi.fn(() => 'ran')
+    const writePromise = fixture.broker.authorizeOperation(
+      { ...createIntent('write-file'), targets: [{ kind: 'path', value: 'src/write.ts' }] },
+      writeExecute
+    )
+    const firstCard = await waitForApproval(fixture.approvals, 0)
+
+    const deletePromise = fixture.broker.authorizeOperation(
+      { ...createIntent('delete-path'), targets: [{ kind: 'path', value: 'src/temp.ts' }] },
+      deleteExecute
+    )
+    const unknownPromise = fixture.broker.authorizeOperation(
+      {
+        ...createIntent('execute-command'),
+        minimumRisk: 'L3',
+        targets: [{ kind: 'command', value: 'Runtime 未提供可信的结构化命令。' }],
+        parameterFingerprint: 'grok-acp:execute:unknown-command:v1'
+      },
+      unknownExecute
+    )
+
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-1') === 3)
+    expect(uniqueApprovals(fixture.approvals)).toHaveLength(1)
+    expect(firstCard).toMatchObject({ operationType: 'write-file' })
+    expect(firstCard.targets.join('\n')).toContain('path: src/write.ts')
+    expect(firstCard.targets.join('\n')).not.toContain('src/temp.ts')
+    expect(JSON.stringify(firstCard)).not.toContain('unknown-command')
+    expect(deleteExecute).not.toHaveBeenCalled()
+    expect(unknownExecute).not.toHaveBeenCalled()
+
+    await fixture.broker.respond({
+      approvalId: firstCard.approvalId,
+      taskId: firstCard.taskId,
+      turnId: firstCard.turnId,
+      decision: 'allow-task'
+    })
+    await expect(writePromise).resolves.toMatchObject({ ok: true, value: 'written', scope: 'task' })
+
+    const secondCard = await waitForUniqueApproval(fixture.approvals, 1)
+    expect(secondCard.operationType).toBe('delete-path')
+    expect(secondCard.operationType).not.toBe('execute-command')
+    expect(uniqueApprovals(fixture.approvals).map((card) => card.operationType)).not.toContain(
+      'execute-command'
+    )
+
+    await fixture.broker.shutdown()
+    await expect(deletePromise).resolves.toEqual({ ok: false, reason: 'cancelled' })
+    await expect(unknownPromise).resolves.toEqual({ ok: false, reason: 'cancelled' })
   })
 
   it('未知 execute 为 L3 仅本次，误发 allow-task 不能登记宽 grant', async () => {
@@ -1202,6 +1372,37 @@ async function waitForApproval(
     await new Promise<void>((resolve) => setTimeout(resolve, 0))
   }
   throw new Error('审批未在预期时间内登记。')
+}
+
+function uniqueApprovals(approvals: AgentPermissionRequest[]): AgentPermissionRequest[] {
+  const seen = new Set<string>()
+  const unique: AgentPermissionRequest[] = []
+  for (const approval of approvals) {
+    if (seen.has(approval.approvalId)) continue
+    seen.add(approval.approvalId)
+    unique.push(approval)
+  }
+  return unique
+}
+
+async function waitForUniqueApproval(
+  approvals: AgentPermissionRequest[],
+  index: number
+): Promise<AgentPermissionRequest> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const approval = uniqueApprovals(approvals)[index]
+    if (approval) return approval
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error('唯一审批卡未在预期时间内出现。')
+}
+
+async function waitUntil(predicate: () => boolean, attempts = 40): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (predicate()) return
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  }
+  throw new Error('条件未在预期时间内成立。')
 }
 
 function deferred<T>(): {

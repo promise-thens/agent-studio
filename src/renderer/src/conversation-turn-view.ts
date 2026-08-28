@@ -23,6 +23,7 @@ import type {
 export { formatToolVerbPhrase, isReadToolTitle } from './conversation-tool-presentation'
 
 export const PERMISSION_ALLOW_TASK_LABEL = '本任务允许'
+export const PERMISSION_INSUFFICIENT_EVIDENCE_NOTICE = '证据不够，不能自动过'
 export const THOUGHT_SUMMARY = '思考过程'
 
 export interface ConversationUserBlock {
@@ -143,6 +144,50 @@ export function resolvePermissionPrimaryAction(
     return { decision: 'allow-task', label: PERMISSION_ALLOW_TASK_LABEL }
   }
   return { decision: 'allow-once', label: '仅允许这一次' }
+}
+
+/**
+ * 审批卡在自身焦点内：Enter 走主按钮，Esc 拒绝。
+ * 输入法确认、Shift+Enter、焦点在非主按钮上时不抢原生按钮行为。
+ */
+export function resolvePermissionCardKeyDecision(
+  event: { key: string; isComposing?: boolean; shiftKey?: boolean; keyCode?: number },
+  primaryDecision: AgentPermissionDecision,
+  options?: { targetIsNonPrimaryButton?: boolean }
+): AgentPermissionDecision | null {
+  if (event.isComposing || event.keyCode === 229) return null
+  if (event.key === 'Escape') return 'deny'
+  if (event.key === 'Enter' && !event.shiftKey && !options?.targetIsNonPrimaryButton) {
+    return primaryDecision
+  }
+  return null
+}
+
+/**
+ * 有可信 path/command/origin 就让卡自己展示；没有则明确告诉用户不能自动过。
+ * 占位「未提供可信…」不能当成真实命令或 origin。
+ */
+export function resolvePermissionEvidenceNotice(
+  request: Pick<AgentPermissionRequest, 'targets'>
+): string | null {
+  if (request.targets.some((target) => hasTrustedPermissionEvidence(target))) return null
+  return PERMISSION_INSUFFICIENT_EVIDENCE_NOTICE
+}
+
+function hasTrustedPermissionEvidence(target: string): boolean {
+  if (
+    target.startsWith('path: ') ||
+    target.startsWith('origin: ') ||
+    target.startsWith('git: ') ||
+    target.startsWith('project: ') ||
+    target.startsWith('worktree: ')
+  ) {
+    return target.trim().length > 8
+  }
+  if (target.startsWith('command: ')) {
+    return !target.includes('未提供可信')
+  }
+  return false
 }
 
 /**
