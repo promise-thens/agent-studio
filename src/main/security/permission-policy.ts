@@ -126,12 +126,14 @@ export function createLocalEnvironmentId(projectId: string, canonicalRoot: strin
 /**
  * 固定首期风险表。minimumRisk 只能升级，Runtime 或调用方不能用它降低默认风险。
  * Browser、Screen、Clipboard 在能力真正接入前直接拒绝。
+ * 未知 execute 与未知出网一样强制 L3，不能靠 mapper 漏标 minimumRisk 变成 Task 通行证。
  */
 export function evaluatePermissionPolicy(intent: OperationIntent): PermissionPolicyEvaluation {
   validateOperationIntent(intent)
   const defaultRisk = DEFAULT_RISK[intent.operationType]
   const forceHighRisk =
     isDangerousGitMutation(intent) ||
+    isUnknownExecuteCommand(intent) ||
     (intent.operationType === 'delete-path' && classifyDeleteGrant(intent) === 'dangerous-exact')
   const risk = maxRisk(defaultRisk, forceHighRisk ? 'L3' : intent.minimumRisk)
 
@@ -227,6 +229,7 @@ function createGrantKeyMaterial(intent: ResolvedOperationIntent): Record<string,
 
   if (
     intent.operationType === 'execute-command' &&
+    !isUnknownExecuteCommand(intent) &&
     maxRisk(DEFAULT_RISK['execute-command'], intent.minimumRisk) !== 'L3'
   ) {
     return { ...identity, commandFingerprint: intent.parameterFingerprint }
@@ -338,6 +341,9 @@ function validateRequiredTargetKinds(intent: OperationIntent): void {
   ) {
     throw new PermissionPolicyError('invalid-intent', '命令操作缺少受限目标。')
   }
+  if (isUnknownExecuteCommand(intent) && intent.minimumRisk !== 'L3') {
+    throw new PermissionPolicyError('invalid-intent', '未知命令必须按最高风险逐次确认。')
+  }
   if (intent.operationType === 'network-egress') {
     if (!kinds.has('origin') && !kinds.has('unknown')) {
       throw new PermissionPolicyError('invalid-intent', '网络操作缺少受限目标。')
@@ -388,10 +394,21 @@ function isDangerousDeleteTarget(executionRoot: string, value: string): boolean 
   return isNonEmptyDirectory(absolute)
 }
 
+/** 路径段按大小写不敏感识别 .git，避免 APFS 上 .GIT / .Git 走普通删除宽 grant。 */
 function pathContainsGitSegment(root: string, absoluteTarget: string): boolean {
   return relative(root, absoluteTarget)
     .split(/[\\/]+/u)
-    .some((segment) => segment === '.git')
+    .some((segment) => segment.toLowerCase() === '.git')
+}
+
+/** 未知命令与未知出网对齐：共用指纹、「未提供可信」或 unknown 目标都必须 L3。 */
+function isUnknownExecuteCommand(intent: OperationIntent): boolean {
+  if (intent.operationType !== 'execute-command') return false
+  if (intent.parameterFingerprint === 'grok-acp:execute:unknown-command:v1') return true
+  return intent.targets.some((target) => {
+    if (target.kind === 'unknown') return true
+    return target.kind === 'command' && target.value.includes('未提供可信')
+  })
 }
 
 /**

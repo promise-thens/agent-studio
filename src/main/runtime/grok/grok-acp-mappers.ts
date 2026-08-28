@@ -553,7 +553,8 @@ function mapGrokOperation(snapshot: GrokToolCallAuthorizationSnapshot): {
       operationType: 'write-file',
       targets: pathTargets,
       parameterFingerprint: createGrokEditFingerprint(snapshot),
-      impact: '修改当前 Project 内的指定文件。'
+      // 授权是本任务整类写入；列出的 path 只是这次请求样本。
+      impact: '本任务允许写入项目内文件。'
     }
   }
   if (kind === 'delete' && pathTargets.length) {
@@ -561,7 +562,8 @@ function mapGrokOperation(snapshot: GrokToolCallAuthorizationSnapshot): {
       operationType: 'delete-path',
       targets: pathTargets,
       parameterFingerprint: 'grok-acp:delete:v1',
-      impact: '删除当前 Project 内的指定路径，此操作可能不可恢复。'
+      // 授权是本任务整类普通删除；列出的 path 只是这次请求样本。
+      impact: '本任务允许删除项目内文件。'
     }
   }
   if (kind === 'execute') {

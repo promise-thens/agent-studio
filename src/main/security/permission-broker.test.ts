@@ -1409,6 +1409,32 @@ describe('PermissionBroker', () => {
     await expect(second).resolves.toEqual({ ok: false, reason: 'cancelled' })
   })
 
+  it('未知 execute 漏标 minimumRisk 时 fail-closed，不能变成 Task 未知命令通行证', async () => {
+    const fixture = createFixture()
+    const leaked = {
+      ...createIntent('execute-command'),
+      targets: [{ kind: 'command' as const, value: 'Runtime 未提供可信的结构化命令。' }],
+      parameterFingerprint: 'grok-acp:execute:unknown-command:v1'
+    }
+    const firstExecute = vi.fn(() => 'ran')
+    await expect(fixture.broker.authorizeOperation(leaked, firstExecute)).resolves.toMatchObject({
+      ok: false
+    })
+    expect(firstExecute).not.toHaveBeenCalled()
+    expect(fixture.approvals).toHaveLength(0)
+
+    const marked = { ...leaked, minimumRisk: 'L3' as const, turnId: 'turn-2' }
+    const secondExecute = vi.fn(() => 'ran-2')
+    const second = fixture.broker.authorizeOperation(marked, secondExecute)
+    const approval = await waitForApproval(fixture.approvals, 0)
+    expect(approval).toMatchObject({ risk: 'L3', allowedScopes: ['once'] })
+    expect(approval.allowedScopes).not.toContain('task')
+
+    await fixture.broker.shutdown()
+    await expect(second).resolves.toEqual({ ok: false, reason: 'cancelled' })
+    expect(secondExecute).not.toHaveBeenCalled()
+  })
+
   it('可信命令的 Task grant 不能覆盖另一条不同指纹的命令', async () => {
     const fixture = createFixture()
     const first = fixture.broker.authorizeOperation(

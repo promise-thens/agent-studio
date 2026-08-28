@@ -248,4 +248,53 @@ describe('mapGrokPermissionRequest 读/写映射', () => {
     expect(JSON.stringify(request)).not.toContain('allow_always')
     expect(JSON.stringify(request)).not.toContain('allow-always')
   })
+
+  it('edit/delete 的 impact 说明本任务整类写/删，不把列出的 path 说成只改这几个文件', () => {
+    const edit = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-edit-impact',
+          title: '修改文件',
+          kind: 'edit',
+          locations: [{ path: '/tmp/fixture/src/a.ts' }, { path: '/tmp/fixture/src/b.ts' }]
+        }
+      },
+      'permission-edit-impact',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    const deletion = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-delete-impact',
+          title: '删除文件',
+          kind: 'delete',
+          locations: [{ path: '/tmp/fixture/src/a.ts' }]
+        }
+      },
+      'permission-delete-impact',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+
+    expect(edit).toMatchObject({
+      operationType: 'write-file',
+      impact: '本任务允许写入项目内文件。'
+    })
+    expect(edit?.impact).not.toContain('指定文件')
+    expect(deletion).toMatchObject({
+      operationType: 'delete-path',
+      impact: '本任务允许删除项目内文件。'
+    })
+    expect(deletion?.impact).not.toContain('指定路径')
+    expect(deletion?.impact).not.toContain('指定文件')
+  })
 })

@@ -409,6 +409,26 @@ describe('Permission 路径边界', () => {
     ).rejects.toMatchObject({ code: 'invalid-target' } satisfies Partial<PermissionPolicyError>)
   })
 
+  it('.GIT / .Git 以及不存在的 .GIT 叶子不得拿普通删除宽 grant', async () => {
+    const root = await fs.realpath(await createTemporaryDirectory('policy-git-case-'))
+    await fs.writeFile(join(root, 'src.ts'), 'export {}')
+    const normalFile = await resolveOperationIntentTargets(
+      createIntent('delete-path', root, [{ kind: 'path', value: 'src.ts' }])
+    )
+
+    for (const value of ['.GIT', '.Git', '.GIT/config', 'nested/.Git/HEAD']) {
+      const dangerous = await resolveOperationIntentTargets(
+        createIntent('delete-path', root, [{ kind: 'path', value }])
+      )
+      expect(evaluatePermissionPolicy(dangerous)).toMatchObject({
+        kind: 'approval',
+        risk: 'L3',
+        allowedScopes: ['once']
+      })
+      expect(createOperationGrantKey(dangerous)).not.toBe(createOperationGrantKey(normalFile))
+    }
+  })
+
   it('execute grant 只绑定命令指纹，未知/出网保持精确目标且不受 rawInput 影响', async () => {
     const root = await fs.realpath(await createTemporaryDirectory('policy-grant-'))
     const execA = await resolveOperationIntentTargets({
@@ -452,6 +472,62 @@ describe('Permission 路径边界', () => {
     expect(createOperationGrantKey(withRawInput)).toBe(createOperationGrantKey(execA))
     expect(JSON.stringify(createGrantKeyInspection(execA))).not.toContain('rawInput')
     expect(JSON.stringify(createGrantKeyInspection(execA))).not.toContain('sk-fake')
+  })
+
+  it('未知 execute 即使漏标 minimumRisk 也不能按 L2 本任务授权', async () => {
+    const root = await fs.realpath(await createTemporaryDirectory('policy-unknown-exec-'))
+    const unknownByFingerprint = {
+      ...createIntent('execute-command', root, [{ kind: 'command', value: 'ls' }]),
+      parameterFingerprint: 'grok-acp:execute:unknown-command:v1'
+    }
+    const unknownByTarget = {
+      ...createIntent('execute-command', root, [
+        { kind: 'command', value: 'Runtime 未提供可信的结构化命令。' }
+      ]),
+      parameterFingerprint: 'cmd-looks-named'
+    }
+    const unknownByKind = {
+      ...createIntent('execute-command', root, [{ kind: 'unknown', value: '目标未确认' }]),
+      parameterFingerprint: 'cmd-unknown-kind'
+    }
+
+    for (const leaked of [unknownByFingerprint, unknownByTarget, unknownByKind]) {
+      expect(() => evaluatePermissionPolicy(leaked)).toThrowError(
+        '未知命令必须按最高风险逐次确认。'
+      )
+    }
+
+    for (const leaked of [unknownByFingerprint, unknownByTarget, unknownByKind]) {
+      expect(evaluatePermissionPolicy({ ...leaked, minimumRisk: 'L3' })).toMatchObject({
+        kind: 'approval',
+        risk: 'L3',
+        allowedScopes: ['once']
+      })
+    }
+
+    const trusted = await resolveOperationIntentTargets({
+      ...createIntent('execute-command', root),
+      parameterFingerprint: 'cmd-a'
+    })
+    expect(evaluatePermissionPolicy(trusted)).toMatchObject({
+      kind: 'approval',
+      risk: 'L2',
+      allowedScopes: ['once', 'task']
+    })
+    expect(createOperationGrantKey({ ...unknownByFingerprint, minimumRisk: 'L3' })).not.toBe(
+      createOperationGrantKey(trusted)
+    )
+    expect(
+      createOperationGrantKey({
+        ...unknownByFingerprint,
+        targets: [{ kind: 'command', value: 'alpha' }]
+      })
+    ).not.toBe(
+      createOperationGrantKey({
+        ...unknownByFingerprint,
+        targets: [{ kind: 'command', value: 'beta' }]
+      })
+    )
   })
 })
 

@@ -411,7 +411,7 @@ describe('权限卡主按钮', () => {
       operationType: 'write-file',
       risk: 'L1',
       title: '修改文件',
-      impact: '写入 Project 文件。',
+      impact: '本任务允许写入项目内文件。',
       targets: ['path: src/auth.ts', 'path: src/main/index.ts'],
       allowedScopes: ['once', 'task'],
       expiresAt: '2099-01-01T00:00:00.000Z'
@@ -459,9 +459,14 @@ describe('权限卡主按钮', () => {
       kind: 'permission',
       request: expect.objectContaining({
         operationType: 'write-file',
+        impact: '本任务允许写入项目内文件。',
         targets: ['path: src/auth.ts', 'path: src/main/index.ts']
       })
     })
+    if (permission?.kind === 'permission') {
+      expect(permission.request.impact).not.toContain('指定文件')
+      expect(permission.request.targets).toEqual(['path: src/auth.ts', 'path: src/main/index.ts'])
+    }
   })
 
   it('流内权限是小卡：非 dialog、不自动抢焦点，并插在计划后面', () => {
