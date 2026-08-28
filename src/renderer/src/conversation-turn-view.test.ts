@@ -645,6 +645,75 @@ describe('静默权限折叠摘要', () => {
     expect(JSON.stringify(auditBlocks)).not.toContain('user-allowed')
     expect(JSON.stringify(blocks)).not.toContain('allow_always')
   })
+
+  it('静默读取摘要不能把 live 审批卡吸到助手回复后面', () => {
+    const writeRequest: AgentPermissionRequest = {
+      approvalId: 'approval-write',
+      initiator: 'runtime',
+      runtimeId: 'grok',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      projectId: 'project-1',
+      environmentId: 'local:test',
+      operationType: 'write-file',
+      risk: 'L1',
+      title: '修改文件',
+      impact: '写入 Project 文件。',
+      targets: ['path: src/auth.ts'],
+      allowedScopes: ['once', 'task'],
+      expiresAt: '2099-01-01T00:00:00.000Z'
+    }
+    const silentReads = Array.from({ length: 12 }, (_, index) =>
+      permissionAuditNode({
+        auditId: `read-${index + 1}`,
+        operationType: 'read-project',
+        reason: index === 0 ? 'auto-allowed' : 'grant-reused'
+      })
+    )
+    const blocks = projectConversationTurn(
+      turn('waiting-permission', [
+        {
+          nodeId: 'task-1:turn-1:user',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'admission',
+          kind: 'user-prompt',
+          text: '请改登录'
+        },
+        {
+          nodeId: 'task-1:turn-1:plan',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'plan',
+          entries: [{ content: '改登录表单', priority: 'medium', status: 'in_progress' }]
+        },
+        {
+          nodeId: 'task-1:turn-1:agent-message:id:',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'message',
+          text: '先说明一下再改文件'
+        },
+        ...silentReads
+      ]),
+      { pendingPermission: writeRequest }
+    )
+    const kinds = blocks.map((block) => block.kind)
+    const permissionIndex = kinds.indexOf('permission')
+    const messageIndex = kinds.indexOf('message')
+    const planIndex = kinds.indexOf('plan')
+
+    expect(kinds).toEqual(['user', 'plan', 'permission', 'message', 'permission-audit'])
+    expect(planIndex).toBeGreaterThanOrEqual(0)
+    expect(permissionIndex).toBeGreaterThan(planIndex)
+    expect(permissionIndex).toBeLessThan(messageIndex)
+    expect(blocks.find((block) => block.kind === 'permission-audit')).toMatchObject({
+      summary: '已自动允许 12 次读取',
+      count: 12
+    })
+  })
 })
 
 function permissionAuditNode(

@@ -487,7 +487,7 @@ export function projectConversationTurn(
   return blocks
 }
 
-/** 审批卡贴在计划/工具后面，不要排到长回复之后把当前步顶出视口。 */
+/** 审批卡只跟计划/工具/思考/子代理；静默审计摘要不能当锚点，否则会把卡顶到长回复后面。 */
 function insertPermissionAfterProcess(
   blocks: ConversationBlock[],
   permission: ConversationPermissionBlock
@@ -499,8 +499,7 @@ function insertPermissionAfterProcess(
         block.kind === 'plan' ||
         block.kind === 'tool' ||
         block.kind === 'thought' ||
-        block.kind === 'subagent' ||
-        block.kind === 'permission-audit'
+        block.kind === 'subagent'
     )
   if (fromEnd < 0) {
     blocks.push(permission)
