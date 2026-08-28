@@ -276,16 +276,29 @@ export function stripDisplayedSessionMediaPaths(text: string): string {
 
 /** 把说明和后续句子拆开，方便把图片插到路径原来的位置。 */
 export function splitAssistantMessageAroundMedia(text: string): { before: string; after: string } {
-  const stripped = stripDisplayedSessionMediaPaths(text)
-  const match = stripped.match(/^(.*?)\n\s*\n([\s\S]*)$/)
-  if (!match) return { before: stripped, after: '' }
-  return { before: match[1].trim(), after: match[2].trim() }
+  const lines = text.split(/\r?\n/)
+  const mediaLineIndex = lines.findIndex((line) => isSessionMediaPathLine(line))
+  if (mediaLineIndex < 0) return { before: text.trim(), after: '' }
+  return {
+    before: lines.slice(0, mediaLineIndex).join('\n').trim(),
+    after: lines
+      .slice(mediaLineIndex + 1)
+      .join('\n')
+      .trim()
+  }
 }
 
-function collectRuntimeMediaBlocks(
+interface RuntimeMediaPlacement {
+  block: ConversationAttachmentBlock
+  sourceIndex: number
+  targetMessageIndex?: number
+}
+
+/** 收集附件连续段并保留其原始节点下标，后续按正文路径决定是否延迟到对应消息。 */
+function collectRuntimeMediaPlacements(
   nodes: TurnTimelineViewModel['nodes']
-): ConversationAttachmentBlock[] {
-  const blocks: ConversationAttachmentBlock[] = []
+): RuntimeMediaPlacement[] {
+  const placements: RuntimeMediaPlacement[] = []
   let index = 0
   while (index < nodes.length) {
     const node = nodes[index]
@@ -293,20 +306,24 @@ function collectRuntimeMediaBlocks(
       index += 1
       continue
     }
+    const sourceIndex = index
     const run: TimelineAttachmentNode[] = [node]
     while (index + 1 < nodes.length && nodes[index + 1]?.kind === 'attachment') {
       index += 1
       run.push(nodes[index] as TimelineAttachmentNode)
     }
-    blocks.push({
-      kind: 'attachment',
-      nodeId: node.nodeId,
-      taskId: node.taskId,
-      attachmentIds: run.map((item) => item.attachmentId)
+    placements.push({
+      sourceIndex,
+      block: {
+        kind: 'attachment',
+        nodeId: node.nodeId,
+        taskId: node.taskId,
+        attachmentIds: run.map((item) => item.attachmentId)
+      }
     })
     index += 1
   }
-  return blocks
+  return placements
 }
 
 /**
@@ -331,17 +348,31 @@ export function projectConversationTurn(
   }
 
   const rest = turn.nodes.filter((node) => node.kind !== 'user-prompt')
-  const mediaBlocks = collectRuntimeMediaBlocks(rest)
-  let mediaInserted = false
-  const insertRuntimeMedia = (): void => {
-    if (mediaInserted || mediaBlocks.length === 0) return
-    mediaInserted = true
-    blocks.push(...mediaBlocks)
+  const mediaPlacements = collectRuntimeMediaPlacements(rest)
+  const pathMessageIndexes = rest.flatMap((node, index) =>
+    node.kind === 'message' && node.text.split(/\r?\n/).some((line) => isSessionMediaPathLine(line))
+      ? [index]
+      : []
+  )
+  const placementsByMessage = new Map<number, ConversationAttachmentBlock[]>()
+  for (const placement of mediaPlacements) {
+    // 每组图片独立寻找其后的最近路径消息；中间夹工具节点时仍归属于同一条回复。
+    const targetMessageIndex = pathMessageIndexes.find(
+      (messageIndex) => messageIndex > placement.sourceIndex
+    )
+    if (targetMessageIndex == null) continue
+    placement.targetMessageIndex = targetMessageIndex
+    const assigned = placementsByMessage.get(targetMessageIndex) ?? []
+    assigned.push(placement.block)
+    placementsByMessage.set(targetMessageIndex, assigned)
   }
   let index = 0
   while (index < rest.length) {
     const node = rest[index]
     if (node.kind === 'attachment') {
+      const placement = mediaPlacements.find((item) => item.sourceIndex === index)
+      // 有正文路径的附件延迟到对应消息；没有路径时仍按原始节点位置展示。
+      if (placement && placement.targetMessageIndex == null) blocks.push(placement.block)
       while (index + 1 < rest.length && rest[index + 1]?.kind === 'attachment') index += 1
       index += 1
       continue
@@ -414,7 +445,8 @@ export function projectConversationTurn(
     } else if (node.kind === 'plan') {
       blocks.push(toPlanBlock(turn, node.entries, node.nodeId))
     } else if (node.kind === 'message') {
-      if (mediaBlocks.length > 0 && !mediaInserted) {
+      const assignedMedia = placementsByMessage.get(index)
+      if (assignedMedia?.length) {
         const { before, after } = splitAssistantMessageAroundMedia(node.text)
         if (before) {
           blocks.push({
@@ -424,7 +456,7 @@ export function projectConversationTurn(
             render: 'markdown'
           })
         }
-        insertRuntimeMedia()
+        blocks.push(...assignedMedia)
         if (after) {
           blocks.push({
             kind: 'message',
@@ -434,11 +466,7 @@ export function projectConversationTurn(
           })
         }
       } else {
-        const text = mediaInserted
-          ? stripDisplayedSessionMediaPaths(node.text)
-          : node.text.trim()
-            ? node.text
-            : ''
+        const text = node.text.trim() ? node.text : ''
         if (text.trim()) {
           blocks.push({
             kind: 'message',
@@ -471,8 +499,6 @@ export function projectConversationTurn(
     }
     index += 1
   }
-
-  insertRuntimeMedia()
 
   const pending = options?.pendingPermission
   if (pending && pending.taskId === turn.taskId && pending.turnId === turn.turnId) {

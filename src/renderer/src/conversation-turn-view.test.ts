@@ -350,6 +350,159 @@ describe('对话块投影', () => {
     })
     expect(JSON.stringify(blocks)).not.toContain('images/4.jpg')
   })
+
+  it('前置助手消息不会抢先承接后续 Runtime 图片', () => {
+    const blocks = projectConversationTurn(
+      turn('completed', [
+        {
+          nodeId: 'task-1:turn-1:message:before',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'message',
+          text: '先看看这张图，再帮你修得更好看。'
+        },
+        {
+          nodeId: 'task-1:turn-1:tool:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'tool',
+          toolCallId: 'tool-1',
+          title: 'image_gen',
+          status: 'completed'
+        },
+        {
+          nodeId: 'task-1:turn-1:attachment:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'attachment',
+          attachmentId: 'attachment-1',
+          attachmentKind: 'image',
+          originalName: '1.jpg'
+        },
+        {
+          nodeId: 'task-1:turn-1:message:after',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'message',
+          text: '修好了，胡大帅：\n\nimages/1.jpg\n\n想再亮一点，直接说。'
+        }
+      ])
+    )
+
+    expect(blocks.map((block) => block.kind)).toEqual([
+      'user',
+      'message',
+      'tool',
+      'message',
+      'attachment',
+      'message'
+    ])
+    expect(blocks[1]).toMatchObject({ kind: 'message', text: '先看看这张图，再帮你修得更好看。' })
+    expect(blocks[3]).toMatchObject({ kind: 'message', text: '修好了，胡大帅：' })
+    expect(blocks[4]).toMatchObject({ kind: 'attachment', attachmentIds: ['attachment-1'] })
+    expect(blocks[5]).toMatchObject({ kind: 'message', text: '想再亮一点，直接说。' })
+  })
+
+  it('连续 Runtime 图片绑定同一条路径消息时合并展示且不丢失', () => {
+    const blocks = projectConversationTurn(
+      turn('completed', [
+        {
+          nodeId: 'task-1:turn-1:attachment:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'attachment',
+          attachmentId: 'attachment-1',
+          attachmentKind: 'image',
+          originalName: '1.jpg'
+        },
+        {
+          nodeId: 'task-1:turn-1:attachment:2',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'attachment',
+          attachmentId: 'attachment-2',
+          attachmentKind: 'image',
+          originalName: '2.jpg'
+        },
+        {
+          nodeId: 'task-1:turn-1:message:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'message',
+          text: '两张都好了：\n\nimages/1.jpg\n\n可以继续调整。'
+        }
+      ])
+    )
+
+    expect(blocks.filter((block) => block.kind === 'attachment')).toEqual([
+      expect.objectContaining({ attachmentIds: ['attachment-1', 'attachment-2'] })
+    ])
+  })
+
+  it('被工具节点分隔的图片组仍绑定到同一条路径消息', () => {
+    const blocks = projectConversationTurn(
+      turn('completed', [
+        {
+          nodeId: 'task-1:turn-1:attachment:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'attachment',
+          attachmentId: 'attachment-1',
+          attachmentKind: 'image',
+          originalName: '1.jpg'
+        },
+        {
+          nodeId: 'task-1:turn-1:tool:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'tool',
+          toolCallId: 'tool-1',
+          title: '读取图片',
+          status: 'completed'
+        },
+        {
+          nodeId: 'task-1:turn-1:attachment:2',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'attachment',
+          attachmentId: 'attachment-2',
+          attachmentKind: 'image',
+          originalName: '2.jpg'
+        },
+        {
+          nodeId: 'task-1:turn-1:message:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'message',
+          text: '都修好了：\n\nimages/2.jpg\n\n可以继续调整。'
+        }
+      ])
+    )
+
+    expect(blocks.filter((block) => block.kind === 'attachment')).toEqual([
+      expect.objectContaining({ attachmentIds: ['attachment-1'] }),
+      expect.objectContaining({ attachmentIds: ['attachment-2'] })
+    ])
+    expect(blocks.map((block) => block.kind)).toEqual([
+      'user',
+      'tool',
+      'message',
+      'attachment',
+      'attachment',
+      'message'
+    ])
+  })
 })
 
 describe('权限卡主按钮', () => {
