@@ -1,4 +1,5 @@
 import type { PublicAgentEvent } from './agent-event'
+import type { ArtifactContent, ArtifactDescriptor } from './artifact'
 import type { TaskAttachmentDescriptor } from './task-attachment'
 import type {
   CommandEvidencePage,
@@ -41,6 +42,8 @@ export const TASK_INVOKE_CHANNELS = {
   listTurnCheckpoints: 'task:list-turn-checkpoints',
   previewLatestTurnRestore: 'task:preview-latest-turn-restore',
   restoreLatestTurn: 'task:restore-latest-turn',
+  listArtifacts: 'task:list-artifacts',
+  getArtifactContent: 'task:get-artifact-content',
   pickAttachments: 'task:pick-attachments',
   importDroppedPaths: 'task:import-dropped-paths',
   importClipboard: 'task:import-clipboard',
@@ -135,4 +138,9 @@ export interface TaskDesktopApi {
     taskId: string,
     path: string
   ) => Promise<DesktopIpcResult<TaskAttachmentPreview>>
+  listArtifacts: (taskId: string) => Promise<DesktopIpcResult<ArtifactDescriptor[]>>
+  getArtifactContent: (
+    taskId: string,
+    artifactId: string
+  ) => Promise<DesktopIpcResult<ArtifactContent>>
 }

@@ -58,9 +58,10 @@ describe('Inspector 开关与标签', () => {
     expect(resolveInspectorTab('changes')).toBe('changes')
   })
 
-  it('审核入口打开 Changes 工作区，其它标签不加宽', () => {
+  it('审核入口打开 Changes 工作区，产物标签同样加宽', () => {
     expect(openChangesReview()).toEqual({ open: true, tab: 'changes' })
     expect(inspectorReviewWorkspaceClass('changes')).toBe('is-review-workspace')
+    expect(inspectorReviewWorkspaceClass('artifacts')).toBe('is-review-workspace')
     expect(inspectorReviewWorkspaceClass('timeline')).toBe('')
     expect(WORKSPACE_INSPECTOR_PLACEMENT).toBe('overlay')
   })
@@ -134,11 +135,12 @@ describe('Inspector 开关与标签', () => {
 })
 
 describe('Inspector 占位文案', () => {
-  it('Changes 已实现，无 Task 时只提示选择；Artifacts 仍指向 P0-13', () => {
+  it('Changes 和 Artifacts 已实现，无 Task 时只提示选择', () => {
     expect(inspectorPlaceholderCopy('changes').heading).toBe('选择一个 Task')
     expect(inspectorPlaceholderCopy('changes').heading).not.toMatch(/尚未实现/)
     expect(inspectorPlaceholderCopy('changes').detail).toMatch(/变更|审阅/)
-    expect(inspectorPlaceholderCopy('artifacts').heading).toBe('尚未实现 · P0-13')
+    expect(inspectorPlaceholderCopy('artifacts').heading).toBe('选择一个 Task')
+    expect(inspectorPlaceholderCopy('artifacts').detail).toMatch(/Markdown|图片|Diff/)
   })
 
   it('Terminal 标明 P0-15 用户交互终端，不把命令证据缺失写成终端未接入', () => {
@@ -155,7 +157,7 @@ describe('Inspector 占位文案', () => {
     expect(WORKSPACE_INSPECTOR_PLACEMENT).toBe('overlay')
     expect(inspectorPlaceholderCopy('changes').heading).toBe('选择一个 Task')
     expect(inspectorPlaceholderCopy('terminal').heading).toContain('P0-15')
-    expect(inspectorPlaceholderCopy('artifacts').heading).toContain('P0-13')
+    expect(inspectorPlaceholderCopy('artifacts').heading).toBe('选择一个 Task')
 
     expect(projectInspectorTimelineSummary(null)).toMatchObject({
       empty: true,

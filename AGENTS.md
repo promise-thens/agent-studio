@@ -255,13 +255,13 @@ git diff --check
 
 > 本节只记录当前任务快照；详细步骤和验证证据以对应实施计划为准。
 
-- 当前计划：[P0-18 Task 附件柜与对话媒体](docs/superpowers/plans/p0-18-task-attachment-inbox.md) P0/P1 已落地：Task inbox（不进 Git）、选文件/拖放/Finder 剪贴板、startTurn 附件、ACP Image/Resource、Runtime Image 入库、用户/助手气泡媒体、ChangeSet 图片/PDF 预览、admission 失败 draft 回滚。P0-14 Worktree 不在本期。
-- 状态：桌面定位为 Grok Build ACP Client，不自己当 Agent。设置现为供应商 / 外观 / 记忆 / Grok 配置；插件页三栏为插件 / MCP / 技能，插件 tab 内分已安装 / 市场，不得打断运行中 Task。Inspector 仍是 Timeline/Changes/Terminal/Artifacts；Changes 打开时加宽为审阅工作区。P2 Codex 暂缓
-- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；库存扫描已补 `installed-plugins`；P0-10D 代码已落地（相关自动测试已过，开发版 GUI / TUI 对读未跑）；P0-10E 代码已落地（自动验证已过；already-configured 加源已修，开发版 GUI / 安装走查未跑）；P0-11 Task 1–4 已合入 main（自动验证已过，开发版 GUI 走查未跑）；P0-12 Task 1–4 代码已落地；P0-12A 两层审阅代码已落地（聚焦测试 + typecheck 已过，开发版 GUI 走查未跑）；P0-18 P0/P1 代码与关键 GUI 主路径已落地
+- 当前计划：[P0-13 基础 Task Artifact Registry 与 Viewer](docs/superpowers/plans/p0-13-task-artifact-registry-viewer.md) 代码已落地：opaque artifactId、Local 注册校验、文本/Markdown/图片/Diff 内容服务、Inspector 产物面板。P0-14 Worktree 不在本期。
+- 状态：桌面定位为 Grok Build ACP Client，不自己当 Agent。设置现为供应商 / 外观 / 记忆 / Grok 配置；插件页三栏为插件 / MCP / 技能，插件 tab 内分已安装 / 市场，不得打断运行中 Task。Inspector 仍是 Timeline/Changes/Terminal/Artifacts；Changes 与 Artifacts 打开时加宽为审阅工作区。P2 Codex 暂缓
+- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；库存扫描已补 `installed-plugins`；P0-10D 代码已落地（相关自动测试已过，开发版 GUI / TUI 对读未跑）；P0-10E 代码已落地（自动验证已过；already-configured 加源已修，开发版 GUI / 安装走查未跑）；P0-11 Task 1–4 已合入 main（自动验证已过，开发版 GUI 走查未跑）；P0-12 Task 1–4 代码已落地；P0-12A 两层审阅代码已落地（聚焦测试 + typecheck 已过，开发版 GUI 走查未跑）；P0-18 P0/P1 代码与关键 GUI 主路径已落地；P0-13 代码已落地（自动测试 + typecheck 已过，开发版 GUI 走查未跑）
 - Grok ACP 加深：顺序仍为 GACP-01 → GACP-02 → P0-10 → P0-10C/D → P0-10E → P0-11 → GACP-03。`available_commands_update` 现为 session 快照，不进 Timeline。命令证据走 `task:list-command-evidence` 等只读查询，不进交互终端。变更审阅走 `task:get-change-set` / `task:get-file-diff` / `task:list-turn-checkpoints`；撤销走 `task:preview-latest-turn-restore` / `task:restore-latest-turn`
 - 兼容边界：首版仍只有一个执行槽；GROK_HOME 仍是 App 目录；记忆整棵树 junction 到 `~/.grok/memory`；用户 toml 只允许合并/删除 `[mcp_servers.*]`；`clientCapabilities: {}`；不把桌面做成 MCP Host 或 Marketplace Host。自动撤销仅 latest-turn 且无漂移；检查点只存哈希，禁止 git reset/checkout
-- 下一步：P0-18 剩余见 [计划未完成](docs/superpowers/plans/p0-18-task-attachment-inbox.md)（Finder 文件复制、真实拖放、Runtime 实际出图、ChangeSet 真实媒体、附件 e2e）。完成后再进入 P0-13。同步走查 P0-12A。不要加回「继续任务」按钮
-- 最近验证：2026-08-25 P0-18 多模态主链。开发版确认截图粘贴、仅附件发送、用户气泡预览、Runtime 识图；CSP 预览修复后 DOM 图片均为受限 `data:image/jpeg` 且成功解码。全量自动验证见计划；受控 e2e 未重跑
+- 下一步：走查 P0-13 Inspector 产物面板（文本/Markdown/图片/Diff、恶意 Markdown、源文件变化）。完成后进入 P0-14。不要加回「继续任务」按钮
+- 最近验证：2026-08-28 P0-13 Artifact Registry。聚焦 Vitest + `pnpm typecheck` 已过；开发版 GUI 四类产物走查未跑
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

@@ -44,15 +44,15 @@
 **前置依赖：**
 - P0-06 的 Task/Turn/Local Environment 身份和 P0-12 的 Diff 引用已稳定。
 
-- [ ] **第 1 步: 定义描述符**
+- [x] **第 1 步: 定义描述符**
 说明：包含 artifactId、projectId、taskId、turnId、kind、title、mimeType、source、environmentId、受限相对路径或 diffRef、size、contentHash、createdAt、trustLevel、availability 和 revision。
 预期：描述符足以审阅和重新验证，不包含 Provider Secret、任意 URL 凭据、原始绝对路径或文件内容。
 
-- [ ] **第 2 步: 实现候选注册校验**
+- [x] **第 2 步: 实现候选注册校验**
 说明：从 TaskStore 解析 Local execution root 和真实路径，拒绝符号链接逃逸、目录、设备文件、超限内容和扩展/MIME 冲突；生成不可预测 artifactId。
 预期：同文件新内容生成新 revision/hash，Renderer 不能用相对路径或 artifactId 猜测读取其它文件。
 
-- [ ] **第 3 步: 关联 TaskStore 与历史**
+- [x] **第 3 步: 关联 TaskStore 与历史**
 说明：Task 历史只保存 ArtifactDescriptor 和受限引用；删除历史记录不删除项目文件。重启后重新验证 source path/hash 并更新 availability。
 预期：Artifact 列表可恢复，源文件消失或变化时保留元数据并显示 missing/changed，而不是继续显示旧可信状态。
 
@@ -67,15 +67,15 @@
 **前置依赖：**
 - 依赖任务 1 的注册表。
 
-- [ ] **第 1 步: 提供文本与 Markdown 内容**
+- [x] **第 1 步: 提供文本与 Markdown 内容**
 说明：按 artifactId 读取有限 UTF-8 文本，检测二进制、BOM 和编码异常；Markdown 统一净化，禁用脚本、事件属性、危险 URL 和任意内联对象。
 预期：超长或异常内容返回截断/unsupported 状态，错误不泄漏其它路径。
 
-- [ ] **第 2 步: 提供受限图片**
+- [x] **第 2 步: 提供受限图片**
 说明：只允许经签名/MIME 验证的 PNG、JPEG、WebP、GIF，读取前检查字节和像素上限；SVG、伪装扩展、损坏和超大图片安全降级。
 预期：Renderer 获得有限 blob/data，而不是 file URL 或任意磁盘路径。
 
-- [ ] **第 3 步: 复用 P0-12 Diff**
+- [x] **第 3 步: 复用 P0-12 Diff**
 说明：Diff Artifact 仅保存 TaskChangeSet/file diff 引用，查询时继续由 P0-12 校验 taskId、environmentId、路径、归因和截断状态。
 预期：Artifact 与 Changes 面板看到同一 Diff 事实，不会出现两套基线或归因结果。
 
@@ -90,15 +90,15 @@
 **前置依赖：**
 - 依赖任务 1、任务 2。
 
-- [ ] **第 1 步: 读取前重新验证**
+- [x] **第 1 步: 读取前重新验证**
 说明：每次打开比较 projectId、taskId、environmentId、真实路径、kind、size 和 contentHash；文件变化后更新 revision/availability，不复用旧可信缓存。
 预期：外部编辑、删除、替换为符号链接和权限变化立即降级，不返回旧内容冒充当前结果。
 
-- [ ] **第 2 步: 实现有界缓存**
+- [x] **第 2 步: 实现有界缓存**
 说明：缓存键包含 artifactId/revision/hash，按总字节和最近使用淘汰；Markdown 净化结果与原内容 hash 绑定，图片 blob 关闭 Viewer 后可释放。
 预期：连续切换 Artifact 不串内容，大文件不会长期占用主进程或 Renderer 内存。
 
-- [ ] **第 3 步: 固定 Local 首次验收边界**
+- [x] **第 3 步: 固定 Local 首次验收边界**
 说明：覆盖 Local 文件存在、变化、删除、项目移动/权限变化和应用重启；Worktree availability 与清理影响在 P0-14 接入后追加集成回归，不在本计划提前伪造。
 预期：P0-13 可以独立在 Local 环境验收，且不会错误依赖尚未实现的 Worktree 生命周期。
 
@@ -113,11 +113,11 @@
 **前置依赖：**
 - 依赖任务 2、任务 3。
 
-- [ ] **第 1 步: 展示 Artifact 列表**
+- [x] **第 1 步: 展示 Artifact 列表**
 说明：按 Turn、类型和时间展示标题、来源、大小、trust、availability 和 revision；从 Timeline/ResultReview 可定位对应 Artifact。
 预期：用户知道每个产物由哪一轮生成，失效或变化不会继续显示为已验证。
 
-- [ ] **第 2 步: 实现类型化查看器**
+- [x] **第 2 步: 实现类型化查看器**
 说明：文本、Markdown、图片和 Diff 分别使用专用 Viewer，统一加载、空态、失败、截断和重新验证交互；未知类型只显示元数据，不提供任意路径输入框。
 预期：切换 Artifact 不串内容，键盘焦点和 `focus-visible` 保留，小窗口可以安全滚动。
 
@@ -127,8 +127,8 @@
 
 ## 验收标准
 
-- [ ] Artifact 通过 opaque artifactId 注册和读取，绑定 Project、Task、Turn 与 Local Execution Environment，Renderer 无法任意读盘。
-- [ ] 文本、Markdown、PNG/JPEG/WebP/GIF 图片和 Diff 均有明确类型、大小、净化、截断与失效策略；HTML 不在本计划实现。
-- [ ] Task 重启后可恢复 Artifact 元数据；源文件变化、删除、替换或权限变化不会继续显示旧可信内容。
-- [ ] Diff Artifact 复用 P0-12 的基线、归因和查询，不创建第二套 Git 事实源。
+- [x] Artifact 通过 opaque artifactId 注册和读取，绑定 Project、Task、Turn 与 Local Execution Environment，Renderer 无法任意读盘。
+- [x] 文本、Markdown、PNG/JPEG/WebP/GIF 图片和 Diff 均有明确类型、大小、净化、截断与失效策略；HTML 不在本计划实现。
+- [x] Task 重启后可恢复 Artifact 元数据；源文件变化、删除、替换或权限变化不会继续显示旧可信内容。
+- [x] Diff Artifact 复用 P0-12 的基线、归因和查询，不创建第二套 Git 事实源。
 - [ ] 目标 ESLint、相关 Vitest/组件与安全测试、`pnpm typecheck`、`pnpm build`、`git diff --check` 通过，并完成四类 Local Artifact 的 Electron 走查。

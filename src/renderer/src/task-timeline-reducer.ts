@@ -227,7 +227,11 @@ export interface TaskResultReviewModel {
     outcome?: ValidationOutcome
     reason?: string
   }
-  artifacts: { count: number; availability: 'unavailable' | 'not-observed'; reason?: string }
+  artifacts: {
+    count: number
+    availability: 'observed' | 'unavailable' | 'not-observed'
+    reason?: string
+  }
   commands: TimelineCommandEvidenceView[]
   warnings: string[]
 }
@@ -752,8 +756,7 @@ function selectTaskResultReview(
     artifacts: turnRecord?.artifactIds?.length
       ? {
           count: turnRecord.artifactIds.length,
-          availability: 'unavailable',
-          reason: 'Artifact 服务尚未接入。'
+          availability: 'observed'
         }
       : { count: 0, availability: 'not-observed' },
     commands: uniqueCommands,

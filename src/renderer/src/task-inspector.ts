@@ -34,7 +34,8 @@ export function openChangesReview(): { open: true; tab: 'changes' } {
 
 /** Changes 才加宽成审阅工作区；其它标签保持普通悬浮卡尺寸。 */
 export function inspectorReviewWorkspaceClass(tab: InspectorTab): string {
-  return resolveInspectorTab(tab) === 'changes' ? 'is-review-workspace' : ''
+  const resolved = resolveInspectorTab(tab)
+  return resolved === 'changes' || resolved === 'artifacts' ? 'is-review-workspace' : ''
 }
 
 export const INSPECTOR_CARD_MARGIN = 12
@@ -256,8 +257,8 @@ export function inspectorPlaceholderCopy(
     }
   }
   return {
-    heading: '尚未实现 · P0-13',
-    detail: 'Task Artifact 将挂在这个标签，不会再改顶层导航。'
+    heading: '选择一个 Task',
+    detail: '选中 Task 后可审阅文本、Markdown、图片和 Diff 产物。'
   }
 }
 

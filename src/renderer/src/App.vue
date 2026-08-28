@@ -45,6 +45,7 @@ import TaskConversation from './components/TaskConversation.vue'
 import TaskHeader from './components/TaskHeader.vue'
 import TaskInspector from './components/TaskInspector.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
+import { useTaskArtifacts } from './composables/useTaskArtifacts'
 import { useTaskChanges } from './composables/useTaskChanges'
 import { useTaskTimeline } from './composables/useTaskTimeline'
 import { createAttachmentPreviewUrl } from './attachment-preview-url'
@@ -229,6 +230,7 @@ const showInspector = ref(INSPECTOR_DEFAULT_OPEN)
 const inspectorTab = ref<InspectorTab>(INSPECTOR_DEFAULT_TAB)
 const inspectorToggleTitle = computed(() => inspectorToggleLabel(showInspector.value))
 const taskChanges = useTaskChanges(() => activeTaskId.value)
+const taskArtifacts = useTaskArtifacts(() => activeTaskId.value)
 const changeCard = computed(() => presentChangeCard(taskChanges.changeSet.value))
 const restoreBusy = taskChanges.restoreBusy
 
@@ -1858,6 +1860,7 @@ function scrollMessagesToBottom(): void {
         :loading-more-permission-audits="taskHistory.loadingMorePermissionAudits.value"
         :show-permission-audits="activeTaskView?.mode === 'history'"
         :changes-controller="taskChanges"
+        :artifacts-controller="taskArtifacts"
         @close="showInspector = false"
         @update:active-tab="inspectorTab = $event"
         @load-more-permission-audits="taskHistory.loadMorePermissionAudits"

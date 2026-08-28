@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { PhArrowsIn as ArrowsIn, PhArrowsOut as ArrowsOut, PhX as X } from '@phosphor-icons/vue'
 import type { PermissionAuditRecord } from '../../../shared/task-history'
 import type { TaskTimelineViewModel } from '../task-timeline-reducer'
+import type { TaskArtifactsController } from '../composables/useTaskArtifacts'
 import type { TaskChangesController } from '../composables/useTaskChanges'
 import {
   INSPECTOR_CARD_MARGIN,
@@ -22,6 +23,7 @@ import {
   type InspectorCardRect,
   type InspectorTab
 } from '../task-inspector'
+import TaskArtifactsPanel from './TaskArtifactsPanel.vue'
 import TaskChangesPanel from './TaskChangesPanel.vue'
 
 const props = withDefaults(
@@ -36,6 +38,7 @@ const props = withDefaults(
     loadingMorePermissionAudits?: boolean
     showPermissionAudits?: boolean
     changesController?: TaskChangesController | null
+    artifactsController?: TaskArtifactsController | null
   }>(),
   {
     taskId: '',
@@ -44,7 +47,8 @@ const props = withDefaults(
     permissionAuditCursor: null,
     loadingMorePermissionAudits: false,
     showPermissionAudits: false,
-    changesController: null
+    changesController: null,
+    artifactsController: null
   }
 )
 
@@ -58,9 +62,15 @@ const currentTab = computed(() => resolveInspectorTab(props.activeTab))
 const showChangesPanel = computed(
   () => currentTab.value === 'changes' && Boolean(props.taskId) && Boolean(props.changesController)
 )
+const showArtifactsPanel = computed(
+  () =>
+    currentTab.value === 'artifacts' && Boolean(props.taskId) && Boolean(props.artifactsController)
+)
 const reviewWorkspaceClass = computed(() => inspectorReviewWorkspaceClass(currentTab.value))
 const placeholder = computed(() => {
-  if (currentTab.value === 'timeline' || showChangesPanel.value) return null
+  if (currentTab.value === 'timeline' || showChangesPanel.value || showArtifactsPanel.value) {
+    return null
+  }
   return inspectorPlaceholderCopy(currentTab.value)
 })
 const timelineSummary = computed(() => projectInspectorTimelineSummary(props.timeline))
@@ -425,6 +435,12 @@ function onTabListKeydown(event: KeyboardEvent): void {
         v-else-if="showChangesPanel && changesController"
         :task-id="taskId"
         :controller="changesController"
+      />
+
+      <TaskArtifactsPanel
+        v-else-if="showArtifactsPanel && artifactsController"
+        :task-id="taskId"
+        :controller="artifactsController"
       />
 
       <div v-else class="inspector-placeholder" role="status">

@@ -77,6 +77,8 @@ describe('桌面 IPC 静态契约', () => {
       'task:list-turn-checkpoints',
       'task:preview-latest-turn-restore',
       'task:restore-latest-turn',
+      'task:list-artifacts',
+      'task:get-artifact-content',
       'task:pick-attachments',
       'task:import-dropped-paths',
       'task:import-clipboard',

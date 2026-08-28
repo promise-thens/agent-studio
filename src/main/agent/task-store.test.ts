@@ -1167,6 +1167,29 @@ describe('TaskStore', () => {
     expect((await store.listTurns('task-1')).items[0]?.validationIds).toBeUndefined()
   })
 
+  it('给已有 Turn 覆盖绑定 artifactIds，并经 listTurns 往返', async () => {
+    const { store } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '写文档',
+      model: { modelId: 'model-1' }
+    })
+
+    const attached = await store.attachTurnArtifactIds('task-1', 'turn-1', ['art-1', 'art-2'])
+    expect(attached).toMatchObject({
+      turnId: 'turn-1',
+      artifactIds: ['art-1', 'art-2']
+    })
+    expect((await store.listTurns('task-1')).items[0]?.artifactIds).toEqual(['art-1', 'art-2'])
+
+    const cleared = await store.attachTurnArtifactIds('task-1', 'turn-1', [])
+    expect(cleared.artifactIds).toBeUndefined()
+    await expect(
+      store.attachTurnArtifactIds('task-1', 'turn-1', ['bad/id'])
+    ).rejects.toMatchObject({ code: 'invalid-state' })
+  })
+
   it('读盘仍接受历史里未校验的 validationIds 字符串数组，不把旧 Turn 标坏', async () => {
     const { store, registry, project } = await createStore()
     await store.createTurn({

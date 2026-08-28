@@ -60,7 +60,7 @@
 
 | 开发顺序 | 计划  | 权重 | 功能                                                                            | 状态   | 前置依赖    |
 | -------: | ----- | ---: | ------------------------------------------------------------------------------- | ------ | ----------- |
-|        1 | P0-13 |    4 | [基础 Task Artifact Registry 与 Viewer](p0-13-task-artifact-registry-viewer.md) | 待开始 | P0-A        |
+|        1 | P0-13 |    4 | [基础 Task Artifact Registry 与 Viewer](p0-13-task-artifact-registry-viewer.md) | 代码已落地；自动测试 + typecheck 已过（GUI 未跑） | P0-A        |
 |        2 | P0-14 |    5 | [隔离 Task Worktree 与结果交付](p0-14-isolated-task-worktree.md)                | 待开始 | P0-A、P0-13 |
 
 #### P0-B 验收门

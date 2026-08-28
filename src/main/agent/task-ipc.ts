@@ -23,6 +23,8 @@ import type {
 } from '../../shared/git-review'
 import type { PublicAgentEventPage } from '../../shared/task-ipc'
 import { TASK_INVOKE_CHANNELS } from '../../shared/task-ipc'
+import type { ArtifactContentService } from '../artifact/artifact-content-service'
+import { ArtifactRegistryError, type ArtifactRegistry } from '../artifact/artifact-registry'
 import { registerTaskAttachmentIpcHandlers } from './task-attachment-ipc'
 import type { TaskAttachmentInbox } from './task-attachment-inbox'
 import type { CommandEvidenceStore } from '../command/command-evidence-store'
@@ -83,6 +85,8 @@ export interface TaskIpcDependencies {
     taskId: string,
     path: string
   ) => Promise<import('../../shared/task-ipc').TaskAttachmentPreview>
+  getArtifactRegistry?: () => ArtifactRegistry | null
+  getArtifactContent?: () => ArtifactContentService | null
 }
 
 function requireHistory(getHistory: TaskIpcDependencies['getHistory']): TaskHistoryIpcRuntime {
@@ -339,6 +343,50 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
     return requireGitReview(dependencies.getGitReview).restoreLatestTurn(taskId)
   })
 
+  /**
+   * 列出当前 Task 的 Artifact 描述符。先从 Git Review 同步候选，再重新验证可用性。
+   * Renderer 只拿 opaque artifactId，不得提交相对路径。
+   */
+  register(TASK_INVOKE_CHANNELS.listArtifacts, async (args) => {
+    const request = readRequest(args, ['taskId'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    requireExistingTask(dependencies.getHistory, taskId)
+    const registry = requireArtifactRegistry(dependencies.getArtifactRegistry)
+    try {
+      const changeSet = await requireGitReview(dependencies.getGitReview).getChangeSet(taskId)
+      await registry.syncFromChangeSet(taskId, changeSet)
+    } catch {
+      // 变更集不可用时仍返回已持久化产物，避免 Git 失败把整个产物页打空。
+    }
+    try {
+      return await registry.list(taskId)
+    } catch (error) {
+      throw wrapArtifactError(error)
+    }
+  })
+
+  /**
+   * 按 artifactId 读取有限内容。主进程每次重新校验 Task、路径和哈希。
+   */
+  register(TASK_INVOKE_CHANNELS.getArtifactContent, async (args) => {
+    const request = readRequest(args, ['taskId', 'artifactId'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    const artifactId = readCommandIdentity(request, 'artifactId')
+    requireExistingTask(dependencies.getHistory, taskId)
+    try {
+      const content = await requireArtifactContent(dependencies.getArtifactContent).getContent(
+        taskId,
+        artifactId
+      )
+      if (content.descriptor.taskId !== taskId || content.descriptor.artifactId !== artifactId) {
+        throw new DesktopIpcFailure('not-found', '未找到该 Artifact。')
+      }
+      return content
+    } catch (error) {
+      throw wrapArtifactError(error)
+    }
+  })
+
   registerTaskAttachmentIpcHandlers({
     ipcMain: dependencies.ipcMain,
     assertTrustedSender: dependencies.assertTrustedSender,
@@ -348,6 +396,36 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
     readClipboard: () => dependencies.readClipboard?.() ?? Promise.resolve([]),
     getChangeMediaPreview: dependencies.getChangeMediaPreview
   })
+}
+
+function wrapArtifactError(error: unknown): never {
+  if (error instanceof DesktopIpcFailure) throw error
+  if (error instanceof ArtifactRegistryError) {
+    const code =
+      error.code === 'not-found'
+        ? 'not-found'
+        : error.code === 'too-large'
+          ? 'payload-too-large'
+          : 'invalid-input'
+    throw new DesktopIpcFailure(code, error.message)
+  }
+  throw error
+}
+
+function requireArtifactRegistry(
+  getRegistry: TaskIpcDependencies['getArtifactRegistry']
+): ArtifactRegistry {
+  const registry = getRegistry?.() ?? null
+  if (!registry) throw new DesktopIpcFailure('runtime-unavailable', 'Artifact 服务尚未初始化。')
+  return registry
+}
+
+function requireArtifactContent(
+  getContent: TaskIpcDependencies['getArtifactContent']
+): ArtifactContentService {
+  const service = getContent?.() ?? null
+  if (!service) throw new DesktopIpcFailure('runtime-unavailable', 'Artifact 内容服务尚未初始化。')
+  return service
 }
 
 function requireGitReview(getGitReview: TaskIpcDependencies['getGitReview']): {

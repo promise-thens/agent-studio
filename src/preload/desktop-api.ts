@@ -60,6 +60,12 @@ import {
   parseTaskChangeSetQueryResult,
   parseTurnChangeCheckpointList
 } from '../shared/git-review'
+import {
+  parseArtifactContent,
+  parseArtifactDescriptor,
+  type ArtifactContent,
+  type ArtifactDescriptor
+} from '../shared/artifact'
 import { TASK_INVOKE_CHANNELS, type TaskDesktopApi } from '../shared/task-ipc'
 import { ATTACHMENT_LIMITS } from '../shared/task-attachment'
 
@@ -1115,7 +1121,38 @@ export function createTaskDesktopApi(
       ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getChangeMediaPreview, {
         taskId,
         path
-      }) as ReturnType<TaskDesktopApi['getChangeMediaPreview']>
+      }) as ReturnType<TaskDesktopApi['getChangeMediaPreview']>,
+    listArtifacts: async (taskId) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.listArtifacts, {
+        taskId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      if (!Array.isArray(result.value)) {
+        return { ok: false, error: { code: 'operation-failed', message: '产物列表无效。' } }
+      }
+      const items: ArtifactDescriptor[] = []
+      for (const item of result.value) {
+        const parsed = parseArtifactDescriptor(item)
+        if (parsed && parsed.taskId === taskId) items.push(parsed)
+      }
+      return { ok: true, value: items }
+    },
+    getArtifactContent: async (taskId, artifactId) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getArtifactContent, {
+        taskId,
+        artifactId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const parsed = parseArtifactContent(result.value)
+      if (
+        !parsed ||
+        parsed.descriptor.taskId !== taskId ||
+        parsed.descriptor.artifactId !== artifactId
+      ) {
+        return { ok: false, error: { code: 'operation-failed', message: '产物内容无效。' } }
+      }
+      return { ok: true, value: parsed as ArtifactContent }
+    }
   }
 }
 

@@ -2246,7 +2246,8 @@ button:disabled {
   padding: 0;
 }
 
-.task-inspector.is-review-workspace .inspector-body > .task-changes-panel {
+.task-inspector.is-review-workspace .inspector-body > .task-changes-panel,
+.task-inspector.is-review-workspace .inspector-body > .task-artifacts-panel {
   flex: 1;
   min-height: 0;
   height: 100%;
@@ -2324,7 +2325,8 @@ button:disabled {
 }
 
 .inspector-body > .execution-timeline,
-.inspector-body > .task-changes-panel {
+.inspector-body > .task-changes-panel,
+.inspector-body > .task-artifacts-panel {
   width: 100%;
   margin: 0;
   padding: 4px 4px 16px;
@@ -3421,4 +3423,221 @@ button:disabled {
     animation: none;
     animation-duration: 0s;
   }
+}
+
+/* 产物审阅区采用轻量索引 + 独立阅读画布，避免列表卡片和正文互相抢层级。 */
+.task-artifacts-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+
+.task-artifacts-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 2px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.task-artifacts-toolbar > div {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.task-artifacts-toolbar strong {
+  color: var(--text-1);
+  font-size: 15px;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+}
+
+.task-artifacts-toolbar span {
+  color: var(--text-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-artifacts-layout {
+  display: grid;
+  grid-template-columns: minmax(196px, 236px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+  flex: 1;
+}
+
+.task-artifacts-list {
+  min-width: 0;
+  overflow: auto;
+  border-right: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  padding: 0 14px 8px 2px;
+  scrollbar-color: color-mix(in srgb, var(--border-strong) 64%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.task-artifacts-group {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 18px;
+}
+
+.task-artifacts-group h3 {
+  min-width: 0;
+  margin: 0 0 6px;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.task-artifact-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-height: 58px;
+  padding: 9px 10px 9px 12px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 8px;
+  color: var(--text-2);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.task-artifact-item:hover {
+  background: var(--hover-fill);
+}
+
+.task-artifact-item strong {
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-artifact-item span {
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.task-artifact-item[aria-pressed='true'] {
+  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--selected-fill));
+}
+
+.task-artifact-item[aria-pressed='true'] span {
+  color: color-mix(in srgb, var(--text-2) 84%, var(--accent));
+}
+
+.artifact-viewer {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 2px 16px;
+  scrollbar-color: color-mix(in srgb, var(--border-strong) 64%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.artifact-viewer-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  min-height: 38px;
+  margin-bottom: 12px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  color: var(--text-1);
+  background: var(--surface-1);
+  font-size: 14px;
+}
+
+.artifact-viewer-banner,
+.artifact-viewer-state {
+  margin: 0 0 12px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.artifact-text-body,
+.artifact-markdown-body {
+  margin: 0;
+  padding: 16px 18px 20px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 1.6;
+  user-select: text;
+}
+
+.artifact-markdown-body .assistant-markdown {
+  gap: 8px;
+  max-width: 78ch;
+  font-size: 13px;
+  line-height: 1.62;
+}
+
+.artifact-markdown-body .assistant-markdown h1 {
+  margin: 0 0 14px;
+  font-size: 22px;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+
+.artifact-markdown-body .assistant-markdown h2,
+.artifact-markdown-body .assistant-markdown h3 {
+  margin-top: 18px;
+  margin-bottom: 8px;
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.artifact-markdown-body .assistant-markdown p,
+.artifact-markdown-body .assistant-markdown ul,
+.artifact-markdown-body .assistant-markdown ol {
+  margin-block: 8px;
+}
+
+.artifact-image {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-0);
+  object-fit: contain;
+}
+
+/* 覆盖审阅工作区的通用内边距，让产物双栏保持统一边界且不产生多层留白。 */
+.task-inspector.is-review-workspace .inspector-body > .task-artifacts-panel {
+  padding: 0 12px 12px;
+}
+
+/* Markdown 由右侧阅读区统一滚动，避免正文块再嵌套一条滚动条。 */
+.artifact-markdown-body {
+  overflow: visible;
 }

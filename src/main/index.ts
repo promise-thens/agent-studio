@@ -34,6 +34,8 @@ import { registerTaskIpcHandlers } from './agent/task-ipc'
 import { TaskStore } from './agent/task-store'
 import { TaskAttachmentInbox } from './agent/task-attachment-inbox'
 import { TaskChangeMediaPreviewService } from './agent/task-change-media-preview'
+import { ArtifactRegistry } from './artifact/artifact-registry'
+import { ArtifactContentService } from './artifact/artifact-content-service'
 import { parseClipboardFilePaths } from './agent/clipboard-file-paths'
 import { ATTACHMENT_LIMITS } from '../shared/task-attachment'
 import { OperationGate, type OperationLease } from './agent/operation-gate'
@@ -123,6 +125,8 @@ let mcpServerStore: McpServerStore | null = null
 let commandEvidenceStore: CommandEvidenceStore | null = null
 /** 与 commandEvidenceStore 一样提升到模块作用域，供 registerIpcHandlers 闭包读取。 */
 let gitReviewService: GitReviewService | null = null
+let artifactRegistry: ArtifactRegistry | null = null
+let artifactContentService: ArtifactContentService | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -374,6 +378,32 @@ async function initializeServices(
     broker: permissionBroker ?? undefined
   })
   gitReviewService = reviewService
+  const probeImagePixels = (bytes: Buffer): { width: number; height: number } | null => {
+    const image = nativeImage.createFromBuffer(bytes)
+    if (image.isEmpty()) return null
+    return image.getSize()
+  }
+  artifactRegistry = new ArtifactRegistry({
+    getTaskContext: (taskId) => {
+      const task = requireTaskStore().getTaskRecord(taskId)
+      return {
+        projectId: task.projectId,
+        taskId: task.taskId,
+        environmentId: task.environment.environmentId,
+        executionRoot: task.environment.rootSnapshot,
+        lastTurnId: task.lastTurnId,
+        taskDirectory: requireTaskStore().getTaskFilesystemRoot(taskId)
+      }
+    },
+    attachTurnArtifactIds: (taskId, turnId, artifactIds) =>
+      requireTaskStore().attachTurnArtifactIds(taskId, turnId, artifactIds),
+    probeImagePixels
+  })
+  artifactContentService = new ArtifactContentService({
+    registry: artifactRegistry,
+    getFileDiff: (taskId, path) => reviewService.getFileDiff(taskId, path),
+    probeImagePixels
+  })
   taskChangeMediaPreviewService = new TaskChangeMediaPreviewService({
     getChangeSet: (taskId) => reviewService.getChangeSet(taskId),
     getExecutionRoot: (taskId) => {
@@ -784,6 +814,8 @@ function registerIpcHandlers(): void {
     readClipboard: readClipboardAttachments,
     getChangeMediaPreview: (taskId, path) =>
       requireTaskChangeMediaPreviewService().getPreview(taskId, path),
+    getArtifactRegistry: () => artifactRegistry,
+    getArtifactContent: () => artifactContentService,
     getHistory: () => {
       const store = taskStore
       const service = agentService

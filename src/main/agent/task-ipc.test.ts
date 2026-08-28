@@ -180,12 +180,61 @@ function createFixture(
       message: '当前不能自动撤销。'
     }))
   }
+  const artifactRegistry = {
+    list: vi.fn(async (taskId: string) => [
+      {
+        artifactId: 'art-1',
+        projectId: 'project-1',
+        taskId,
+        turnId: 'turn-1',
+        kind: 'markdown' as const,
+        title: 'README.md',
+        mimeType: 'text/markdown',
+        source: 'git-review' as const,
+        environmentId: 'local:env',
+        location: { kind: 'file' as const, relativePath: 'README.md' },
+        size: 12,
+        contentHash: 'abc',
+        createdAt: '2026-08-28T00:00:00.000Z',
+        trustLevel: 'verified' as const,
+        availability: 'ready' as const,
+        revision: 1
+      }
+    ]),
+    syncFromChangeSet: vi.fn(async () => undefined)
+  }
+  const artifactContent = {
+    getContent: vi.fn(async (taskId: string, artifactId: string) => ({
+      kind: 'markdown' as const,
+      markdown: '# hi',
+      descriptor: {
+        artifactId,
+        projectId: 'project-1',
+        taskId,
+        turnId: 'turn-1',
+        kind: 'markdown' as const,
+        title: 'README.md',
+        mimeType: 'text/markdown',
+        source: 'git-review' as const,
+        environmentId: 'local:env',
+        location: { kind: 'file' as const, relativePath: 'README.md' },
+        size: 12,
+        contentHash: 'abc',
+        createdAt: '2026-08-28T00:00:00.000Z',
+        trustLevel: 'verified' as const,
+        availability: 'ready' as const,
+        revision: 1
+      }
+    }))
+  }
   registerTaskIpcHandlers({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     assertTrustedSender,
     getHistory: () => (historyAvailable ? history : null),
     getCommandEvidenceStore: () => (commandStoreAvailable ? commandStore : null),
     getGitReview: () => gitReview,
+    getArtifactRegistry: () => artifactRegistry as never,
+    getArtifactContent: () => artifactContent as never,
     sanitizeError: (error) => (error instanceof Error ? error.message : String(error))
   })
   return {
@@ -532,6 +581,31 @@ describe('Task 变更审阅只读 IPC', () => {
       value: { status: 'escaped', path: '../outside' }
     })
     expect(JSON.stringify(escaped)).not.toContain('/etc/')
+  })
+
+  it('Artifact IPC 只接受 taskId/artifactId，列表不含绝对路径', async () => {
+    const fixture = createFixture()
+    const listed = await fixture.invoke(TASK_INVOKE_CHANNELS.listArtifacts, { taskId: 'task-1' })
+    expect(listed).toMatchObject({
+      ok: true,
+      value: [{ artifactId: 'art-1', location: { relativePath: 'README.md' } }]
+    })
+    expect(JSON.stringify(listed)).not.toContain('/Users/')
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.listArtifacts, {
+        taskId: 'task-1',
+        relativePath: 'README.md'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+
+    const content = await fixture.invoke(TASK_INVOKE_CHANNELS.getArtifactContent, {
+      taskId: 'task-1',
+      artifactId: 'art-1'
+    })
+    expect(content).toMatchObject({
+      ok: true,
+      value: { kind: 'markdown', markdown: '# hi' }
+    })
   })
 
   it('跨 Task 的 command/diff 当 not-found，拒绝额外字段', async () => {

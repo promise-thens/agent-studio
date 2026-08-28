@@ -48,6 +48,8 @@ const MAX_RECORD_BYTES = 1024 * 1024
 const DELETE_TOKEN_TTL_MS = 5 * 60 * 1000
 /** 单个 Turn 最多绑定的 validationId 数；只约束写入路径，避免历史膨胀。 */
 const MAX_TURN_VALIDATION_IDS = 32
+/** 单个 Turn 最多绑定的 artifactId 数；只约束写入路径。 */
+const MAX_TURN_ARTIFACT_IDS = 64
 
 export interface RuntimeCapabilityEvidenceV1 {
   resume: 'unsupported' | 'declared' | 'verified'
@@ -772,6 +774,56 @@ export class TaskStore {
         delete nextTurn.validationIds
       } else {
         nextTurn.validationIds = [...validationIds]
+      }
+      const nextTask: TaskRecordV1 = {
+        ...task,
+        updatedAt: this.now(),
+        revision: task.revision + 1
+      }
+      await this.writer.write(this.turnPath(task, turnId), nextTurn)
+      await this.writer.write(this.taskPath(task), nextTask)
+      this.tasks.set(taskId, nextTask)
+      return stripTurnSchema(nextTurn)
+    })
+  }
+
+  /**
+   * 给已有 Turn 覆盖绑定 artifactIds。
+   * 与 validationIds 一样只校验写入路径，读盘仍接受历史里未校验的可选数组。
+   */
+  async attachTurnArtifactIds(
+    taskId: string,
+    turnId: string,
+    artifactIds: string[]
+  ): Promise<TurnHistoryRecord> {
+    if (!isValidIdentifier(taskId) || !isValidIdentifier(turnId)) {
+      throw new TaskStoreError('invalid-state', 'Task 或 Turn 身份无效。')
+    }
+    if (!Array.isArray(artifactIds) || artifactIds.length > MAX_TURN_ARTIFACT_IDS) {
+      throw new TaskStoreError('invalid-state', 'artifactIds 无效。')
+    }
+    const seen = new Set<string>()
+    for (const artifactId of artifactIds) {
+      if (!isValidIdentifier(artifactId) || seen.has(artifactId)) {
+        throw new TaskStoreError('invalid-state', 'artifactIds 无效。')
+      }
+      seen.add(artifactId)
+    }
+
+    return this.enqueueTask(taskId, async () => {
+      const task = this.requireTask(taskId)
+      if (!(await pathExists(this.turnPath(task, turnId)))) {
+        throw new TaskStoreError('history-not-found', '未找到指定 Turn 历史。')
+      }
+      const turn = await this.readTurn(task, turnId)
+      const nextTurn: TurnRecordV1 = {
+        ...turn,
+        revision: turn.revision + 1
+      }
+      if (artifactIds.length === 0) {
+        delete nextTurn.artifactIds
+      } else {
+        nextTurn.artifactIds = [...artifactIds]
       }
       const nextTask: TaskRecordV1 = {
         ...task,
@@ -1842,6 +1894,15 @@ function parseTurnRecord(value: unknown): RecordParseResult<TurnRecordV1> {
       !Array.isArray(value.attachmentIds) ||
       value.attachmentIds.length > 8 ||
       value.attachmentIds.some((id) => typeof id !== 'string' || !isValidIdentifier(id))
+    ) {
+      return { kind: 'corrupt' }
+    }
+  }
+  if (value.artifactIds !== undefined) {
+    if (
+      !Array.isArray(value.artifactIds) ||
+      value.artifactIds.length > MAX_TURN_ARTIFACT_IDS ||
+      value.artifactIds.some((id) => typeof id !== 'string' || !isValidIdentifier(id))
     ) {
       return { kind: 'corrupt' }
     }

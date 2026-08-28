@@ -858,6 +858,91 @@ describe('窄 Preload API', () => {
     })
   })
 
+  it('Artifact API 丢掉绝对路径并拒绝混入 path 字段', async () => {
+    const ipcRenderer = createIpcRenderer()
+    const task = createTaskDesktopApi(ipcRenderer)
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: [
+        {
+          artifactId: 'art-1',
+          projectId: 'project-1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          kind: 'markdown',
+          title: 'README.md',
+          mimeType: 'text/markdown',
+          source: 'git-review',
+          environmentId: 'local:env',
+          location: { kind: 'file', relativePath: 'README.md' },
+          size: 12,
+          contentHash: 'abc',
+          createdAt: '2026-08-28T00:00:00.000Z',
+          trustLevel: 'verified',
+          availability: 'ready',
+          revision: 1,
+          path: '/Users/secret/README.md'
+        },
+        {
+          artifactId: 'art-2',
+          projectId: 'project-1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          kind: 'markdown',
+          title: 'README.md',
+          mimeType: 'text/markdown',
+          source: 'git-review',
+          environmentId: 'local:env',
+          location: { kind: 'file', relativePath: 'README.md' },
+          size: 12,
+          contentHash: 'abc',
+          createdAt: '2026-08-28T00:00:00.000Z',
+          trustLevel: 'verified',
+          availability: 'ready',
+          revision: 1
+        }
+      ]
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        kind: 'markdown',
+        markdown: '# hi',
+        descriptor: {
+          artifactId: 'art-2',
+          projectId: 'project-1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          kind: 'markdown',
+          title: 'README.md',
+          mimeType: 'text/markdown',
+          source: 'git-review',
+          environmentId: 'local:env',
+          location: { kind: 'file', relativePath: 'README.md' },
+          size: 12,
+          contentHash: 'abc',
+          createdAt: '2026-08-28T00:00:00.000Z',
+          trustLevel: 'verified',
+          availability: 'ready',
+          revision: 1
+        },
+        filePath: '/Users/secret/README.md'
+      }
+    })
+
+    const listed = await task.listArtifacts('task-1')
+    const content = await task.getArtifactContent('task-1', 'art-2')
+    expect(listed).toMatchObject({
+      ok: true,
+      value: [{ artifactId: 'art-2', location: { relativePath: 'README.md' } }]
+    })
+    expect(JSON.stringify(listed)).not.toContain('/Users/secret')
+    expect(content).toMatchObject({
+      ok: false,
+      error: { code: 'operation-failed' }
+    })
+  })
+
   it('恢复预览丢掉绝对路径和文件正文', async () => {
     const ipcRenderer = createIpcRenderer()
     const task = createTaskDesktopApi(ipcRenderer)
