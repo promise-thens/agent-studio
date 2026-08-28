@@ -302,7 +302,9 @@ export class PermissionBroker {
       return
     }
     if (response.decision === 'deny') {
-      await this.settlePending(pending, 'user-denied')
+      // 卡上列出了整批同类 path，拒绝必须收下同一 grantKey 的全部挂起项。
+      const cohort = this.collectMergeableCohort(pending)
+      await Promise.all(cohort.map((item) => this.settlePending(item, 'user-denied')))
       this.maybeDeliverQueueHead(response.taskId, response.turnId)
       return
     }
@@ -455,6 +457,10 @@ export class PermissionBroker {
     grantKey: string,
     options: AuthorizeOperationOptions
   ): Promise<PermissionAuthorizationResult<T>> {
+    // 准入与登记之间可能已完成本任务授权；推卡前再读一次，避免结算窗口再弹一张。
+    if (this.taskGrants.has(grantKey)) {
+      return this.executeAllowed(intent, execute, risk, 'grant-reused', 'task', options.isActive)
+    }
     const approvalId = this.allocateApprovalId()
     const expiresAtMs = this.now() + PERMISSION_APPROVAL_TTL_MS
     const approval = createApprovalRequest(
@@ -602,6 +608,8 @@ export class PermissionBroker {
           environmentId: pending.intent.environmentId,
           createdAt: new Date(this.now()).toISOString()
         })
+        // 结算窗口里新到的同类 waiting 立刻按 grant-reused 收掉，不要等队首执行完再弹卡。
+        this.reuseWaitingGrantHolders(pending.grantKey)
       }
       this.finishPending(pending, { ok: true, value, reason: 'user-allowed', scope })
     } catch {
@@ -643,6 +651,10 @@ export class PermissionBroker {
     if (this.hasBusyApproval(taskId, turnId)) return
     const head = this.getWaitingQueueHead(taskId, turnId)
     if (!head) return
+    if (this.taskGrants.has(head.grantKey)) {
+      void this.settlePendingAsGrantReused(head)
+      return
+    }
     this.rebuildMergedTargets(head)
     if (head.deliveredToUi) return
     head.deliveredToUi = true
@@ -765,6 +777,52 @@ export class PermissionBroker {
     }
     leader.approval.targets = values
     if (truncated) leader.approval.truncated = true
+  }
+
+  /**
+   * 本任务 grant 生效后，把同 key 仍在 waiting 的请求按 grant-reused 执行并收束。
+   * 已展示的卡要通知 Renderer 撤掉，避免用户对着一张已经自动过的卡点允许。
+   */
+  private reuseWaitingGrantHolders(grantKey: string): void {
+    for (const pending of this.pending.values()) {
+      if (pending.phase !== 'waiting' || pending.grantKey !== grantKey) continue
+      void this.settlePendingAsGrantReused(pending)
+    }
+  }
+
+  private settlePendingAsGrantReused(pending: PendingApproval): Promise<void> {
+    if (pending.phase === 'settled') return pending.settlement ?? Promise.resolve()
+    if (pending.phase !== 'waiting') return pending.settlement ?? Promise.resolve()
+    if (!this.taskGrants.has(pending.grantKey)) return Promise.resolve()
+
+    pending.phase = 'settling'
+    this.clearTimer(pending.timer)
+    if (pending.deliveredToUi && !pending.cancellationNotified) {
+      pending.cancellationNotified = true
+      try {
+        this.onApprovalCancelled?.({
+          approvalId: pending.approval.approvalId,
+          taskId: pending.approval.taskId,
+          turnId: pending.approval.turnId,
+          reason: 'cancelled'
+        })
+      } catch {
+        // Renderer 撤卡失败不能阻止主进程按已有 grant 执行。
+      }
+    }
+    const settlement = Promise.resolve().then(async () => {
+      const result = await this.executeAllowed(
+        pending.intent,
+        pending.execute,
+        pending.policyRisk,
+        'grant-reused',
+        'task',
+        pending.isActive
+      )
+      this.finishPending(pending, result)
+    })
+    pending.settlement = settlement
+    return settlement
   }
 
   private registerPending(pending: PendingApproval, insertAfterId?: string): void {

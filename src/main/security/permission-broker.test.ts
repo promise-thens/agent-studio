@@ -1074,6 +1074,116 @@ describe('PermissionBroker', () => {
     ).resolves.toMatchObject({ ok: true, value: 'write-8', reason: 'grant-reused' })
   })
 
+  it('allow-task 结算窗口内到达的同类 write 走 grant-reused，不再弹卡', async () => {
+    const fixture = createFixture()
+    const releaseExecute = deferred<void>()
+    const executing = deferred<void>()
+    const executes = Array.from({ length: 8 }, (_, index) =>
+      vi.fn(async () => {
+        executing.resolve()
+        await releaseExecute.promise
+        return `write-${index}`
+      })
+    )
+    const promises = executes.map((execute, index) =>
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('write-file'),
+          targets: [{ kind: 'path', value: `src/write-${index}.ts` }]
+        },
+        execute
+      )
+    )
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-1') === 8)
+    const cards = uniqueApprovals(fixture.approvals)
+    expect(cards).toHaveLength(1)
+
+    const respondPromise = fixture.broker.respond({
+      approvalId: cards[0]!.approvalId,
+      taskId: cards[0]!.taskId,
+      turnId: cards[0]!.turnId,
+      decision: 'allow-task'
+    })
+    await executing.promise
+
+    const ninthExecute = vi.fn(() => 'write-8')
+    const ninth = fixture.broker.authorizeOperation(
+      {
+        ...createIntent('write-file'),
+        targets: [{ kind: 'path', value: 'src/write-8.ts' }]
+      },
+      ninthExecute
+    )
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-1') === 9)
+    expect(uniqueApprovals(fixture.approvals)).toHaveLength(1)
+
+    releaseExecute.resolve()
+    await respondPromise
+    await expect(Promise.all(promises)).resolves.toEqual(
+      executes.map((_, index) => ({
+        ok: true,
+        value: `write-${index}`,
+        reason: 'user-allowed',
+        scope: 'task'
+      }))
+    )
+    await expect(ninth).resolves.toMatchObject({
+      ok: true,
+      value: 'write-8',
+      reason: 'grant-reused'
+    })
+    expect(ninthExecute).toHaveBeenCalledOnce()
+    expect(uniqueApprovals(fixture.approvals)).toHaveLength(1)
+    expect(fixture.broker.getPendingCount('task-1', 'turn-1')).toBe(0)
+  })
+
+  it('拒绝合并写文件卡会拒绝列出的全部同类 path，不影响其他 grantKey', async () => {
+    const fixture = createFixture()
+    const writeExecutes = Array.from({ length: 8 }, (_, index) => vi.fn(() => `write-${index}`))
+    const writePromises = writeExecutes.map((execute, index) =>
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('write-file'),
+          targets: [{ kind: 'path', value: `src/write-${index}.ts` }]
+        },
+        execute
+      )
+    )
+    const deleteExecute = vi.fn(() => 'deleted')
+    const deletePromise = fixture.broker.authorizeOperation(
+      {
+        ...createIntent('delete-path'),
+        targets: [{ kind: 'path', value: 'src/temp.ts' }]
+      },
+      deleteExecute
+    )
+
+    await waitUntil(() => fixture.broker.getPendingCount('task-1', 'turn-1') === 9)
+    const writeCard = uniqueApprovals(fixture.approvals)[0]!
+    expect(uniqueApprovals(fixture.approvals)).toHaveLength(1)
+    expect(writeCard.operationType).toBe('write-file')
+
+    await fixture.broker.respond({
+      approvalId: writeCard.approvalId,
+      taskId: writeCard.taskId,
+      turnId: writeCard.turnId,
+      decision: 'deny'
+    })
+    await expect(Promise.all(writePromises)).resolves.toEqual(
+      Array.from({ length: 8 }, () => ({ ok: false, reason: 'user-denied' }))
+    )
+    writeExecutes.forEach((execute) => expect(execute).not.toHaveBeenCalled())
+    expect(deleteExecute).not.toHaveBeenCalled()
+    expect(fixture.broker.getPendingCount('task-1', 'turn-1')).toBe(1)
+
+    const deleteCard = await waitForUniqueApproval(fixture.approvals, 1)
+    expect(deleteCard.operationType).toBe('delete-path')
+    expect(deleteCard.targets[0]).toBe('path: src/temp.ts')
+
+    await fixture.broker.shutdown()
+    await expect(deletePromise).resolves.toEqual({ ok: false, reason: 'cancelled' })
+  })
+
   it('合并写文件卡点 allow-once 只执行队首，其余继续排队且不得一起跑', async () => {
     const fixture = createFixture()
     const executes = Array.from({ length: 8 }, (_, index) => vi.fn(() => `write-${index}`))

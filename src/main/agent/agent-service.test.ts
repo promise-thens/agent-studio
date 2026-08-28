@@ -516,15 +516,17 @@ describe('AgentService Task / Turn 编排', () => {
           'src/first.ts'
         )
       )
-      fixture.service.handlePermissionRequest(
-        permissionRequest(
+      fixture.service.handlePermissionRequest({
+        ...permissionRequest(
           fixture.taskId,
           'turn-a1',
           'runtime-session-1',
           'runtime-request-second',
           'src/second.ts'
-        )
-      )
+        ),
+        operationType: 'delete-path',
+        parameterFingerprint: 'delete:runtime-request-second'
+      })
       const first = await waitForApproval(fixture.approvals, 0)
       await vi.waitFor(() =>
         expect(fixture.broker.getPendingCount(fixture.taskId, 'turn-a1')).toBe(2)
