@@ -230,6 +230,8 @@ describe('Inspector 占位文案', () => {
 
 describe('权限审计展示标签', () => {
   it('把已有审计字段翻成可读中文，不引入 Runtime 营销名', () => {
+    expect(permissionAuditReasonLabel('auto-allowed')).toBe('策略自动允许')
+    expect(permissionAuditReasonLabel('grant-reused')).toBe('复用当前 Task 授权')
     expect(permissionAuditReasonLabel('user-allowed')).toBe('用户允许')
     expect(permissionAuditScopeLabel('once')).toBe('仅本次')
     expect(permissionAuditScopeLabel(undefined)).toBe('未授予范围')

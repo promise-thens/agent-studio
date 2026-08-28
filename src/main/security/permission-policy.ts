@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { promises as fs } from 'node:fs'
+import { promises as fs, readdirSync, statSync } from 'node:fs'
 import { isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import {
   AGENT_OPERATION_TYPES,
@@ -28,7 +28,8 @@ const DEFAULT_RISK: Record<AgentOperationType, AgentPermissionRisk> = {
   'read-project': 'L0',
   'write-file': 'L1',
   'execute-command': 'L2',
-  'delete-path': 'L3',
+  // 项目内普通删文件/空目录与写文件同级；危险删除由 classifyDeleteGrant 升到 L3。
+  'delete-path': 'L1',
   'git-read': 'L0',
   'git-mutate': 'L2',
   'worktree-create': 'L2',
@@ -125,11 +126,16 @@ export function createLocalEnvironmentId(projectId: string, canonicalRoot: strin
 /**
  * 固定首期风险表。minimumRisk 只能升级，Runtime 或调用方不能用它降低默认风险。
  * Browser、Screen、Clipboard 在能力真正接入前直接拒绝。
+ * 未知 execute 与未知出网一样强制 L3，不能靠 mapper 漏标 minimumRisk 变成 Task 通行证。
  */
 export function evaluatePermissionPolicy(intent: OperationIntent): PermissionPolicyEvaluation {
   validateOperationIntent(intent)
   const defaultRisk = DEFAULT_RISK[intent.operationType]
-  const risk = maxRisk(defaultRisk, isDangerousGitMutation(intent) ? 'L3' : intent.minimumRisk)
+  const forceHighRisk =
+    isDangerousGitMutation(intent) ||
+    isUnknownExecuteCommand(intent) ||
+    (intent.operationType === 'delete-path' && classifyDeleteGrant(intent) === 'dangerous-exact')
+  const risk = maxRisk(defaultRisk, forceHighRisk ? 'L3' : intent.minimumRisk)
 
   if (['browser', 'screen', 'clipboard'].includes(intent.operationType)) {
     return { kind: 'deny', risk, reason: 'unsupported', allowedScopes: [] }
@@ -192,21 +198,48 @@ export async function resolveOperationIntentTargets(
   }
 }
 
-/** 授权键使用 canonical target 和参数指纹；任何身份或约束不同都不能命中。 */
+/**
+ * 授权键必须按操作类别控制粒度：同类读/写/普通删在同一 Task 内复用，
+ * 避免每个文件一把钥匙；危险删除、未知命令、出网仍绑定精确目标。
+ * 身份字段（initiator/task/project/environment）始终参与，防止跨 Task 或跨环境继承。
+ */
 export function createOperationGrantKey(intent: ResolvedOperationIntent): string {
   return createHash('sha256')
-    .update(
-      JSON.stringify({
-        initiator: intent.initiator,
-        taskId: intent.taskId,
-        projectId: intent.projectId,
-        environmentId: intent.environmentId,
-        operationType: intent.operationType,
-        targets: intent.targets,
-        parameterFingerprint: intent.parameterFingerprint
-      })
-    )
+    .update(JSON.stringify(createGrantKeyMaterial(intent)))
     .digest('hex')
+}
+
+/** 只序列化授权判别字段，禁止把 rawInput 或未建模属性编进 grant。 */
+function createGrantKeyMaterial(intent: ResolvedOperationIntent): Record<string, unknown> {
+  const identity = {
+    initiator: intent.initiator,
+    taskId: intent.taskId,
+    projectId: intent.projectId,
+    environmentId: intent.environmentId,
+    operationType: intent.operationType
+  }
+
+  if (intent.operationType === 'read-project' || intent.operationType === 'write-file') {
+    return identity
+  }
+
+  if (intent.operationType === 'delete-path' && classifyDeleteGrant(intent) === 'in-root-normal') {
+    return { ...identity, grantClass: 'in-root-normal' }
+  }
+
+  if (
+    intent.operationType === 'execute-command' &&
+    !isUnknownExecuteCommand(intent) &&
+    maxRisk(DEFAULT_RISK['execute-command'], intent.minimumRisk) !== 'L3'
+  ) {
+    return { ...identity, commandFingerprint: intent.parameterFingerprint }
+  }
+
+  return {
+    ...identity,
+    targets: intent.targets,
+    parameterFingerprint: intent.parameterFingerprint
+  }
 }
 
 /** 共享 DTO 的主进程形状校验；只接受有限字段，不把校验责任下放 Renderer。 */
@@ -308,6 +341,9 @@ function validateRequiredTargetKinds(intent: OperationIntent): void {
   ) {
     throw new PermissionPolicyError('invalid-intent', '命令操作缺少受限目标。')
   }
+  if (isUnknownExecuteCommand(intent) && intent.minimumRisk !== 'L3') {
+    throw new PermissionPolicyError('invalid-intent', '未知命令必须按最高风险逐次确认。')
+  }
   if (intent.operationType === 'network-egress') {
     if (!kinds.has('origin') && !kinds.has('unknown')) {
       throw new PermissionPolicyError('invalid-intent', '网络操作缺少受限目标。')
@@ -326,6 +362,66 @@ function validateRequiredTargetKinds(intent: OperationIntent): void {
   }
   if (intent.operationType === 'worktree-remove' && !kinds.has('path')) {
     throw new PermissionPolicyError('invalid-intent', '移除 Worktree 必须包含明确路径。')
+  }
+}
+
+/**
+ * 普通项目内删文件/空目录可走宽 grant；越出 root、删 .git、递归清空非空目录必须精确确认。
+ * 调用方 minimumRisk=L3 时也视为危险，避免宽 grant 被“只是升风险”的删除继承。
+ */
+function classifyDeleteGrant(intent: OperationIntent): 'in-root-normal' | 'dangerous-exact' {
+  if (intent.operationType !== 'delete-path') return 'dangerous-exact'
+  if (intent.minimumRisk && RISK_ORDER[intent.minimumRisk] >= RISK_ORDER.L3) {
+    return 'dangerous-exact'
+  }
+  const pathTargets = intent.targets.filter((target) => target.kind === 'path')
+  if (pathTargets.length === 0 || pathTargets.length !== intent.targets.length) {
+    return 'dangerous-exact'
+  }
+  return pathTargets.some((target) => isDangerousDeleteTarget(intent.executionRoot, target.value))
+    ? 'dangerous-exact'
+    : 'in-root-normal'
+}
+
+/** 删除目标一旦越界、指向 root 本身、命中 .git 或非空目录，就不能按“普通删文件”复用。 */
+function isDangerousDeleteTarget(executionRoot: string, value: string): boolean {
+  const absolute = normalize(isAbsolute(value) ? value : resolve(executionRoot, value))
+  const normalizedRoot = normalize(executionRoot)
+  if (!isPathInside(normalizedRoot, absolute) || samePath(absolute, normalizedRoot)) {
+    return true
+  }
+  if (pathContainsGitSegment(normalizedRoot, absolute)) return true
+  return isNonEmptyDirectory(absolute)
+}
+
+/** 路径段按大小写不敏感识别 .git，避免 APFS 上 .GIT / .Git 走普通删除宽 grant。 */
+function pathContainsGitSegment(root: string, absoluteTarget: string): boolean {
+  return relative(root, absoluteTarget)
+    .split(/[\\/]+/u)
+    .some((segment) => segment.toLowerCase() === '.git')
+}
+
+/** 未知命令与未知出网对齐：共用指纹、「未提供可信」或 unknown 目标都必须 L3。 */
+function isUnknownExecuteCommand(intent: OperationIntent): boolean {
+  if (intent.operationType !== 'execute-command') return false
+  if (intent.parameterFingerprint === 'grok-acp:execute:unknown-command:v1') return true
+  return intent.targets.some((target) => {
+    if (target.kind === 'unknown') return true
+    return target.kind === 'command' && target.value.includes('未提供可信')
+  })
+}
+
+/**
+ * 非空目录删除等于递归清空，必须每次确认。
+ * 路径不存在按普通删文件处理；其它 stat/readdir 失败则失败关闭为危险。
+ */
+function isNonEmptyDirectory(absolutePath: string): boolean {
+  try {
+    const stats = statSync(absolutePath)
+    if (!stats.isDirectory()) return false
+    return readdirSync(absolutePath).length > 0
+  } catch (error) {
+    return !isFileNotFound(error)
   }
 }
 

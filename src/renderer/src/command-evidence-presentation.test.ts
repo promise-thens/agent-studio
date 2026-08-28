@@ -127,4 +127,27 @@ describe('命令证据展示文案', () => {
     expect(commandInconsistencyLabel('title-success-nonzero-exit')).toMatch(/不一致|退出/)
     expect(presentCommandEvidenceSummary(view)).toMatch(/不一致|退出码 2/)
   })
+
+  it('未上报审批的 Runtime 命令标明 Broker 没拦，有 approvalId 则不冒充沙箱', () => {
+    const unreported = toCommandEvidenceView(
+      evidence({
+        source: 'runtime-tool',
+        trustLevel: 'runtime-reported'
+      })
+    )
+    const intercepted = toCommandEvidenceView(
+      evidence({
+        source: 'runtime-tool',
+        trustLevel: 'runtime-reported',
+        approvalId: 'permission-req-1'
+      })
+    )
+
+    expect(unreported.brokerGateLabel).toBe('Broker 没拦')
+    expect(presentCommandEvidenceSummary(unreported)).toContain('Broker 没拦')
+    expect(intercepted.brokerGateLabel).toBeUndefined()
+    expect(presentCommandEvidenceSummary(intercepted)).not.toContain('Broker 没拦')
+    expect(presentCommandEvidenceSummary(intercepted)).not.toMatch(/Broker 强制|App 沙箱执行/)
+    expect(commandSourceLabel('runtime-tool')).not.toMatch(/沙箱|Broker/)
+  })
 })

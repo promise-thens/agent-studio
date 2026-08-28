@@ -235,6 +235,31 @@ describe('Grok ACP 协议投影', () => {
     }
   )
 
+  it.each<acp.ToolKind>(['read', 'search'])(
+    '%s 带可信路径时映射为项目内读取，不得落到 unknown',
+    (kind) => {
+      const request = mapGrokPermissionRequest(
+        permissionRequest({
+          optionId: 'allow-once',
+          kind,
+          path: '/tmp/project/src/notes.ts'
+        }),
+        `permission-${kind}-path`,
+        'task-from-service',
+        'turn-from-service',
+        redactFakeText,
+        true
+      )
+
+      expect(request).toMatchObject({
+        operationType: 'read-project',
+        targets: [{ kind: 'path', value: '/tmp/project/src/notes.ts' }],
+        executionSupported: true
+      })
+      expect(request?.minimumRisk).toBeUndefined()
+    }
+  )
+
   it('合并 locations 与 diff.path 时去重，并保留待 Policy 校验的越界候选', () => {
     const request = mapGrokPermissionRequest(
       {
@@ -1515,6 +1540,51 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     }
   })
 
+  it('只有 allow_always 时项目内读取不会 auto-allowed 或 grant-reused', async () => {
+    const fixture = await createInvalidPermissionIntegrationFixture()
+    try {
+      const execution = fixture.startTurn('验证缺少 allow_once 不能假装自动过')
+      await vi.waitFor(() => expect(fixture.internal.activeTurn).not.toBeNull())
+      const acpResponse = fixture.internal.requestPermission(
+        {
+          sessionId: 'runtime-session-1',
+          toolCall: {
+            toolCallId: 'tool-read-always-only',
+            title: '读取项目文件',
+            kind: 'read',
+            locations: [{ path: join(fixture.workspace, 'src/notes.ts') }]
+          },
+          options: [permissionOption('allow-always', 'allow_always')]
+        },
+        fixture.connection
+      )
+
+      await expect(acpResponse).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
+      await vi.waitFor(() =>
+        expect(fixture.broker.getPendingCount(fixture.taskId, fixture.turnId)).toBe(0)
+      )
+      expect(fixture.approvals).toHaveLength(0)
+      expect(getPermissionBrokerGrantCount(fixture.broker)).toBe(0)
+      expect(fixture.respondPermissionSpy).toHaveBeenCalledWith(expect.any(String), 'cancelled')
+
+      const auditPage = await fixture.auditStore.list(fixture.taskId)
+      expect(auditPage.items).toHaveLength(1)
+      expect(auditPage.items[0]).toMatchObject({
+        operationType: 'read-project',
+        reason: 'unsupported',
+        detail: 'Runtime 没提供一次性允许。'
+      })
+      expect(auditPage.items[0].reason).not.toBe('auto-allowed')
+      expect(auditPage.items[0].reason).not.toBe('grant-reused')
+      expect(JSON.stringify(auditPage.items[0])).not.toContain('allow_always')
+
+      fixture.releasePrompt.resolve({ stopReason: 'end_turn' })
+      await expect(execution).resolves.toMatchObject({ outcome: 'completed' })
+    } finally {
+      await fixture.dispose()
+    }
+  })
+
   it('超长 toolCallId 立即熔断当前 Turn，原文不进入快照或 tombstone', async () => {
     const connection = {} as acp.ClientSideConnection
     const harness = createAdapterHarness(connection)
@@ -1684,6 +1754,29 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     expect(JSON.stringify(harness.permissions[0])).not.toContain(injected)
     expect(JSON.stringify(harness.permissions[0])).not.toContain(FAKE_SECRET)
     harness.adapter.respondPermission(harness.permissions[0].requestId, 'deny-once')
+    await expect(responsePromise).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
+  })
+
+  it('只有 allow_always 的项目内读取仍标记不可执行，且不回传 always', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+    const responsePromise = harness.internal.requestPermission(
+      permissionRequestWithOptions(
+        [permissionOption('allow-always', 'allow_always')],
+        'read',
+        `${WORKSPACE}/src/notes.ts`
+      ),
+      connection
+    )
+
+    expect(harness.permissions[0]).toMatchObject({
+      operationType: 'read-project',
+      executionSupported: false,
+      targets: [{ kind: 'path', value: `${WORKSPACE}/src/notes.ts` }]
+    })
+    expect(JSON.stringify(harness.permissions[0])).not.toContain('allow_always')
+    harness.adapter.respondPermission(harness.permissions[0].requestId, 'allow-once')
     await expect(responsePromise).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
   })
 
@@ -2346,6 +2439,48 @@ describe('Grok Runtime 命令证据持久化', () => {
     expect(evidence?.approvalId).toBeUndefined()
   })
 
+  it('自动过路径下 execute 仍写 runtime-tool 证据，不等用户点审批卡', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const { adapter, internal, store, permissions } = await createEvidenceHarness(connection)
+    const responsePromise = internal.requestPermission(
+      permissionRequest({
+        optionId: 'allow-once',
+        toolCallId: 'tool-auto-allowed',
+        kind: 'execute'
+      }),
+      connection
+    )
+    internal.handleSessionUpdate(
+      notification({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tool-auto-allowed',
+        kind: 'execute',
+        status: 'completed',
+        rawInput: { command: 'pnpm test' },
+        rawOutput: { exit_code: 0, timed_out: false, output: 'ok' }
+      }),
+      connection
+    )
+    await adapter.waitForCommandEvidenceWrites()
+
+    const commandId = deriveGrokRuntimeCommandId(
+      'task-current',
+      'turn-current',
+      'tool-auto-allowed'
+    )
+    const evidence = await store.readEvidence('task-current', commandId)
+    expect(parseCommandExecutionEvidence(evidence)).toMatchObject({
+      source: 'runtime-tool',
+      trustLevel: 'runtime-reported',
+      status: 'succeeded',
+      displayCommand: 'pnpm test',
+      toolCallId: 'tool-auto-allowed',
+      approvalId: permissions[0]?.requestId
+    })
+    adapter.respondPermission(permissions[0].requestId, 'allow-once')
+    await responsePromise
+  })
+
   it('未见 ACP permission request 时不发明 approvalId', async () => {
     const connection = {} as acp.ClientSideConnection
     const { adapter, internal, store } = await createEvidenceHarness(connection)
@@ -2937,14 +3072,17 @@ function permissionRequest({
 
 /** 构造可包含多个单次或持久选项的 ACP 权限请求，用于验证安全选项筛选。 */
 function permissionRequestWithOptions(
-  options: acp.PermissionOption[]
+  options: acp.PermissionOption[],
+  kind: acp.ToolKind = 'execute',
+  path?: string
 ): acp.RequestPermissionRequest {
   return {
     sessionId: 'runtime-session-1',
     toolCall: {
       toolCallId: 'tool-1',
       title: '执行测试命令',
-      kind: 'execute'
+      kind,
+      ...(path ? { locations: [{ path }] } : {})
     },
     options
   }

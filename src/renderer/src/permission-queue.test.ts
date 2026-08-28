@@ -24,6 +24,19 @@ describe('Renderer 权限审批队列', () => {
     expect(removePermissionRequest(queue, first)[0]?.approvalId).toBe('approval-2')
   })
 
+  it('同一张卡补路径时原地更新 targets，不新增队列项', () => {
+    const now = Date.parse('2026-08-12T00:00:00.000Z')
+    const first = createRequest('approval-1', '2026-08-12T00:01:00.000Z')
+    const updated = {
+      ...first,
+      targets: ['path: src/index.ts', 'path: src/auth.ts']
+    }
+    let queue = enqueuePermissionRequest([], first, now)
+    queue = enqueuePermissionRequest(queue, updated, now)
+    expect(queue).toHaveLength(1)
+    expect(queue[0]?.targets).toEqual(['path: src/index.ts', 'path: src/auth.ts'])
+  })
+
   it('主进程取消队首或队中时只移除目标项，剩余审批顺序不变', () => {
     const queue = [
       createRequest('approval-1', '2026-08-12T00:01:00.000Z'),

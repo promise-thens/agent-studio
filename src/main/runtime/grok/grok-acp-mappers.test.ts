@@ -2,6 +2,7 @@ import type * as acp from '@agentclientprotocol/sdk'
 import { describe, expect, it } from 'vitest'
 import {
   mapGrokAvailableCommands,
+  mapGrokPermissionRequest,
   mapGrokRuntimeImageContent,
   mapGrokSessionUpdate
 } from './grok-acp-mappers'
@@ -157,5 +158,143 @@ describe('mapGrokRuntimeImageContent', () => {
       mapGrokRuntimeImageContent({ type: 'image', data: FAKE_PNG_BASE64, mimeType: 'image/svg+xml' })
     ).toBeNull()
     expect(mapGrokRuntimeImageContent({ type: 'text', text: FAKE_PNG_BASE64 })).toBeNull()
+  })
+})
+
+describe('mapGrokPermissionRequest 读/写映射', () => {
+  it('read/search 带可信 path 时映射为 read-project，不落入 unknown', () => {
+    for (const kind of ['read', 'search'] as const) {
+      const request = mapGrokPermissionRequest(
+        {
+          sessionId: SESSION_ID,
+          options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+          toolCall: {
+            toolCallId: `tool-${kind}`,
+            title: `读取 ${kind}`,
+            kind,
+            locations: [{ path: '/tmp/fixture/src/notes.ts' }],
+            rawInput: { command: 'cat /etc/passwd', apiKey: FAKE_KEY }
+          }
+        },
+        `permission-${kind}`,
+        'task-mapper',
+        'turn-mapper',
+        redactFakeText,
+        true
+      )
+
+      expect(request).toMatchObject({
+        operationType: 'read-project',
+        targets: [{ kind: 'path', value: '/tmp/fixture/src/notes.ts' }],
+        executionSupported: true
+      })
+      expect(request?.minimumRisk).toBeUndefined()
+      expect(JSON.stringify(request)).not.toContain('rawInput')
+      expect(JSON.stringify(request)).not.toContain(FAKE_KEY)
+      expect(JSON.stringify(request)).not.toContain('allow_always')
+    }
+  })
+
+  it('read 缺少 path 时仍是 unknown L3，rawInput 不能让它自动过', () => {
+    const request = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-read-no-path',
+          kind: 'read',
+          rawInput: { kind: 'read', path: '/tmp/fixture/secret.ts' }
+        }
+      },
+      'permission-read-no-path',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+
+    expect(request).toMatchObject({
+      operationType: 'unknown',
+      minimumRisk: 'L3',
+      targets: [{ kind: 'unknown', value: 'Runtime 未提供可验证的操作目标。' }]
+    })
+    expect(JSON.stringify(request)).not.toContain('secret.ts')
+    expect(JSON.stringify(request)).not.toContain('rawInput')
+  })
+
+  it('只有 allow_always 时即使是项目内读取也不把 executionSupported 设为 true', () => {
+    const request = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-always', name: 'Always', kind: 'allow_always' }],
+        toolCall: {
+          toolCallId: 'tool-read-always',
+          kind: 'read',
+          locations: [{ path: '/tmp/fixture/src/a.ts' }]
+        }
+      },
+      'permission-read-always',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      false
+    )
+
+    expect(request).toMatchObject({
+      operationType: 'read-project',
+      executionSupported: false,
+      targets: [{ kind: 'path', value: '/tmp/fixture/src/a.ts' }]
+    })
+    expect(JSON.stringify(request)).not.toContain('allow_always')
+    expect(JSON.stringify(request)).not.toContain('allow-always')
+  })
+
+  it('edit/delete 的 impact 说明本任务整类写/删，不把列出的 path 说成只改这几个文件', () => {
+    const edit = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-edit-impact',
+          title: '修改文件',
+          kind: 'edit',
+          locations: [{ path: '/tmp/fixture/src/a.ts' }, { path: '/tmp/fixture/src/b.ts' }]
+        }
+      },
+      'permission-edit-impact',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    const deletion = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-delete-impact',
+          title: '删除文件',
+          kind: 'delete',
+          locations: [{ path: '/tmp/fixture/src/a.ts' }]
+        }
+      },
+      'permission-delete-impact',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+
+    expect(edit).toMatchObject({
+      operationType: 'write-file',
+      impact: '本任务允许写入项目内文件。'
+    })
+    expect(edit?.impact).not.toContain('指定文件')
+    expect(deletion).toMatchObject({
+      operationType: 'delete-path',
+      impact: '本任务允许删除项目内文件。'
+    })
+    expect(deletion?.impact).not.toContain('指定路径')
+    expect(deletion?.impact).not.toContain('指定文件')
   })
 })

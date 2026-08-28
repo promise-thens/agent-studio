@@ -13,16 +13,24 @@ import {
 } from './command-evidence-presentation'
 import { isReadToolTitle, presentToolTitle } from './conversation-tool-presentation'
 import { isActiveConversationTurn } from './task-conversation-view'
-import type {
-  TimelineAttachmentNode,
-  TimelineTextNode,
-  TimelineToolNode,
-  TurnTimelineViewModel
+import {
+  formatSilentPermissionSummary,
+  isSilentPermissionAuditReason,
+  type TimelineAttachmentNode,
+  type TimelinePermissionNode,
+  type TimelineTextNode,
+  type TimelineToolNode,
+  type TurnTimelineViewModel
 } from './task-timeline-reducer'
 
 export { formatToolVerbPhrase, isReadToolTitle } from './conversation-tool-presentation'
+export {
+  formatSilentPermissionSummary,
+  isSilentPermissionAuditReason
+} from './task-timeline-reducer'
 
 export const PERMISSION_ALLOW_TASK_LABEL = '本任务允许'
+export const PERMISSION_INSUFFICIENT_EVIDENCE_NOTICE = '证据不够，不能自动过'
 export const THOUGHT_SUMMARY = '思考过程'
 
 export interface ConversationUserBlock {
@@ -99,6 +107,13 @@ export interface ConversationPermissionBlock {
   primaryLabel: string
 }
 
+export interface ConversationPermissionAuditBlock {
+  kind: 'permission-audit'
+  nodeId: string
+  summary: string
+  count: number
+}
+
 export interface ConversationUsageBlock {
   kind: 'usage'
   nodeId: string
@@ -129,6 +144,7 @@ export type ConversationBlock =
   | ConversationAttachmentBlock
   | ConversationErrorBlock
   | ConversationPermissionBlock
+  | ConversationPermissionAuditBlock
   | ConversationUsageBlock
   | ConversationAvailabilityBlock
 
@@ -143,6 +159,50 @@ export function resolvePermissionPrimaryAction(
     return { decision: 'allow-task', label: PERMISSION_ALLOW_TASK_LABEL }
   }
   return { decision: 'allow-once', label: '仅允许这一次' }
+}
+
+/**
+ * 审批卡在自身焦点内：Enter 走主按钮，Esc 拒绝。
+ * 输入法确认、Shift+Enter、焦点在非主按钮上时不抢原生按钮行为。
+ */
+export function resolvePermissionCardKeyDecision(
+  event: { key: string; isComposing?: boolean; shiftKey?: boolean; keyCode?: number },
+  primaryDecision: AgentPermissionDecision,
+  options?: { targetIsNonPrimaryButton?: boolean }
+): AgentPermissionDecision | null {
+  if (event.isComposing || event.keyCode === 229) return null
+  if (event.key === 'Escape') return 'deny'
+  if (event.key === 'Enter' && !event.shiftKey && !options?.targetIsNonPrimaryButton) {
+    return primaryDecision
+  }
+  return null
+}
+
+/**
+ * 有可信 path/command/origin 就让卡自己展示；没有则明确告诉用户不能自动过。
+ * 占位「未提供可信…」不能当成真实命令或 origin。
+ */
+export function resolvePermissionEvidenceNotice(
+  request: Pick<AgentPermissionRequest, 'targets'>
+): string | null {
+  if (request.targets.some((target) => hasTrustedPermissionEvidence(target))) return null
+  return PERMISSION_INSUFFICIENT_EVIDENCE_NOTICE
+}
+
+function hasTrustedPermissionEvidence(target: string): boolean {
+  if (
+    target.startsWith('path: ') ||
+    target.startsWith('origin: ') ||
+    target.startsWith('git: ') ||
+    target.startsWith('project: ') ||
+    target.startsWith('worktree: ')
+  ) {
+    return target.trim().length > 8
+  }
+  if (target.startsWith('command: ')) {
+    return !target.includes('未提供可信')
+  }
+  return false
 }
 
 /**
@@ -298,6 +358,35 @@ export function projectConversationTurn(
       index += 1
       continue
     }
+    if (node.kind === 'permission-audit') {
+      // 静默允许收成摘要；人工审批只留 live PermissionPrompt，避免历史里再铺大红牌。
+      if (!isSilentPermissionAuditReason(node.audit.reason)) {
+        index += 1
+        continue
+      }
+      const run: TimelinePermissionNode[] = [node]
+      while (
+        index + 1 < rest.length &&
+        rest[index + 1]?.kind === 'permission-audit' &&
+        isSilentPermissionAuditReason((rest[index + 1] as TimelinePermissionNode).audit.reason) &&
+        (rest[index + 1] as TimelinePermissionNode).audit.operationType === node.audit.operationType
+      ) {
+        index += 1
+        run.push(rest[index] as TimelinePermissionNode)
+      }
+      const count = run.reduce((total, item) => total + item.foldedCount, 0)
+      blocks.push({
+        kind: 'permission-audit',
+        nodeId: node.nodeId,
+        summary:
+          run.length === 1 && node.summary
+            ? node.summary
+            : formatSilentPermissionSummary(node.audit.operationType, count),
+        count
+      })
+      index += 1
+      continue
+    }
     if (node.kind === 'tool') {
       const run: TimelineToolNode[] = [node]
       if (isReadToolTitle(node.title)) {
@@ -398,7 +487,7 @@ export function projectConversationTurn(
   return blocks
 }
 
-/** 审批卡贴在计划/工具后面，不要排到长回复之后把当前步顶出视口。 */
+/** 审批卡只跟计划/工具/思考/子代理；静默审计摘要不能当锚点，否则会把卡顶到长回复后面。 */
 function insertPermissionAfterProcess(
   blocks: ConversationBlock[],
   permission: ConversationPermissionBlock

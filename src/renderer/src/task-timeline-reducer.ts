@@ -1,6 +1,8 @@
 import type {
   AgentCapabilityState,
   AgentContextUsage,
+  AgentOperationType,
+  AgentPermissionResolutionReason,
   AgentPlanEntry,
   AgentToolStatus,
   AgentTurnUsage
@@ -153,6 +155,10 @@ export interface TimelineCommandNode extends TimelineNodeBase {
 export interface TimelinePermissionNode extends TimelineNodeBase {
   kind: 'permission-audit'
   audit: PermissionAuditRecord
+  /** 连续同类静默允许折叠后的条数；人工审批保持 1。 */
+  foldedCount: number
+  /** 静默允许才有摘要；人工审批卡不走这条，避免 12 张大红牌。 */
+  summary?: string
 }
 
 export interface TimelineDiffNode extends TimelineNodeBase {
@@ -236,6 +242,35 @@ export interface TaskTimelineViewModel {
 
 export interface TimelineSelectorContext {
   executionSnapshot: TaskExecutionSnapshot
+}
+
+const SILENT_PERMISSION_OPERATION_NOUN: Record<AgentOperationType, string> = {
+  'read-project': '读取',
+  'write-file': '写入',
+  'delete-path': '删除',
+  'execute-command': '命令',
+  'git-read': 'Git 读取',
+  'git-mutate': 'Git 变更',
+  'worktree-create': 'Worktree 创建',
+  'worktree-remove': 'Worktree 移除',
+  'network-egress': '出网',
+  browser: '浏览器',
+  screen: '屏幕',
+  clipboard: '剪贴板',
+  unknown: '未知操作'
+}
+
+/** auto-allowed / grant-reused 才能折叠；user-allowed 等人工结论必须单独可回看。 */
+export function isSilentPermissionAuditReason(reason: AgentPermissionResolutionReason): boolean {
+  return reason === 'auto-allowed' || reason === 'grant-reused'
+}
+
+/** Timeline 折叠摘要，例如「已自动允许 12 次读取」。 */
+export function formatSilentPermissionSummary(
+  operationType: AgentOperationType,
+  count: number
+): string {
+  return `已自动允许 ${count} 次${SILENT_PERMISSION_OPERATION_NOUN[operationType]}`
 }
 
 export function createTaskTimelineFacts(taskId: string): TaskTimelineFacts {
@@ -551,16 +586,8 @@ function projectNodes(
       })
     }
   }
-  for (const slot of Object.values(turn.auditsById))
-    if (slot.kind === 'accepted')
-      nodes.push({
-        nodeId: `${turn.taskId}:${turn.turnId}:audit:${slot.audit.auditId}`,
-        taskId: turn.taskId,
-        turnId: turn.turnId,
-        source: 'permission-audit',
-        kind: 'permission-audit',
-        audit: structuredClone(slot.audit)
-      })
+  const lastEventSequence = events.reduce((max, event) => Math.max(max, event.sequence), 0)
+  nodes.push(...foldPermissionAuditNodes(turn, lastEventSequence))
   const attachedToolCallIds = new Set(
     [...tools.values()].map((node) => node.command?.commandId).filter(Boolean)
   )
@@ -836,6 +863,48 @@ function ingestEvent(state: TaskTimelineFacts, event: PublicAgentEvent): void {
     turnId: event.turnId,
     sequence: event.sequence
   })
+}
+
+/**
+ * 连续同类静默允许收成一条摘要，并排到事件之后，避免 12 张审计节点顶到用户句前面。
+ * 人工审批、拒绝、取消仍各自独立；facts 层 auditsById 保持逐条，不在这里丢审计。
+ */
+function foldPermissionAuditNodes(
+  turn: TimelineTurnFacts,
+  lastEventSequence: number
+): TimelinePermissionNode[] {
+  const accepted = Object.values(turn.auditsById)
+    .flatMap((slot) => (slot.kind === 'accepted' ? [slot.audit] : []))
+    .sort(
+      (left, right) =>
+        left.createdAt.localeCompare(right.createdAt) || left.auditId.localeCompare(right.auditId)
+    )
+  const folded: TimelinePermissionNode[] = []
+  for (const audit of accepted) {
+    const previous = folded.at(-1)
+    if (
+      previous?.summary &&
+      isSilentPermissionAuditReason(audit.reason) &&
+      previous.audit.operationType === audit.operationType
+    ) {
+      previous.foldedCount += 1
+      previous.summary = formatSilentPermissionSummary(audit.operationType, previous.foldedCount)
+      continue
+    }
+    const silent = isSilentPermissionAuditReason(audit.reason)
+    folded.push({
+      nodeId: `${turn.taskId}:${turn.turnId}:audit:${audit.auditId}`,
+      taskId: turn.taskId,
+      turnId: turn.turnId,
+      firstSequence: lastEventSequence + folded.length + 1,
+      source: 'permission-audit',
+      kind: 'permission-audit',
+      audit: structuredClone(audit),
+      foldedCount: 1,
+      ...(silent ? { summary: formatSilentPermissionSummary(audit.operationType, 1) } : {})
+    })
+  }
+  return folded
 }
 
 function ingestAudit(state: TaskTimelineFacts, audit: PermissionAuditRecord): void {
