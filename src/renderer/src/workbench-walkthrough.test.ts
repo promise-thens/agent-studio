@@ -21,6 +21,14 @@ const conversationTurnViewSource = readFileSync(join(root, 'conversation-turn-vi
 const toolRowSource = readFileSync(join(root, 'components/ToolRow.vue'), 'utf8')
 const permissionSource = readFileSync(join(root, 'components/PermissionPrompt.vue'), 'utf8')
 const composerSource = readFileSync(join(root, 'components/TaskComposer.vue'), 'utf8')
+const permissionModeSource = readFileSync(
+  join(root, 'components/TaskPermissionModeMenu.vue'),
+  'utf8'
+)
+const takeoverConfirmSource = readFileSync(
+  join(root, 'components/TaskTakeoverConfirmDialog.vue'),
+  'utf8'
+)
 
 function tool(
   toolCallId: string,
@@ -188,6 +196,17 @@ describe('工作台对照走查（夹具，非桌面 GUI）', () => {
       /block\.kind === 'permission-audit'[\s\S]{0,200}PermissionPrompt/
     )
     expect(permissionSource).not.toContain('role="dialog"')
+    expect(composerSource).toContain('TaskPermissionModeMenu')
+    expect(composerSource).toContain('TaskTakeoverConfirmDialog')
+    expect(permissionModeSource).toContain('应如何批准操作？')
+    expect(permissionModeSource).toContain('请求批准')
+    expect(permissionModeSource).toContain('帮我批准')
+    expect(permissionModeSource).toContain('完全访问')
+    expect(takeoverConfirmSource).toContain('让 Grok 完全接管当前任务？')
+    expect(takeoverConfirmSource).toContain('将不再询问工具权限')
+    expect(takeoverConfirmSource).toContain('桌面看不到未上报的操作')
+    expect(takeoverConfirmSource).toContain('命令、改文件、出网都会自己做')
+    expect(takeoverConfirmSource).toContain('若已启用浏览器或 Computer Use 插件，也会自己点')
   })
 })
 

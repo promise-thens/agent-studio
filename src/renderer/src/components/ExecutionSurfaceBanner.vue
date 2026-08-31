@@ -5,6 +5,7 @@ import { resolveExecutionSurfaceBanner, type WorkbenchPrimaryView } from '../wor
 const props = defineProps<{
   primaryView: WorkbenchPrimaryView
   activeExecution: { taskId: string; state: string } | null
+  takeoverHud?: string | null
 }>()
 
 defineEmits<{
@@ -20,7 +21,7 @@ const banner = computed(() =>
 
 const copy = computed(() => {
   if (banner.value.kind === 'waiting-permission') return '任务等待审批'
-  if (banner.value.kind === 'running') return '任务正在执行'
+  if (banner.value.kind === 'running') return props.takeoverHud || '任务正在执行'
   return ''
 })
 </script>

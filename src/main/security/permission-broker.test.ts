@@ -86,6 +86,43 @@ describe('PermissionBroker', () => {
     await expect(deletePromise).resolves.toEqual({ ok: false, reason: 'cancelled' })
   })
 
+  it('ask 不走 grant-reused，assist 仍 reuse', async () => {
+    const fixture = createFixture()
+    const firstPromise = fixture.broker.authorizeOperation(createIntent('write-file'), vi.fn())
+    const first = await waitForApproval(fixture.approvals, 0)
+    await fixture.broker.respond({
+      approvalId: first.approvalId,
+      taskId: first.taskId,
+      turnId: first.turnId,
+      decision: 'allow-task'
+    })
+    await expect(firstPromise).resolves.toMatchObject({ ok: true, reason: 'user-allowed' })
+
+    const askPromise = fixture.broker.authorizeOperation(
+      { ...createIntent('write-file'), turnId: 'turn-2' },
+      vi.fn(() => 'ask-again'),
+      { permissionPromptStyle: 'ask' }
+    )
+    const askApproval = await waitForApproval(fixture.approvals, 1)
+    expect(askApproval.turnId).toBe('turn-2')
+    await fixture.broker.respond({
+      approvalId: askApproval.approvalId,
+      taskId: askApproval.taskId,
+      turnId: askApproval.turnId,
+      decision: 'allow-once'
+    })
+    await expect(askPromise).resolves.toMatchObject({ ok: true, reason: 'user-allowed' })
+
+    await expect(
+      fixture.broker.authorizeOperation(
+        { ...createIntent('write-file'), turnId: 'turn-3' },
+        vi.fn(() => 'assist-again'),
+        { permissionPromptStyle: 'assist' }
+      )
+    ).resolves.toMatchObject({ ok: true, value: 'assist-again', reason: 'grant-reused' })
+    await fixture.broker.shutdown()
+  })
+
   it('写文件宽 grant 不能捎带删除、未知出网或 Computer Use', async () => {
     const fixture = createFixture()
     const first = fixture.broker.authorizeOperation(createIntent('write-file'), vi.fn())

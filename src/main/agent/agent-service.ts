@@ -9,7 +9,14 @@ import type {
   AgentTurnExecutionResult,
   AgentTurnOutcome
 } from '../../shared/agent'
-import { readTakeoverSnapshot } from '../../shared/task-takeover'
+import {
+  GROK_TAKEOVER_CONTROL_PROMPT,
+  isTaskPermissionMode,
+  permissionSnapshotFromMode,
+  readPermissionPromptStyle,
+  readTakeoverSnapshot,
+  resolveTakeoverApply
+} from '../../shared/task-takeover'
 import type {
   ConversationEntryState,
   RuntimeResumeSummary,
@@ -40,7 +47,11 @@ import {
   TaskStoreError,
   type TaskRecordV1
 } from './task-store'
-import type { AgentRespondPermissionRequest } from '../../shared/agent-ipc'
+import type {
+  AgentRespondPermissionRequest,
+  AgentSetPermissionModeRequest,
+  AgentSetPermissionModeResult
+} from '../../shared/agent-ipc'
 import type { AgentAvailableCommandSnapshot } from '../../shared/agent-available-command'
 import type { PermissionBroker } from '../security/permission-broker'
 import { createLocalEnvironmentId } from '../security/permission-policy'
@@ -122,9 +133,13 @@ function cloneTask(task: AgentTaskRecord): AgentTaskRuntimeState {
     ...(task.lastTurnId ? { lastTurnId: task.lastTurnId } : {}),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
-    // 缺省展示未接管；快照时间仅在有合法值时拷贝。
+    // 缺省展示未接管 + assist；applied 仅在明确为真时拷贝。
     takeoverEnabled: task.takeoverEnabled === true,
-    ...(task.takeoverUpdatedAt ? { takeoverUpdatedAt: task.takeoverUpdatedAt } : {})
+    permissionPromptStyle: task.permissionPromptStyle === 'ask' ? 'ask' : 'assist',
+    takeoverApplied: task.takeoverApplied === true,
+    ...(task.takeoverUpdatedAt ? { takeoverUpdatedAt: task.takeoverUpdatedAt } : {}),
+    ...(task.takeoverMayStillBeActive ? { takeoverMayStillBeActive: true } : {}),
+    ...(task.takeoverPendingReason ? { takeoverPendingReason: task.takeoverPendingReason } : {})
   }
 }
 
@@ -328,6 +343,8 @@ export class AgentService {
           createdAt: observedAt,
           updatedAt: observedAt,
           takeoverEnabled: false,
+          permissionPromptStyle: 'assist',
+          takeoverApplied: false,
           session
         }
         if (this.taskStore && task.projectId) {
@@ -505,6 +522,14 @@ export class AgentService {
       return
     }
     this.runtimePermissionRequests.set(request.requestId, request)
+    if (task.takeoverEnabled === true) {
+      // 接管生效后仍收到 request_permission：Broker 照常走，HUD 标未完全生效。
+      task.takeoverApplied = false
+      delete task.takeoverPendingReason
+      void this.persistPermissionMode(task)
+    } else if (task.takeoverMayStillBeActive) {
+      delete task.takeoverMayStillBeActive
+    }
     const environmentId = createLocalEnvironmentId(task.projectId, task.workspace)
     void this.authorizeRuntimePermission(request, task.projectId, task.workspace, environmentId)
   }
@@ -552,7 +577,9 @@ export class AgentService {
           executionSupported: request.executionSupported,
           isActive: () => this.isRuntimePermissionActive(request),
           onPendingChange: (count) => this.updatePermissionWaitingState(request, count),
-          cancellationId: request.requestId
+          cancellationId: request.requestId,
+          permissionPromptStyle:
+            this.tasks.get(request.taskId)?.permissionPromptStyle === 'ask' ? 'ask' : 'assist'
         }
       )
       .then((result) => {
@@ -595,6 +622,81 @@ export class AgentService {
       return { taskId, revision: 0, commands: [] }
     }
     return cloneAvailableCommandSnapshot(stored)
+  }
+
+  /**
+   * 切换当前 Task 的 ask / assist / takeover。
+   * 这是把审批交给 Grok always-approve，不是 Permission Broker 沙箱；
+   * 打开接管必须 confirmed: true，且只允许空闲。不写 ~/.grok。
+   */
+  async setPermissionMode(
+    request: AgentSetPermissionModeRequest
+  ): Promise<AgentSetPermissionModeResult> {
+    const task = this.requireTask(request.taskId)
+    if (!isTaskPermissionMode(request.mode)) {
+      throw new AgentServiceError('invalid-input', '批准模式无效。')
+    }
+    if (request.mode === 'takeover' && request.confirmed !== true) {
+      throw new AgentServiceError('invalid-input', '打开完全接管前必须确认。')
+    }
+    if (this.isPermissionModeLocked()) {
+      throw new AgentServiceError('invalid-state', '任务执行中不能切换批准模式。')
+    }
+
+    const previousStyle = task.permissionPromptStyle === 'ask' ? 'ask' : 'assist'
+    const previousEnabled = task.takeoverEnabled === true
+    const snapshot = permissionSnapshotFromMode(request.mode, previousStyle)
+    const currentlyApplied = task.takeoverApplied === true
+    const decision = resolveTakeoverApply({
+      hasSession: this.isTaskSessionActive(task),
+      idle: true,
+      advertisedCommands: this.getAvailableCommands(task.taskId).commands,
+      desiredEnabled: snapshot.takeoverEnabled,
+      currentlyApplied
+    })
+
+    task.permissionPromptStyle = snapshot.permissionPromptStyle
+    task.takeoverEnabled = snapshot.takeoverEnabled
+    task.takeoverUpdatedAt = this.now()
+    task.updatedAt = task.takeoverUpdatedAt
+    delete task.takeoverPendingReason
+
+    if (snapshot.takeoverEnabled) {
+      delete task.takeoverMayStillBeActive
+      if (decision.kind === 'send-command') {
+        task.takeoverApplied = true
+      } else if (decision.kind === 'new-session-meta') {
+        task.takeoverApplied = false
+      } else if (decision.kind === 'defer-next-session') {
+        task.takeoverApplied = false
+        task.takeoverPendingReason = decision.reason
+      } else {
+        task.takeoverApplied = currentlyApplied
+      }
+    } else {
+      if (decision.kind === 'send-command' && currentlyApplied) {
+        task.takeoverApplied = false
+        task.takeoverMayStillBeActive = true
+      } else {
+        task.takeoverApplied = false
+        delete task.takeoverMayStillBeActive
+      }
+      if (decision.kind === 'defer-next-session') {
+        task.takeoverPendingReason = decision.reason
+        if (currentlyApplied) task.takeoverMayStillBeActive = true
+      }
+    }
+
+    await this.persistPermissionMode(task)
+    if (previousEnabled !== snapshot.takeoverEnabled) {
+      await this.recordTakeoverToggleAudit(task, snapshot.takeoverEnabled)
+    }
+
+    return {
+      task: cloneTask(task),
+      decision,
+      ...(decision.kind === 'send-command' ? { controlPrompt: GROK_TAKEOVER_CONTROL_PROMPT } : {})
+    }
   }
 
   /** Adapter 已在本地取消 ACP Promise；这里只撤销完全匹配的 Broker 审批与 Renderer 投影。 */
@@ -687,8 +789,12 @@ export class AgentService {
     if (this.isForeignExecutionActive(taskId)) {
       throw new AgentServiceError('invalid-state', '先停掉当前任务。')
     }
-    if (this.isTaskSessionActive(task)) return
+    if (this.isTaskSessionActive(task)) {
+      this.markTakeoverAppliedIfLive(task)
+      return
+    }
     await this.activateOrRebuildTaskSession(task, inheritedLease)
+    this.markTakeoverAppliedIfLive(this.requireTask(taskId))
   }
 
   /** 只读历史显式继续时重新连接 Project，并在当前能力验证后恢复原生会话。 */
@@ -717,6 +823,93 @@ export class AgentService {
     const task = this.tasks.get(taskId)
     if (!task) throw new AgentServiceError('task-not-found', '未找到指定 Task。')
     return task
+  }
+
+  /** 与模型选择器同一 busy：活动 Turn / 执行槽 / session 操作期间不能改批准模式。 */
+  private isPermissionModeLocked(): boolean {
+    return (
+      this.sessionOperationActive ||
+      this.executionController.hasActiveTurn() ||
+      this.taskExecutor?.hasActiveExecution() === true
+    )
+  }
+
+  /**
+   * 已 applied 的 session 禁止再发 /always-approve（toggle）。
+   * 未 applied 只更新 HUD 原因，真正发命令走 setPermissionMode 或 consumeTakeoverApplyCommand。
+   */
+  private markTakeoverAppliedIfLive(task: AgentTaskRecord): void {
+    if (task.takeoverEnabled !== true || !this.isTaskSessionActive(task)) return
+    if (task.takeoverApplied === true) {
+      delete task.takeoverPendingReason
+      return
+    }
+    const decision = resolveTakeoverApply({
+      hasSession: true,
+      idle: !this.isPermissionModeLocked(),
+      advertisedCommands: this.getAvailableCommands(task.taskId).commands,
+      desiredEnabled: true,
+      currentlyApplied: false
+    })
+    if (decision.kind === 'defer-next-session') {
+      task.takeoverPendingReason = decision.reason
+    }
+  }
+
+  /**
+   * 进入已恢复 session 后，若快照接管且尚未 applied、空闲且命令已广告，则交出 controlPrompt。
+   * 调用方必须立刻走与 startTurn 同一条 executor.start；此处先标 applied，避免 toggle 两次。
+   */
+  consumeTakeoverApplyCommand(taskId: string): string | null {
+    const task = this.requireTask(taskId)
+    if (task.takeoverEnabled !== true || task.takeoverApplied === true) return null
+    if (this.isPermissionModeLocked() || !this.isTaskSessionActive(task)) return null
+    const decision = resolveTakeoverApply({
+      hasSession: true,
+      idle: true,
+      advertisedCommands: this.getAvailableCommands(task.taskId).commands,
+      desiredEnabled: true,
+      currentlyApplied: false
+    })
+    if (decision.kind !== 'send-command') {
+      if (decision.kind === 'defer-next-session') task.takeoverPendingReason = decision.reason
+      return null
+    }
+    task.takeoverApplied = true
+    delete task.takeoverPendingReason
+    delete task.takeoverMayStillBeActive
+    void this.persistPermissionMode(task)
+    return GROK_TAKEOVER_CONTROL_PROMPT
+  }
+
+  private async persistPermissionMode(task: AgentTaskRecord): Promise<void> {
+    if (!this.taskStore) return
+    await this.taskStore.updateTaskPermissionMode(task.taskId, {
+      takeoverEnabled: task.takeoverEnabled === true,
+      permissionPromptStyle: task.permissionPromptStyle === 'ask' ? 'ask' : 'assist',
+      takeoverApplied: task.takeoverApplied === true
+    })
+    const persisted = this.taskStore.getTaskRecord(task.taskId)
+    if (persisted.takeoverUpdatedAt) task.takeoverUpdatedAt = persisted.takeoverUpdatedAt
+    task.updatedAt = persisted.updatedAt
+  }
+
+  /**
+   * 审计只写 enabled/disabled，不含 prompt 全文或密钥。
+   */
+  private async recordTakeoverToggleAudit(task: AgentTaskRecord, enabled: boolean): Promise<void> {
+    if (!this.permissionBroker || !task.projectId) return
+    try {
+      await this.permissionBroker.recordTakeoverToggle({
+        taskId: task.taskId,
+        turnId: task.activeTurnId ?? task.lastTurnId ?? task.taskId,
+        projectId: task.projectId,
+        environmentId: createLocalEnvironmentId(task.projectId, task.workspace),
+        enabled
+      })
+    } catch {
+      // 审计失败不得回滚模式切换。
+    }
   }
 
   private assertRuntimeReady(workspace: string): void {
@@ -833,6 +1026,7 @@ export class AgentService {
         if (!this.canCommitEnter(generation)) return this.supersededEntry(task.taskId)
         const liveTask = this.requireTask(task.taskId)
         if (this.isTaskSessionActive(liveTask)) {
+          this.markTakeoverAppliedIfLive(liveTask)
           return this.createEntryState(liveTask.taskId, {
             restore: 'ready',
             method: 'resume',
@@ -842,6 +1036,7 @@ export class AgentService {
         try {
           const method = await this.activateTaskSession(liveTask, lease, generation)
           if (!this.canCommitEnter(generation)) return this.supersededEntry(liveTask.taskId)
+          this.markTakeoverAppliedIfLive(liveTask)
           if (method === 'load') {
             return this.createEntryState(liveTask.taskId, {
               restore: 'degraded',
@@ -940,6 +1135,13 @@ export class AgentService {
       )
     }
     this.selectedTaskId = task.taskId
+    if (task.takeoverEnabled === true) {
+      // 新 session 已带 yoloMode；禁止再发 /always-approve（它是 toggle）。
+      task.takeoverApplied = true
+      delete task.takeoverPendingReason
+      delete task.takeoverMayStillBeActive
+      await this.persistPermissionMode(task)
+    }
   }
 
   private async resolveMcpServers(): Promise<AgentRuntimeMcpServer[]> {
@@ -1409,6 +1611,7 @@ function mapHistoryStateToRuntimeState(state: TaskRecordV1['state']): AgentExecu
 function restoreRuntimeTask(task: TaskRecordV1): AgentTaskRecord {
   const state: AgentExecutionState = mapHistoryStateToRuntimeState(task.state)
   const takeover = readTakeoverSnapshot(task)
+  const permissionPromptStyle = readPermissionPromptStyle(task)
   return {
     taskId: task.taskId,
     projectId: task.projectId,
@@ -1425,6 +1628,9 @@ function restoreRuntimeTask(task: TaskRecordV1): AgentTaskRecord {
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     takeoverEnabled: takeover.takeoverEnabled,
+    permissionPromptStyle,
+    // 重启后：接管且上次 session 已 applied 才视为生效，否则 fail-closed 未完全生效。
+    takeoverApplied: takeover.takeoverEnabled && task.takeoverApplied === true,
     ...(takeover.takeoverUpdatedAt ? { takeoverUpdatedAt: takeover.takeoverUpdatedAt } : {})
   }
 }

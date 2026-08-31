@@ -1,3 +1,5 @@
+import type { PermissionPromptStyle, TakeoverApplyReason } from './task-takeover'
+
 /** Agent Studio 当前识别的 Runtime 标识；新增 Runtime 时必须先确认领域语义可复用。 */
 export type AgentRuntimeId = 'grok' | 'codex'
 
@@ -90,6 +92,16 @@ export interface AgentTaskRuntimeState {
   /** 当前 Task 是否处于完全接管；默认 false。不是 Broker 沙箱。 */
   takeoverEnabled: boolean
   takeoverUpdatedAt?: string
+  /** 非接管时的询问风格；缺字段默认 assist。接管只改 takeoverEnabled。 */
+  permissionPromptStyle: PermissionPromptStyle
+  /**
+   * 当前绑定 session 是否已把接管落到 Grok。
+   * 内存为主；重启后仅当快照接管且上次 session 已 applied 才为 true，否则 fail-closed。
+   */
+  takeoverApplied: boolean
+  /** 关命令已发但尚未见到新的 request_permission 时，HUD 写「接管可能仍在」。 */
+  takeoverMayStillBeActive?: boolean
+  takeoverPendingReason?: TakeoverApplyReason
 }
 
 /** 一次 Turn 完成后的有限结果；身份由 AgentService 分配，协议对象不得进入共享层。 */
@@ -211,6 +223,7 @@ export type AgentPermissionResolutionReason =
   | 'invalid-target'
   | 'unsupported'
   | 'internal-error'
+  | 'takeover-toggled'
 
 /** 发起者只描述受信任主进程边界，不使用 Runtime 文案或 Renderer 输入作为身份。 */
 export type AgentOperationInitiator =

@@ -18,7 +18,8 @@ import {
   AGENT_INVOKE_CHANNELS,
   AGENT_PUSH_CHANNELS,
   type AgentDesktopApi,
-  type AgentPermissionCancellation
+  type AgentPermissionCancellation,
+  type AgentSetPermissionModeResult
 } from '../shared/agent-ipc'
 import { parseAppAppearanceState } from '../shared/app-appearance'
 import {
@@ -623,6 +624,12 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
         turnId: request.turnId,
         decision: request.decision
       }) as Promise<DesktopIpcResult<null>>,
+    setPermissionMode: (request) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, {
+        taskId: request.taskId,
+        mode: request.mode,
+        ...(typeof request.confirmed === 'boolean' ? { confirmed: request.confirmed } : {})
+      }) as Promise<DesktopIpcResult<AgentSetPermissionModeResult>>,
     onStatus: (listener) =>
       subscribe<AgentRuntimeStatus>(ipcRenderer, AGENT_PUSH_CHANNELS.status, listener),
     onExecutionUpdate: (listener) =>

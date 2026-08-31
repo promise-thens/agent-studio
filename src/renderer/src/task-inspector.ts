@@ -158,7 +158,8 @@ const PERMISSION_AUDIT_REASON_LABELS: Record<AgentPermissionResolutionReason, st
   expired: '审批已过期',
   'invalid-target': '目标无效',
   unsupported: '能力不支持',
-  'internal-error': '内部执行失败'
+  'internal-error': '内部执行失败',
+  'takeover-toggled': '任务接管已切换'
 }
 
 /** 标题栏按钮文案随开合变化，保持 aria-pressed 与可见 title 一致。 */

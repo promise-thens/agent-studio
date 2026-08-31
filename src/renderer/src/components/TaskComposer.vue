@@ -25,8 +25,11 @@ import {
   slashQuery,
   type SlashCommandItem
 } from '../slash-command-palette'
+import type { TaskPermissionMode } from '../../../shared/task-takeover'
 import ModelSelector from './ModelSelector.vue'
 import SlashCommandPalette from './SlashCommandPalette.vue'
+import TaskPermissionModeMenu from './TaskPermissionModeMenu.vue'
+import TaskTakeoverConfirmDialog from './TaskTakeoverConfirmDialog.vue'
 
 const props = defineProps<{
   prompt: string
@@ -43,6 +46,8 @@ const props = defineProps<{
   selectModel: (model: ProviderModelOption) => Promise<ProviderConfigSummary>
   modelBusy?: boolean
   modelDisabled?: boolean
+  permissionMode?: TaskPermissionMode
+  takeoverHud?: string | null
   /** 上下文 used/limit；没数据时不传或传空，模板藏起来。 */
   contextUsage?: string | null
   runtimeCommands?: AgentAvailableCommand[]
@@ -71,7 +76,24 @@ const emit = defineEmits<{
   'import-dropped-paths': [paths: string[]]
   'import-clipboard': []
   'remove-attachment': [attachmentId: string]
+  'permission-mode-select': [mode: TaskPermissionMode]
 }>()
+
+const pendingTakeover = ref(false)
+
+function handlePermissionModeSelect(mode: TaskPermissionMode): void {
+  if (props.modelBusy || props.modelDisabled) return
+  if (mode === 'takeover') {
+    pendingTakeover.value = true
+    return
+  }
+  emit('permission-mode-select', mode)
+}
+
+function confirmTakeover(): void {
+  pendingTakeover.value = false
+  emit('permission-mode-select', 'takeover')
+}
 
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const stopButton = ref<HTMLButtonElement | null>(null)
@@ -229,6 +251,7 @@ defineExpose({ focus, focusStop })
 
 <template>
   <footer class="composer-wrap">
+    <p v-if="takeoverHud" class="composer-takeover-hud" role="status">{{ takeoverHud }}</p>
     <div
       class="composer"
       :class="{ dragging }"
@@ -304,6 +327,12 @@ defineExpose({ focus, focusStop })
             @changed="emit('modelChanged', $event)"
             @error="emit('modelError', $event)"
           />
+          <TaskPermissionModeMenu
+            :mode="permissionMode ?? 'assist'"
+            :busy="modelBusy"
+            :disabled="modelDisabled"
+            @select="handlePermissionModeSelect"
+          />
           <span v-if="contextUsage" class="composer-usage" title="上下文用量">{{
             contextUsage
           }}</span>
@@ -375,5 +404,10 @@ defineExpose({ focus, focusStop })
     >
       {{ disabledMessage || promptMediaHint }}
     </p>
+    <TaskTakeoverConfirmDialog
+      v-if="pendingTakeover"
+      @confirm="confirmTakeover"
+      @cancel="pendingTakeover = false"
+    />
   </footer>
 </template>

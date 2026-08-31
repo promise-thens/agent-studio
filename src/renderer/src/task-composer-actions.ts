@@ -127,9 +127,9 @@ export function resolveCancelTurnRequest(
   }
 }
 
-/** 小窗保底宽度：模型选择和发送/停止不得 `display:none`。 */
+/** 小窗保底宽度：模型、批准模式和发送/停止不得 `display:none`。 */
 export const COMPOSER_COMPACT_MIN_WIDTH_PX = 980
-export const COMPOSER_COMPACT_ALWAYS_VISIBLE = ['model', 'send-or-stop'] as const
+export const COMPOSER_COMPACT_ALWAYS_VISIBLE = ['model', 'permission-mode', 'send-or-stop'] as const
 
 export interface ComposerChrome {
   action: 'send' | 'stop'

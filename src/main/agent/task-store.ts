@@ -27,7 +27,11 @@ import type {
   TaskExecutionState
 } from '../../shared/task-execution'
 import type { AgentRuntimeSessionRef } from './agent-runtime-adapter'
-import { readTakeoverSnapshot } from '../../shared/task-takeover'
+import {
+  readPermissionPromptStyle,
+  readTakeoverSnapshot,
+  type PermissionPromptStyle
+} from '../../shared/task-takeover'
 import { ProjectRegistry } from '../project/project-registry'
 import { createLocalEnvironmentId } from '../security/permission-policy'
 import { AtomicJsonWriter } from '../storage/atomic-json-file'
@@ -91,6 +95,10 @@ export interface TaskRecordV1 {
   /** 当前 Task 是否完全接管；缺字段读成 false。不是 Broker 沙箱。 */
   takeoverEnabled: boolean
   takeoverUpdatedAt?: string
+  /** 非接管时的询问风格；旧 JSON 缺字段读成 assist。 */
+  permissionPromptStyle: PermissionPromptStyle
+  /** 绑定 session 是否已 applied；缺字段 fail-closed 为 false。 */
+  takeoverApplied?: boolean
 }
 
 type PersistedExecutionReason =
@@ -327,7 +335,8 @@ export class TaskStore {
         createdAt: observedAt,
         updatedAt: observedAt,
         revision: 1,
-        takeoverEnabled: false
+        takeoverEnabled: false,
+        permissionPromptStyle: 'assist'
       }
       await this.writer.write(this.taskPath(task), task)
       this.tasks.set(task.taskId, task)
@@ -676,6 +685,37 @@ export class TaskStore {
       task: { ...task, state, activeTurnId: undefined },
       turn: { ...turn, state, endedAt: this.now(), ...(usage ? { usage } : {}) }
     }))
+  }
+
+  /**
+   * 写入当前 Task 的批准模式快照。这是把审批交给 Grok always-approve，不是 Broker 沙箱。
+   * 不 bump schema；旧记录缺 style 已在 parse 时读成 assist。
+   */
+  async updateTaskPermissionMode(
+    taskId: string,
+    patch: {
+      takeoverEnabled: boolean
+      permissionPromptStyle: PermissionPromptStyle
+      takeoverApplied: boolean
+    }
+  ): Promise<TaskRecordV1> {
+    return this.enqueueTask(taskId, async () => {
+      const task = this.requireTask(taskId)
+      const observedAt = this.now()
+      const nextTask: TaskRecordV1 = {
+        ...task,
+        takeoverEnabled: patch.takeoverEnabled === true,
+        permissionPromptStyle: patch.permissionPromptStyle === 'ask' ? 'ask' : 'assist',
+        takeoverApplied: patch.takeoverApplied === true,
+        takeoverUpdatedAt: observedAt,
+        updatedAt: observedAt,
+        revision: task.revision + 1
+      }
+      if (!nextTask.takeoverApplied) delete nextTask.takeoverApplied
+      await this.writer.write(this.taskPath(nextTask), nextTask)
+      this.tasks.set(taskId, nextTask)
+      return structuredClone(nextTask)
+    })
   }
 
   /**
@@ -1849,6 +1889,8 @@ function parseTaskRecord(value: unknown): RecordParseResult<TaskRecordV1> {
     return { kind: 'corrupt' }
   }
   const takeover = readTakeoverSnapshot(value)
+  const permissionPromptStyle = readPermissionPromptStyle(value)
+  const takeoverApplied = takeover.takeoverEnabled && value.takeoverApplied === true
   const upgraded: Record<string, unknown> = {
     ...value,
     schemaVersion: TASK_SCHEMA_VERSION,
@@ -1859,13 +1901,19 @@ function parseTaskRecord(value: unknown): RecordParseResult<TaskRecordV1> {
       projectId: value.projectId,
       rootSnapshot: value.environment.rootSnapshot
     },
-    takeoverEnabled: takeover.takeoverEnabled
+    takeoverEnabled: takeover.takeoverEnabled,
+    permissionPromptStyle
   }
-  // 缺字段或非法类型 fail-closed 为 false，不把整条 Task 标 corrupt，也不 bump schema。
+  // 缺字段或非法类型 fail-closed 为 false / assist，不把整条 Task 标 corrupt，也不 bump schema。
   if (takeover.takeoverUpdatedAt) {
     upgraded.takeoverUpdatedAt = takeover.takeoverUpdatedAt
   } else {
     delete upgraded.takeoverUpdatedAt
+  }
+  if (takeoverApplied) {
+    upgraded.takeoverApplied = true
+  } else {
+    delete upgraded.takeoverApplied
   }
   return {
     kind: 'valid',

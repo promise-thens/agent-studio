@@ -350,6 +350,8 @@ describe('命令板表面', () => {
     expect(composerSource).toContain("emit('open-plugins-marketplace')")
     expect(composerSource).toContain('matchProductSlashSubmit')
     expect(composerSource).not.toContain('继续任务')
+    expect(composerSource).toContain('TaskPermissionModeMenu')
+    expect(composerSource).toContain('TaskTakeoverConfirmDialog')
   })
 
   it('App 按 selectedTaskId 订阅命令快照，产品提交不清 startTurn', () => {

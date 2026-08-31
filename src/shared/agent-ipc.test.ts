@@ -26,6 +26,7 @@ describe('桌面 IPC 静态契约', () => {
       'agent:get-task-runtime-state',
       'agent:respond-permission',
       'agent:get-available-commands',
+      'agent:set-permission-mode',
       'agent:status',
       'agent:execution-update',
       'agent:event',

@@ -12,6 +12,11 @@ import type {
   AgentRuntimeStatus,
   AgentTaskRuntimeState
 } from '../../shared/agent'
+import {
+  resolveTakeoverHudCopy,
+  taskPermissionModeFromSnapshot,
+  type TaskPermissionMode
+} from '../../shared/task-takeover'
 import type {
   AgentAvailableCommand,
   AgentAvailableCommandSnapshot
@@ -483,6 +488,70 @@ const promptMediaHint = computed(() =>
     ? '当前 Runtime 未声明识图，图片将按文件附件发送。'
     : ''
 )
+const taskPermission = ref<
+  Record<
+    string,
+    {
+      mode: TaskPermissionMode
+      takeoverEnabled: boolean
+      takeoverApplied: boolean
+      takeoverMayStillBeActive?: boolean
+    }
+  >
+>({})
+const permissionModeBusy = ref(false)
+const activePermissionState = computed(() => taskPermission.value[activeTaskId.value] ?? null)
+const composerPermissionMode = computed<TaskPermissionMode>(
+  () => activePermissionState.value?.mode ?? 'assist'
+)
+const composerTakeoverHud = computed(() => {
+  const state = activePermissionState.value
+  if (!state) return null
+  return resolveTakeoverHudCopy({
+    takeoverEnabled: state.takeoverEnabled,
+    takeoverApplied: state.takeoverApplied,
+    takeoverMayStillBeActive: state.takeoverMayStillBeActive,
+    executing: Boolean(activeExecution.value)
+  })
+})
+
+function applyPermissionRuntime(task: AgentTaskRuntimeState): void {
+  taskPermission.value = {
+    ...taskPermission.value,
+    [task.taskId]: {
+      mode: taskPermissionModeFromSnapshot({
+        takeoverEnabled: task.takeoverEnabled === true,
+        permissionPromptStyle: task.permissionPromptStyle === 'ask' ? 'ask' : 'assist'
+      }),
+      takeoverEnabled: task.takeoverEnabled === true,
+      takeoverApplied: task.takeoverApplied === true,
+      ...(task.takeoverMayStillBeActive ? { takeoverMayStillBeActive: true } : {})
+    }
+  }
+}
+
+/** 等主进程成功后再改 UI，禁止乐观切换接管。 */
+async function setTaskPermissionMode(mode: TaskPermissionMode): Promise<void> {
+  const taskId = activeTaskId.value
+  if (!taskId || permissionModeBusy.value || composerChrome.value.modelBusy) return
+  permissionModeBusy.value = true
+  try {
+    applyPermissionRuntime(
+      unwrapDesktopIpcResult(
+        await window.agent.setPermissionMode({
+          taskId,
+          mode,
+          ...(mode === 'takeover' ? { confirmed: true as const } : {})
+        })
+      ).task
+    )
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    permissionModeBusy.value = false
+  }
+}
+
 const composerAttachmentViews = computed(() =>
   draftAttachments.value.map((item) => ({
     attachmentId: item.attachmentId,
@@ -776,6 +845,7 @@ function activateTaskView(task: AgentTaskRuntimeState, mode: 'live' | 'history' 
     0,
     12
   )
+  applyPermissionRuntime(task)
   reconcilePermissionQueue(task.taskId, activeProjectId.value)
 }
 
@@ -858,6 +928,11 @@ async function selectTask(taskId: string): Promise<void> {
     const entry = await pendingEnter
     if (enterGeneration !== conversationEnterGeneration || activeTaskId.value !== taskId) return
     conversationEntry.value = entry
+    try {
+      applyPermissionRuntime(unwrapDesktopIpcResult(await window.agent.getTaskRuntimeState(taskId)))
+    } catch {
+      // 进入对话已成功；批准模式刷新失败时保持上次快照，不阻断浏览。
+    }
   } catch (error) {
     if (activeTaskId.value !== taskId) return
     if (enterGeneration === conversationEnterGeneration) {
@@ -1770,6 +1845,7 @@ function scrollMessagesToBottom(): void {
             v-if="executionSurfaceBanner.kind !== 'none'"
             :primary-view="workbench.primaryView.value"
             :active-execution="activeExecution"
+            :takeover-hud="composerTakeoverHud"
             @return-to-conversation="workbench.returnToConversation"
           />
           <PluginsPage
@@ -1824,8 +1900,10 @@ function scrollMessagesToBottom(): void {
             :model="currentModel"
             :load-models="loadSavedModels"
             :select-model="selectProviderModel"
-            :model-busy="composerChrome.modelBusy"
+            :model-busy="composerChrome.modelBusy || permissionModeBusy"
             :model-disabled="!providerSummary?.configured"
+            :permission-mode="composerPermissionMode"
+            :takeover-hud="composerTakeoverHud"
             :context-usage="composerContextUsage"
             :runtime-commands="runtimeSlashCommands"
             :attachments="composerAttachmentViews"
@@ -1845,6 +1923,7 @@ function scrollMessagesToBottom(): void {
             @open-settings-grok-config="handleProductSlashAction('open-settings-grok-config')"
             @model-changed="handleModelChanged"
             @model-error="handleModelError"
+            @permission-mode-select="setTaskPermissionMode"
           />
         </template>
       </main>

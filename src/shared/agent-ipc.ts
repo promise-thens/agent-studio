@@ -4,6 +4,7 @@ import type {
   AgentRuntimeStatus,
   AgentTaskRuntimeState
 } from './agent'
+import type { TakeoverApplyDecision, TaskPermissionMode } from './task-takeover'
 import type { AgentAvailableCommandSnapshot } from './agent-available-command'
 import type { PublicAgentEvent } from './agent-event'
 import type {
@@ -25,7 +26,8 @@ export const AGENT_INVOKE_CHANNELS = {
   cancelTurn: 'agent:cancel-turn',
   getTaskRuntimeState: 'agent:get-task-runtime-state',
   respondPermission: 'agent:respond-permission',
-  getAvailableCommands: 'agent:get-available-commands'
+  getAvailableCommands: 'agent:get-available-commands',
+  setPermissionMode: 'agent:set-permission-mode'
 } as const
 
 export const AGENT_PUSH_CHANNELS = {
@@ -73,6 +75,22 @@ export interface AgentRespondPermissionRequest {
   decision: AgentPermissionDecision
 }
 
+/**
+ * 切换当前 Task 的批准模式。takeover 必须带 confirmed: true；
+ * 这是把审批交给 Grok always-approve，不是 Permission Broker 沙箱。
+ */
+export interface AgentSetPermissionModeRequest {
+  taskId: string
+  mode: TaskPermissionMode
+  confirmed?: boolean
+}
+
+export interface AgentSetPermissionModeResult {
+  task: AgentTaskRuntimeState
+  decision: TakeoverApplyDecision
+  controlPrompt?: '/always-approve'
+}
+
 /** 主进程只用审批身份通知 Renderer 移除已失效项，不暴露 Runtime requestId。 */
 export interface AgentPermissionCancellation {
   approvalId: string
@@ -102,6 +120,13 @@ export interface AgentDesktopApi {
    */
   getAvailableCommands: (taskId: string) => Promise<DesktopIpcResult<AgentAvailableCommandSnapshot>>
   respondPermission: (request: AgentRespondPermissionRequest) => Promise<DesktopIpcResult<null>>
+  /**
+   * 空闲时切换 ask / assist / takeover。Renderer 不得自己写 _meta；
+   * takeover 必须先确认再带 confirmed: true。
+   */
+  setPermissionMode: (
+    request: AgentSetPermissionModeRequest
+  ) => Promise<DesktopIpcResult<AgentSetPermissionModeResult>>
   onStatus: (listener: (status: AgentRuntimeStatus) => void) => () => void
   onExecutionUpdate: (listener: (snapshot: TaskExecutionSnapshot) => void) => () => void
   onEvent: (listener: (event: PublicAgentEvent) => void) => () => void

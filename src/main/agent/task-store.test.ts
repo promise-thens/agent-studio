@@ -114,7 +114,9 @@ describe('TaskStore', () => {
     const { store } = await createStore()
     const record = store.getTaskRecord('task-1')
     expect(record.takeoverEnabled).toBe(false)
+    expect(record.permissionPromptStyle).toBe('assist')
     expect(record).not.toHaveProperty('takeoverUpdatedAt')
+    expect(record).not.toHaveProperty('takeoverApplied')
   })
 
   it('缺 takeover 字段的旧 task.json 读成 false 且 Task 仍可用', async () => {
@@ -129,6 +131,7 @@ describe('TaskStore', () => {
     await restarted.initialize()
     const record = restarted.getTaskRecord('task-1')
     expect(record.takeoverEnabled).toBe(false)
+    expect(record.permissionPromptStyle).toBe('assist')
     expect(record).not.toHaveProperty('takeoverUpdatedAt')
     expect(record.taskId).toBe('task-1')
     expect(record.state).toBe('pending')
@@ -146,8 +149,22 @@ describe('TaskStore', () => {
     await restarted.initialize()
     const record = restarted.getTaskRecord('task-1')
     expect(record.takeoverEnabled).toBe(false)
+    expect(record.permissionPromptStyle).toBe('assist')
     expect(record).not.toHaveProperty('takeoverUpdatedAt')
     expect(record.taskId).toBe('task-1')
+  })
+
+  it('updateTaskPermissionMode 写盘，旧 JSON 缺 style 读成 assist', async () => {
+    const { store } = await createStore()
+    const updated = await store.updateTaskPermissionMode('task-1', {
+      takeoverEnabled: true,
+      permissionPromptStyle: 'ask',
+      takeoverApplied: true
+    })
+    expect(updated.takeoverEnabled).toBe(true)
+    expect(updated.permissionPromptStyle).toBe('ask')
+    expect(updated.takeoverApplied).toBe(true)
+    expect(updated.takeoverUpdatedAt).toEqual(expect.any(String))
   })
 
   it('持久化 Turn 和完整展示事件，但历史 DTO/事件文件不暴露 session ID', async () => {
@@ -1225,9 +1242,9 @@ describe('TaskStore', () => {
 
     const cleared = await store.attachTurnArtifactIds('task-1', 'turn-1', [])
     expect(cleared.artifactIds).toBeUndefined()
-    await expect(
-      store.attachTurnArtifactIds('task-1', 'turn-1', ['bad/id'])
-    ).rejects.toMatchObject({ code: 'invalid-state' })
+    await expect(store.attachTurnArtifactIds('task-1', 'turn-1', ['bad/id'])).rejects.toMatchObject(
+      { code: 'invalid-state' }
+    )
   })
 
   it('读盘仍接受历史里未校验的 validationIds 字符串数组，不把旧 Turn 标坏', async () => {

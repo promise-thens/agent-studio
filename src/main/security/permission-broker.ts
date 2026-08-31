@@ -10,6 +10,7 @@ import type {
   OperationIntent
 } from '../../shared/agent'
 import type { PermissionAuditRecord } from '../../shared/task-history'
+import type { PermissionPromptStyle } from '../../shared/task-takeover'
 import type { AgentPermissionCancellation } from '../../shared/agent-ipc'
 import {
   MAX_PERMISSION_AUDIT_RECORD_BYTES,
@@ -41,7 +42,7 @@ export type PermissionAuthorizationResult<T> =
       ok: false
       reason: Exclude<
         AgentPermissionResolutionReason,
-        'auto-allowed' | 'grant-reused' | 'user-allowed'
+        'auto-allowed' | 'grant-reused' | 'user-allowed' | 'takeover-toggled'
       >
     }
 
@@ -60,6 +61,11 @@ export interface AuthorizeOperationOptions {
   onPendingChange?: (count: number) => void
   /** 仅供主进程精确关联 Runtime 请求与产品审批，永不进入 Renderer DTO。 */
   cancellationId?: string
+  /**
+   * ask 时跳过 taskGrants 复用，L1+ 每次询问。assist 保持 GACP-03。
+   * L0 policy.kind === 'allow' 仍自动过。这不是 always-approve 沙箱。
+   */
+  permissionPromptStyle?: PermissionPromptStyle
 }
 
 export interface PermissionBrokerOptions {
@@ -110,6 +116,7 @@ interface PendingApproval {
   isActive?: () => boolean
   onPendingChange?: (count: number) => void
   cancellationId?: string
+  skipTaskGrantReuse: boolean
   timer: ReturnType<typeof setTimeout>
   resolve: (result: PermissionAuthorizationResult<unknown>) => void
   phase: 'waiting' | 'settling' | 'executing' | 'settled'
@@ -247,7 +254,8 @@ export class PermissionBroker {
         )
       }
 
-      if (this.taskGrants.has(grantKey)) {
+      const skipTaskGrantReuse = options.permissionPromptStyle === 'ask'
+      if (!skipTaskGrantReuse && this.taskGrants.has(grantKey)) {
         admission.release()
         return await this.executeAllowed(
           resolved,
@@ -431,6 +439,36 @@ export class PermissionBroker {
     this.taskGrants.clear()
   }
 
+  /**
+   * 记录 Task 完全接管开关。detail 只写 enabled/disabled，不含 prompt。
+   * 这是把审批交给 Grok always-approve，不是 Broker 沙箱。
+   */
+  async recordTakeoverToggle(input: {
+    taskId: string
+    turnId: string
+    projectId: string
+    environmentId: string
+    enabled: boolean
+  }): Promise<void> {
+    await this.auditStore.append({
+      auditId: this.createId(),
+      taskId: input.taskId,
+      turnId: input.turnId,
+      projectId: input.projectId,
+      environmentId: input.environmentId,
+      initiator: 'app',
+      appService: 'other',
+      operationType: 'unknown',
+      risk: 'L3',
+      targetSummaries: ['task-permission-mode'],
+      title: '任务批准模式',
+      impact: '将审批交给 Grok always-approve，不是 Permission Broker 沙箱。',
+      reason: 'takeover-toggled',
+      detail: input.enabled ? 'enabled' : 'disabled',
+      createdAt: new Date(this.now()).toISOString()
+    })
+  }
+
   /** App 退出时取消所有等待请求并清空不跨重启的 Task grant。 */
   async shutdown(): Promise<void> {
     this.shuttingDown = true
@@ -457,8 +495,9 @@ export class PermissionBroker {
     grantKey: string,
     options: AuthorizeOperationOptions
   ): Promise<PermissionAuthorizationResult<T>> {
+    const skipTaskGrantReuse = options.permissionPromptStyle === 'ask'
     // 准入与登记之间可能已完成本任务授权；推卡前再读一次，避免结算窗口再弹一张。
-    if (this.taskGrants.has(grantKey)) {
+    if (!skipTaskGrantReuse && this.taskGrants.has(grantKey)) {
       return this.executeAllowed(intent, execute, risk, 'grant-reused', 'task', options.isActive)
     }
     const approvalId = this.allocateApprovalId()
@@ -487,6 +526,7 @@ export class PermissionBroker {
         ...(options.isActive ? { isActive: options.isActive } : {}),
         ...(options.onPendingChange ? { onPendingChange: options.onPendingChange } : {}),
         ...(options.cancellationId ? { cancellationId: options.cancellationId } : {}),
+        skipTaskGrantReuse,
         timer,
         resolve: (result) => resolve(result as PermissionAuthorizationResult<T>),
         phase: 'waiting',
@@ -651,7 +691,7 @@ export class PermissionBroker {
     if (this.hasBusyApproval(taskId, turnId)) return
     const head = this.getWaitingQueueHead(taskId, turnId)
     if (!head) return
-    if (this.taskGrants.has(head.grantKey)) {
+    if (!head.skipTaskGrantReuse && this.taskGrants.has(head.grantKey)) {
       void this.settlePendingAsGrantReused(head)
       return
     }
@@ -786,6 +826,7 @@ export class PermissionBroker {
   private reuseWaitingGrantHolders(grantKey: string): void {
     for (const pending of this.pending.values()) {
       if (pending.phase !== 'waiting' || pending.grantKey !== grantKey) continue
+      if (pending.skipTaskGrantReuse) continue
       void this.settlePendingAsGrantReused(pending)
     }
   }
@@ -935,7 +976,7 @@ export class PermissionBroker {
     risk: AgentPermissionRisk,
     reason: Exclude<
       AgentPermissionResolutionReason,
-      'auto-allowed' | 'grant-reused' | 'user-allowed'
+      'auto-allowed' | 'grant-reused' | 'user-allowed' | 'takeover-toggled'
     >,
     scope?: AgentPermissionScope,
     detail?: string

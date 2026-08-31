@@ -151,9 +151,9 @@ describe('发送与停止身份', () => {
     expect(running.action).toBe('stop')
     expect(running.modelBusy).toBe(true)
     expect(running.textareaVisible).toBe(true)
-    expect(running.keepVisibleAtCompactWidth).toEqual(['model', 'send-or-stop'])
+    expect(running.keepVisibleAtCompactWidth).toEqual(['model', 'permission-mode', 'send-or-stop'])
     expect(COMPOSER_COMPACT_MIN_WIDTH_PX).toBe(980)
-    expect(COMPOSER_COMPACT_ALWAYS_VISIBLE).toEqual(['model', 'send-or-stop'])
+    expect(COMPOSER_COMPACT_ALWAYS_VISIBLE).toEqual(['model', 'permission-mode', 'send-or-stop'])
 
     expect(
       resolveComposerChrome({

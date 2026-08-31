@@ -9,8 +9,11 @@ import {
   type AgentEnterTaskRequest,
   type AgentGetTaskRuntimeStateRequest,
   type AgentRespondPermissionRequest,
+  type AgentSetPermissionModeRequest,
+  type AgentSetPermissionModeResult,
   type AgentStartTurnRequest
 } from '../../shared/agent-ipc'
+import { isTaskPermissionMode } from '../../shared/task-takeover'
 import { ATTACHMENT_LIMITS } from '../../shared/task-attachment'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
 import type {
@@ -49,6 +52,9 @@ export interface AgentIpcRuntime {
   getTaskRuntimeState: (taskId: string) => AgentTaskRuntimeState
   getAvailableCommands: (taskId: string) => AgentAvailableCommandSnapshot
   respondPermission: (request: AgentRespondPermissionRequest) => Promise<void>
+  setPermissionMode: (
+    request: AgentSetPermissionModeRequest
+  ) => Promise<AgentSetPermissionModeResult>
 }
 
 export interface AgentIpcDependencies {
@@ -190,6 +196,29 @@ function readCancelRequest(args: unknown[]): AgentCancelTurnRequest {
   }
 }
 
+/**
+ * 读取批准模式切换。takeover 必须带 confirmed: true。
+ * 这是把审批交给 Grok always-approve，不是 Permission Broker 沙箱。
+ */
+function readSetPermissionModeRequest(args: unknown[]): AgentSetPermissionModeRequest {
+  const request = readRequest(args, ['taskId', 'mode', 'confirmed'])
+  const mode = request.mode
+  if (!isTaskPermissionMode(mode)) {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  if (request.confirmed !== undefined && typeof request.confirmed !== 'boolean') {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  if (mode === 'takeover' && request.confirmed !== true) {
+    throw new DesktopIpcFailure('invalid-input', '打开完全接管前必须确认。')
+  }
+  return {
+    taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES),
+    mode,
+    ...(typeof request.confirmed === 'boolean' ? { confirmed: request.confirmed } : {})
+  }
+}
+
 function readPermissionRequest(args: unknown[]): AgentRespondPermissionRequest {
   const request = readRequest(args, ['approvalId', 'taskId', 'turnId', 'decision'])
   const decision = request.decision
@@ -328,5 +357,16 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
       }
       throw error
     }
+  })
+
+  /**
+   * 切换当前 Task 批准模式。sender 已由 registerResultHandler 校验为主窗口。
+   * takeover 无 confirmed 在读参阶段拒绝，避免 Runtime 被误调。
+   */
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.setPermissionMode, async (args) => {
+    const request = readSetPermissionModeRequest(args)
+    const agent = requireAgent(dependencies.getAgent)
+    assertPromptState(agent.getStatus())
+    return agent.setPermissionMode(request)
   })
 }

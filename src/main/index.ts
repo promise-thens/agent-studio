@@ -38,6 +38,7 @@ import { ArtifactRegistry } from './artifact/artifact-registry'
 import { ArtifactContentService } from './artifact/artifact-content-service'
 import { parseClipboardFilePaths } from './agent/clipboard-file-paths'
 import { ATTACHMENT_LIMITS } from '../shared/task-attachment'
+import type { TaskExecutionSnapshot } from '../shared/task-execution'
 import { OperationGate, type OperationLease } from './agent/operation-gate'
 import { TaskExecutor } from './agent/task-executor'
 import { TaskExecutionController } from './agent/task-execution-controller'
@@ -577,6 +578,48 @@ async function runManagedMarketplaceAdd(gitUrl: string): Promise<null> {
 }
 
 /** 注册渲染层可调用的最小 IPC 接口。 */
+/**
+ * 与 agent:start-turn 同一条执行槽。接管斜杠命令也走这里，
+ * displayText 经统一脱敏，字面量为 /always-approve，不含用户原文。
+ */
+async function startTurnWithPrompt(
+  service: AgentService,
+  executor: TaskExecutor,
+  taskId: string,
+  prompt: string,
+  attachmentIds: string[] = []
+): Promise<TaskExecutionSnapshot> {
+  await service.waitForEnter(taskId)
+  await service.ensureTaskSessionForTurn(taskId)
+  const task = requireTaskStore().getTaskRecord(taskId)
+  return executor.start({
+    taskId,
+    projectId: task.projectId,
+    runtimeId: task.runtimeId,
+    session: {
+      runtimeId: task.runtimeSession.runtimeId,
+      runtimeSessionId: task.runtimeSession.runtimeSessionId,
+      workspace: task.runtimeSession.workspace
+    },
+    environmentId: task.environment.environmentId,
+    resolvedExecutionRoot: task.environment.rootSnapshot,
+    prompt,
+    promptDisplayText: redactProviderText(prompt),
+    ...(attachmentIds.length ? { attachmentIds } : {}),
+    model: (() => {
+      const config = requireProviderRuntimeConfig()
+      return {
+        modelId: config.modelId,
+        ...(config.modelDisplayName ? { displayName: config.modelDisplayName } : {})
+      }
+    })(),
+    capabilitySnapshot: requireRuntimeAdapter().getCapabilitySnapshot(),
+    prepareRuntime: async (lease) => {
+      await service.resumeTask(taskId, lease)
+    }
+  })
+}
+
 function registerIpcHandlers(): void {
   const rendererTrust = createRendererTrustOptions()
   const desktopIpcMain: DesktopIpcMain = {
@@ -601,38 +644,17 @@ function registerIpcHandlers(): void {
         connect: (projectId) => service.connect(projectId),
         disconnect: () => service.disconnect(),
         createTask: (projectId) => service.createTask(projectId),
-        enterTask: (taskId) => service.enterTask(taskId),
-        startTurn: async (taskId, prompt, attachmentIds = []) => {
-          await service.waitForEnter(taskId)
-          await service.ensureTaskSessionForTurn(taskId)
-          const task = requireTaskStore().getTaskRecord(taskId)
-          return executor.start({
-            taskId,
-            projectId: task.projectId,
-            runtimeId: task.runtimeId,
-            session: {
-              runtimeId: task.runtimeSession.runtimeId,
-              runtimeSessionId: task.runtimeSession.runtimeSessionId,
-              workspace: task.runtimeSession.workspace
-            },
-            environmentId: task.environment.environmentId,
-            resolvedExecutionRoot: task.environment.rootSnapshot,
-            prompt,
-            promptDisplayText: redactProviderText(prompt),
-            ...(attachmentIds.length ? { attachmentIds } : {}),
-            model: (() => {
-              const config = requireProviderRuntimeConfig()
-              return {
-                modelId: config.modelId,
-                ...(config.modelDisplayName ? { displayName: config.modelDisplayName } : {})
-              }
-            })(),
-            capabilitySnapshot: requireRuntimeAdapter().getCapabilitySnapshot(),
-            prepareRuntime: async (lease) => {
-              await service.resumeTask(taskId, lease)
-            }
-          })
+        enterTask: async (taskId) => {
+          const entry = await service.enterTask(taskId)
+          const controlPrompt = service.consumeTakeoverApplyCommand(taskId)
+          if (controlPrompt) {
+            // 恢复后补发接管命令，展示文本固定为 /always-approve，不含用户原文。
+            await startTurnWithPrompt(service, executor, taskId, controlPrompt)
+          }
+          return entry
         },
+        startTurn: async (taskId, prompt, attachmentIds = []) =>
+          startTurnWithPrompt(service, executor, taskId, prompt, attachmentIds),
         cancelTurn: async (request) => {
           if (typeof request === 'string') return service.cancelTurn(request)
           const cancelled = await executor.cancel(request)
@@ -641,7 +663,15 @@ function registerIpcHandlers(): void {
         },
         getTaskRuntimeState: (taskId) => service.getTaskRuntimeState(taskId),
         getAvailableCommands: (taskId) => service.getAvailableCommands(taskId),
-        respondPermission: (request) => service.respondPermission(request)
+        respondPermission: (request) => service.respondPermission(request),
+        setPermissionMode: async (request) => {
+          const result = await service.setPermissionMode(request)
+          if (result.decision.kind === 'send-command' && result.controlPrompt) {
+            // 与 startTurn 同一条 executor.start；展示文本脱敏为 /always-approve。
+            await startTurnWithPrompt(service, executor, request.taskId, result.controlPrompt)
+          }
+          return result
+        }
       }
     },
     sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())

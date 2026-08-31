@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  GROK_TAKEOVER_CONTROL_PROMPT,
   GROK_TAKEOVER_SLASH_COMMAND,
   isTakeoverCommandAdvertised,
+  permissionSnapshotFromMode,
+  readPermissionPromptStyle,
   readTakeoverSnapshot,
   resolveTakeoverApply,
+  resolveTakeoverHudCopy,
+  taskPermissionModeFromSnapshot,
   type TakeoverApplyInput
 } from './task-takeover'
 
@@ -160,5 +165,82 @@ describe('readTakeoverSnapshot', () => {
       takeoverEnabled: false
     })
     expect(readTakeoverSnapshot({ takeoverUpdatedAt: 1 })).toEqual({ takeoverEnabled: false })
+  })
+})
+
+describe('permissionPromptStyle 与三档映射', () => {
+  it('缺字段与非法值默认 assist，仅字面量 ask 才是 ask', () => {
+    expect(readPermissionPromptStyle(undefined)).toBe('assist')
+    expect(readPermissionPromptStyle(null)).toBe('assist')
+    expect(readPermissionPromptStyle({})).toBe('assist')
+    expect(readPermissionPromptStyle({ permissionPromptStyle: 'assist' })).toBe('assist')
+    expect(readPermissionPromptStyle({ permissionPromptStyle: 'ask' })).toBe('ask')
+    expect(readPermissionPromptStyle({ permissionPromptStyle: 'takeover' })).toBe('assist')
+    expect(readPermissionPromptStyle({ permissionPromptStyle: true })).toBe('assist')
+  })
+
+  it('takeoverEnabled 为真即 takeover，否则回落 style；缺字段 fail-closed 为 assist', () => {
+    expect(
+      taskPermissionModeFromSnapshot({ takeoverEnabled: true, permissionPromptStyle: 'ask' })
+    ).toBe('takeover')
+    expect(
+      taskPermissionModeFromSnapshot({ takeoverEnabled: false, permissionPromptStyle: 'ask' })
+    ).toBe('ask')
+    expect(
+      taskPermissionModeFromSnapshot({ takeoverEnabled: false, permissionPromptStyle: 'assist' })
+    ).toBe('assist')
+    expect(
+      taskPermissionModeFromSnapshot({
+        takeoverEnabled: false,
+        permissionPromptStyle: readPermissionPromptStyle({})
+      })
+    ).toBe('assist')
+  })
+
+  it('进入接管保留上次 ask/assist，关掉才写回询问风格', () => {
+    expect(permissionSnapshotFromMode('takeover', 'ask')).toEqual({
+      takeoverEnabled: true,
+      permissionPromptStyle: 'ask'
+    })
+    expect(permissionSnapshotFromMode('assist', 'ask')).toEqual({
+      takeoverEnabled: false,
+      permissionPromptStyle: 'assist'
+    })
+    expect(permissionSnapshotFromMode('ask')).toEqual({
+      takeoverEnabled: false,
+      permissionPromptStyle: 'ask'
+    })
+    expect(GROK_TAKEOVER_CONTROL_PROMPT).toBe('/always-approve')
+  })
+
+  it('HUD：执行中才写正在接管；未生效与可能仍在始终可见', () => {
+    expect(
+      resolveTakeoverHudCopy({
+        takeoverEnabled: true,
+        takeoverApplied: true,
+        executing: true
+      })
+    ).toBe('Grok 正在完全接管')
+    expect(
+      resolveTakeoverHudCopy({
+        takeoverEnabled: true,
+        takeoverApplied: true,
+        executing: false
+      })
+    ).toBeNull()
+    expect(
+      resolveTakeoverHudCopy({
+        takeoverEnabled: true,
+        takeoverApplied: false,
+        executing: false
+      })
+    ).toBe('接管未完全生效')
+    expect(
+      resolveTakeoverHudCopy({
+        takeoverEnabled: false,
+        takeoverApplied: false,
+        takeoverMayStillBeActive: true
+      })
+    ).toBe('接管可能仍在')
   })
 })

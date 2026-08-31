@@ -43,7 +43,9 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
     state: 'pending',
     createdAt: '2026-08-11T00:00:00.000Z',
     updatedAt: '2026-08-11T00:00:00.000Z',
-    takeoverEnabled: false
+    takeoverEnabled: false,
+    permissionPromptStyle: 'assist',
+    takeoverApplied: false
   }
   const turn: AgentTurnExecutionResult = {
     taskId: 'task-1',
@@ -75,7 +77,11 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
       revision: 0,
       commands: []
     })),
-    respondPermission: vi.fn(async () => undefined)
+    respondPermission: vi.fn(async () => undefined),
+    setPermissionMode: vi.fn(async () => ({
+      task,
+      decision: { kind: 'noop' as const }
+    }))
   }
   const assertTrustedSender = vi.fn()
   registerAgentIpcHandlers({
@@ -230,7 +236,9 @@ describe('Agent IPC Handler', () => {
         lastTurnId: 'turn-failed',
         createdAt: '2026-08-11T00:00:00.000Z',
         updatedAt: '2026-08-11T00:00:01.000Z',
-        takeoverEnabled: false
+        takeoverEnabled: false,
+        permissionPromptStyle: 'assist',
+        takeoverApplied: false
       }
     })
 
@@ -523,5 +531,67 @@ describe('Agent IPC Handler', () => {
       expect(result.error.message).not.toContain('internal.example')
       expect(result.error.message).not.toContain('/Users/test')
     }
+  })
+
+  it('未 confirmed 的 takeover 必须拒绝，且不得调用 Runtime', async () => {
+    const fixture = createFixture()
+
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, {
+        taskId: 'task-1',
+        mode: 'takeover'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, {
+        taskId: 'task-1',
+        mode: 'takeover',
+        confirmed: false
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.runtime.setPermissionMode).not.toHaveBeenCalled()
+  })
+
+  it('普通 set assist 成功委托 Service', async () => {
+    const fixture = createFixture()
+    const result = await fixture.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, {
+      taskId: 'task-1',
+      mode: 'assist'
+    })
+    expect(result).toMatchObject({
+      ok: true,
+      value: { task: { taskId: 'task-1' }, decision: { kind: 'noop' } }
+    })
+    expect(fixture.runtime.setPermissionMode).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      mode: 'assist'
+    })
+  })
+
+  it('活动 Turn 时切换批准模式映射为 invalid-state', async () => {
+    const fixture = createFixture()
+    vi.mocked(fixture.runtime.setPermissionMode).mockRejectedValue(
+      new AgentServiceError('invalid-state', '任务执行中不能切换批准模式。')
+    )
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, {
+        taskId: 'task-1',
+        mode: 'ask'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-state' } })
+  })
+
+  it('confirmed 的 takeover 才委托 Service', async () => {
+    const fixture = createFixture()
+    await fixture.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, {
+      taskId: 'task-1',
+      mode: 'takeover',
+      confirmed: true
+    })
+    expect(fixture.runtime.setPermissionMode).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      mode: 'takeover',
+      confirmed: true
+    })
   })
 })

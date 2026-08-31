@@ -1130,6 +1130,8 @@ describe('AgentService Task / Turn 编排', () => {
     const service = createService(adapter, ['task-a'])
     const task = await service.createTask(WORKSPACE)
     expect(task.takeoverEnabled).toBe(false)
+    expect(task.permissionPromptStyle).toBe('assist')
+    expect(task.takeoverApplied).toBe(false)
     expect(task).not.toHaveProperty('takeoverUpdatedAt')
     expect(adapter.createSession).toHaveBeenCalledTimes(1)
     expect(adapter.createSession.mock.calls[0]?.[0]).toEqual({
@@ -1196,6 +1198,90 @@ describe('AgentService Task / Turn 编排', () => {
       })
     } finally {
       await rm(userDataPath, { recursive: true, force: true })
+    }
+  })
+
+  it('未确认的 takeover 抛 invalid-input', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    const task = await service.createTask(WORKSPACE)
+    await expect(
+      service.setPermissionMode({ taskId: task.taskId, mode: 'takeover' })
+    ).rejects.toEqual(new AgentServiceError('invalid-input', '打开完全接管前必须确认。'))
+    expect(service.getTaskRuntimeState(task.taskId).takeoverEnabled).toBe(false)
+    expect(adapter.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('活动 Turn 期间不能切换批准模式', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const turn = deferred<AgentRuntimeTurnResult>()
+    const dispatched = deferred<void>()
+    adapter.startTurn.mockImplementationOnce(async () => {
+      dispatched.resolve()
+      return turn.promise
+    })
+    const controller = new TaskExecutionController()
+    const service = createService(adapter, ['task-a', 'turn-1'], controller)
+    const task = await service.createTask(WORKSPACE)
+    const running = service.startTurn(task.taskId, '执行中')
+    await dispatched.promise
+    await expect(service.setPermissionMode({ taskId: task.taskId, mode: 'ask' })).rejects.toEqual(
+      new AgentServiceError('invalid-state', '任务执行中不能切换批准模式。')
+    )
+    turn.resolve({ outcome: 'completed' })
+    await running
+  })
+
+  it('普通 set assist 成功且不发接管命令', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    const task = await service.createTask(WORKSPACE)
+    const result = await service.setPermissionMode({ taskId: task.taskId, mode: 'assist' })
+    expect(result.task.permissionPromptStyle).toBe('assist')
+    expect(result.task.takeoverEnabled).toBe(false)
+    expect(result.decision).toEqual({ kind: 'noop' })
+    expect(result.controlPrompt).toBeUndefined()
+    expect(adapter.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('有 session + 广告 + idle 时 enable 返回 controlPrompt /always-approve', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    const task = await service.createTask(WORKSPACE)
+    service.handleAvailableCommands({
+      taskId: task.taskId,
+      revision: 1,
+      commands: [{ name: 'always-approve', description: '完全接管' }]
+    })
+    const result = await service.setPermissionMode({
+      taskId: task.taskId,
+      mode: 'takeover',
+      confirmed: true
+    })
+    expect(result.decision).toEqual({ kind: 'send-command', commandName: 'always-approve' })
+    expect(result.controlPrompt).toBe('/always-approve')
+    expect(result.task.takeoverEnabled).toBe(true)
+    expect(result.task.takeoverApplied).toBe(true)
+    expect(adapter.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('无 session 返回 new-session-meta 且不 startTurn', async () => {
+    const fixture = await createHistoryServiceFixture(['task-a'])
+    try {
+      const created = await fixture.service.createTask(fixture.project.projectId)
+      await fixture.service.disconnect()
+      const result = await fixture.service.setPermissionMode({
+        taskId: created.taskId,
+        mode: 'takeover',
+        confirmed: true
+      })
+      expect(result.decision).toEqual({ kind: 'new-session-meta' })
+      expect(result.controlPrompt).toBeUndefined()
+      expect(result.task.takeoverEnabled).toBe(true)
+      expect(result.task.takeoverApplied).toBe(false)
+      expect(fixture.adapter.startTurn).not.toHaveBeenCalled()
+    } finally {
+      await fixture.dispose()
     }
   })
 })

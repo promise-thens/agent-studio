@@ -357,7 +357,8 @@ function validateAuditRecord(value: unknown): asserts value is PermissionAuditRe
       'expired',
       'invalid-target',
       'unsupported',
-      'internal-error'
+      'internal-error',
+      'takeover-toggled'
     ].includes(String(value.reason))
   ) {
     throw new Error('invalid-enum')
