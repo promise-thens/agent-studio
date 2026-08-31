@@ -2,7 +2,7 @@
 
 > **致执行者：** 把当前 Adapter 依赖的 Grok 私有约定收成版本化契约。本计划在 P0-10 之后、第二个 Runtime（P2）之前完成，可与 P0-12 并行。P1-05 继续拥有密钥与 `GROK_HOME` 隔离复核，本计划拥有 ACP 启动方言。
 >
-> **状态：** 待开始（前置：P0-10；建议同时有 GACP-01 观察记录）
+> **状态：** 代码已落地（2026-08-31）。相关 Vitest + `pnpm typecheck:node` 已过；lifecycle / permission Electron E2E 与开发版 GUI 未在本分支实跑。
 >
 > **插入点：** P0-10 之后、P2 之前；不阻塞 P0-12
 
@@ -106,13 +106,13 @@ ProviderRuntimeConfig（主进程已校验）
 connection.initialize({
   protocolVersion: acp.PROTOCOL_VERSION,
   clientCapabilities: {},
-  clientInfo: { name: 'agent-studio', version: '0.1.0' }
+  clientInfo: { name: 'agent-studio', version: app.getVersion() /* 开发态加 -dev */ }
 })
 ```
 
 本计划要求 `clientInfo.version` 改为读取应用真实版本（`app.getVersion()` 或构建期注入），避免 Grok 侧诊断对不上。
 
-允许读取的响应字段仍只有：`protocolVersion`、`agentInfo.version`、`loadSession`、`sessionCapabilities.resume`、`sessionCapabilities.close`。其它字段进观察文档，不进产品逻辑。
+允许读取的响应字段：`protocolVersion`、`agentInfo.version`、`loadSession`、`sessionCapabilities.resume`、`sessionCapabilities.close`、`promptCapabilities.image`、`promptCapabilities.embeddedContext`。`promptCapabilities.audio` 与其它字段只进观察文档，不进产品逻辑。
 
 ### 5. session/set_model
 
@@ -130,15 +130,15 @@ connection.initialize({
 
 **涉及范围：** `grok-acp-dialect.ts`、Adapter 引用、单测。
 
-- [ ] **第 1 步: 冻结常量**
+- [x] **第 1 步: 冻结常量**
       说明：集中 `GROK_SET_MODEL_METHOD`、`AGENT_STUDIO_MODEL_ALIAS`、生产 argv、允许读取的 initialize 字段列表、set_model 响应守卫。
       预期：改 argv 会有单测失败；测试里禁止再复制一份魔法数组而不引用模块。
 
-- [ ] **第 2 步: 实现握手兼容性检查**
+- [x] **第 2 步: 实现握手兼容性检查**
       说明：输入为 `InitializeResponse` 的已投影子集。版本不等 → 现有拒绝。缺少 session/new 基线能力（规范要求 Agent 必须支持）只记录，不自行发明探测。
       预期：GACP-01 记录的真实握手能通过；故意改 version 的夹具被拒绝。
 
-- [ ] **第 3 步: 实现 set_model 守卫**
+- [x] **第 3 步: 实现 set_model 守卫**
       说明：把 Adapter 里“必须是 object”的检查搬进方言模块，并补充：禁止把 `_meta` 当业务字段读。
       预期：null / 数组 / 字符串响应全部失败关闭。
 
@@ -148,15 +148,15 @@ connection.initialize({
 
 **涉及范围：** `clientInfo`、能力快照、错误文案、方言矩阵文档。
 
-- [ ] **第 1 步: clientInfo.version 使用真实应用版本**
+- [x] **第 1 步: clientInfo.version 使用真实应用版本**
       说明：从主进程注入，不在 Renderer 拼。开发态可以用 `0.1.0-dev`，打包用 `app.getVersion()`。
       预期：握手里的 Client 版本与关于页/安装包一致。
 
-- [ ] **第 2 步: 写方言矩阵**
+- [x] **第 2 步: 写方言矩阵**
       说明：`grok-acp-dialect-matrix.md` 以 GACP-01 的 CLI 版本为“已支持”。列出启动参数、握手字段、set_model、GROK_HOME、已知失败模式。新 Grok 版本必须新增一行观察，不能默默改代码兼容。
       预期：P2 开始前，执行者能一眼看到 Grok Adapter 绑定的是哪一版方言。
 
-- [ ] **第 3 步: 产品错误分类**
+- [x] **第 3 步: 产品错误分类**
       说明：连接失败至少能区分：找不到 `grok` 二进制、协议版本不兼容、Provider 配置缺失、set_model 失败、进程退出。继续脱敏，不把 stderr 原文丢给 UI。
       预期：用户不会把“没装 CLI”和“模型绑定失败”看成同一句话。
 
@@ -166,15 +166,15 @@ connection.initialize({
 
 **涉及范围：** P1-05 清单、`persistProviderConfig()`、clear 配置。
 
-- [ ] **第 1 步: 对照 P1-05 走隔离**
+- [x] **第 1 步: 对照 P1-05 走隔离**
       说明：保存 Provider、切换 origin、清除配置、工具子进程 env 中无 Key。本计划不重做存储层，只确认 spawn env 仍满足 P1-05。
       预期：`clearGrokProviderConfig()` 只删 App grok-home 的 config.toml。
 
-- [ ] **第 2 步: Provider 变更事务**
+- [x] **第 2 步: Provider 变更事务**
       说明：busy/connecting 时不能改模型；ready 时 disconnect + connect 失败要回滚旧配置。现有 `persistProviderConfig()` 必须仍被单测锁住。
       预期：方言模块引入后这条事务不回退。
 
-- [ ] **第 3 步: 受控 E2E 不被生产方言绑死**
+- [x] **第 3 步: 受控 E2E 不被生产方言绑死**
       说明：fixture 继续使用独立 argv 与 `ELECTRON_RUN_AS_NODE`。方言常量测试要分开生产/E2E 两条。
       预期：lifecycle / permission E2E 仍全绿。
 
@@ -182,12 +182,12 @@ connection.initialize({
 
 ## 验收标准
 
-- [ ] 生产启动参数、GROK_HOME、set_model、initialize 允许字段都有单测锁定。
-- [ ] `clientInfo.version` 不再写死成与发布无关的字符串。
-- [ ] 方言矩阵文档存在，并指向 GACP-01 观察版本。
-- [ ] 失败关闭策略不变：版本不兼容、set_model 形状错误、配置写失败都不会带着半开 session 继续 prompt。
-- [ ] P1-05 的密钥隔离没有回退；`~/.grok` 不被修改。
-- [ ] `pnpm typecheck`、相关 Vitest、既有 Electron E2E、`pnpm build`、`git diff --check` 通过。
+- [x] 生产启动参数、GROK_HOME、set_model、initialize 允许字段都有单测锁定。
+- [x] `clientInfo.version` 不再写死成与发布无关的字符串。
+- [x] 方言矩阵文档存在，并指向 GACP-01 观察版本。
+- [x] 失败关闭策略不变：版本不兼容、set_model 形状错误、配置写失败都不会带着半开 session 继续 prompt。
+- [x] P1-05 的密钥隔离没有回退；`~/.grok` 不被修改。
+- [ ] `pnpm typecheck`、相关 Vitest、既有 Electron E2E、`pnpm build`、`git diff --check` 通过。相关 Vitest 与 `typecheck:node` 已过；lifecycle / permission Electron E2E 与 `pnpm build` 未在本分支实跑。
 
 ## 非目标
 
