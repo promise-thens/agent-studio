@@ -257,11 +257,11 @@ git diff --check
 
 - 当前计划：[P0-19 Grok 宿主能力打磨](docs/superpowers/plans/p0-19-grok-host-capability-polish.md)。P1-06～08 与 P2 搁置；P3 自建浏览器/Helper 后置于 19f。P0-13 代码已落地，开发版 GUI 走查仍是 0 号门。P0-14 Worktree 可与 19a 并行，不挡宿主能力摊开。
 - 状态：桌面定位为 Grok Build ACP Client，不自己当 Agent。设置现为供应商 / 外观 / 记忆 / Grok 配置；插件页三栏为插件 / MCP / 技能，插件 tab 内分已安装 / 市场，不得打断运行中 Task。Inspector 仍是 Timeline/Changes/Terminal/Artifacts；Changes 与 Artifacts 打开时加宽为审阅工作区。P2 Codex 暂缓
-- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；库存扫描已补 `installed-plugins`；P0-10D 代码已落地（相关自动测试已过，开发版 GUI / TUI 对读未跑）；P0-10E 代码已落地（自动验证已过；already-configured 加源已修，开发版 GUI / 安装走查未跑）；P0-11 Task 1–4 已合入 main（自动验证已过，开发版 GUI 走查未跑）；P0-12 Task 1–4 代码已落地；P0-12A 两层审阅代码已落地（聚焦测试 + typecheck 已过，开发版 GUI 走查未跑）；P0-18 P0/P1 代码与关键 GUI 主路径已落地；P0-13 代码已落地（自动测试 + typecheck 已过，开发版 GUI 走查未跑）；P0-19 已立项未开工
-- Grok ACP 加深：GACP-01 → GACP-02 → P0-10C/D/E → P0-11 → GACP-03（纳入 P0-19）→ P0-19a～f（Plan / Sandbox / rewind / Hooks / 后台 / 浏览器插件表面）与 GACP-06。`available_commands_update` 现为 session 快照，不进 Timeline。命令证据走 `task:list-command-evidence` 等只读查询，不进交互终端。变更审阅走 `task:get-change-set` / `task:get-file-diff` / `task:list-turn-checkpoints`；撤销走 `task:preview-latest-turn-restore` / `task:restore-latest-turn`
+- 完成度：P0-01 至 P0-09、GACP-01 如前；GACP-02 核心已落地；P0-10 Task 1–4 已合入；P0-10A/B 代码已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；库存扫描已补 `installed-plugins`；P0-10D 代码已落地（相关自动测试已过，开发版 GUI / TUI 对读未跑）；P0-10E 代码已落地（自动验证已过；already-configured 加源已修，开发版 GUI / 安装走查未跑）；P0-11 Task 1–4 已合入 main（自动验证已过，开发版 GUI 走查未跑）；GACP-03 代码已落地（真机/GUI 未收口）；P0-12 Task 1–4 代码已落地；P0-12A 两层审阅代码已落地（聚焦测试 + typecheck 已过，开发版 GUI 走查未跑）；P0-18 P0/P1 代码与关键 GUI 主路径已落地；P0-13 代码已落地（自动测试 + typecheck 已过，开发版 GUI 走查未跑）；GACP-04 代码已落地（相关 Vitest 已过；lifecycle/permission E2E 与 GUI 未跑）；P0-19 已立项未开工
+- Grok ACP 加深：GACP-01 → GACP-02 → P0-10C/D/E → P0-11 → GACP-03（纳入 P0-19）→ GACP-04（方言契约已落地，不挡 P0-19）→ P0-19a～g 与 GACP-06。`available_commands_update` 现为 session 快照，不进 Timeline。命令证据走 `task:list-command-evidence` 等只读查询，不进交互终端。变更审阅走 `task:get-change-set` / `task:get-file-diff` / `task:list-turn-checkpoints`；撤销走 `task:preview-latest-turn-restore` / `task:restore-latest-turn`
 - 兼容边界：首版仍只有一个执行槽；GROK_HOME 仍是 App 目录；记忆整棵树 junction 到 `~/.grok/memory`；用户 toml 只允许合并/删除 `[mcp_servers.*]`；`clientCapabilities: {}`；不把桌面做成 MCP Host 或 Marketplace Host。自动撤销仅 latest-turn 且无漂移；检查点只存哈希，禁止 git reset/checkout。完全接管（always-approve）按 P0-19g：当前 Task 显式开关，默认关，不写全局 yolo
-- 下一步：P0-19 从 GACP-03 询问模式收口开始，随后 [P0-19g](docs/superpowers/plans/p0-19g-task-takeover-always-approve.md) Task 完全接管。P0-10C 至 P0-13 开发版走查暂时可以通过。不要加回「继续任务」按钮
-- 最近验证：2026-08-28 P0-13 Artifact Registry。聚焦 Vitest + `pnpm typecheck` 已过；开发版 GUI 四类产物走查未跑
+- 下一步：GACP-03 询问模式代码已落地，新代码从 [P0-19g](docs/superpowers/plans/p0-19g-task-takeover-always-approve.md) Task 完全接管开始（须先观察 yoloMode）。P0-10C 至 P0-13 开发版走查暂时可以通过。不要加回「继续任务」按钮
+- 最近验证：2026-08-31 GACP-04 方言契约。相关 Vitest + `pnpm typecheck:node` 已过；lifecycle/permission Electron E2E 与开发版 GUI 未跑。P0-13 开发版 GUI 四类产物走查仍未跑
 
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence

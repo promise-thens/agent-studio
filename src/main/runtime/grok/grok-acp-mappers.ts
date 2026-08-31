@@ -20,6 +20,7 @@ import {
   updateAgentRuntimeCapabilitySnapshot,
   type AgentCapabilityInput
 } from '../../agent/runtime-capabilities'
+import { assertGrokHandshakeCompat, projectGrokHandshakeFields } from './grok-acp-dialect'
 
 export const GROK_RUNTIME_ID = 'grok' as const
 
@@ -121,6 +122,7 @@ export function createGrokCapabilitySnapshot(
 
 /**
  * 只投影 ACP initialize 标准字段并校验协商版本；_meta、认证方式和扩展字段全部丢弃。
+ * 版本兼容检查归属方言模块，Mapper 只负责能力快照投影。
  */
 export function mapGrokInitializeCapabilitySnapshot(
   baseline: AgentRuntimeCapabilitySnapshot,
@@ -128,24 +130,22 @@ export function mapGrokInitializeCapabilitySnapshot(
   redactText: TextRedactor,
   protocolVersion: number
 ): AgentRuntimeCapabilitySnapshot {
-  if (response.protocolVersion !== protocolVersion) {
-    throw new Error(
-      `ACP 协议版本不兼容：Runtime 返回 ${response.protocolVersion}，客户端支持 ${protocolVersion}。`
-    )
-  }
+  // 备注：只消费 allow-list 投影；promptCapabilities.audio 等不得由此进入产品逻辑。
+  const projected = projectGrokHandshakeFields(response)
+  assertGrokHandshakeCompat(projected, protocolVersion)
 
-  const runtimeVersion = response.agentInfo?.version?.trim()
+  const runtimeVersion = projected.agentInfoVersion?.trim()
   let snapshot = createAgentRuntimeCapabilitySnapshot({
     runtimeId: GROK_RUNTIME_ID,
     ...(runtimeVersion ? { runtimeVersion: redactText(runtimeVersion) } : {}),
-    protocolVersion: String(response.protocolVersion),
+    protocolVersion: String(projected.protocolVersion),
     capabilities: Object.values(baseline.capabilities),
     redactText
   })
 
   snapshot = updateAgentRuntimeCapabilitySnapshot(
     snapshot,
-    response.agentCapabilities?.loadSession === true
+    projected.loadSession === true
       ? {
           capabilityId: 'session.load',
           support: 'native',
@@ -165,7 +165,7 @@ export function mapGrokInitializeCapabilitySnapshot(
 
   return updateAgentRuntimeCapabilitySnapshot(
     snapshot,
-    response.agentCapabilities?.sessionCapabilities?.resume != null
+    projected.resume === true
       ? {
           capabilityId: 'session.resume',
           support: 'native',

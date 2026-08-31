@@ -444,6 +444,8 @@ async function initializeServices(
     {
       userDataPath: app.getPath('userData'),
       getProviderConfig: () => requireProviderStore().getRuntimeConfig(),
+      // 备注：握手 clientInfo.version 与关于页/安装包对齐；开发态加 -dev，禁止 Renderer 传入。
+      getClientVersion: () => (app.isPackaged ? app.getVersion() : `${app.getVersion()}-dev`),
       redactText: redactProviderText,
       getMcpServers: async () =>
         toAgentRuntimeMcpServers(await requireMcpServerStore().listEnabledResolved()),

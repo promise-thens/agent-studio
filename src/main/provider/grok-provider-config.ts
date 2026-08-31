@@ -1,10 +1,12 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import type { ProviderRuntimeConfig } from './provider-config-store'
+import { AGENT_STUDIO_MODEL_ALIAS } from '../runtime/grok/grok-acp-dialect'
 import { GrokHomeConfigController, hasTomlTable } from '../runtime/grok/grok-home-config-controller'
 import { ensureSharedGrokMemory, getUserGrokMemoryDir } from '../runtime/grok/grok-shared-memory'
 
-export const AGENT_STUDIO_MODEL_ALIAS = 'agent-studio-default'
+/** 方言模块为 source of truth；此处 re-export 保持既有 Provider 导入路径。 */
+export { AGENT_STUDIO_MODEL_ALIAS } from '../runtime/grok/grok-acp-dialect'
 export const AGENT_STUDIO_MODEL_API_KEY_ENV = 'AGENT_STUDIO_MODEL_API_KEY'
 
 /** 返回 Agent Studio 独立管理的 Grok Home，避免修改用户自己的 ~/.grok。 */

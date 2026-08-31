@@ -1,7 +1,9 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type {
@@ -26,15 +28,23 @@ import { TaskExecutionController } from '../../agent/task-execution-controller'
 import { TaskStore } from '../../agent/task-store'
 import { ProjectRegistry } from '../../project/project-registry'
 import type { ProviderRuntimeConfig } from '../../provider/provider-config-store'
-import {
-  AGENT_STUDIO_MODEL_ALIAS,
-  AGENT_STUDIO_MODEL_API_KEY_ENV
-} from '../../provider/grok-provider-config'
+import { AGENT_STUDIO_MODEL_API_KEY_ENV } from '../../provider/grok-provider-config'
 import { PermissionAuditStore } from '../../security/permission-audit-store'
 import { PermissionBroker } from '../../security/permission-broker'
 import { parseCommandExecutionEvidence } from '../../../shared/command'
 import { CommandEvidenceStore } from '../../command/command-evidence-store'
 import { createLocalEnvironmentId } from '../../security/permission-policy'
+import {
+  AGENT_STUDIO_MODEL_ALIAS,
+  GROK_PRODUCTION_AGENT_ARGV,
+  GROK_SET_MODEL_METHOD,
+  buildGrokControlledE2ESpawnArgs
+} from './grok-acp-dialect'
+import {
+  CONTROLLED_ACP_E2E_DIRECTORIES,
+  CONTROLLED_ACP_E2E_FIXTURE_FILE,
+  type ControlledAcpFixtureLaunch
+} from './controlled-acp-fixture'
 import { GrokAcpAdapter, buildGrokRuntimeEnvironment } from './grok-acp-adapter'
 import { deriveGrokRuntimeCommandId } from './grok-command-evidence-mapper'
 import {
@@ -513,6 +523,178 @@ describe('Grok ACP 协议投影', () => {
 })
 
 describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
+  it('initialize 使用 Main 注入的 clientInfo.version，不写死常量', async () => {
+    const initialize = vi
+      .fn()
+      .mockResolvedValue(initializeResponse({ loadSession: true, resume: true }))
+    const connection = { initialize } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false, {
+      getClientVersion: () => '0.1.0-test'
+    })
+    const child = {} as ChildProcessWithoutNullStreams
+    harness.internal.process = child
+    harness.internal.connectionGeneration = 1
+
+    await expect(
+      harness.internal.initializeConnection(connection, child, WORKSPACE, 1)
+    ).resolves.toBe(true)
+
+    expect(initialize).toHaveBeenCalledWith({
+      protocolVersion: acp.PROTOCOL_VERSION,
+      clientCapabilities: {},
+      clientInfo: {
+        name: 'agent-studio',
+        version: '0.1.0-test'
+      }
+    })
+  })
+
+  it('spawn ENOENT 状态文案归类为未安装 CLI，不含路径与 Node 原文', () => {
+    const harness = createAdapterHarness(undefined, false)
+    const child = {} as ChildProcessWithoutNullStreams
+    harness.internal.process = child
+    harness.internal.connectionGeneration = 1
+    const spawnError = Object.assign(new Error('spawn /Users/tester/.grok/bin/grok ENOENT'), {
+      code: 'ENOENT'
+    })
+
+    harness.internal.handleRuntimeProcessError(child, 1, WORKSPACE, spawnError)
+
+    expect(harness.adapter.getStatus()).toMatchObject({
+      state: 'error',
+      workspace: WORKSPACE,
+      message: '还没有安装 Grok Build CLI。'
+    })
+    expect(harness.adapter.getStatus().message).not.toContain('ENOENT')
+    expect(harness.adapter.getStatus().message).not.toContain('/Users/tester')
+    expect(harness.adapter.getStatus().message).not.toContain(FAKE_SECRET)
+  })
+
+  it('connect：握手流错误先于 spawn ENOENT 时仍抛出未安装 CLI（runtime-unavailable）', async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), 'grok-cli-missing-race-'))
+    const workspace = join(userDataPath, 'workspace')
+    await mkdir(workspace)
+    const child = createFakeSpawnChild()
+
+    try {
+      const adapter = new GrokAcpAdapter(
+        {
+          onStatus: () => undefined,
+          onEvent: () => undefined,
+          onPermission: () => undefined,
+          onPermissionCancelled: () => undefined,
+          onAvailableCommands: () => undefined
+        },
+        {
+          userDataPath,
+          getProviderConfig: () => providerConfig(),
+          getClientVersion: () => '0.1.0-test',
+          redactText: redactFakeText,
+          // 备注：测试注入 spawn，避免 ESM 下无法 spy node:child_process.spawn。
+          spawnProductionProcess: () => child
+        }
+      )
+      const internal = adapter as unknown as GrokAcpAdapterTestAccess
+
+      // 备注：握手先失败并进入 connect catch；ENOENT 用 setImmediate 晚到，复现竞态。
+      vi.spyOn(internal, 'initializeConnection').mockImplementation(async () => {
+        setImmediate(() => {
+          child.emit(
+            'error',
+            Object.assign(new Error('spawn /Users/tester/.grok/bin/grok ENOENT'), {
+              code: 'ENOENT'
+            })
+          )
+        })
+        throw new Error('NDJSON stream closed before initialize response')
+      })
+
+      await expect(adapter.connect(workspace)).rejects.toMatchObject({
+        code: 'runtime-unavailable',
+        message: '还没有安装 Grok Build CLI。'
+      })
+      expect(adapter.getStatus().message).toBe('还没有安装 Grok Build CLI。')
+      expect(adapter.getStatus().message).not.toContain('连接失败')
+      expect(adapter.getStatus().message).not.toContain('ENOENT')
+      expect(adapter.getStatus().message).not.toContain('/Users/tester')
+    } finally {
+      await rm(userDataPath, { recursive: true, force: true })
+    }
+  })
+
+  it('协议版本不兼容时状态与抛错保留协议语义，不再包成无法区分的连接失败', async () => {
+    const initialize = vi.fn().mockResolvedValue({
+      protocolVersion: acp.PROTOCOL_VERSION + 1,
+      agentCapabilities: {}
+    } as acp.InitializeResponse)
+    const connection = { initialize } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false, {
+      getClientVersion: () => '0.1.0-test'
+    })
+    const child = {
+      kill: vi.fn(),
+      stdin: { destroyed: true },
+      stdout: { destroyed: true },
+      stderr: { destroyed: true, setEncoding: vi.fn(), on: vi.fn() }
+    } as unknown as ChildProcessWithoutNullStreams
+    harness.internal.process = child
+    harness.internal.connection = connection
+    harness.internal.connectionGeneration = 1
+
+    await expect(
+      harness.internal.initializeConnection(connection, child, WORKSPACE, 1)
+    ).rejects.toThrow(/ACP 协议版本不兼容/)
+
+    // 备注：connect() 捕获后应直接透出协议文案；此处验证 resolve 路径与产品常量一致。
+    const connectFailure = harness.internal.resolveConnectFailure(
+      new Error(
+        `ACP 协议版本不兼容：Runtime 返回 ${acp.PROTOCOL_VERSION + 1}，客户端支持 ${acp.PROTOCOL_VERSION}。`
+      )
+    )
+    expect(connectFailure.code).toBe('operation-failed')
+    expect(connectFailure.message).toContain('ACP 协议版本不兼容')
+    expect(connectFailure.message).not.toMatch(/^连接失败/)
+  })
+
+  it('Provider 缺失与 set_model 失败文案保持可区分', async () => {
+    const missingProvider = createAdapterHarness(undefined, false, {
+      getProviderConfig: () => null
+    })
+    // 备注：harness 默认会塞假 connection；connect 早退前必须清掉，才能走到 Provider 校验。
+    missingProvider.internal.connection = null
+    missingProvider.internal.status = {
+      ...missingProvider.internal.status,
+      state: 'idle',
+      message: '尚未连接 Grok Build',
+      workspace: undefined,
+      runtimeSessionId: undefined
+    }
+    await expect(missingProvider.adapter.connect(WORKSPACE)).rejects.toMatchObject({
+      code: 'runtime-unavailable',
+      message: '模型服务配置不可用，请重新配置 URL、Key 和模型。'
+    })
+
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-new' })
+    const request = vi.fn().mockResolvedValue(undefined)
+    const connection = {
+      newSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+    await expect(
+      harness.adapter.createSession({ workspace: WORKSPACE, taskId: 'task-test' })
+    ).rejects.toMatchObject({
+      code: 'operation-failed'
+    })
+    expect(harness.adapter.getStatus().message).toMatch(
+      /绑定 Agent Studio 模型失败|未确认 Agent Studio 模型绑定/
+    )
+    expect(harness.adapter.getStatus().message).not.toBe(
+      '模型服务配置不可用，请重新配置 URL、Key 和模型。'
+    )
+    expect(harness.adapter.getStatus().message).not.toBe('还没有安装 Grok Build CLI。')
+  })
+
   it('握手只更新当前连接，旧连接晚到结果不覆盖新快照', async () => {
     let resolveInitialize: ((response: acp.InitializeResponse) => void) | undefined
     const initialize = vi.fn().mockImplementation(
@@ -550,7 +732,7 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
 
     expect(newSession).toHaveBeenCalledWith({ cwd: WORKSPACE, mcpServers: [] })
-    expect(request).toHaveBeenCalledWith('session/set_model', {
+    expect(request).toHaveBeenCalledWith(GROK_SET_MODEL_METHOD, {
       sessionId: 'runtime-session-new',
       modelId: AGENT_STUDIO_MODEL_ALIAS
     })
@@ -637,14 +819,14 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
     expect(request.mock.calls).toEqual([
       [
-        'session/set_model',
+        GROK_SET_MODEL_METHOD,
         {
           sessionId: 'runtime-session-a',
           modelId: AGENT_STUDIO_MODEL_ALIAS
         }
       ],
       [
-        'session/set_model',
+        GROK_SET_MODEL_METHOD,
         {
           sessionId: 'runtime-session-b',
           modelId: AGENT_STUDIO_MODEL_ALIAS
@@ -693,7 +875,7 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     await expect(
       harness.adapter.resumeSession(runtimeSession('runtime-session-a'), 'task-test')
     ).rejects.toMatchObject({ code: 'operation-failed' })
-    expect(request).toHaveBeenCalledWith('session/set_model', {
+    expect(request).toHaveBeenCalledWith(GROK_SET_MODEL_METHOD, {
       sessionId: 'runtime-session-a',
       modelId: AGENT_STUDIO_MODEL_ALIAS
     })
@@ -914,9 +1096,9 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
       return { stopReason: 'end_turn' as const }
     })
 
-    await expect(harness.adapter.startTurn(turnContext('task-image', 'turn-image'))).resolves.toEqual(
-      { outcome: 'completed' }
-    )
+    await expect(
+      harness.adapter.startTurn(turnContext('task-image', 'turn-image'))
+    ).resolves.toEqual({ outcome: 'completed' })
     expect(harness.events.filter((event) => event.kind === 'error')).toEqual([
       expect.objectContaining({
         code: 'runtime-attachment-rejected',
@@ -2339,7 +2521,9 @@ describe('Grok Runtime 环境隔离', () => {
         HTTPS_PROXY: 'http://127.0.0.1:7890',
         NPM_TOKEN: 'must-not-leak',
         XAI_API_KEY: 'must-not-leak',
-        NODE_OPTIONS: '--require malicious.js'
+        NODE_OPTIONS: '--require malicious.js',
+        ELECTRON_RUN_AS_NODE: '1',
+        ELECTRON_ENABLE_LOGGING: '1'
       }
     )
 
@@ -2354,6 +2538,9 @@ describe('Grok Runtime 环境隔离', () => {
     expect(environment).not.toHaveProperty('NPM_TOKEN')
     expect(environment).not.toHaveProperty('XAI_API_KEY')
     expect(environment).not.toHaveProperty('NODE_OPTIONS')
+    // 备注：生产 Runtime env 不得带入 Electron 调试变量；受控 E2E 才自行设置 ELECTRON_RUN_AS_NODE。
+    expect(environment).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
+    expect(environment).not.toHaveProperty('ELECTRON_ENABLE_LOGGING')
   })
 
   it('不继承宿主 GROK_MEMORY=0，关闭记忆时才显式传 0', () => {
@@ -2383,6 +2570,99 @@ describe('Grok Runtime 环境隔离', () => {
 
     expect(environment.GROK_XAI_API_BASE_URL).toBe('https://api.example.com/v1')
     expect(JSON.stringify(environment)).not.toContain('hostile.example')
+  })
+})
+
+describe('Grok Runtime 受控 E2E fixture spawn', () => {
+  it('fixture spawn 使用独立 argv 与 ELECTRON_RUN_AS_NODE，不含生产 --no-auto-update', async () => {
+    const userDataPath = await realpath(
+      await mkdtemp(join(tmpdir(), 'grok-controlled-fixture-spawn-'))
+    )
+    const workspace = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.workspace)
+    const traceDirectory = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.trace)
+    const barrierDirectory = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.barriers)
+    const runtimeHomeDirectory = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.runtimeHome)
+    await Promise.all(
+      [workspace, traceDirectory, barrierDirectory, runtimeHomeDirectory].map((dir) =>
+        mkdir(dir, { recursive: true })
+      )
+    )
+
+    const repositoryRootPath = await realpath(process.cwd())
+    const fixturePath = join(repositoryRootPath, 'tests', 'e2e', CONTROLLED_ACP_E2E_FIXTURE_FILE)
+    const launch: ControlledAcpFixtureLaunch = {
+      scenario: 'E2E:FIFO',
+      repositoryRootPath,
+      userDataPath,
+      fixturePath,
+      traceDirectory,
+      barrierDirectory,
+      runtimeHomeDirectory
+    }
+
+    const child = createFakeSpawnChild()
+    let captured:
+      | {
+          command: string
+          args: readonly string[]
+          options: { cwd?: string; env?: NodeJS.ProcessEnv }
+        }
+      | undefined
+
+    try {
+      const adapter = new GrokAcpAdapter(
+        {
+          onStatus: () => undefined,
+          onEvent: () => undefined,
+          onPermission: () => undefined,
+          onPermissionCancelled: () => undefined,
+          onAvailableCommands: () => undefined
+        },
+        {
+          userDataPath,
+          getProviderConfig: () => providerConfig(),
+          getClientVersion: () => '0.1.0-test',
+          redactText: redactFakeText,
+          controlledFixture: launch,
+          // 备注：测试注入 spawn，避免 ESM 下无法 spy node:child_process.spawn。
+          spawnControlledProcess: (command, args, options) => {
+            captured = {
+              command,
+              args,
+              options: options as { cwd?: string; env?: NodeJS.ProcessEnv }
+            }
+            return child
+          }
+        }
+      )
+      const internal = adapter as unknown as GrokAcpAdapterTestAccess
+      vi.spyOn(internal, 'initializeConnection').mockResolvedValue(true)
+
+      await adapter.connect(workspace)
+
+      expect(captured).toBeDefined()
+      expect(captured!.command).toBe(process.execPath)
+      expect(captured!.args).toEqual(
+        buildGrokControlledE2ESpawnArgs({
+          fixturePath,
+          scenario: 'E2E:FIFO',
+          userDataPath
+        })
+      )
+      expect(captured!.args).toContain('--scenario')
+      expect(captured!.args).toContain('--user-data')
+      expect(captured!.args).not.toContain('--no-auto-update')
+      expect(captured!.args).not.toEqual([...GROK_PRODUCTION_AGENT_ARGV])
+      expect(captured!.options.cwd).toBe(workspace)
+      expect(captured!.options.env).toMatchObject({
+        ELECTRON_RUN_AS_NODE: '1',
+        HOME: runtimeHomeDirectory
+      })
+      expect(captured!.options.env).not.toHaveProperty(AGENT_STUDIO_MODEL_API_KEY_ENV)
+      expect(captured!.options.env).not.toHaveProperty('PATH')
+    } finally {
+      await rm(userDataPath, { recursive: true, force: true })
+    }
   })
 })
 
@@ -2705,6 +2985,13 @@ interface GrokAcpAdapterTestAccess {
     workspace: string,
     connectionGeneration: number
   ) => Promise<boolean>
+  handleRuntimeProcessError: (
+    child: ChildProcessWithoutNullStreams,
+    connectionGeneration: number,
+    workspace: string,
+    error: unknown
+  ) => void
+  resolveConnectFailure: (error: unknown) => AgentRuntimeAdapterError
   requestPermission: (
     params: acp.RequestPermissionRequest,
     sourceConnection: acp.ClientSideConnection
@@ -2825,6 +3112,7 @@ async function createInvalidPermissionIntegrationFixture(): Promise<InvalidPermi
   const adapter = new GrokAcpAdapter(sink, {
     userDataPath,
     getProviderConfig: () => providerConfig(),
+    getClientVersion: () => '0.1.0-test',
     redactText: redactFakeText
   })
   const internal = adapter as unknown as GrokAcpAdapterTestAccess
@@ -2898,10 +3186,25 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve, reject }
 }
 
+/** 供 connect 缺 CLI 竞态测试注入的假子进程。 */
+function createFakeSpawnChild(): ChildProcessWithoutNullStreams {
+  const child = new EventEmitter() as ChildProcessWithoutNullStreams & EventEmitter
+  Object.assign(child, {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    pid: 4242,
+    kill: vi.fn()
+  })
+  return child
+}
+
 function createAdapterHarness(
   connection: acp.ClientSideConnection = {} as acp.ClientSideConnection,
   selected = true,
   extraOptions: {
+    getClientVersion?: () => string
+    getProviderConfig?: () => ProviderRuntimeConfig | null
     commandEvidenceStore?: CommandEvidenceStore
     resolveCommandEvidenceContext?: () => { environmentId: string } | null
     storeRuntimeImage?: (input: {
@@ -2939,6 +3242,8 @@ function createAdapterHarness(
     {
       userDataPath: '/tmp/agent-studio-test',
       getProviderConfig: () => providerConfig(),
+      // 备注：测试注入明确假版本，禁止依赖 Adapter 内写死常量。
+      getClientVersion: () => '0.1.0-test',
       redactText: redactFakeText,
       ...extraOptions
     }

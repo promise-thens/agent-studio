@@ -52,7 +52,7 @@
 |        8 | P0-12   |    5 | [项目 Git 基线与变更审阅](p0-12-project-git-change-review.md)                                | Task 1–4 代码已落地；自动验证已过（GUI 未跑） | P0-06、P0-07、P0-08、P0-10、P0-11        |
 |       8b | P0-12A  |    4 | [两层变更审阅工作区](p0-12a-change-review-workspace.md)                                      | 代码已落地；自动验证已过（GUI 未跑） | P0-12                                    |
 |       8c | P0-18   |    4 | [Task 附件柜与对话媒体](p0-18-task-attachment-inbox.md)                                     | 主路径已落地；出图/ChangeSet 缩略图/GUI 未完 | P0-10、P0-12A；不阻塞、也不实现 P0-14     |
-|       8a | GACP-04 |    4 | [Grok ACP 方言兼容契约](grokACP计划/gacp-04-grok-acp-dialect-compat.md)                     | 待开始                             | P0-10、GACP-01；可与 P0-12 并行，P2 前完成 |
+|       8a | GACP-04 |    4 | [Grok ACP 方言兼容契约](grokACP计划/gacp-04-grok-acp-dialect-compat.md)                     | 代码已落地；相关 Vitest 已过（E2E/GUI 未跑） | P0-10、GACP-01；可与 P0-12 并行，P2 前完成 |
 
 #### P0-A 验收门
 
@@ -109,7 +109,7 @@ P0-14 Worktree 仍是 P0-B，可在 GACP-03 后与 19a 并行，不挡本表。
 | [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) | 5 | 真机协议观察与能力核实 | 已完成（受限关闭） | 2026-08-19 冻结观察；遗留不挡 GACP-02 |
 | [GACP-02](grokACP计划/gacp-02-session-restore-capability-contract.md) | 5 | 点进历史即可接着聊 | 核心已落地，待手工/e2e 收口 | GACP-01 已关闭；P0-10 前 |
 | [GACP-03](grokACP计划/gacp-03-structured-permission-evidence.md) | 4 | 能过的自动过，不要一个个点 | 计划写已落地，真机/GUI 未收口；纳入 P0-19 | P0-11 后；P0-19 第 1 项 |
-| [GACP-04](grokACP计划/gacp-04-grok-acp-dialect-compat.md) | 4 | Grok ACP 方言兼容契约 | 待开始 | P0-10 后、P2 前 |
+| [GACP-04](grokACP计划/gacp-04-grok-acp-dialect-compat.md) | 4 | Grok ACP 方言兼容契约 | 代码已落地；相关 Vitest 已过（lifecycle/permission E2E 与 GUI 未跑） | P0-10 后、P2 前；不挡 P0-19 |
 | [GACP-05](grokACP计划/gacp-05-client-capability-advertisement.md) | 3 | Client 能力广告 | 待开始 | P0-15 后；未实现不得广告 |
 | [GACP-06](grokACP计划/gacp-06-subagent-timeline.md) | 3 | 子 Agent 嵌套时间线 | 待开始 | P0-10A 换皮之后接分组；GACP-01 未见父子字段，禁止猜树 |
 

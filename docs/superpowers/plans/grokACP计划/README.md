@@ -35,7 +35,7 @@ Agent Studio 是 ACP **Client**，Grok Build 是 ACP **Agent**。成熟度必须
 这些实现必须被后续计划当作硬约束，而不是重写对象：
 
 - 传输：`grok --no-auto-update agent --no-leader -m agent-studio-default stdio` + `acp.ndJsonStream` + `ClientSideConnection`。见 `src/main/runtime/grok/grok-acp-adapter.ts`。
-- 握手：`initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {}, clientInfo })`；版本不兼容立即拒绝；只读取 `protocolVersion`、`agentInfo.version`、`loadSession`、`sessionCapabilities.resume` / `close`。
+- 握手：`initialize({ protocolVersion: acp.PROTOCOL_VERSION, clientCapabilities: {}, clientInfo })`；版本不兼容立即拒绝；产品只读取 `protocolVersion`、`agentInfo.version`、`loadSession`、`sessionCapabilities.resume` / `close`、`promptCapabilities.image` / `embeddedContext`。
 - 身份：`taskId` / `turnId` / `executionId` 由 Agent Studio 持有；`runtimeSessionId` 只留在主进程 `AgentRuntimeSessionRef`。
 - 事件：`mapGrokSessionUpdate()` 白名单投影；`rawInput` / `rawOutput` / `_meta` / tool `name` 不进授权事实。
 - 权限：只回唯一 `allow_once` / `reject_once`；绝不回 `allow_always` / `reject_always`；证据冲突粘性 `invalid`，即使 UI 点允许也只能向 ACP 回 `cancelled`。
@@ -98,7 +98,7 @@ P0-A 主表因此变成：
 | 7 | P0-11 | 5 | 仍按原依赖 | 命令证据事实源 |
 | 7a | [GACP-03](gacp-03-structured-permission-evidence.md) | 4 | P0-11 后；P0-19 第 1 项 | 能过的自动过，不要一个个点 |
 | 8 | P0-12 | 5 | 原依赖不变 | Diff 审阅 |
-| 8a | [GACP-04](gacp-04-grok-acp-dialect-compat.md) | 4 | P0-10 后、P2 前 | 冻结 Grok 启动/握手/set_model |
+| 8a | [GACP-04](gacp-04-grok-acp-dialect-compat.md) | 4 | 代码已落地（相关 Vitest 已过；E2E/GUI 未跑） | 冻结 Grok 启动/握手/set_model |
 | 5c | [GACP-06](gacp-06-subagent-timeline.md) | 3 | P0-10A 后；无父子字段只做扁平 | 子 Agent 嵌套卡片；不挡 GACP-02 / 换皮 |
 | 晚 | [GACP-05](gacp-05-client-capability-advertisement.md) | 3 | P0-15 后且产品确认 | 未实现不得广告 |
 

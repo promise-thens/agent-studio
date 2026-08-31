@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   AGENT_STUDIO_MODEL_API_KEY_ENV,
   buildGrokProviderConfig,
+  clearGrokProviderConfig,
+  getManagedGrokHome,
   writeGrokProviderConfig
 } from './grok-provider-config'
 import type { ProviderRuntimeConfig } from './provider-config-store'
@@ -73,6 +75,36 @@ describe('writeGrokProviderConfig', () => {
     expect(appToml).toContain('[model.agent-studio-default]')
     expect(appToml).toContain('[memory]')
     expect(appToml).not.toContain('test-secret-key')
+    expect(await readFile(userConfig, 'utf8')).toBe('[ui]\nvim_mode = true\n')
+  })
+})
+
+describe('clearGrokProviderConfig', () => {
+  const dirs: string[] = []
+
+  afterEach(async () => {
+    const { rm } = await import('node:fs/promises')
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
+  })
+
+  it('只删除 App grok-home/config.toml，不碰假 ~/.grok/config.toml', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'grok-provider-clear-'))
+    dirs.push(root)
+    const userGrok = join(root, '.grok')
+    await mkdir(userGrok, { recursive: true })
+    const userConfig = join(userGrok, 'config.toml')
+    await writeFile(userConfig, '[ui]\nvim_mode = true\n', 'utf8')
+
+    const grokHome = await writeGrokProviderConfig(root, baseConfig, {
+      userMemoryDir: join(userGrok, 'memory')
+    })
+    expect(grokHome).toBe(getManagedGrokHome(root))
+    const appConfig = join(grokHome, 'config.toml')
+    await expect(readFile(appConfig, 'utf8')).resolves.toContain('[model.agent-studio-default]')
+
+    await clearGrokProviderConfig(root)
+
+    await expect(readFile(appConfig, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
     expect(await readFile(userConfig, 'utf8')).toBe('[ui]\nvim_mode = true\n')
   })
 })

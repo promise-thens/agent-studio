@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
@@ -32,11 +32,25 @@ import { toAcpMcpServers } from '../../mcp/mcp-server-to-acp'
 import { updateAgentRuntimeCapabilitySnapshot } from '../../agent/runtime-capabilities'
 import type { ProviderRuntimeConfig } from '../../provider/provider-config-store'
 import {
-  AGENT_STUDIO_MODEL_ALIAS,
   AGENT_STUDIO_MODEL_API_KEY_ENV,
   getManagedGrokHome,
   writeGrokProviderConfig
 } from '../../provider/grok-provider-config'
+import {
+  AGENT_STUDIO_MODEL_ALIAS,
+  GROK_ACP_CLIENT_CAPABILITIES,
+  GROK_ACP_PRODUCT_MESSAGES,
+  GROK_PRODUCTION_AGENT_ARGV,
+  GROK_SET_MODEL_METHOD,
+  buildGrokAcpClientInfo,
+  buildGrokControlledE2ESpawnArgs,
+  classifyGrokConnectError,
+  classifyGrokSpawnProcessError,
+  isGrokCliMissingSpawnError,
+  isGrokSetModelResponseValid,
+  projectGrokHandshakeFields,
+  resolveGrokAcpFailure
+} from './grok-acp-dialect'
 import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
 import type { CommandEvidenceStore } from '../../command/command-evidence-store'
 import {
@@ -129,7 +143,6 @@ interface GrokSetModelRequest {
   modelId: string
 }
 
-const GROK_SET_MODEL_METHOD = 'session/set_model'
 const MAX_PERMISSION_OPTION_ID_BYTES = 4 * 1024
 const MAX_TOOL_CALL_AUTHORIZATION_SNAPSHOTS = 2_000
 const MAX_TERMINAL_TOOL_CALL_IDS = 2_000
@@ -137,6 +150,12 @@ const MAX_TERMINAL_TOOL_CALL_IDS = 2_000
 export interface GrokAcpAdapterOptions {
   userDataPath: string
   getProviderConfig: () => ProviderRuntimeConfig | null
+  /**
+   * Main 在 app.whenReady() 后注入的 Client 版本。
+   * 打包用 app.getVersion()；开发用 `${app.getVersion()}-dev`；测试注入假版本。
+   * 禁止从 Renderer / IPC 传入。
+   */
+  getClientVersion: () => string
   redactText: (text: string) => string
   /** 仅由 Main 开发态 E2E bootstrap 注入；绝不接受 Renderer、IPC 或普通环境变量。 */
   controlledFixture?: ControlledAcpFixtureLaunch
@@ -166,6 +185,24 @@ export interface GrokAcpAdapterOptions {
   }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
   /** 仅测试注入 Grok session 媒体根；生产固定 /tmp/sessions。 */
   grokSessionMediaRoot?: string
+  /**
+   * 仅测试注入生产 spawn；缺省为 node:child_process.spawn。
+   * 禁止 Renderer / IPC / 普通环境变量传入。
+   */
+  spawnProductionProcess?: (
+    command: string,
+    args: readonly string[],
+    options: SpawnOptions
+  ) => ChildProcessWithoutNullStreams
+  /**
+   * 仅测试注入受控 E2E spawn；缺省为 node:child_process.spawn。
+   * 禁止 Renderer / IPC / 普通环境变量传入；生产路径不得设置。
+   */
+  spawnControlledProcess?: (
+    command: string,
+    args: readonly string[],
+    options: SpawnOptions
+  ) => ChildProcessWithoutNullStreams
 }
 
 /**
@@ -198,6 +235,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   private promptMedia = { image: false, embeddedContext: false }
   private status: AgentRuntimeStatus
   private commandEvidenceWrites: Promise<void> = Promise.resolve()
+  /**
+   * 当前 connect 尝试期间子进程 error 事件缓存。
+   * 握手可能先以非 ENOENT 失败；分类时优先认缺 CLI，避免笼统“连接失败”。
+   */
+  private connectProcessError: unknown | null = null
 
   constructor(
     private readonly sink: AgentRuntimeAdapterSink,
@@ -232,10 +274,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
     const providerConfig = this.options.getProviderConfig()
     if (!providerConfig) {
-      const error = this.createError(
-        'runtime-unavailable',
-        '模型服务配置不可用，请重新配置 URL、Key 和模型。'
-      )
+      const resolved = resolveGrokAcpFailure('provider-config-missing')
+      const error = this.createError(resolved.adapterErrorCode, resolved.message)
       this.updateStatus({ state: 'error', message: error.message, workspace })
       throw error
     }
@@ -258,30 +298,29 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       try {
         grokHome = await writeGrokProviderConfig(this.options.userDataPath, providerConfig)
       } catch (error) {
-        const adapterError = this.createError(
-          'operation-failed',
-          `无法生成 Grok 配置：${this.redactError(error)}`
-        )
+        const resolved = resolveGrokAcpFailure('config-write-failed', {
+          redactedDetail: this.redactError(error)
+        })
+        const adapterError = this.createError(resolved.adapterErrorCode, resolved.message)
         this.updateStatus({ state: 'error', message: adapterError.message, workspace })
         throw adapterError
       }
 
       // 生产默认启动参数必须保持原样，不能经由通用 command/args 抽象。
       const memoryEnabled = (await this.options.isMemoryEnabled?.()) ?? true
-      child = spawn(
-        this.resolveBinary(),
-        ['--no-auto-update', 'agent', '--no-leader', '-m', AGENT_STUDIO_MODEL_ALIAS, 'stdio'],
-        {
-          cwd: workspace,
-          env: buildGrokRuntimeEnvironment(providerConfig, grokHome, process.env, {
-            memoryEnabled
-          }),
-          stdio: ['pipe', 'pipe', 'pipe']
-        }
-      )
+      const spawnProduction = this.options.spawnProductionProcess ?? spawn
+      // 备注：stdio 全 pipe 时运行时一定是 WithoutNullStreams；测试注入必须返回同类形状。
+      child = spawnProduction(this.resolveBinary(), [...GROK_PRODUCTION_AGENT_ARGV], {
+        cwd: workspace,
+        env: buildGrokRuntimeEnvironment(providerConfig, grokHome, process.env, {
+          memoryEnabled
+        }),
+        stdio: ['pipe', 'pipe', 'pipe']
+      }) as ChildProcessWithoutNullStreams
     }
     const connectionGeneration = ++this.connectionGeneration
     this.process = child
+    this.connectProcessError = null
 
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (text: string) => {
@@ -290,6 +329,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       if (text.trim()) this.observe({ kind: 'stderr', hasText: true })
     })
     child.once('error', (error) => {
+      this.connectProcessError = error
       this.handleRuntimeProcessError(child, connectionGeneration, workspace, error)
     })
     child.on('exit', (code) => {
@@ -321,13 +361,27 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       return this.status
     } catch (error) {
       // 被新连接替换的旧握手只结束自己，禁止断开已建立的新 Runtime。
-      if (!this.isCurrentConnection(connection, child, connectionGeneration)) return this.status
+      if (!this.isCurrentConnection(connection, child, connectionGeneration)) {
+        // 进程错误可能已抢先清连接；缺 CLI 仍必须抛出可区分错误给调用方。
+        if (isGrokCliMissingSpawnError(this.connectProcessError)) {
+          throw this.createCliMissingError(workspace)
+        }
+        return this.status
+      }
 
       await this.disconnectInternal(false)
-      const adapterError = this.toAdapterError(error, 'operation-failed', '连接失败')
+      // 握手可能先失败；再等一轮事件循环，让晚到的 ENOENT 有机会落袋。
+      if (!isGrokCliMissingSpawnError(this.connectProcessError)) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      // 备注：缺 CLI 优先于笼统流错误；协议不兼容等仍走 resolveConnectFailure。
+      const preferredError = isGrokCliMissingSpawnError(this.connectProcessError)
+        ? this.connectProcessError
+        : error
+      const adapterError = this.resolveConnectFailure(preferredError)
       this.updateStatus({
         state: 'error',
-        message: `连接失败：${adapterError.message}`,
+        message: adapterError.message,
         workspace
       })
       throw adapterError
@@ -664,11 +718,9 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   ): Promise<boolean> {
     const response = await connection.initialize({
       protocolVersion: acp.PROTOCOL_VERSION,
-      clientCapabilities: {},
-      clientInfo: {
-        name: 'agent-studio',
-        version: '0.1.0'
-      }
+      clientCapabilities: { ...GROK_ACP_CLIENT_CAPABILITIES },
+      // 备注：version 由 Main 注入；方言拒绝空值，Adapter 不写死安装包版本。
+      clientInfo: buildGrokAcpClientInfo(this.options.getClientVersion())
     })
     if (!this.isCurrentConnection(connection, child, connectionGeneration)) return false
 
@@ -684,11 +736,13 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       (text) => this.safeRedact(text),
       acp.PROTOCOL_VERSION
     )
+    // 备注：promptMedia 必须走 allow-list 投影，禁止旁路读取 audio 等未声明能力。
+    const handshake = projectGrokHandshakeFields(response)
     this.promptMedia = {
-      image: response.agentCapabilities?.promptCapabilities?.image === true,
-      embeddedContext: response.agentCapabilities?.promptCapabilities?.embeddedContext === true
+      image: handshake.promptImage === true,
+      embeddedContext: handshake.promptEmbeddedContext === true
     }
-    this.supportsCloseSession = response.agentCapabilities?.sessionCapabilities?.close != null
+    this.supportsCloseSession = handshake.close === true
     this.verifyCapability('runtime.connect', 'stable', undefined, false)
     this.status = {
       runtimeId: GROK_RUNTIME_ID,
@@ -1268,16 +1322,14 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       )
       this.assertSessionOperationCurrent(current)
 
-      if (response === null || typeof response !== 'object' || Array.isArray(response)) {
+      // 备注：形状守卫归属方言；此处保持 fail-closed，不读 _meta 业务字段。
+      if (!isGrokSetModelResponseValid(response)) {
         this.observe({
           kind: 'set-model',
           accepted: false,
           responseShape: response === null ? 'null' : 'missing'
         })
-        throw this.createError(
-          'operation-failed',
-          'Grok Runtime 未确认 Agent Studio 模型绑定，已阻止继续执行。'
-        )
+        throw this.createError('operation-failed', GROK_ACP_PRODUCT_MESSAGES.setModelShapeRejected)
       }
       this.observe({ kind: 'set-model', accepted: true, responseShape: 'object' })
     } catch (error) {
@@ -1286,11 +1338,16 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       if (!(error instanceof AgentRuntimeAdapterError)) {
         this.observe({ kind: 'set-model', accepted: false, responseShape: 'failed' })
       }
-      const adapterError = this.toAdapterError(
-        error,
-        'operation-failed',
-        '绑定 Agent Studio 模型失败'
-      )
+      // 备注：只统一文案分类，不改变 fail-closed 与 disconnect 语义。
+      const adapterError =
+        error instanceof AgentRuntimeAdapterError
+          ? error
+          : this.createError(
+              'operation-failed',
+              resolveGrokAcpFailure('set-model-failed', {
+                redactedDetail: this.redactError(error)
+              }).message
+            )
       await this.disconnectInternal(false)
       this.updateStatus({ state: 'error', message: adapterError.message, workspace })
       throw adapterError
@@ -1471,11 +1528,38 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     workspace: string,
     error: unknown
   ): void {
-    if (this.process !== child || this.connectionGeneration !== connectionGeneration) return
-    const message = `无法启动 Grok Build：${this.redactError(error)}`
-    this.failActiveTurn(message, 'runtime-process-error')
-    this.clearFailedConnection()
-    this.updateStatus({ state: 'error', message, workspace })
+    this.connectProcessError = error
+    const kind = classifyGrokSpawnProcessError(error)
+    // 备注：ENOENT 只展示“未安装 CLI”，禁止把 spawn 路径或 Node 原文送进 UI。
+    const message =
+      kind === 'cli-missing'
+        ? resolveGrokAcpFailure('cli-missing').message
+        : `无法启动 Grok Build：${this.redactError(error)}`
+
+    const isCurrent = this.process === child && this.connectionGeneration === connectionGeneration
+    if (isCurrent) {
+      this.failActiveTurn(message, 'runtime-process-error')
+      this.clearFailedConnection()
+      this.updateStatus({ state: 'error', message, workspace })
+      return
+    }
+
+    // 握手已先失败并 disconnect；缺 CLI 仍覆盖笼统连接失败文案。
+    if (
+      kind === 'cli-missing' &&
+      this.status.state === 'error' &&
+      this.status.workspace === workspace
+    ) {
+      this.updateStatus({ state: 'error', message, workspace })
+    }
+  }
+
+  /** 组装缺 CLI 的有限错误，并同步状态文案。 */
+  private createCliMissingError(workspace: string): AgentRuntimeAdapterError {
+    const resolved = resolveGrokAcpFailure('cli-missing')
+    const adapterError = this.createError(resolved.adapterErrorCode, resolved.message)
+    this.updateStatus({ state: 'error', message: adapterError.message, workspace })
+    return adapterError
   }
 
   private handleRuntimeProcessExit(
@@ -1488,10 +1572,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     if (this.process !== child || this.connectionGeneration !== connectionGeneration) return
 
     const hadActiveTurn = this.activeTurn != null
+    const resolved = resolveGrokAcpFailure('process-exited', { exitCode: code })
     const message =
       code === 0 && !hadActiveTurn
-        ? 'Grok Build 已断开'
-        : `Grok Build 已退出，代码 ${code ?? '未知'}`
+        ? GROK_ACP_PRODUCT_MESSAGES.processDisconnected
+        : resolved.message
     if (hadActiveTurn) this.failActiveTurn(message, 'runtime-process-exit')
     this.clearFailedConnection()
     if (this.status.state !== 'idle') {
@@ -1501,6 +1586,19 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         workspace
       })
     }
+  }
+
+  /**
+   * 将 connect 捕获错误映射为可区分的产品失败。
+   * 已归一化的 AdapterError 直接透传；协议不兼容不再二次包装成笼统“连接失败”。
+   */
+  private resolveConnectFailure(error: unknown): AgentRuntimeAdapterError {
+    if (error instanceof AgentRuntimeAdapterError) return error
+    const kind = classifyGrokConnectError(error)
+    const resolved = resolveGrokAcpFailure(kind, {
+      redactedDetail: this.redactError(error)
+    })
+    return this.createError(resolved.adapterErrorCode, resolved.message)
   }
 
   private clearFailedConnection(): void {
@@ -1622,15 +1720,21 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     launch: ControlledAcpFixtureLaunch
   ): Promise<ChildProcessWithoutNullStreams> {
     await assertControlledFixtureLaunch(this.options.userDataPath, workspace, launch)
-    return spawn(
+    const spawnControlled = this.options.spawnControlledProcess ?? spawn
+    // 备注：受控 E2E 必须走独立 argv 与 ELECTRON_RUN_AS_NODE，禁止复用生产 GROK_PRODUCTION_AGENT_ARGV。
+    return spawnControlled(
       process.execPath,
-      [launch.fixturePath, '--scenario', launch.scenario, '--user-data', launch.userDataPath],
+      buildGrokControlledE2ESpawnArgs({
+        fixturePath: launch.fixturePath,
+        scenario: launch.scenario,
+        userDataPath: launch.userDataPath
+      }),
       {
         cwd: workspace,
         env: buildControlledFixtureEnvironment(launch.runtimeHomeDirectory, launch.userDataPath),
         stdio: ['pipe', 'pipe', 'pipe']
       }
-    )
+    ) as ChildProcessWithoutNullStreams
   }
 
   /** 观察记录缺省为空操作，避免生产路径多写协议字段。 */

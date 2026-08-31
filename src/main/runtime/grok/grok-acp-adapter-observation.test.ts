@@ -7,7 +7,7 @@ import type {
   AgentRuntimeSessionRef,
   AgentRuntimeTurnContext
 } from '../../agent/agent-runtime-adapter'
-import { AGENT_STUDIO_MODEL_ALIAS } from '../../provider/grok-provider-config'
+import { AGENT_STUDIO_MODEL_ALIAS } from './grok-acp-dialect'
 import type { ProviderRuntimeConfig } from '../../provider/provider-config-store'
 import { GrokAcpAdapter } from './grok-acp-adapter'
 import type { GrokAcpObservationRecord } from './grok-acp-protocol-observer'
@@ -308,6 +308,7 @@ function createObservedHarness(
   const adapter = new GrokAcpAdapter(sink, {
     userDataPath: '/tmp/agent-studio-gacp01-remaining',
     getProviderConfig: () => providerConfig(),
+    getClientVersion: () => '0.1.0-test',
     redactText: (text) => text.replaceAll(FAKE_KEY, '[REDACTED]'),
     ...(records ? { protocolObserver: { record: (item) => records.push(item) } } : {})
   })
