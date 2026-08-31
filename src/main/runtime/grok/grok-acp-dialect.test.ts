@@ -82,6 +82,12 @@ describe('Grok ACP 方言常量冻结', () => {
     ])
     expect(e2eArgs).not.toEqual([...GROK_PRODUCTION_AGENT_ARGV])
     expect(GROK_PRODUCTION_AGENT_ARGV).not.toContain('--scenario')
+    // 备注：fixture 不得绑死生产 argv；禁止把 --no-auto-update / agent stdio 带进受控 spawn。
+    expect(e2eArgs).not.toContain('--no-auto-update')
+    expect(e2eArgs).not.toContain('agent')
+    expect(e2eArgs).not.toContain('stdio')
+    expect(e2eArgs).toContain('--scenario')
+    expect(e2eArgs).toContain('--user-data')
   })
 })
 

@@ -193,6 +193,15 @@ export interface GrokAcpAdapterOptions {
     args: readonly string[],
     options: SpawnOptions
   ) => ChildProcessWithoutNullStreams
+  /**
+   * 仅测试注入受控 E2E spawn；缺省为 node:child_process.spawn。
+   * 禁止 Renderer / IPC / 普通环境变量传入；生产路径不得设置。
+   */
+  spawnControlledProcess?: (
+    command: string,
+    args: readonly string[],
+    options: SpawnOptions
+  ) => ChildProcessWithoutNullStreams
 }
 
 /**
@@ -1711,7 +1720,9 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     launch: ControlledAcpFixtureLaunch
   ): Promise<ChildProcessWithoutNullStreams> {
     await assertControlledFixtureLaunch(this.options.userDataPath, workspace, launch)
-    return spawn(
+    const spawnControlled = this.options.spawnControlledProcess ?? spawn
+    // 备注：受控 E2E 必须走独立 argv 与 ELECTRON_RUN_AS_NODE，禁止复用生产 GROK_PRODUCTION_AGENT_ARGV。
+    return spawnControlled(
       process.execPath,
       buildGrokControlledE2ESpawnArgs({
         fixturePath: launch.fixturePath,
@@ -1723,7 +1734,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         env: buildControlledFixtureEnvironment(launch.runtimeHomeDirectory, launch.userDataPath),
         stdio: ['pipe', 'pipe', 'pipe']
       }
-    )
+    ) as ChildProcessWithoutNullStreams
   }
 
   /** 观察记录缺省为空操作，避免生产路径多写协议字段。 */

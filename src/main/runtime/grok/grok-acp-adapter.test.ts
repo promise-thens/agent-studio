@@ -34,7 +34,17 @@ import { PermissionBroker } from '../../security/permission-broker'
 import { parseCommandExecutionEvidence } from '../../../shared/command'
 import { CommandEvidenceStore } from '../../command/command-evidence-store'
 import { createLocalEnvironmentId } from '../../security/permission-policy'
-import { AGENT_STUDIO_MODEL_ALIAS, GROK_SET_MODEL_METHOD } from './grok-acp-dialect'
+import {
+  AGENT_STUDIO_MODEL_ALIAS,
+  GROK_PRODUCTION_AGENT_ARGV,
+  GROK_SET_MODEL_METHOD,
+  buildGrokControlledE2ESpawnArgs
+} from './grok-acp-dialect'
+import {
+  CONTROLLED_ACP_E2E_DIRECTORIES,
+  CONTROLLED_ACP_E2E_FIXTURE_FILE,
+  type ControlledAcpFixtureLaunch
+} from './controlled-acp-fixture'
 import { GrokAcpAdapter, buildGrokRuntimeEnvironment } from './grok-acp-adapter'
 import { deriveGrokRuntimeCommandId } from './grok-command-evidence-mapper'
 import {
@@ -2511,7 +2521,9 @@ describe('Grok Runtime 环境隔离', () => {
         HTTPS_PROXY: 'http://127.0.0.1:7890',
         NPM_TOKEN: 'must-not-leak',
         XAI_API_KEY: 'must-not-leak',
-        NODE_OPTIONS: '--require malicious.js'
+        NODE_OPTIONS: '--require malicious.js',
+        ELECTRON_RUN_AS_NODE: '1',
+        ELECTRON_ENABLE_LOGGING: '1'
       }
     )
 
@@ -2526,6 +2538,9 @@ describe('Grok Runtime 环境隔离', () => {
     expect(environment).not.toHaveProperty('NPM_TOKEN')
     expect(environment).not.toHaveProperty('XAI_API_KEY')
     expect(environment).not.toHaveProperty('NODE_OPTIONS')
+    // 备注：生产 Runtime env 不得带入 Electron 调试变量；受控 E2E 才自行设置 ELECTRON_RUN_AS_NODE。
+    expect(environment).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
+    expect(environment).not.toHaveProperty('ELECTRON_ENABLE_LOGGING')
   })
 
   it('不继承宿主 GROK_MEMORY=0，关闭记忆时才显式传 0', () => {
@@ -2555,6 +2570,99 @@ describe('Grok Runtime 环境隔离', () => {
 
     expect(environment.GROK_XAI_API_BASE_URL).toBe('https://api.example.com/v1')
     expect(JSON.stringify(environment)).not.toContain('hostile.example')
+  })
+})
+
+describe('Grok Runtime 受控 E2E fixture spawn', () => {
+  it('fixture spawn 使用独立 argv 与 ELECTRON_RUN_AS_NODE，不含生产 --no-auto-update', async () => {
+    const userDataPath = await realpath(
+      await mkdtemp(join(tmpdir(), 'grok-controlled-fixture-spawn-'))
+    )
+    const workspace = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.workspace)
+    const traceDirectory = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.trace)
+    const barrierDirectory = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.barriers)
+    const runtimeHomeDirectory = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.runtimeHome)
+    await Promise.all(
+      [workspace, traceDirectory, barrierDirectory, runtimeHomeDirectory].map((dir) =>
+        mkdir(dir, { recursive: true })
+      )
+    )
+
+    const repositoryRootPath = await realpath(process.cwd())
+    const fixturePath = join(repositoryRootPath, 'tests', 'e2e', CONTROLLED_ACP_E2E_FIXTURE_FILE)
+    const launch: ControlledAcpFixtureLaunch = {
+      scenario: 'E2E:FIFO',
+      repositoryRootPath,
+      userDataPath,
+      fixturePath,
+      traceDirectory,
+      barrierDirectory,
+      runtimeHomeDirectory
+    }
+
+    const child = createFakeSpawnChild()
+    let captured:
+      | {
+          command: string
+          args: readonly string[]
+          options: { cwd?: string; env?: NodeJS.ProcessEnv }
+        }
+      | undefined
+
+    try {
+      const adapter = new GrokAcpAdapter(
+        {
+          onStatus: () => undefined,
+          onEvent: () => undefined,
+          onPermission: () => undefined,
+          onPermissionCancelled: () => undefined,
+          onAvailableCommands: () => undefined
+        },
+        {
+          userDataPath,
+          getProviderConfig: () => providerConfig(),
+          getClientVersion: () => '0.1.0-test',
+          redactText: redactFakeText,
+          controlledFixture: launch,
+          // 备注：测试注入 spawn，避免 ESM 下无法 spy node:child_process.spawn。
+          spawnControlledProcess: (command, args, options) => {
+            captured = {
+              command,
+              args,
+              options: options as { cwd?: string; env?: NodeJS.ProcessEnv }
+            }
+            return child
+          }
+        }
+      )
+      const internal = adapter as unknown as GrokAcpAdapterTestAccess
+      vi.spyOn(internal, 'initializeConnection').mockResolvedValue(true)
+
+      await adapter.connect(workspace)
+
+      expect(captured).toBeDefined()
+      expect(captured!.command).toBe(process.execPath)
+      expect(captured!.args).toEqual(
+        buildGrokControlledE2ESpawnArgs({
+          fixturePath,
+          scenario: 'E2E:FIFO',
+          userDataPath
+        })
+      )
+      expect(captured!.args).toContain('--scenario')
+      expect(captured!.args).toContain('--user-data')
+      expect(captured!.args).not.toContain('--no-auto-update')
+      expect(captured!.args).not.toEqual([...GROK_PRODUCTION_AGENT_ARGV])
+      expect(captured!.options.cwd).toBe(workspace)
+      expect(captured!.options.env).toMatchObject({
+        ELECTRON_RUN_AS_NODE: '1',
+        HOME: runtimeHomeDirectory
+      })
+      expect(captured!.options.env).not.toHaveProperty(AGENT_STUDIO_MODEL_API_KEY_ENV)
+      expect(captured!.options.env).not.toHaveProperty('PATH')
+    } finally {
+      await rm(userDataPath, { recursive: true, force: true })
+    }
   })
 })
 

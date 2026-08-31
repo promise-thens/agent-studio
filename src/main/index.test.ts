@@ -854,6 +854,67 @@ describe('Main 删除与权限失效编排', () => {
     expect(mocks.agentService.connect).not.toHaveBeenCalled()
   })
 
+  it.each(['busy', 'connecting'] as const)(
+    'Agent status 为 %s 时 save/select 拒绝修改，且不 save、不断开',
+    async (state) => {
+      const operations = mocks.providerOperations!
+      mocks.agentService.getStatus.mockReturnValue({
+        runtimeId: 'grok',
+        state,
+        message: state,
+        workspace: '/tmp/project-1'
+      })
+
+      await expect(operations.save(providerInput('model-busy'))).rejects.toThrow(
+        '任务执行中，结束后才能修改模型配置。'
+      )
+      await expect(operations.selectModel({ modelId: 'model-busy-select' })).rejects.toThrow(
+        '任务执行中，结束后才能修改模型配置。'
+      )
+      expect(mocks.providerStore.save).not.toHaveBeenCalled()
+      expect(mocks.agentService.disconnect).not.toHaveBeenCalled()
+      expect(mocks.agentService.connect).not.toHaveBeenCalled()
+    }
+  )
+
+  it('ready 时重连失败会回滚到旧 Provider 配置', async () => {
+    const operations = mocks.providerOperations!
+    const previous = {
+      baseUrl: 'https://provider.test/v1',
+      authMode: 'none' as const,
+      modelId: 'model-1',
+      testedAt: '2026-08-17T00:00:00.000Z',
+      updatedAt: '2026-08-17T00:00:00.000Z'
+    }
+    mocks.providerState.runtimeConfig = { ...previous }
+    mocks.agentService.getStatus.mockReturnValue({
+      runtimeId: 'grok',
+      state: 'ready',
+      message: 'ready',
+      workspace: '/tmp/project-1'
+    })
+    mocks.agentService.connect.mockRejectedValueOnce(new Error('模拟重连失败'))
+
+    await expect(operations.save(providerInput('model-2'))).rejects.toThrow('模拟重连失败')
+
+    expect(mocks.agentService.disconnect).toHaveBeenCalledOnce()
+    expect(mocks.providerStore.save).toHaveBeenCalledTimes(2)
+    expect(mocks.providerStore.save).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ modelId: 'model-2' }),
+      expect.objectContaining({ testedAt: expect.any(String) })
+    )
+    expect(mocks.providerStore.save).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        baseUrl: previous.baseUrl,
+        authMode: previous.authMode,
+        modelId: previous.modelId
+      }),
+      { testedAt: previous.testedAt }
+    )
+  })
+
   it('插件安装 trust 非 true 时 CLI argv 不含 --trust，且不回传 stdout', async () => {
     mocks.runGrokPlugin.mockReset()
     mocks.runGrokPlugin.mockResolvedValue({
