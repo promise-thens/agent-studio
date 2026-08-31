@@ -256,6 +256,7 @@ describe('插件页已安装/市场嵌套栏', () => {
       pane: 'installed'
     })
     expect(resolveProductSlashPluginTarget('open-settings')).toBeNull()
+    expect(resolveProductSlashPluginTarget('open-permission-mode')).toBeNull()
   })
 
   it('市场副标题只用 DTO 计数与说明，不编造展示名', () => {

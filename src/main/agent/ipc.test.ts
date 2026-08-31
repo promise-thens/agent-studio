@@ -5,6 +5,10 @@ import type {
   AgentTurnExecutionResult
 } from '../../shared/agent'
 import { AGENT_INVOKE_CHANNELS } from '../../shared/agent-ipc'
+import {
+  GROK_TAKEOVER_CONTROL_PROMPT,
+  PUBLIC_TAKEOVER_CONTROL_PROMPT_BLOCKED_MESSAGE
+} from '../../shared/task-takeover'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
 import type { DesktopIpcHandler } from '../ipc-types'
 import { DesktopIpcFailure, type TrustedIpcInvokeEvent } from '../security/ipc-sender-validation'
@@ -184,6 +188,23 @@ describe('Agent IPC Handler', () => {
     })
     expect(fixture.runtime.enterTask).toHaveBeenCalledWith('task-1')
     expect(JSON.stringify(result)).not.toContain('runtimeSessionId')
+  })
+
+  it('公开 startTurn 拒绝字面量 /always-approve，不得调用 Runtime', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(AGENT_INVOKE_CHANNELS.startTurn, {
+        taskId: 'task-1',
+        prompt: GROK_TAKEOVER_CONTROL_PROMPT
+      })
+    ).toEqual({
+      ok: false,
+      error: {
+        code: 'invalid-input',
+        message: PUBLIC_TAKEOVER_CONTROL_PROMPT_BLOCKED_MESSAGE
+      }
+    })
+    expect(fixture.runtime.startTurn).not.toHaveBeenCalled()
   })
 
   it('Turn 只在 ready 状态委托，并保留 Task ID 与 Prompt 首尾内容', async () => {

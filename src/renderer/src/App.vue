@@ -105,7 +105,8 @@ import { resolveExecutionSurfaceBanner } from './workbench-primary-view'
 import {
   applyAvailableCommandFetchIfCurrent,
   applyAvailableCommandSnapshotIfCurrent,
-  matchProductSlashSubmit
+  matchProductSlashSubmit,
+  type SlashCommandItem
 } from './slash-command-palette'
 import {
   createAndSelectTask,
@@ -203,7 +204,11 @@ const draftPreviewUrls = ref<Record<string, string>>({})
 const runtimeSlashCommands = ref<AgentAvailableCommand[]>([])
 /** 当前命令板已应用的快照 revision；切 Task 时归零，避免旧 GET 盖住更新的 push。 */
 const runtimeSlashRevision = ref(0)
-const taskComposer = ref<{ focus: () => void; focusStop?: () => void } | null>(null)
+const taskComposer = ref<{
+  focus: () => void
+  focusStop?: () => void
+  openPermissionModeFromSlash?: () => void
+} | null>(null)
 const promptSubmissionPending = ref(false)
 const projectConnectionPending = ref(false)
 const projectSelectionPending = ref(false)
@@ -1118,16 +1123,12 @@ function openPluginHub(
   workbench.openPlugins()
 }
 
-function handleProductSlashAction(
-  action:
-    | 'open-plugins'
-    | 'open-plugins-marketplace'
-    | 'open-plugins-mcp'
-    | 'open-settings'
-    | 'open-settings-memory'
-    | 'open-settings-grok-config'
-): void {
+function handleProductSlashAction(action: NonNullable<SlashCommandItem['productAction']>): void {
   prompt.value = ''
+  if (action === 'open-permission-mode') {
+    taskComposer.value?.openPermissionModeFromSlash?.()
+    return
+  }
   const pluginTarget = resolveProductSlashPluginTarget(action)
   if (pluginTarget) {
     openPluginHub(pluginTarget.tab, pluginTarget.pane)
@@ -1910,6 +1911,7 @@ function scrollMessagesToBottom(): void {
             :model-disabled="!providerSummary?.configured"
             :permission-mode="composerPermissionMode"
             :takeover-applied="activePermissionState?.takeoverApplied === true"
+            :takeover-may-still-be-active="activePermissionState?.takeoverMayStillBeActive === true"
             :takeover-hud="composerTakeoverHud"
             :set-permission-mode="setTaskPermissionMode"
             :context-usage="composerContextUsage"

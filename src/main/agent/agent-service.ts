@@ -203,6 +203,8 @@ export class AgentService {
   private readonly onTaskRuntimeState?: (task: AgentTaskRuntimeState) => void
   /** 防止 /always-approve 对同一 Task 连发两次（它是 toggle）。 */
   private readonly takeoverControlInFlight = new Set<string>()
+  /** 关闭/打开命令已成功入队；lingering 但未入队成功时才视为 Grok 仍可能 yolo。 */
+  private readonly takeoverControlDispatched = new Set<string>()
   private readonly getSessionMcpServers?: AgentServiceOptions['getSessionMcpServers']
   private readonly getTrustedExternalRoots?: AgentServiceOptions['getTrustedExternalRoots']
   private readonly ensureChangeBaseline?: AgentServiceOptions['ensureChangeBaseline']
@@ -659,7 +661,7 @@ export class AgentService {
     const previousStyle = task.permissionPromptStyle === 'ask' ? 'ask' : 'assist'
     const previousEnabled = task.takeoverEnabled === true
     const snapshot = permissionSnapshotFromMode(request.mode, previousStyle)
-    const currentlyApplied = task.takeoverApplied === true
+    const currentlyApplied = this.isTakeoverCurrentlyApplied(task)
     const decision = resolveTakeoverApply({
       hasSession: this.isTaskSessionActive(task),
       idle: true,
@@ -693,7 +695,10 @@ export class AgentService {
         task.takeoverMayStillBeActive = true
       } else {
         task.takeoverApplied = false
-        delete task.takeoverMayStillBeActive
+        // 关闭命令已发出后的同档 noop 必须保留 lingering，不得假装已回到询问。
+        if (!(decision.kind === 'noop' && task.takeoverMayStillBeActive === true)) {
+          delete task.takeoverMayStillBeActive
+        }
       }
       if (decision.kind === 'defer-next-session') {
         task.takeoverPendingReason = decision.reason
@@ -856,6 +861,17 @@ export class AgentService {
   }
 
   /**
+   * lingering 且关闭命令尚未入队成功时，视为 Grok 仍可能处于 always-approve。
+   * 此时再开接管不得再发 toggle；关接管允许重发。这不是 Permission Broker 沙箱。
+   */
+  private isTakeoverCurrentlyApplied(task: AgentTaskRecord): boolean {
+    return (
+      task.takeoverApplied === true ||
+      (task.takeoverMayStillBeActive === true && !this.takeoverControlDispatched.has(task.taskId))
+    )
+  }
+
+  /**
    * 已 applied 禁止再发 /always-approve。未 applied 只更新 HUD 原因；
    * 真正发命令由 beginTakeoverControlPrompt 交给调用方 startTurn。
    */
@@ -941,6 +957,7 @@ export class AgentService {
   markTakeoverCommandDispatched(taskId: string): AgentTaskRuntimeState {
     const task = this.requireTask(taskId)
     this.takeoverControlInFlight.delete(taskId)
+    this.takeoverControlDispatched.add(taskId)
     if (task.takeoverEnabled === true) {
       task.takeoverApplied = true
       delete task.takeoverPendingReason
@@ -954,6 +971,7 @@ export class AgentService {
   /** start 失败时释放 in-flight，保持未 applied 以便重试。 */
   abortTakeoverControlPrompt(taskId: string): void {
     this.takeoverControlInFlight.delete(taskId)
+    this.takeoverControlDispatched.delete(taskId)
   }
 
   private async persistPermissionMode(task: AgentTaskRecord): Promise<void> {

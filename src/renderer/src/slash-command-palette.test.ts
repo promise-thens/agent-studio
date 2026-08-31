@@ -135,7 +135,8 @@ describe('合并与过滤', () => {
       'memory',
       'mcps',
       'mcp',
-      'config'
+      'config',
+      'always-approve'
     ])
     expect(illegal.map((item) => item.name)).toEqual([
       'plugins',
@@ -144,7 +145,8 @@ describe('合并与过滤', () => {
       'memory',
       'mcps',
       'mcp',
-      'config'
+      'config',
+      'always-approve'
     ])
     expect(empty.every((item) => item.source === 'product')).toBe(true)
     expect(PRODUCT_SLASH_COMMANDS.map((item) => item.name)).toEqual([
@@ -154,7 +156,8 @@ describe('合并与过滤', () => {
       'memory',
       'mcps',
       'mcp',
-      'config'
+      'config',
+      'always-approve'
     ])
   })
 
@@ -173,6 +176,7 @@ describe('合并与过滤', () => {
       'product:mcps',
       'product:mcp',
       'product:config',
+      'product:always-approve',
       'runtime:compact'
     ])
     expect(items.find((item) => item.name === 'plugins')?.productAction).toBe('open-plugins')
@@ -210,9 +214,35 @@ describe('产品发送拦截', () => {
     expect(matchProductSlashSubmit('/marketplace')).toBe('open-plugins-marketplace')
     expect(matchProductSlashSubmit('/marketplace leftover')).toBe('open-plugins-marketplace')
     expect(matchProductSlashSubmit('/settings')).toBe('open-settings')
+    expect(matchProductSlashSubmit('/always-approve')).toBe('open-permission-mode')
+    expect(matchProductSlashSubmit('/always-approve leftover')).toBe('open-permission-mode')
     expect(matchProductSlashSubmit('/plug')).toBeNull()
     expect(matchProductSlashSubmit('/compact keep auth')).toBeNull()
     expect(matchProductSlashSubmit(' /plugins')).toBeNull()
+  })
+})
+
+describe('always-approve 产品别名', () => {
+  it('广告的 always-approve 不得作为 runtime 项交给 startTurn', () => {
+    const items = merged([
+      runtimeCommand({ name: 'always-approve', description: 'Grok 自己的接管命令' }),
+      runtimeCommand({ name: 'compact', description: '压缩上下文' })
+    ])
+    const matched = filterSlashCommands(items, slashQuery('/always-approve'))
+
+    expect(matched).toHaveLength(1)
+    expect(matched[0]?.source).toBe('product')
+    expect(matched[0]?.name).toBe('always-approve')
+    expect(resolveSlashSubmit(matched[0]!, '/always-approve')).toEqual({
+      kind: 'product',
+      action: 'open-permission-mode'
+    })
+    expect(resolveSlashSubmit(matched[0]!, '/always-approve')).not.toEqual(
+      expect.objectContaining({ kind: 'runtime' })
+    )
+    expect(
+      items.find((item) => item.source === 'runtime' && item.name === 'always-approve')
+    ).toBeUndefined()
   })
 })
 
@@ -349,6 +379,8 @@ describe('命令板表面', () => {
     expect(composerSource).toContain("emit('open-plugins-mcp')")
     expect(composerSource).toContain("emit('open-plugins-marketplace')")
     expect(composerSource).toContain('matchProductSlashSubmit')
+    expect(composerSource).toContain("action === 'open-permission-mode'")
+    expect(composerSource).toContain('openPermissionModeFromSlash')
     expect(composerSource).not.toContain('继续任务')
     expect(composerSource).toContain('TaskPermissionModeMenu')
     expect(composerSource).toContain('TaskTakeoverConfirmDialog')
@@ -371,6 +403,8 @@ describe('命令板表面', () => {
     expect(appSource).toContain('open-plugins-marketplace')
     expect(appSource).toContain('resolveProductSlashPluginTarget')
     expect(appSource).toContain('initial-pane')
+    expect(appSource).toContain('open-permission-mode')
+    expect(appSource).toContain('openPermissionModeFromSlash')
     expect(appSource).not.toContain("openSettingsSection('mcp')")
   })
 })

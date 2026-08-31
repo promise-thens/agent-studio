@@ -48,6 +48,7 @@ const props = defineProps<{
   modelDisabled?: boolean
   permissionMode?: TaskPermissionMode
   takeoverApplied?: boolean
+  takeoverMayStillBeActive?: boolean
   takeoverHud?: string | null
   setPermissionMode: (mode: TaskPermissionMode) => Promise<void>
   /** 上下文 used/limit；没数据时不传或传空，模板藏起来。 */
@@ -197,12 +198,22 @@ watch(filteredCommands, (items) => {
 })
 
 function emitProductAction(action: NonNullable<SlashCommandItem['productAction']>): void {
+  if (action === 'open-permission-mode') {
+    openPermissionModeFromSlash()
+    return
+  }
   if (action === 'open-plugins') emit('open-plugins')
   else if (action === 'open-plugins-mcp') emit('open-plugins-mcp')
   else if (action === 'open-plugins-marketplace') emit('open-plugins-marketplace')
   else if (action === 'open-settings-memory') emit('open-settings-memory')
   else if (action === 'open-settings-grok-config') emit('open-settings-grok-config')
   else emit('open-settings')
+}
+
+/** 广告的 /always-approve 只打开确认/菜单，不得当成 runtime prompt 发出去。 */
+function openPermissionModeFromSlash(): void {
+  emit('update:prompt', '')
+  void handlePermissionModeSelect('takeover')
 }
 
 function submitPaletteItem(item: SlashCommandItem): void {
@@ -260,6 +271,15 @@ function handleComposerKeydown(event: KeyboardEvent): void {
   emit('send')
 }
 
+function handleSendClick(): void {
+  const productAction = matchProductSlashSubmit(props.prompt)
+  if (productAction) {
+    emitProductAction(productAction)
+    return
+  }
+  emit('send')
+}
+
 function focus(): void {
   textarea.value?.focus()
 }
@@ -269,7 +289,7 @@ function focusStop(): void {
   stopButton.value?.focus()
 }
 
-defineExpose({ focus, focusStop })
+defineExpose({ focus, focusStop, openPermissionModeFromSlash })
 </script>
 
 <template>
@@ -355,6 +375,7 @@ defineExpose({ focus, focusStop })
             :busy="modelBusy"
             :disabled="modelDisabled"
             :takeover-applied="takeoverApplied === true"
+            :takeover-may-still-be-active="takeoverMayStillBeActive === true"
             @select="handlePermissionModeSelect"
           />
           <span v-if="contextUsage" class="composer-usage" title="上下文用量">{{
@@ -391,7 +412,7 @@ defineExpose({ focus, focusStop })
             :title="disabledMessage || '发送'"
             :aria-label="disabledMessage || '发送'"
             :aria-describedby="disabledMessage ? 'prompt-capability-message' : undefined"
-            @click="emit('send')"
+            @click="handleSendClick"
           >
             <PaperPlaneTilt :size="17" weight="fill" />
           </button>

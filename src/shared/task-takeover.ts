@@ -89,6 +89,15 @@ export function readTakeoverSnapshot(value: unknown): {
 /** 发给 Grok 的接管斜杠命令全文；展示与审计都只用这一字面量，不带用户 prompt。 */
 export const GROK_TAKEOVER_CONTROL_PROMPT = `/${GROK_TAKEOVER_SLASH_COMMAND}` as const
 
+/** 公开 agent:start-turn 拒绝该字面量时的提示；内部控制 turn 不走这条闸门。 */
+export const PUBLIC_TAKEOVER_CONTROL_PROMPT_BLOCKED_MESSAGE =
+  '请改用批准模式菜单切换完全接管，不要直接发送 /always-approve。'
+
+/** 公开 startTurn 不得发送该字面量；内部控制 turn 用同一 prompt 但不经过 IPC 闸门。 */
+export function isPublicTakeoverControlPrompt(prompt: string): boolean {
+  return prompt === GROK_TAKEOVER_CONTROL_PROMPT
+}
+
 export const TASK_PERMISSION_MODES = ['ask', 'assist', 'takeover'] as const
 export type TaskPermissionMode = (typeof TASK_PERMISSION_MODES)[number]
 
@@ -197,4 +206,21 @@ export function resolveTakeoverHudCopy(input: {
 
 export function isTaskPermissionMode(value: unknown): value is TaskPermissionMode {
   return value === 'ask' || value === 'assist' || value === 'takeover'
+}
+
+/**
+ * 菜单是否应把当前档再交给 setPermissionMode。
+ * lingering 时允许重选 ask/assist 以重发关闭 toggle；takeover 未 applied 时允许重试开启。
+ */
+export function shouldResubmitPermissionMode(input: {
+  current: TaskPermissionMode
+  next: TaskPermissionMode
+  takeoverApplied: boolean
+  takeoverMayStillBeActive?: boolean
+}): boolean {
+  if (input.next !== input.current) return true
+  if (input.next === 'takeover' && input.takeoverApplied !== true) return true
+  return (
+    input.takeoverMayStillBeActive === true && (input.next === 'ask' || input.next === 'assist')
+  )
 }

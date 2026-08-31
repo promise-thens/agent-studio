@@ -2,6 +2,7 @@ import {
   AVAILABLE_COMMAND_NAME_PATTERN,
   type AgentAvailableCommand
 } from '../../shared/agent-available-command'
+import { GROK_TAKEOVER_SLASH_COMMAND } from '../../shared/task-takeover'
 
 export type SlashCommandSource = 'runtime' | 'product'
 
@@ -11,7 +12,7 @@ export interface SlashCommandItem {
   description: string
   inputHint?: string
   source: SlashCommandSource
-  // product 只允许导航，不得 startTurn。
+  // product 只允许桌面动作，不得 startTurn。
   productAction?:
     | 'open-plugins'
     | 'open-plugins-marketplace'
@@ -19,11 +20,12 @@ export interface SlashCommandItem {
     | 'open-settings'
     | 'open-settings-memory'
     | 'open-settings-grok-config'
+    | 'open-permission-mode'
 }
 
 export const SLASH_RUNTIME_WAITING_COPY = '等待 Grok 提供命令'
 
-/** 桌面导航别名；同名时优先于 Grok 广告，避免 /plugins 或 /marketplace 去 startTurn。 */
+/** 产品别名优先于 Grok 广告：/plugins 走导航，/always-approve 走开批准模式，都不得 startTurn。 */
 export const PRODUCT_SLASH_COMMANDS: SlashCommandItem[] = [
   {
     id: 'product:plugins',
@@ -73,6 +75,13 @@ export const PRODUCT_SLASH_COMMANDS: SlashCommandItem[] = [
     description: '打开 Grok 配置',
     source: 'product',
     productAction: 'open-settings-grok-config'
+  },
+  {
+    id: 'product:always-approve',
+    name: GROK_TAKEOVER_SLASH_COMMAND,
+    description: '打开批准模式；完全接管必须先确认',
+    source: 'product',
+    productAction: 'open-permission-mode'
   }
 ]
 
@@ -107,7 +116,7 @@ export function mergeSlashCommands(input: {
   for (const command of runtime) {
     if (typeof command?.name !== 'string' || typeof command.description !== 'string') continue
     if (!AVAILABLE_COMMAND_NAME_PATTERN.test(command.name)) continue
-    // 同名时产品别名优先：桌面导航不能被 Grok 的 /plugins 抢走去发 prompt。
+    // 同名时产品别名优先：/plugins 与 /always-approve 都不能被 Grok 广告抢走去发 prompt。
     if (productNames.has(command.name) || seen.has(command.name)) continue
     seen.add(command.name)
     runtimeItems.push({

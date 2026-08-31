@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   GROK_TAKEOVER_CONTROL_PROMPT,
   GROK_TAKEOVER_SLASH_COMMAND,
+  isPublicTakeoverControlPrompt,
   isTakeoverCommandAdvertised,
   permissionSnapshotFromMode,
+  PUBLIC_TAKEOVER_CONTROL_PROMPT_BLOCKED_MESSAGE,
   readPermissionPromptStyle,
   readTakeoverSnapshot,
   resolveTakeoverApply,
   resolveTakeoverHudCopy,
+  shouldResubmitPermissionMode,
   taskPermissionModeFromSnapshot,
   type TakeoverApplyInput
 } from './task-takeover'
@@ -211,6 +214,10 @@ describe('permissionPromptStyle 与三档映射', () => {
       permissionPromptStyle: 'ask'
     })
     expect(GROK_TAKEOVER_CONTROL_PROMPT).toBe('/always-approve')
+    expect(isPublicTakeoverControlPrompt('/always-approve')).toBe(true)
+    expect(isPublicTakeoverControlPrompt('/always-approve ')).toBe(false)
+    expect(isPublicTakeoverControlPrompt('/always-approve leftover')).toBe(false)
+    expect(PUBLIC_TAKEOVER_CONTROL_PROMPT_BLOCKED_MESSAGE).toContain('批准模式菜单')
   })
 
   it('HUD：执行中才写正在接管；未生效与可能仍在始终可见', () => {
@@ -242,5 +249,54 @@ describe('permissionPromptStyle 与三档映射', () => {
         takeoverMayStillBeActive: true
       })
     ).toBe('接管可能仍在')
+  })
+})
+
+describe('shouldResubmitPermissionMode', () => {
+  it('lingering 时允许重选当前 ask/assist；已 applied 的接管不再提交', () => {
+    expect(
+      shouldResubmitPermissionMode({
+        current: 'assist',
+        next: 'assist',
+        takeoverApplied: false,
+        takeoverMayStillBeActive: true
+      })
+    ).toBe(true)
+    expect(
+      shouldResubmitPermissionMode({
+        current: 'ask',
+        next: 'ask',
+        takeoverApplied: false,
+        takeoverMayStillBeActive: true
+      })
+    ).toBe(true)
+    expect(
+      shouldResubmitPermissionMode({
+        current: 'assist',
+        next: 'assist',
+        takeoverApplied: false
+      })
+    ).toBe(false)
+    expect(
+      shouldResubmitPermissionMode({
+        current: 'takeover',
+        next: 'takeover',
+        takeoverApplied: true
+      })
+    ).toBe(false)
+    expect(
+      shouldResubmitPermissionMode({
+        current: 'takeover',
+        next: 'takeover',
+        takeoverApplied: false
+      })
+    ).toBe(true)
+    expect(
+      shouldResubmitPermissionMode({
+        current: 'assist',
+        next: 'takeover',
+        takeoverApplied: false
+      })
+    ).toBe(true)
   })
 })

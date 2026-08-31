@@ -8,6 +8,7 @@ import {
   PhWarning as Warning
 } from '@phosphor-icons/vue'
 import {
+  shouldResubmitPermissionMode,
   TASK_PERMISSION_MODE_COPY,
   TASK_PERMISSION_MODES,
   type TaskPermissionMode
@@ -19,6 +20,7 @@ const props = withDefaults(
     busy?: boolean
     disabled?: boolean
     takeoverApplied?: boolean
+    takeoverMayStillBeActive?: boolean
   }>(),
   { busy: false, disabled: false }
 )
@@ -79,7 +81,14 @@ function closeMenu(restoreFocus = false): void {
 
 function chooseMode(mode: TaskPermissionMode): void {
   if (isDisabled.value) return
-  if (mode === props.mode && !(mode === 'takeover' && props.takeoverApplied !== true)) {
+  if (
+    !shouldResubmitPermissionMode({
+      current: props.mode,
+      next: mode,
+      takeoverApplied: props.takeoverApplied === true,
+      takeoverMayStillBeActive: props.takeoverMayStillBeActive
+    })
+  ) {
     return closeMenu(true)
   }
   selecting.value = true

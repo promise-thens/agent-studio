@@ -13,7 +13,11 @@ import {
   type AgentSetPermissionModeResult,
   type AgentStartTurnRequest
 } from '../../shared/agent-ipc'
-import { isTaskPermissionMode } from '../../shared/task-takeover'
+import {
+  isPublicTakeoverControlPrompt,
+  isTaskPermissionMode,
+  PUBLIC_TAKEOVER_CONTROL_PROMPT_BLOCKED_MESSAGE
+} from '../../shared/task-takeover'
 import { ATTACHMENT_LIMITS } from '../../shared/task-attachment'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
 import type {
@@ -174,6 +178,10 @@ function readStartTurnRequest(args: unknown[]): AgentStartTurnRequest {
   const prompt = readOptionalPrompt(request)
   if (!prompt.trim() && attachmentIds.length === 0) {
     throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  // 公开 startTurn 不得把广告命令当作用户 Turn；内部控制 turn 不经过本闸门。
+  if (isPublicTakeoverControlPrompt(prompt)) {
+    throw new DesktopIpcFailure('invalid-input', PUBLIC_TAKEOVER_CONTROL_PROMPT_BLOCKED_MESSAGE)
   }
   return {
     taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES),
