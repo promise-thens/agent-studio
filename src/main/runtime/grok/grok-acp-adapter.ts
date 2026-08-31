@@ -32,11 +32,20 @@ import { toAcpMcpServers } from '../../mcp/mcp-server-to-acp'
 import { updateAgentRuntimeCapabilitySnapshot } from '../../agent/runtime-capabilities'
 import type { ProviderRuntimeConfig } from '../../provider/provider-config-store'
 import {
-  AGENT_STUDIO_MODEL_ALIAS,
   AGENT_STUDIO_MODEL_API_KEY_ENV,
   getManagedGrokHome,
   writeGrokProviderConfig
 } from '../../provider/grok-provider-config'
+import {
+  AGENT_STUDIO_MODEL_ALIAS,
+  GROK_ACP_CLIENT_CAPABILITIES,
+  GROK_ACP_CLIENT_INFO_NAME,
+  GROK_ACP_CLIENT_INFO_VERSION,
+  GROK_PRODUCTION_AGENT_ARGV,
+  GROK_SET_MODEL_METHOD,
+  buildGrokControlledE2ESpawnArgs,
+  isGrokSetModelResponseValid
+} from './grok-acp-dialect'
 import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
 import type { CommandEvidenceStore } from '../../command/command-evidence-store'
 import {
@@ -129,7 +138,6 @@ interface GrokSetModelRequest {
   modelId: string
 }
 
-const GROK_SET_MODEL_METHOD = 'session/set_model'
 const MAX_PERMISSION_OPTION_ID_BYTES = 4 * 1024
 const MAX_TOOL_CALL_AUTHORIZATION_SNAPSHOTS = 2_000
 const MAX_TERMINAL_TOOL_CALL_IDS = 2_000
@@ -268,17 +276,13 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
       // 生产默认启动参数必须保持原样，不能经由通用 command/args 抽象。
       const memoryEnabled = (await this.options.isMemoryEnabled?.()) ?? true
-      child = spawn(
-        this.resolveBinary(),
-        ['--no-auto-update', 'agent', '--no-leader', '-m', AGENT_STUDIO_MODEL_ALIAS, 'stdio'],
-        {
-          cwd: workspace,
-          env: buildGrokRuntimeEnvironment(providerConfig, grokHome, process.env, {
-            memoryEnabled
-          }),
-          stdio: ['pipe', 'pipe', 'pipe']
-        }
-      )
+      child = spawn(this.resolveBinary(), [...GROK_PRODUCTION_AGENT_ARGV], {
+        cwd: workspace,
+        env: buildGrokRuntimeEnvironment(providerConfig, grokHome, process.env, {
+          memoryEnabled
+        }),
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
     }
     const connectionGeneration = ++this.connectionGeneration
     this.process = child
@@ -664,10 +668,10 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   ): Promise<boolean> {
     const response = await connection.initialize({
       protocolVersion: acp.PROTOCOL_VERSION,
-      clientCapabilities: {},
+      clientCapabilities: { ...GROK_ACP_CLIENT_CAPABILITIES },
       clientInfo: {
-        name: 'agent-studio',
-        version: '0.1.0'
+        name: GROK_ACP_CLIENT_INFO_NAME,
+        version: GROK_ACP_CLIENT_INFO_VERSION
       }
     })
     if (!this.isCurrentConnection(connection, child, connectionGeneration)) return false
@@ -1268,7 +1272,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       )
       this.assertSessionOperationCurrent(current)
 
-      if (response === null || typeof response !== 'object' || Array.isArray(response)) {
+      // 备注：形状守卫归属方言；此处保持 fail-closed，不读 _meta 业务字段。
+      if (!isGrokSetModelResponseValid(response)) {
         this.observe({
           kind: 'set-model',
           accepted: false,
@@ -1624,7 +1629,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     await assertControlledFixtureLaunch(this.options.userDataPath, workspace, launch)
     return spawn(
       process.execPath,
-      [launch.fixturePath, '--scenario', launch.scenario, '--user-data', launch.userDataPath],
+      buildGrokControlledE2ESpawnArgs({
+        fixturePath: launch.fixturePath,
+        scenario: launch.scenario,
+        userDataPath: launch.userDataPath
+      }),
       {
         cwd: workspace,
         env: buildControlledFixtureEnvironment(launch.runtimeHomeDirectory, launch.userDataPath),

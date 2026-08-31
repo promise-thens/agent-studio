@@ -7,7 +7,7 @@ import type {
   AgentRuntimeSessionRef,
   AgentRuntimeTurnContext
 } from '../../agent/agent-runtime-adapter'
-import { AGENT_STUDIO_MODEL_ALIAS } from '../../provider/grok-provider-config'
+import { AGENT_STUDIO_MODEL_ALIAS } from './grok-acp-dialect'
 import type { ProviderRuntimeConfig } from '../../provider/provider-config-store'
 import { GrokAcpAdapter } from './grok-acp-adapter'
 import type { GrokAcpObservationRecord } from './grok-acp-protocol-observer'

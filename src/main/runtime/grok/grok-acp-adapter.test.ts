@@ -26,15 +26,13 @@ import { TaskExecutionController } from '../../agent/task-execution-controller'
 import { TaskStore } from '../../agent/task-store'
 import { ProjectRegistry } from '../../project/project-registry'
 import type { ProviderRuntimeConfig } from '../../provider/provider-config-store'
-import {
-  AGENT_STUDIO_MODEL_ALIAS,
-  AGENT_STUDIO_MODEL_API_KEY_ENV
-} from '../../provider/grok-provider-config'
+import { AGENT_STUDIO_MODEL_API_KEY_ENV } from '../../provider/grok-provider-config'
 import { PermissionAuditStore } from '../../security/permission-audit-store'
 import { PermissionBroker } from '../../security/permission-broker'
 import { parseCommandExecutionEvidence } from '../../../shared/command'
 import { CommandEvidenceStore } from '../../command/command-evidence-store'
 import { createLocalEnvironmentId } from '../../security/permission-policy'
+import { AGENT_STUDIO_MODEL_ALIAS, GROK_SET_MODEL_METHOD } from './grok-acp-dialect'
 import { GrokAcpAdapter, buildGrokRuntimeEnvironment } from './grok-acp-adapter'
 import { deriveGrokRuntimeCommandId } from './grok-command-evidence-mapper'
 import {
@@ -550,7 +548,7 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
 
     expect(newSession).toHaveBeenCalledWith({ cwd: WORKSPACE, mcpServers: [] })
-    expect(request).toHaveBeenCalledWith('session/set_model', {
+    expect(request).toHaveBeenCalledWith(GROK_SET_MODEL_METHOD, {
       sessionId: 'runtime-session-new',
       modelId: AGENT_STUDIO_MODEL_ALIAS
     })
@@ -637,14 +635,14 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
     expect(request.mock.calls).toEqual([
       [
-        'session/set_model',
+        GROK_SET_MODEL_METHOD,
         {
           sessionId: 'runtime-session-a',
           modelId: AGENT_STUDIO_MODEL_ALIAS
         }
       ],
       [
-        'session/set_model',
+        GROK_SET_MODEL_METHOD,
         {
           sessionId: 'runtime-session-b',
           modelId: AGENT_STUDIO_MODEL_ALIAS
@@ -693,7 +691,7 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     await expect(
       harness.adapter.resumeSession(runtimeSession('runtime-session-a'), 'task-test')
     ).rejects.toMatchObject({ code: 'operation-failed' })
-    expect(request).toHaveBeenCalledWith('session/set_model', {
+    expect(request).toHaveBeenCalledWith(GROK_SET_MODEL_METHOD, {
       sessionId: 'runtime-session-a',
       modelId: AGENT_STUDIO_MODEL_ALIAS
     })

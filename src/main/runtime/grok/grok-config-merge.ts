@@ -1,5 +1,5 @@
-/** 与 grok-provider-config 的 AGENT_STUDIO_MODEL_ALIAS 对齐，避免循环导入。 */
-const AGENT_STUDIO_MODEL_ALIAS = 'agent-studio-default'
+import { AGENT_STUDIO_MODEL_ALIAS } from './grok-acp-dialect'
+
 const MODEL_TABLE = `model.${AGENT_STUDIO_MODEL_ALIAS}`
 const SHELL_POLICY_TABLE = 'shell_environment_policy'
 const TABLE_HEADER_PATTERN = /^\s*\[([^\]]+)]\s*(#.*)?$/

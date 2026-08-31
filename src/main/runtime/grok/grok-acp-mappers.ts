@@ -20,6 +20,7 @@ import {
   updateAgentRuntimeCapabilitySnapshot,
   type AgentCapabilityInput
 } from '../../agent/runtime-capabilities'
+import { assertGrokHandshakeCompat } from './grok-acp-dialect'
 
 export const GROK_RUNTIME_ID = 'grok' as const
 
@@ -121,6 +122,7 @@ export function createGrokCapabilitySnapshot(
 
 /**
  * 只投影 ACP initialize 标准字段并校验协商版本；_meta、认证方式和扩展字段全部丢弃。
+ * 版本兼容检查归属方言模块，Mapper 只负责能力快照投影。
  */
 export function mapGrokInitializeCapabilitySnapshot(
   baseline: AgentRuntimeCapabilitySnapshot,
@@ -128,11 +130,19 @@ export function mapGrokInitializeCapabilitySnapshot(
   redactText: TextRedactor,
   protocolVersion: number
 ): AgentRuntimeCapabilitySnapshot {
-  if (response.protocolVersion !== protocolVersion) {
-    throw new Error(
-      `ACP 协议版本不兼容：Runtime 返回 ${response.protocolVersion}，客户端支持 ${protocolVersion}。`
-    )
-  }
+  // 备注：方言拥有 version 判断；缺少 session/new 基线只记 notes，不发明探测。
+  assertGrokHandshakeCompat(
+    {
+      protocolVersion: response.protocolVersion,
+      ...(response.agentInfo?.version?.trim()
+        ? { agentInfoVersion: response.agentInfo.version.trim() }
+        : {}),
+      loadSession: response.agentCapabilities?.loadSession === true,
+      resume: response.agentCapabilities?.sessionCapabilities?.resume != null,
+      close: response.agentCapabilities?.sessionCapabilities?.close != null
+    },
+    protocolVersion
+  )
 
   const runtimeVersion = response.agentInfo?.version?.trim()
   let snapshot = createAgentRuntimeCapabilitySnapshot({

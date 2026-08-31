@@ -2,15 +2,13 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { GROK_CONFIG_MAX_BYTES } from '../../../shared/grok-config-hints'
+import { AGENT_STUDIO_MODEL_ALIAS } from './grok-acp-dialect'
 import {
   GrokConfigMergeError,
   hasTomlTable,
   mergeGrokConfigToml,
   type GrokConfigPatch
 } from './grok-config-merge'
-
-/** 与 grok-provider-config 的 AGENT_STUDIO_MODEL_ALIAS 对齐，避免循环导入。 */
-const AGENT_STUDIO_MODEL_ALIAS = 'agent-studio-default'
 const SECRET_KEY_PATTERN = /(?:^|_)(api[_-]?key|token|secret|password|authorization)$/i
 const SECRET_VALUE_PATTERN = /^(sk-|ghp_|github_pat_|xai-|Bearer\s+)/i
 
