@@ -1,7 +1,9 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type {
@@ -556,6 +558,58 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     expect(harness.adapter.getStatus().message).not.toContain('ENOENT')
     expect(harness.adapter.getStatus().message).not.toContain('/Users/tester')
     expect(harness.adapter.getStatus().message).not.toContain(FAKE_SECRET)
+  })
+
+  it('connect：握手流错误先于 spawn ENOENT 时仍抛出未安装 CLI（runtime-unavailable）', async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), 'grok-cli-missing-race-'))
+    const workspace = join(userDataPath, 'workspace')
+    await mkdir(workspace)
+    const child = createFakeSpawnChild()
+
+    try {
+      const adapter = new GrokAcpAdapter(
+        {
+          onStatus: () => undefined,
+          onEvent: () => undefined,
+          onPermission: () => undefined,
+          onPermissionCancelled: () => undefined,
+          onAvailableCommands: () => undefined
+        },
+        {
+          userDataPath,
+          getProviderConfig: () => providerConfig(),
+          getClientVersion: () => '0.1.0-test',
+          redactText: redactFakeText,
+          // 备注：测试注入 spawn，避免 ESM 下无法 spy node:child_process.spawn。
+          spawnProductionProcess: () => child
+        }
+      )
+      const internal = adapter as unknown as GrokAcpAdapterTestAccess
+
+      // 备注：握手先失败并进入 connect catch；ENOENT 用 setImmediate 晚到，复现竞态。
+      vi.spyOn(internal, 'initializeConnection').mockImplementation(async () => {
+        setImmediate(() => {
+          child.emit(
+            'error',
+            Object.assign(new Error('spawn /Users/tester/.grok/bin/grok ENOENT'), {
+              code: 'ENOENT'
+            })
+          )
+        })
+        throw new Error('NDJSON stream closed before initialize response')
+      })
+
+      await expect(adapter.connect(workspace)).rejects.toMatchObject({
+        code: 'runtime-unavailable',
+        message: '还没有安装 Grok Build CLI。'
+      })
+      expect(adapter.getStatus().message).toBe('还没有安装 Grok Build CLI。')
+      expect(adapter.getStatus().message).not.toContain('连接失败')
+      expect(adapter.getStatus().message).not.toContain('ENOENT')
+      expect(adapter.getStatus().message).not.toContain('/Users/tester')
+    } finally {
+      await rm(userDataPath, { recursive: true, force: true })
+    }
   })
 
   it('协议版本不兼容时状态与抛错保留协议语义，不再包成无法区分的连接失败', async () => {
@@ -3022,6 +3076,19 @@ function deferred<T>(): Deferred<T> {
     reject = rejectPromise
   })
   return { promise, resolve, reject }
+}
+
+/** 供 connect 缺 CLI 竞态测试注入的假子进程。 */
+function createFakeSpawnChild(): ChildProcessWithoutNullStreams {
+  const child = new EventEmitter() as ChildProcessWithoutNullStreams & EventEmitter
+  Object.assign(child, {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    pid: 4242,
+    kill: vi.fn()
+  })
+  return child
 }
 
 function createAdapterHarness(

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
@@ -46,6 +46,7 @@ import {
   buildGrokControlledE2ESpawnArgs,
   classifyGrokConnectError,
   classifyGrokSpawnProcessError,
+  isGrokCliMissingSpawnError,
   isGrokSetModelResponseValid,
   resolveGrokAcpFailure
 } from './grok-acp-dialect'
@@ -183,6 +184,15 @@ export interface GrokAcpAdapterOptions {
   }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
   /** 仅测试注入 Grok session 媒体根；生产固定 /tmp/sessions。 */
   grokSessionMediaRoot?: string
+  /**
+   * 仅测试注入生产 spawn；缺省为 node:child_process.spawn。
+   * 禁止 Renderer / IPC / 普通环境变量传入。
+   */
+  spawnProductionProcess?: (
+    command: string,
+    args: readonly string[],
+    options: SpawnOptions
+  ) => ChildProcessWithoutNullStreams
 }
 
 /**
@@ -215,6 +225,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   private promptMedia = { image: false, embeddedContext: false }
   private status: AgentRuntimeStatus
   private commandEvidenceWrites: Promise<void> = Promise.resolve()
+  /**
+   * 当前 connect 尝试期间子进程 error 事件缓存。
+   * 握手可能先以非 ENOENT 失败；分类时优先认缺 CLI，避免笼统“连接失败”。
+   */
+  private connectProcessError: unknown | null = null
 
   constructor(
     private readonly sink: AgentRuntimeAdapterSink,
@@ -283,16 +298,19 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
       // 生产默认启动参数必须保持原样，不能经由通用 command/args 抽象。
       const memoryEnabled = (await this.options.isMemoryEnabled?.()) ?? true
-      child = spawn(this.resolveBinary(), [...GROK_PRODUCTION_AGENT_ARGV], {
+      const spawnProduction = this.options.spawnProductionProcess ?? spawn
+      // 备注：stdio 全 pipe 时运行时一定是 WithoutNullStreams；测试注入必须返回同类形状。
+      child = spawnProduction(this.resolveBinary(), [...GROK_PRODUCTION_AGENT_ARGV], {
         cwd: workspace,
         env: buildGrokRuntimeEnvironment(providerConfig, grokHome, process.env, {
           memoryEnabled
         }),
         stdio: ['pipe', 'pipe', 'pipe']
-      })
+      }) as ChildProcessWithoutNullStreams
     }
     const connectionGeneration = ++this.connectionGeneration
     this.process = child
+    this.connectProcessError = null
 
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (text: string) => {
@@ -301,6 +319,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       if (text.trim()) this.observe({ kind: 'stderr', hasText: true })
     })
     child.once('error', (error) => {
+      this.connectProcessError = error
       this.handleRuntimeProcessError(child, connectionGeneration, workspace, error)
     })
     child.on('exit', (code) => {
@@ -332,11 +351,24 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       return this.status
     } catch (error) {
       // 被新连接替换的旧握手只结束自己，禁止断开已建立的新 Runtime。
-      if (!this.isCurrentConnection(connection, child, connectionGeneration)) return this.status
+      if (!this.isCurrentConnection(connection, child, connectionGeneration)) {
+        // 进程错误可能已抢先清连接；缺 CLI 仍必须抛出可区分错误给调用方。
+        if (isGrokCliMissingSpawnError(this.connectProcessError)) {
+          throw this.createCliMissingError(workspace)
+        }
+        return this.status
+      }
 
       await this.disconnectInternal(false)
-      // 备注：协议不兼容等方言失败必须保留可区分文案，禁止再无差别包成“连接失败”。
-      const adapterError = this.resolveConnectFailure(error)
+      // 握手可能先失败；再等一轮事件循环，让晚到的 ENOENT 有机会落袋。
+      if (!isGrokCliMissingSpawnError(this.connectProcessError)) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      // 备注：缺 CLI 优先于笼统流错误；协议不兼容等仍走 resolveConnectFailure。
+      const preferredError = isGrokCliMissingSpawnError(this.connectProcessError)
+        ? this.connectProcessError
+        : error
+      const adapterError = this.resolveConnectFailure(preferredError)
       this.updateStatus({
         state: 'error',
         message: adapterError.message,
@@ -1487,16 +1519,38 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     workspace: string,
     error: unknown
   ): void {
-    if (this.process !== child || this.connectionGeneration !== connectionGeneration) return
+    this.connectProcessError = error
     const kind = classifyGrokSpawnProcessError(error)
     // 备注：ENOENT 只展示“未安装 CLI”，禁止把 spawn 路径或 Node 原文送进 UI。
     const message =
       kind === 'cli-missing'
         ? resolveGrokAcpFailure('cli-missing').message
         : `无法启动 Grok Build：${this.redactError(error)}`
-    this.failActiveTurn(message, 'runtime-process-error')
-    this.clearFailedConnection()
-    this.updateStatus({ state: 'error', message, workspace })
+
+    const isCurrent = this.process === child && this.connectionGeneration === connectionGeneration
+    if (isCurrent) {
+      this.failActiveTurn(message, 'runtime-process-error')
+      this.clearFailedConnection()
+      this.updateStatus({ state: 'error', message, workspace })
+      return
+    }
+
+    // 握手已先失败并 disconnect；缺 CLI 仍覆盖笼统连接失败文案。
+    if (
+      kind === 'cli-missing' &&
+      this.status.state === 'error' &&
+      this.status.workspace === workspace
+    ) {
+      this.updateStatus({ state: 'error', message, workspace })
+    }
+  }
+
+  /** 组装缺 CLI 的有限错误，并同步状态文案。 */
+  private createCliMissingError(workspace: string): AgentRuntimeAdapterError {
+    const resolved = resolveGrokAcpFailure('cli-missing')
+    const adapterError = this.createError(resolved.adapterErrorCode, resolved.message)
+    this.updateStatus({ state: 'error', message: adapterError.message, workspace })
+    return adapterError
   }
 
   private handleRuntimeProcessExit(
