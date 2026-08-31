@@ -44,6 +44,7 @@ import {
   GROK_SET_MODEL_METHOD,
   buildGrokAcpClientInfo,
   buildGrokControlledE2ESpawnArgs,
+  buildGrokNewSessionRequest,
   classifyGrokConnectError,
   classifyGrokSpawnProcessError,
   isGrokCliMissingSpawnError,
@@ -400,10 +401,15 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     const previousSelectedSession = this.selectedSession
 
     try {
-      const response = await current.connection.newSession({
-        cwd: context.workspace,
-        mcpServers: await this.resolveAcpMcpServers(context.mcpServers)
-      })
+      // 只有 Task 快照接管时才写 `_meta.yoloMode`；这是把审批交给 Grok always-approve，
+      // 不是 Permission Broker 沙箱；禁止透传未知 _meta。
+      const response = await current.connection.newSession(
+        buildGrokNewSessionRequest({
+          cwd: context.workspace,
+          mcpServers: await this.resolveAcpMcpServers(context.mcpServers),
+          takeoverEnabled: context.takeoverEnabled === true
+        })
+      )
       this.assertSessionOperationCurrent(current)
       if (!response.sessionId) {
         this.observe({

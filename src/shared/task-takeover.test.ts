@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   GROK_TAKEOVER_SLASH_COMMAND,
   isTakeoverCommandAdvertised,
+  readTakeoverSnapshot,
   resolveTakeoverApply,
   type TakeoverApplyInput
 } from './task-takeover'
@@ -130,5 +131,34 @@ describe('resolveTakeoverApply', () => {
         })
       )
     ).toEqual({ kind: 'defer-next-session', reason: 'command-unavailable' })
+  })
+})
+
+describe('readTakeoverSnapshot', () => {
+  it('仅当 takeoverEnabled === true 才为 true，缺字段与非法类型 fail-closed 为 false', () => {
+    expect(readTakeoverSnapshot(undefined).takeoverEnabled).toBe(false)
+    expect(readTakeoverSnapshot(null).takeoverEnabled).toBe(false)
+    expect(readTakeoverSnapshot({}).takeoverEnabled).toBe(false)
+    expect(readTakeoverSnapshot({ takeoverEnabled: false }).takeoverEnabled).toBe(false)
+    expect(readTakeoverSnapshot({ takeoverEnabled: true }).takeoverEnabled).toBe(true)
+    expect(readTakeoverSnapshot({ takeoverEnabled: 'true' }).takeoverEnabled).toBe(false)
+    expect(readTakeoverSnapshot({ takeoverEnabled: 1 }).takeoverEnabled).toBe(false)
+  })
+
+  it('takeoverUpdatedAt 仅保留非空 ISO-8601 字符串', () => {
+    expect(
+      readTakeoverSnapshot({
+        takeoverEnabled: true,
+        takeoverUpdatedAt: '2026-08-31T00:00:00.000Z'
+      })
+    ).toEqual({
+      takeoverEnabled: true,
+      takeoverUpdatedAt: '2026-08-31T00:00:00.000Z'
+    })
+    expect(readTakeoverSnapshot({ takeoverUpdatedAt: '' })).toEqual({ takeoverEnabled: false })
+    expect(readTakeoverSnapshot({ takeoverUpdatedAt: 'not-a-date' })).toEqual({
+      takeoverEnabled: false
+    })
+    expect(readTakeoverSnapshot({ takeoverUpdatedAt: 1 })).toEqual({ takeoverEnabled: false })
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type {
@@ -1122,6 +1122,80 @@ describe('AgentService Task / Turn 编排', () => {
       throw new Error('expected AgentServiceError')
     } catch (error) {
       expect(error).toEqual(new AgentServiceError('invalid-input', 'Task ID 无效。'))
+    }
+  })
+
+  it('createTask 默认未接管，createSession 不传 takeoverEnabled 键', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    const task = await service.createTask(WORKSPACE)
+    expect(task.takeoverEnabled).toBe(false)
+    expect(task).not.toHaveProperty('takeoverUpdatedAt')
+    expect(adapter.createSession).toHaveBeenCalledTimes(1)
+    expect(adapter.createSession.mock.calls[0]?.[0]).toEqual({
+      workspace: WORKSPACE,
+      taskId: 'task-a',
+      mcpServers: []
+    })
+    expect(adapter.createSession.mock.calls[0]?.[0]).not.toHaveProperty('takeoverEnabled')
+  })
+
+  it('恢复快照接管后，resume 失败重建 session 才传入 takeoverEnabled: true', async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), 'agent-service-takeover-'))
+    const projectPath = join(userDataPath, 'project')
+    await mkdir(projectPath)
+    try {
+      const registry = new ProjectRegistry({ userDataPath, createId: () => 'project-1' })
+      await registry.initialize()
+      const project = await registry.register(projectPath)
+      const store = new TaskStore({ projectRegistry: registry })
+      await store.initialize()
+      await store.createTask({
+        taskId: 'task-1',
+        projectId: project.projectId,
+        root: project.canonicalRoot,
+        runtimeId: 'grok',
+        session: {
+          runtimeId: 'grok',
+          runtimeSessionId: 'persisted-session',
+          workspace: project.canonicalRoot
+        },
+        capabilitySnapshot: restoreSnapshot({ resume: false, load: false })
+      })
+      const taskPath = join(
+        registry.getProjectDirectory(project.projectId),
+        'tasks/task-1/task.json'
+      )
+      const disk = JSON.parse(await readFile(taskPath, 'utf8')) as Record<string, unknown>
+      disk.takeoverEnabled = true
+      disk.takeoverUpdatedAt = '2026-08-31T00:00:00.000Z'
+      await writeFile(taskPath, JSON.stringify(disk))
+
+      const restoredStore = new TaskStore({ projectRegistry: registry })
+      await restoredStore.initialize()
+      const adapter = new FakeRuntimeAdapter({ resume: false, load: false })
+      adapter.primeWorkspace(project.canonicalRoot)
+      const service = new AgentService(adapter, new TaskExecutionController(), {
+        projectRegistry: registry,
+        taskStore: restoredStore,
+        operationGate: new OperationGate(),
+        createId: () => 'turn-1'
+      })
+
+      expect(service.getTaskRuntimeState('task-1')).toMatchObject({
+        takeoverEnabled: true,
+        takeoverUpdatedAt: '2026-08-31T00:00:00.000Z'
+      })
+
+      await service.startTurn('task-1', '重建')
+      expect(adapter.createSession).toHaveBeenCalledWith({
+        workspace: project.canonicalRoot,
+        taskId: 'task-1',
+        mcpServers: [],
+        takeoverEnabled: true
+      })
+    } finally {
+      await rm(userDataPath, { recursive: true, force: true })
     }
   })
 })

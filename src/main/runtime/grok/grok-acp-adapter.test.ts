@@ -782,6 +782,115 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
   })
 
+  it('接管 Task 的 newSession 才带且仅带 _meta.yoloMode: true', async () => {
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-yolo' })
+    const request = vi.fn().mockResolvedValue({})
+    const connection = {
+      newSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+
+    await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-takeover',
+      takeoverEnabled: true
+    })
+
+    expect(newSession).toHaveBeenCalledWith({
+      cwd: WORKSPACE,
+      mcpServers: [],
+      _meta: { yoloMode: true }
+    })
+    const params = newSession.mock.calls[0]?.[0] as { _meta?: Record<string, unknown> }
+    expect(Object.keys(params._meta ?? {})).toEqual(['yoloMode'])
+  })
+
+  it('takeoverEnabled 为 false 或省略时 newSession 不得出现 _meta', async () => {
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-plain' })
+    const request = vi.fn().mockResolvedValue({})
+    const connection = {
+      newSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+
+    await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-false',
+      takeoverEnabled: false
+    })
+    expect(newSession).toHaveBeenCalledWith({ cwd: WORKSPACE, mcpServers: [] })
+    expect(newSession.mock.calls[0]?.[0]).not.toHaveProperty('_meta')
+
+    await harness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-omit'
+    })
+    expect(newSession).toHaveBeenLastCalledWith({ cwd: WORKSPACE, mcpServers: [] })
+    expect(newSession.mock.calls[1]?.[0]).not.toHaveProperty('_meta')
+  })
+
+  it('mcp 非空时普通 Task 仍无 _meta，接管 Task 只多 yoloMode', async () => {
+    const mcpServers = [
+      {
+        name: 'docs',
+        transport: 'http' as const,
+        url: 'https://example.com/mcp',
+        headers: []
+      }
+    ]
+    const expectedMcp = [
+      {
+        type: 'http',
+        name: 'docs',
+        url: 'https://example.com/mcp',
+        headers: []
+      }
+    ]
+
+    const plainNewSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-mcp-plain' })
+    const plainHarness = createAdapterHarness(
+      {
+        newSession: plainNewSession,
+        request: vi.fn().mockResolvedValue({})
+      } as unknown as acp.ClientSideConnection,
+      false
+    )
+    await plainHarness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-mcp-plain',
+      mcpServers
+    })
+    expect(plainNewSession).toHaveBeenCalledWith({
+      cwd: WORKSPACE,
+      mcpServers: expectedMcp
+    })
+    expect(plainNewSession.mock.calls[0]?.[0]).not.toHaveProperty('_meta')
+
+    const yoloNewSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-mcp-yolo' })
+    const yoloHarness = createAdapterHarness(
+      {
+        newSession: yoloNewSession,
+        request: vi.fn().mockResolvedValue({})
+      } as unknown as acp.ClientSideConnection,
+      false
+    )
+    await yoloHarness.adapter.createSession({
+      workspace: WORKSPACE,
+      taskId: 'task-mcp-yolo',
+      mcpServers,
+      takeoverEnabled: true
+    })
+    expect(yoloNewSession).toHaveBeenCalledWith({
+      cwd: WORKSPACE,
+      mcpServers: expectedMcp,
+      _meta: { yoloMode: true }
+    })
+    const yoloParams = yoloNewSession.mock.calls[0]?.[0] as { _meta?: Record<string, unknown> }
+    expect(Object.keys(yoloParams._meta ?? {})).toEqual(['yoloMode'])
+  })
+
   it('load/resume 首次允许 protocol-declared 证据，成功后才提升 verified', async () => {
     const loadSession = vi.fn().mockResolvedValue({})
     const resumeSession = vi.fn().mockResolvedValue({})

@@ -42,7 +42,8 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
     workspace: '/tmp/project',
     state: 'pending',
     createdAt: '2026-08-11T00:00:00.000Z',
-    updatedAt: '2026-08-11T00:00:00.000Z'
+    updatedAt: '2026-08-11T00:00:00.000Z',
+    takeoverEnabled: false
   }
   const turn: AgentTurnExecutionResult = {
     taskId: 'task-1',
@@ -228,7 +229,8 @@ describe('Agent IPC Handler', () => {
         state: 'failed',
         lastTurnId: 'turn-failed',
         createdAt: '2026-08-11T00:00:00.000Z',
-        updatedAt: '2026-08-11T00:00:01.000Z'
+        updatedAt: '2026-08-11T00:00:01.000Z',
+        takeoverEnabled: false
       }
     })
 

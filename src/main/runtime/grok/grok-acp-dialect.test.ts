@@ -13,6 +13,7 @@ import {
   assertGrokHandshakeCompat,
   buildGrokAcpClientInfo,
   buildGrokControlledE2ESpawnArgs,
+  buildGrokNewSessionRequest,
   classifyGrokConnectError,
   classifyGrokSpawnProcessError,
   isGrokSetModelResponseValid,
@@ -268,5 +269,45 @@ describe('Grok ACP 连接失败分类', () => {
     expect(resolveGrokAcpFailure('generic', { redactedDetail: 'timeout' }).message).toContain(
       '连接失败'
     )
+  })
+})
+
+describe('buildGrokNewSessionRequest', () => {
+  const mcpServers = [{ type: 'http', name: 'docs', url: 'https://example.com/mcp', headers: [] }]
+
+  it('未接管时严格只有 cwd 与 mcpServers，无 _meta', () => {
+    expect(
+      buildGrokNewSessionRequest({ cwd: '/tmp/ws', mcpServers: [], takeoverEnabled: false })
+    ).toEqual({ cwd: '/tmp/ws', mcpServers: [] })
+    expect(
+      buildGrokNewSessionRequest({ cwd: '/tmp/ws', mcpServers, takeoverEnabled: false })
+    ).toEqual({ cwd: '/tmp/ws', mcpServers })
+    expect(
+      buildGrokNewSessionRequest({ cwd: '/tmp/ws', mcpServers: [], takeoverEnabled: false })
+    ).not.toHaveProperty('_meta')
+  })
+
+  it('接管时只多 _meta.yoloMode: true，键集合严格为 yoloMode', () => {
+    const params = buildGrokNewSessionRequest({
+      cwd: '/tmp/ws',
+      mcpServers: [],
+      takeoverEnabled: true
+    })
+    expect(params).toEqual({
+      cwd: '/tmp/ws',
+      mcpServers: [],
+      _meta: { yoloMode: true }
+    })
+    expect(Object.keys(params._meta ?? {})).toEqual(['yoloMode'])
+  })
+
+  it('mcp 非空时接管只多 _meta.yoloMode', () => {
+    expect(
+      buildGrokNewSessionRequest({ cwd: '/tmp/ws', mcpServers, takeoverEnabled: true })
+    ).toEqual({
+      cwd: '/tmp/ws',
+      mcpServers,
+      _meta: { yoloMode: true }
+    })
   })
 })

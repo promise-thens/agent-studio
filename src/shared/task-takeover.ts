@@ -63,3 +63,28 @@ export function resolveTakeoverApply(input: TakeoverApplyInput): TakeoverApplyDe
 
   return { kind: 'send-command', commandName: GROK_TAKEOVER_SLASH_COMMAND }
 }
+
+/**
+ * 从 Task 快照或未知 JSON 读取接管字段。
+ * 缺字段、非法类型一律 fail-closed 为未接管，不要因此把整条 Task 标 corrupt。
+ * takeoverUpdatedAt 仅保留非空 ISO-8601 字符串。
+ */
+export function readTakeoverSnapshot(value: unknown): {
+  takeoverEnabled: boolean
+  takeoverUpdatedAt?: string
+} {
+  const record =
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}
+  const takeoverEnabled = record.takeoverEnabled === true
+  const takeoverUpdatedAt =
+    typeof record.takeoverUpdatedAt === 'string' &&
+    record.takeoverUpdatedAt.trim() !== '' &&
+    Number.isFinite(Date.parse(record.takeoverUpdatedAt))
+      ? record.takeoverUpdatedAt
+      : undefined
+  return takeoverUpdatedAt === undefined
+    ? { takeoverEnabled }
+    : { takeoverEnabled, takeoverUpdatedAt }
+}

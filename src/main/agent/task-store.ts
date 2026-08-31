@@ -27,6 +27,7 @@ import type {
   TaskExecutionState
 } from '../../shared/task-execution'
 import type { AgentRuntimeSessionRef } from './agent-runtime-adapter'
+import { readTakeoverSnapshot } from '../../shared/task-takeover'
 import { ProjectRegistry } from '../project/project-registry'
 import { createLocalEnvironmentId } from '../security/permission-policy'
 import { AtomicJsonWriter } from '../storage/atomic-json-file'
@@ -87,6 +88,9 @@ export interface TaskRecordV1 {
   revision: number
   /** 归档时间；存在即视为已归档，默认 list 省略但 get 仍可读。 */
   archivedAt?: string
+  /** 当前 Task 是否完全接管；缺字段读成 false。不是 Broker 沙箱。 */
+  takeoverEnabled: boolean
+  takeoverUpdatedAt?: string
 }
 
 type PersistedExecutionReason =
@@ -322,7 +326,8 @@ export class TaskStore {
         turnCount: 0,
         createdAt: observedAt,
         updatedAt: observedAt,
-        revision: 1
+        revision: 1,
+        takeoverEnabled: false
       }
       await this.writer.write(this.taskPath(task), task)
       this.tasks.set(task.taskId, task)
@@ -1843,7 +1848,8 @@ function parseTaskRecord(value: unknown): RecordParseResult<TaskRecordV1> {
   ) {
     return { kind: 'corrupt' }
   }
-  const upgraded = {
+  const takeover = readTakeoverSnapshot(value)
+  const upgraded: Record<string, unknown> = {
     ...value,
     schemaVersion: TASK_SCHEMA_VERSION,
     environment: {
@@ -1852,7 +1858,14 @@ function parseTaskRecord(value: unknown): RecordParseResult<TaskRecordV1> {
       environmentId,
       projectId: value.projectId,
       rootSnapshot: value.environment.rootSnapshot
-    }
+    },
+    takeoverEnabled: takeover.takeoverEnabled
+  }
+  // 缺字段或非法类型 fail-closed 为 false，不把整条 Task 标 corrupt，也不 bump schema。
+  if (takeover.takeoverUpdatedAt) {
+    upgraded.takeoverUpdatedAt = takeover.takeoverUpdatedAt
+  } else {
+    delete upgraded.takeoverUpdatedAt
   }
   return {
     kind: 'valid',

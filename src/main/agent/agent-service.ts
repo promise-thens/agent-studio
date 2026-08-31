@@ -9,6 +9,7 @@ import type {
   AgentTurnExecutionResult,
   AgentTurnOutcome
 } from '../../shared/agent'
+import { readTakeoverSnapshot } from '../../shared/task-takeover'
 import type {
   ConversationEntryState,
   RuntimeResumeSummary,
@@ -120,7 +121,10 @@ function cloneTask(task: AgentTaskRecord): AgentTaskRuntimeState {
     ...(task.activeTurnId ? { activeTurnId: task.activeTurnId } : {}),
     ...(task.lastTurnId ? { lastTurnId: task.lastTurnId } : {}),
     createdAt: task.createdAt,
-    updatedAt: task.updatedAt
+    updatedAt: task.updatedAt,
+    // 缺省展示未接管；快照时间仅在有合法值时拷贝。
+    takeoverEnabled: task.takeoverEnabled === true,
+    ...(task.takeoverUpdatedAt ? { takeoverUpdatedAt: task.takeoverUpdatedAt } : {})
   }
 }
 
@@ -323,6 +327,7 @@ export class AgentService {
           state: 'pending',
           createdAt: observedAt,
           updatedAt: observedAt,
+          takeoverEnabled: false,
           session
         }
         if (this.taskStore && task.projectId) {
@@ -917,7 +922,9 @@ export class AgentService {
       this.adapter.createSession({
         workspace: task.workspace,
         taskId: task.taskId,
-        mcpServers: await this.resolveMcpServers()
+        mcpServers: await this.resolveMcpServers(),
+        // resume 失败后开新 session 必须带 yoloMode；仅快照为 true 时才传该键。
+        ...(task.takeoverEnabled === true ? { takeoverEnabled: true } : {})
       })
     )
     this.assertOperationLeaseCurrent(lease)
@@ -1401,6 +1408,7 @@ function mapHistoryStateToRuntimeState(state: TaskRecordV1['state']): AgentExecu
 
 function restoreRuntimeTask(task: TaskRecordV1): AgentTaskRecord {
   const state: AgentExecutionState = mapHistoryStateToRuntimeState(task.state)
+  const takeover = readTakeoverSnapshot(task)
   return {
     taskId: task.taskId,
     projectId: task.projectId,
@@ -1415,6 +1423,8 @@ function restoreRuntimeTask(task: TaskRecordV1): AgentTaskRecord {
     state,
     ...(task.lastTurnId ? { lastTurnId: task.lastTurnId } : {}),
     createdAt: task.createdAt,
-    updatedAt: task.updatedAt
+    updatedAt: task.updatedAt,
+    takeoverEnabled: takeover.takeoverEnabled,
+    ...(takeover.takeoverUpdatedAt ? { takeoverUpdatedAt: takeover.takeoverUpdatedAt } : {})
   }
 }

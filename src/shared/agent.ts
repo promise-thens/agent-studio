@@ -87,6 +87,9 @@ export interface AgentTaskRuntimeState {
   lastTurnId?: string
   createdAt: string
   updatedAt: string
+  /** 当前 Task 是否处于完全接管；默认 false。不是 Broker 沙箱。 */
+  takeoverEnabled: boolean
+  takeoverUpdatedAt?: string
 }
 
 /** 一次 Turn 完成后的有限结果；身份由 AgentService 分配，协议对象不得进入共享层。 */

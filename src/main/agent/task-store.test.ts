@@ -110,6 +110,46 @@ async function createStore(
 }
 
 describe('TaskStore', () => {
+  it('新建 Task 默认未接管，且不写 takeoverUpdatedAt', async () => {
+    const { store } = await createStore()
+    const record = store.getTaskRecord('task-1')
+    expect(record.takeoverEnabled).toBe(false)
+    expect(record).not.toHaveProperty('takeoverUpdatedAt')
+  })
+
+  it('缺 takeover 字段的旧 task.json 读成 false 且 Task 仍可用', async () => {
+    const { registry, project } = await createStore()
+    const taskPath = join(registry.getProjectDirectory(project.projectId), 'tasks/task-1/task.json')
+    const disk = JSON.parse(await readFile(taskPath, 'utf8')) as Record<string, unknown>
+    delete disk.takeoverEnabled
+    delete disk.takeoverUpdatedAt
+    await writeFile(taskPath, JSON.stringify(disk))
+
+    const restarted = new TaskStore({ projectRegistry: registry })
+    await restarted.initialize()
+    const record = restarted.getTaskRecord('task-1')
+    expect(record.takeoverEnabled).toBe(false)
+    expect(record).not.toHaveProperty('takeoverUpdatedAt')
+    expect(record.taskId).toBe('task-1')
+    expect(record.state).toBe('pending')
+  })
+
+  it('非法 takeover 类型 fail-closed 为 false，不把 Task 标 corrupt', async () => {
+    const { registry, project } = await createStore()
+    const taskPath = join(registry.getProjectDirectory(project.projectId), 'tasks/task-1/task.json')
+    const disk = JSON.parse(await readFile(taskPath, 'utf8')) as Record<string, unknown>
+    disk.takeoverEnabled = 'true'
+    disk.takeoverUpdatedAt = 123
+    await writeFile(taskPath, JSON.stringify(disk))
+
+    const restarted = new TaskStore({ projectRegistry: registry })
+    await restarted.initialize()
+    const record = restarted.getTaskRecord('task-1')
+    expect(record.takeoverEnabled).toBe(false)
+    expect(record).not.toHaveProperty('takeoverUpdatedAt')
+    expect(record.taskId).toBe('task-1')
+  })
+
   it('持久化 Turn 和完整展示事件，但历史 DTO/事件文件不暴露 session ID', async () => {
     const { store, registry, project } = await createStore()
     await store.createTurn({

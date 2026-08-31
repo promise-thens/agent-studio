@@ -87,11 +87,11 @@ Grok 工具
 
 ### 任务 2: Task 快照与 session/new
 
-- [ ] **第 1 步: 快照字段**
+- [x] **第 1 步: 快照字段**
 
 说明：`takeoverEnabled: boolean`，默认 false。进历史重开时仍在，但 resume 成功后必须按任务 1 再应用一次；应用失败 HUD 为未生效，不得假装已接管。
 
-- [ ] **第 2 步: Adapter**
+- [x] **第 2 步: Adapter**
 
 说明：仅当该 Task `takeoverEnabled` 时 `newSession` 带 `_meta: { yoloMode: true }`。测试：普通 Task 调用参数严格等于今天的 `{ cwd, mcpServers }`（可加 mcp，但无 _meta）。禁止把未知 _meta 字段传给 Grok。
 

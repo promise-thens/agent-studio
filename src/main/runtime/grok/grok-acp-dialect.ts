@@ -310,3 +310,19 @@ export function buildGrokControlledE2ESpawnArgs(input: {
     input.userDataPath
   ]
 }
+
+/**
+ * 组装 Grok session/new 请求。
+ * 只有 Task 快照接管时才写 `_meta.yoloMode`；这是把审批交给 Grok always-approve，
+ * 不是 Permission Broker 沙箱。键集合必须字面量构造，禁止透传未知 _meta。
+ */
+export function buildGrokNewSessionRequest<TMcpServers>(input: {
+  cwd: string
+  mcpServers: TMcpServers
+  takeoverEnabled: boolean
+}): { cwd: string; mcpServers: TMcpServers; _meta?: { yoloMode: true } } {
+  if (input.takeoverEnabled) {
+    return { cwd: input.cwd, mcpServers: input.mcpServers, _meta: { yoloMode: true } }
+  }
+  return { cwd: input.cwd, mcpServers: input.mcpServers }
+}

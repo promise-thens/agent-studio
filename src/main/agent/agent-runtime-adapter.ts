@@ -51,11 +51,15 @@ export interface AgentRuntimeMcpServer {
  * 创建 Runtime session 所需的最小上下文。
  * taskId 是产品身份，必须在 newSession 前交给 Adapter，
  * 因为 available_commands_update 常在 Turn 之前到达。
+ * takeoverEnabled 只是产品布尔：仅当 Task 快照为完全接管时为 true，
+ * Adapter 据此决定是否给 Grok `_meta.yoloMode`。禁止把 Renderer 任意对象透传成 `_meta`。
  */
 export interface AgentRuntimeSessionContext {
   workspace: string
   taskId: string
   mcpServers?: AgentRuntimeMcpServer[]
+  /** 仅产品布尔；只有 true 时 Grok Adapter 才写 `_meta.yoloMode`。不是 Broker 沙箱。 */
+  takeoverEnabled?: boolean
 }
 
 /** 活动 Turn 的稳定身份；取消只能作用于当前完全匹配的引用。 */
