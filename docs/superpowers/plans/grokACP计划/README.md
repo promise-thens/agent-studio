@@ -1,6 +1,6 @@
 # Grok ACP 加深计划
 
-> 状态：已立项，P0-09 真机测试门已受限关闭，GACP-01 已于 2026-08-19 受限关闭，GACP-02 核心已落地；P0-10C 代码已落地（自动验证已过，GUI 未跑）；P0-10D 代码已落地（相关自动测试已过，GUI / TUI 对读未跑）；P0-10E 代码已落地（自动验证已过，开发版 GUI / 安装走查未跑）。下一步 P0-11。`available_commands_update` 现为 session 快照，不进 Timeline。
+> 状态：已立项，P0-09 真机测试门已受限关闭，GACP-01 已于 2026-08-19 受限关闭，GACP-02 核心已落地；P0-10C/D/E 代码已落地（GUI 走查未跑）。2026-08-31 起 Grok 宿主打磨主线见 [P0-19](../p0-19-grok-host-capability-polish.md)；GACP-03 / GACP-06 纳入该程序。`available_commands_update` 现为 session 快照，不进 Timeline。
 > 创建日期：2026-08-18
 > 定位：在现有 `GrokAcpAdapter` 最小闭环之上，按真实 Grok ACP 方言补齐验证、恢复、审批可解释性和 Client 能力广告
 > 产品愿景仍以 [product-vision.md](../../../product-vision.md) 为准；本目录不改 Runtime × Provider × Capability 分层
@@ -77,7 +77,9 @@ P0-09 测试门关闭
   → P0-11 Command Evidence
   → GACP-03 结构化权限证据（只消费 P0-11 与 GACP-01 已冻结字段）
   → P0-12 Git Review
-  → GACP-04 Grok ACP 方言兼容契约（可与 P0-12 并行，必须在 P2 前完成）
+  → [P0-19](../p0-19-grok-host-capability-polish.md) Grok 宿主能力打磨（2026-08-31 主线；含 Plan / Sandbox / rewind / Hooks / 后台 / 浏览器插件表面）
+  → GACP-06 子 Agent 分组（插入 P0-19 顺序第 3）
+  → GACP-04 Grok ACP 方言兼容契约（可并行；P2 仍搁置，不挡 P0-19）
   → …P0-B / P0-15…
   → GACP-05 Client 能力广告（只有真做了 fs/terminal 才启动）
 ```
@@ -94,7 +96,7 @@ P0-A 主表因此变成：
 | 6c | [P0-10D](../p0-10d-grok-memory-and-mcp.md) | 4 | 代码已落地（自动测试已过，GUI / TUI 对读未跑） | 设置记忆/MCP；Grok 执行 |
 | 6d | [P0-10E](../p0-10e-grok-plugin-install-and-trust.md) | 4 | 代码已落地（自动验证已过，GUI 未跑） | 市场安装/信任；不读 ~/.grok |
 | 7 | P0-11 | 5 | 仍按原依赖 | 命令证据事实源 |
-| 7a | [GACP-03](gacp-03-structured-permission-evidence.md) | 4 | P0-11 后 | 能过的自动过，不要一个个点 |
+| 7a | [GACP-03](gacp-03-structured-permission-evidence.md) | 4 | P0-11 后；P0-19 第 1 项 | 能过的自动过，不要一个个点 |
 | 8 | P0-12 | 5 | 原依赖不变 | Diff 审阅 |
 | 8a | [GACP-04](gacp-04-grok-acp-dialect-compat.md) | 4 | P0-10 后、P2 前 | 冻结 Grok 启动/握手/set_model |
 | 5c | [GACP-06](gacp-06-subagent-timeline.md) | 3 | P0-10A 后；无父子字段只做扁平 | 子 Agent 嵌套卡片；不挡 GACP-02 / 换皮 |
@@ -143,12 +145,13 @@ P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windo
 
 路线图入口见 [roadmap-index.md](../roadmap-index.md) 的 “Grok ACP 加深” 一节。
 
-## 6. 已确认的产品意向（2026-08-18）
+## 6. 已确认的产品意向（2026-08-18，2026-08-31 补充）
 
 - **对话：** 点一条历史 = 进入这条还能发的对话。不要「只读 + 继续」两步。接不上 Grok 就在同一 Task 里降级，状态条说一声即可。
 - **权限：** 不要每个工具点一次。读自动过；项目内写/普通删/命令，本任务点一次后自动过。真正危险的是越出项目、不可逆 Git、未知外网、屏幕/剪贴板/Computer Use。
 - **子 Agent：** 分发由 Runtime 做；桌面用 Claude Code Desktop 那种嵌套卡片展示，见 [GACP-06](gacp-06-subagent-timeline.md)。不进侧栏当第二条 Task。
 - **整站皮肤：** 当前三栏卡片+日志风时间线要大修，见 [P0-10A](../p0-10a-claude-desktop-workbench-ui.md)。**对话、计划、子 Agent 三件都按 Claude Code Desktop 做在主列一条流里**：对话是字，计划是一张原地打勾的清单，子 Agent 是嵌套任务卡。GACP-06 只负责子 Agent 分组，不另做皮。
+- **2026-08-31：** 先打磨 Grok 宿主，P1 扩展与 P2 搁置。Plan / Sandbox / rewind / Hooks / 后台 / 浏览器插件表面见 [P0-19](../p0-19-grok-host-capability-polish.md)。完全接管见 [P0-19g](../p0-19g-task-takeover-always-approve.md)：要写 always-approve，但是当前 Task 显式开关。P0-10C 至 P0-13 开发版走查暂时可以通过。
 - **先不做、以后再加的工作台能力：**
   - 切换模型：输入框已有 `ModelSelector`，空闲时可切；执行中仍禁止。P0-10 / GACP-04 把它收成工作台常驻能力，不另开 ACP 协议计划。
   - 当前上下文：ACP `usage_update` 已映射为实验性事件。P0-09/P0-10 Inspector 显示 used/limit 即可，数据不够就写「未提供」，不要假进度条。

@@ -478,7 +478,7 @@ P0-B 完成后，用户才真正拥有“隔离执行 → 审阅 → 带走结�
 
 P0+ 不共同阻塞 P0-A/P0-B；只有确实需要交互终端、HTML 或并行调度的后续计划才依赖对应能力。
 
-### P1：开放模型配置
+### P1：开放模型配置（2026-08-31 扩展搁置）
 
 - 管理 Provider 和模型配置；
 - 支持 Base URL、API Key、Model ID 和协议类型；
@@ -489,7 +489,7 @@ P0+ 不共同阻塞 P0-A/P0-B；只有确实需要交互终端、HTML 或并行�
 
 P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService 边界上复核和补强；P1-06 至 P1-08 扩展模型来源和兼容深度，但不得阻塞 P0 的单 Runtime 工作台闭环。
 
-### P2：接入 Codex app-server（当前暂缓，先打磨 Grok 宿主）
+### P2：接入 Codex app-server（当前暂缓；2026-08-31 继续搁置至 P0-19 完成后再评估）
 
 - 使用 Agent Studio `userData` 下的独立 `CODEX_HOME` 完成 binary、schema、app-server 生命周期和 ChatGPT 账号认证，不触碰用户默认 `~/.codex`；
 - 将 Thread、Turn、Item、Plan、Usage 和原生恢复绑定到产品 Task/Turn，fork 创建新 Task 而不是覆盖原 Task；
@@ -497,7 +497,7 @@ P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService �
 - 先交付单执行槽 Runtime 选择与启动，再把不可变启动快照接入队列和有界并行；
 - 将命令执行、审批、文件变化、Diff 和 Artifact 映射到既有 Permission、Command Evidence、Changes 和 Artifact 服务，不复制第二套工作台。
 
-### P3：插件能力中心
+### P3：插件能力中心（2026-08-31：先走 Grok 插件表面 P0-19f，桌面引擎后置）
 
 - Capability Manifest、ActionDescriptor 与 Registry；
 - Capability Executor 与核心 Permission Broker 接入；
@@ -579,6 +579,14 @@ P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService �
 - 优先完成真实闭环，不用按钮数量制造虚假完成度。
 
 ## 16. 想法记录
+
+### 2026-08-31
+
+- 先打磨一个 Runtime：Grok Build。P1-06～08 多 Provider 与 P2 Codex 搁置；现有单 Provider 设置保留。
+- P3 提前指把 Grok 已有能力摊到桌面（Plan、子 Agent、少打断权限、Sandbox、rewind、Hooks、后台命令、浏览器/电脑插件的审批与截图），不是先做桌面自建 Computer Use Helper。
+- 完全接管要写：当前 Task 显式确认后走 Grok always-approve；默认询问；不静默 yolo、不写全局 config。少打断询问模式仍走桌面 Task grant。见 [p0-19g-task-takeover-always-approve.md](superpowers/plans/p0-19g-task-takeover-always-approve.md)。
+- 程序计划见 [p0-19-grok-host-capability-polish.md](superpowers/plans/p0-19-grok-host-capability-polish.md)。
+- P0-10C 至 P0-13 开发版走查暂时可以通过，不挡 P0-19 新能力开工；未走查不得标成 GUI 已过。
 
 ### 2026-08-07
 

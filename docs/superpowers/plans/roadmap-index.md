@@ -1,10 +1,12 @@
 # Agent Studio 分阶段功能路线索引
 
-> 状态：P0-01 至 P0-07 已完成代码、自动验证与 Electron 验收；P0-08 核心实现、完整自动门禁和首批受控 lifecycle Electron E2E 已完成，真机与跨平台验收待补；P0-09 真机验收已受限关闭；GACP-01 已于 2026-08-19 受限关闭；GACP-02 核心已落地；P0-10B 代码已落地。P0-10C 代码已落地、自动验证已过（GUI 未跑）；库存扫描已补上 `installed-plugins`。P0-10D 代码已落地、相关自动测试已过（开发版 GUI / TUI 对读未跑）。P0-10E 代码已落地、自动验证已过（开发版 GUI / 安装走查未跑）。下一步见 P0-11。Grok ACP 加深计划见 [grokACP计划](grokACP计划/README.md)
+> 状态：P0-01 至 P0-13 主体代码已落地（多项 GUI 走查未跑）。2026-08-31 当前主线为 [P0-19](p0-19-grok-host-capability-polish.md)。P1 扩展与 P2 搁置。Grok ACP 加深计划见 [grokACP计划](grokACP计划/README.md)
 >
 > 本索引只负责开发顺序、权重、依赖和进度导航；每一个实际功能只在对应独立 Markdown 中定义任务。产品愿景仍以 [product-vision.md](../../product-vision.md) 为唯一愿景来源。
 >
 > **2026-08-20 产品确认：** 桌面是 Grok Build 的 ACP Client，不自己当 Agent。MCP / Skills / 记忆 / 插件由 Grok 执行，工作台负责可视化与配置。P2 Codex 与 P4 多大脑暂缓，计划文件保留。
+>
+> **2026-08-31 产品确认：** 先打磨一个 Runtime（Grok）。P1-06～08 与 P2 搁置；现有单 Provider 设置保留。P3 提前指摊开 Grok 已有能力（Plan / 子 Agent / 少打断权限 / Sandbox / rewind / Hooks / 后台命令 / 浏览器插件表面），不是开工桌面自建 Computer Use Helper。当前主线：[P0-19](p0-19-grok-host-capability-polish.md)。
 
 ## 使用规则
 
@@ -13,7 +15,7 @@
 - **三个验收层：** P0-A 是本地可用闭环；P0-B 是隔离交付闭环；P0+ 是不阻塞第一可用版本的增强能力。后续计划应依赖明确验收层或具体计划，不再使用含义模糊的“依赖整个 P0”。
 - **安全不是过度安全：** 只读项目元信息允许任务范围授权；写文件/执行命令展示影响；删除、外发数据、登录态、屏幕和剪贴板始终明确确认。不会做自研加密、逐文件弹窗、默认全盘扫描或未有生态就先做插件市场。
 - **状态说明：** P0-01 至 P0-07 已完成代码、自动验证和 Electron 验收；P0-06 已通过真实 Provider 调用、多轮、重启恢复成功/失败、不可用 Project、异常中断、取消、损坏隔离和物理删除走查。P0-07 已通过完整自动门禁、主要真实 Grok 权限路径与受控 ACP Runtime Electron E2E；后者使用固定本地 fixture 验证完整 Electron/stdio ACP 管线，不等价于真实 Grok 黑盒触发，也不把 Broker 描述为 Runtime 进程沙箱。P0-08 已完成核心实现、Permission E2E 和首批 lifecycle E2E，Windows/Linux 生命周期平台差异仍待验收；真实 Grok 活动退出与重启 interrupted 已由 2026-08-18 Windows 夜间补测在 Grok 路径上收口。P0-09 真机验收已受限关闭：同一 Task 两轮实时/历史一致，权限允许/拒绝、终态、退出三分支已有结论；Windows 窗口销毁/重建与历史截断保持限制。GACP-01 已于 2026-08-19 受限关闭（握手、`set_model`、A→B→A `resume`、一次 `execute` 权限已冻结；load/close/子 Agent/退出协议路径保持 `not-observed`，不挡后续开工）。GACP-02 核心已落地。P0-10 Task 1–4 与 P0-10B 已有代码。P0-10C 代码已落地、自动验证已过（GUI 未跑）；库存已按真机 `installed-plugins` 修正。P0-10D 代码已落地（相关自动测试已过，GUI / TUI 对读未跑）。P0-10E 代码已落地、自动验证已过（开发版 GUI / 安装走查未跑）。下一步 P0-11。P1 前五项已有实现提交 `fe2a81a`，但仍列为“实现待复核”。
-- **产品主线：** 先把 Grok Build 打磨成可日常使用的单 Runtime 工作台（宿主可视化：斜杠命令、记忆、MCP、插件），再扩展 Provider 宽度。Codex Runtime 与多大脑协作暂缓。HTML 预览是 Artifact 的隔离扩展，不是产品本体。
+- **产品主线：** 先把 Grok Build 打磨成可日常使用的单 Runtime 工作台。当前按 [P0-19](p0-19-grok-host-capability-polish.md) 摊开 Grok 已有能力；P1 扩展与 Codex 暂缓。HTML 预览是 Artifact 的隔离扩展，不是产品本体。
 
 ## P0：统一核心骨架与 Codex-style 单 Runtime 工作台
 
@@ -78,6 +80,26 @@
 |        3 | P0-17 |    4 | [多任务队列与有界并行调度](p0-17-multi-task-scheduling.md) | 待开始 | P0-08、P0-10、P0-11、P0-14 |
 |        4 | GACP-05 |    3 | [Client 能力广告](grokACP计划/gacp-05-client-capability-advertisement.md) | 待开始 | P0-15 且产品确认；默认不进 P0-A |
 
+## P0-19：Grok 宿主能力打磨（当前主线，2026-08-31）
+
+程序索引：[p0-19-grok-host-capability-polish.md](p0-19-grok-host-capability-polish.md)。桌面仍是 ACP Client；不自建 BrowserView / Helper。完全接管按 [P0-19g](p0-19g-task-takeover-always-approve.md) 做 Task 级显式开关，默认关闭。**2026-08-31：P0-10C 至 P0-13 开发版走查暂时可以通过，不挡本表第 1 项起开工。**
+
+| 顺序 | 计划 | 权重 | 功能 | 状态 | 前置依赖 |
+| ---: | --- | ---: | --- | --- | --- |
+| 0 | 已写未验走查 | 5 | P0-13 优先，再 10C/D/E、11、12 | 暂时可以通过，不挡开工 | 对应代码已落地；未走查不得标 GUI 已过 |
+| 1 | [GACP-03](grokACP计划/gacp-03-structured-permission-evidence.md) | 4 | 询问模式：能过的自动过；browser/screen 保持 L3 | 计划写已落地，真机/GUI 未收口 | P0-11 |
+| 1b | [P0-19g](p0-19g-task-takeover-always-approve.md) | 5 | Task 完全接管（always-approve），默认关 | 待开始 | GACP-03；须先观察 yoloMode |
+| 2 | [P0-19a](p0-19a-session-plan-mode.md) | 4 | Plan mode 开关与主列清单 | 待开始 | 与接管互斥 |
+| 3 | [GACP-06](grokACP计划/gacp-06-subagent-timeline.md) | 3 | 子 Agent 嵌套时间线；无父子字段保持扁平 | 待开始 | 先观察字段；皮肤跟 P0-10A |
+| 4 | [P0-19b](p0-19b-grok-sandbox-profile.md) | 4 | Grok Sandbox 档位与空闲重启 | 待开始 | 空闲重启纪律 |
+| 5 | [P0-19c](p0-19c-turn-rewind.md) | 4 | 对话 /rewind 与文件 latest-turn 恢复分开 | 待开始 | P0-12 |
+| 6 | [P0-19d](p0-19d-hooks-surface.md) | 3 | Hooks 只读库存，桌面不执行 | 待开始 | grok-home 扫描模式 |
+| 7 | [P0-19e](p0-19e-background-command-monitor.md) | 3 | 后台命令 Timeline 监视 | 待开始 | 先观察 ACP 字段 |
+| 8 | [P0-19f](p0-19f-browser-computer-use-surface.md) | 4 | 浏览器/电脑插件：L3、截图 Artifact、可见停止 | 待开始 | P0-10E、GACP-03、P0-13 |
+| 后 | P3-05～07 | 3 | 桌面受管浏览器 / Chrome 桥 / macOS Helper | 后置 | 仅当 19f 仍缺共享页面 |
+
+P0-14 Worktree 仍是 P0-B，可在 GACP-03 后与 19a 并行，不挡本表。
+
 ## Grok ACP 加深
 
 本系列补的是现有 `GrokAcpAdapter` 的真机核实、恢复语义、审批可读性和方言契约，不是第二条 Runtime，也不替代 P0-10 / P0-11 / P0-15 / P3-04。完整评估与切分见 [grokACP计划/README.md](grokACP计划/README.md)。
@@ -86,16 +108,18 @@
 | --- | ---: | --- | --- | --- |
 | [GACP-01](grokACP计划/gacp-01-real-grok-protocol-verification.md) | 5 | 真机协议观察与能力核实 | 已完成（受限关闭） | 2026-08-19 冻结观察；遗留不挡 GACP-02 |
 | [GACP-02](grokACP计划/gacp-02-session-restore-capability-contract.md) | 5 | 点进历史即可接着聊 | 核心已落地，待手工/e2e 收口 | GACP-01 已关闭；P0-10 前 |
-| [GACP-03](grokACP计划/gacp-03-structured-permission-evidence.md) | 4 | 能过的自动过，不要一个个点 | 待开始 | P0-11 后 |
+| [GACP-03](grokACP计划/gacp-03-structured-permission-evidence.md) | 4 | 能过的自动过，不要一个个点 | 计划写已落地，真机/GUI 未收口；纳入 P0-19 | P0-11 后；P0-19 第 1 项 |
 | [GACP-04](grokACP计划/gacp-04-grok-acp-dialect-compat.md) | 4 | Grok ACP 方言兼容契约 | 待开始 | P0-10 后、P2 前 |
 | [GACP-05](grokACP计划/gacp-05-client-capability-advertisement.md) | 3 | Client 能力广告 | 待开始 | P0-15 后；未实现不得广告 |
 | [GACP-06](grokACP计划/gacp-06-subagent-timeline.md) | 3 | 子 Agent 嵌套时间线 | 待开始 | P0-10A 换皮之后接分组；GACP-01 未见父子字段，禁止猜树 |
 
 当前 `clientCapabilities: {}` 是诚实状态。GACP-05 之前禁止打开 `fs` / `terminal`。P0-08 尚未完成的 Windows/Linux 生命周期仍留在 P0-08；GACP-01 不再回填这些平台项。
 
-## P1：开放模型配置
+## P1：开放模型配置（扩展搁置）
 
-P1-01 至 P1-05 是现有单 Provider 基线的复核和补强，应在 P0-05 后穿插完成并最迟纳入 P0-A 验收；P1-06 至 P1-08 的 Provider 宽度扩展不得阻塞 P0-A/P0-B。
+> 2026-08-31：P1-06 至 P1-08 不开工。P1-01 至 P1-05 现有单 Provider 设置保留，不为「开放模型」再开复核轮。Grok 继续用当前供应商页。
+
+P1-01 至 P1-05 是现有单 Provider 基线；P1-06 至 P1-08 的 Provider 宽度扩展不得阻塞 Grok 宿主打磨。
 
 | 顺序 | 权重 | 功能                                                                    | 状态       | 前置依赖              |
 | ---- | ---: | ----------------------------------------------------------------------- | ---------- | --------------------- |
@@ -110,7 +134,8 @@ P1-01 至 P1-05 是现有单 Provider 基线的复核和补强，应在 P0-05 �
 
 ## P2：接入 Codex app-server（暂缓）
 
-> 2026-08-20：先打磨 Grok 宿主。本系列计划文件保留，不删，不作为下一阶段开工项。Grok 日用闭环（P0-10C/D/E、P0-11、GACP-03、P0-12）完成前不要开始 P2-01。
+> 2026-08-20：先打磨 Grok 宿主。本系列计划文件保留，不删，不作为下一阶段开工项。
+> 2026-08-31：P2 继续搁置，直到 P0-19 程序完成后再评估。
 
 P2-01、P2-02 先完成 account-backed Codex 的独立状态、账号、Thread/Turn 和恢复边界，不依赖 P1-07；P2-03 可在 P0-A 后先做协议/审批/命令映射，但以 P0-13/P0-14 作为 Artifact/Worktree 最终完成门。P2-04A 先交付单执行槽的 Runtime 选择，P2-04B 再接 P0-17 队列与并行。
 
@@ -122,7 +147,9 @@ P2-01、P2-02 先完成 account-backed Codex 的独立状态、账号、Thread/T
 | 04A  |    4 | [单执行槽跨 Runtime 选择与任务启动](p2-04a-cross-runtime-task-workbench.md)      | 待开始 | P0-B、P2-01 至 P2-03；Codex `app-provider` 另依赖 P1-06 至 P1-08 |
 | 04B  |    4 | [跨 Runtime Scheduler 与并行整合](p2-04b-cross-runtime-scheduler-integration.md) | 待开始 | P0-17、P2-04A                                                    |
 
-## P3：插件能力中心
+## P3：插件能力中心（引擎后置，宿主表面走 P0-19）
+
+> 2026-08-31：浏览器 / Computer Use 的**第一波**是 Grok 插件在桌面里可审批、可看截图、可停止，见 P0-19f。P3-01 起的桌面 Capability Pack、受管浏览器、Chrome 桥、macOS Helper 等 19f 完成且仍缺共享页面后再开工。
 
 P3 统一沿用 `Manifest / ActionDescriptor → Registry → Executor → Permission Broker → 核心事实服务`，Capability 不直接调用 Runtime，也不复制 Timeline、Command Evidence、Changes、Validation 或 Artifact。P3-03 只提供项目体检这一首个内置 Capability，不重新定义通用 Action 契约。
 
