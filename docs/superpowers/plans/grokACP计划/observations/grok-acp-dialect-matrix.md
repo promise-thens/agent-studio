@@ -48,8 +48,12 @@ grok --no-auto-update agent --no-leader -m agent-studio-default stdio
 - `loadSession`
 - `sessionCapabilities.resume`
 - `sessionCapabilities.close`
+- `promptCapabilities.image`（驱动 `promptMedia.image` / Composer「未声明识图」提示）
+- `promptCapabilities.embeddedContext`（驱动 `promptMedia.embeddedContext` / 附件 resource_link）
 
-其它字段（`auth`、`providers`、`_meta`、promptCapabilities 等）只进观察文档，不驱动业务分支。版本不等 → fail-closed。
+产品实际读取字段见 `GROK_INITIALIZE_PRODUCT_READ_FIELDS`，必须是上表子集；投影走 `projectGrokHandshakeFields()`。
+其它字段（`auth`、`providers`、`_meta`、`promptCapabilities.audio` 等）只进观察文档，不驱动业务分支。版本不等 → fail-closed。
+`clientCapabilities` 请求侧仍为 `{}`，GACP-05 前禁止广告 fs/terminal。
 
 ## session/set_model
 
@@ -58,7 +62,8 @@ grok --no-auto-update agent --no-leader -m agent-studio-default stdio
 | 方法 | `session/set_model` |
 | 参数 | `{ sessionId, modelId: 'agent-studio-default' }` |
 | 成功 | 非 null 普通对象；不读 `_meta` 业务字段 |
-| 失败 | `disconnectInternal(false)` + 产品文案含「绑定 Agent Studio 模型失败」 |
+| 形状失败 | `disconnectInternal(false)` + 「Grok Runtime 未确认 Agent Studio 模型绑定，已阻止继续执行。」 |
+| RPC / 其它失败 | `disconnectInternal(false)` + 「绑定 Agent Studio 模型失败：…」 |
 
 ## GROK_HOME 与二进制路径（必须分开）
 
@@ -76,7 +81,7 @@ grok --no-auto-update agent --no-leader -m agent-studio-default stdio
 | `cli-missing` | `runtime-unavailable` | 「还没有安装 Grok Build CLI。」（无路径 / 无 ENOENT 原文） |
 | `protocol-incompatible` | `operation-failed` | 保留「ACP 协议版本不兼容…」，不包成笼统「连接失败」 |
 | `provider-config-missing` | `runtime-unavailable` | 「模型服务配置不可用，请重新配置 URL、Key 和模型。」 |
-| `set-model-failed` | `operation-failed` | 「绑定 Agent Studio 模型失败」语义 |
+| `set-model-failed` | `operation-failed` | RPC：「绑定 Agent Studio 模型失败」；形状失败：「未确认 Agent Studio 模型绑定」 |
 | `config-write-failed` | `operation-failed` | 「无法生成 Grok 配置：…」（已脱敏） |
 | `process-exited` | `operation-failed` | 「Grok Build 已退出，代码 N」 |
 | `generic` | `operation-failed` | 「连接失败：…」或「无法启动 Grok Build：…」 |

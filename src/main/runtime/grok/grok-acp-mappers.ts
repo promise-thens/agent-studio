@@ -20,7 +20,7 @@ import {
   updateAgentRuntimeCapabilitySnapshot,
   type AgentCapabilityInput
 } from '../../agent/runtime-capabilities'
-import { assertGrokHandshakeCompat } from './grok-acp-dialect'
+import { assertGrokHandshakeCompat, projectGrokHandshakeFields } from './grok-acp-dialect'
 
 export const GROK_RUNTIME_ID = 'grok' as const
 
@@ -130,32 +130,22 @@ export function mapGrokInitializeCapabilitySnapshot(
   redactText: TextRedactor,
   protocolVersion: number
 ): AgentRuntimeCapabilitySnapshot {
-  // 备注：方言拥有 version 判断；缺少 session/new 基线只记 notes，不发明探测。
-  assertGrokHandshakeCompat(
-    {
-      protocolVersion: response.protocolVersion,
-      ...(response.agentInfo?.version?.trim()
-        ? { agentInfoVersion: response.agentInfo.version.trim() }
-        : {}),
-      loadSession: response.agentCapabilities?.loadSession === true,
-      resume: response.agentCapabilities?.sessionCapabilities?.resume != null,
-      close: response.agentCapabilities?.sessionCapabilities?.close != null
-    },
-    protocolVersion
-  )
+  // 备注：只消费 allow-list 投影；promptCapabilities.audio 等不得由此进入产品逻辑。
+  const projected = projectGrokHandshakeFields(response)
+  assertGrokHandshakeCompat(projected, protocolVersion)
 
-  const runtimeVersion = response.agentInfo?.version?.trim()
+  const runtimeVersion = projected.agentInfoVersion?.trim()
   let snapshot = createAgentRuntimeCapabilitySnapshot({
     runtimeId: GROK_RUNTIME_ID,
     ...(runtimeVersion ? { runtimeVersion: redactText(runtimeVersion) } : {}),
-    protocolVersion: String(response.protocolVersion),
+    protocolVersion: String(projected.protocolVersion),
     capabilities: Object.values(baseline.capabilities),
     redactText
   })
 
   snapshot = updateAgentRuntimeCapabilitySnapshot(
     snapshot,
-    response.agentCapabilities?.loadSession === true
+    projected.loadSession === true
       ? {
           capabilityId: 'session.load',
           support: 'native',
@@ -175,7 +165,7 @@ export function mapGrokInitializeCapabilitySnapshot(
 
   return updateAgentRuntimeCapabilitySnapshot(
     snapshot,
-    response.agentCapabilities?.sessionCapabilities?.resume != null
+    projected.resume === true
       ? {
           capabilityId: 'session.resume',
           support: 'native',

@@ -6,6 +6,7 @@ import {
   GROK_ACP_CLIENT_INFO_NAME,
   GROK_ACP_PRODUCT_MESSAGES,
   GROK_CONTROLLED_E2E_SPAWN_ARG_FLAGS,
+  GROK_INITIALIZE_PRODUCT_READ_FIELDS,
   GROK_INITIALIZE_RESPONSE_ALLOWED_FIELDS,
   GROK_PRODUCTION_AGENT_ARGV,
   GROK_SET_MODEL_METHOD,
@@ -15,6 +16,7 @@ import {
   classifyGrokConnectError,
   classifyGrokSpawnProcessError,
   isGrokSetModelResponseValid,
+  projectGrokHandshakeFields,
   resolveGrokAcpFailure,
   type GrokHandshakeProjectedFields
 } from './grok-acp-dialect'
@@ -59,8 +61,56 @@ describe('Grok ACP 方言常量冻结', () => {
       'agentInfo.version',
       'loadSession',
       'sessionCapabilities.resume',
-      'sessionCapabilities.close'
+      'sessionCapabilities.close',
+      'promptCapabilities.image',
+      'promptCapabilities.embeddedContext'
     ])
+  })
+
+  it('产品实际读取的握手字段必须是 allow-list 子集，禁止旁路读取 audio 等未声明能力', () => {
+    // 备注：若 Adapter/Mapper 开始读新字段却未进 allow-list，本断言必须先红。
+    const allowed = new Set<string>(GROK_INITIALIZE_RESPONSE_ALLOWED_FIELDS)
+    for (const field of GROK_INITIALIZE_PRODUCT_READ_FIELDS) {
+      expect(allowed.has(field)).toBe(true)
+    }
+    expect([...GROK_INITIALIZE_PRODUCT_READ_FIELDS]).toEqual([
+      'protocolVersion',
+      'agentInfo.version',
+      'loadSession',
+      'sessionCapabilities.resume',
+      'sessionCapabilities.close',
+      'promptCapabilities.image',
+      'promptCapabilities.embeddedContext'
+    ])
+    expect(GROK_INITIALIZE_PRODUCT_READ_FIELDS).not.toContain('promptCapabilities.audio')
+    expect(GROK_INITIALIZE_RESPONSE_ALLOWED_FIELDS).not.toContain('promptCapabilities.audio')
+  })
+
+  it('projectGrokHandshakeFields 只投影 allow-list，promptMedia 走 image/embeddedContext', () => {
+    const projected = projectGrokHandshakeFields({
+      protocolVersion: 1,
+      agentInfo: { version: '1.0.5' },
+      agentCapabilities: {
+        loadSession: true,
+        sessionCapabilities: { resume: {}, close: {} },
+        promptCapabilities: {
+          image: false,
+          embeddedContext: true,
+          // 备注：audio 即使出现也不得进入产品投影。
+          audio: true
+        }
+      }
+    })
+    expect(projected).toEqual({
+      protocolVersion: 1,
+      agentInfoVersion: '1.0.5',
+      loadSession: true,
+      resume: true,
+      close: true,
+      promptImage: false,
+      promptEmbeddedContext: true
+    })
+    expect(projected).not.toHaveProperty('promptAudio')
   })
 
   it('受控 E2E argv 与生产 argv 分离，且使用固定 flag', () => {

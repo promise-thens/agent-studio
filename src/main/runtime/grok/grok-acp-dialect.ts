@@ -35,14 +35,30 @@ export const GROK_ACP_CLIENT_CAPABILITIES = {} as const
 
 /**
  * initialize 响应里允许进入产品逻辑的字段路径。
- * 其它字段只进观察文档，不得驱动业务分支。
+ * 其它字段（auth / providers / _meta / promptCapabilities.audio 等）只进观察文档。
  */
 export const GROK_INITIALIZE_RESPONSE_ALLOWED_FIELDS = [
   'protocolVersion',
   'agentInfo.version',
   'loadSession',
   'sessionCapabilities.resume',
-  'sessionCapabilities.close'
+  'sessionCapabilities.close',
+  'promptCapabilities.image',
+  'promptCapabilities.embeddedContext'
+] as const
+
+/**
+ * 产品实际读取的握手字段。必须始终是 allow-list 子集；
+ * Adapter/Mapper 新增读取时先改本列表，单测会强制同步 allow-list。
+ */
+export const GROK_INITIALIZE_PRODUCT_READ_FIELDS = [
+  'protocolVersion',
+  'agentInfo.version',
+  'loadSession',
+  'sessionCapabilities.resume',
+  'sessionCapabilities.close',
+  'promptCapabilities.image',
+  'promptCapabilities.embeddedContext'
 ] as const
 
 /**
@@ -62,6 +78,8 @@ export const GROK_ACP_PRODUCT_MESSAGES = {
   cliMissing: '还没有安装 Grok Build CLI。',
   providerConfigMissing: '模型服务配置不可用，请重新配置 URL、Key 和模型。',
   setModelFailed: '绑定 Agent Studio 模型失败',
+  /** set_model 响应形状不对时的产品文案；与 RPC 失败同属 fail-closed 家族。 */
+  setModelShapeRejected: 'Grok Runtime 未确认 Agent Studio 模型绑定，已阻止继续执行。',
   processDisconnected: 'Grok Build 已断开',
   connectFailed: '连接失败'
 } as const
@@ -73,6 +91,32 @@ export interface GrokHandshakeProjectedFields {
   loadSession?: boolean
   resume?: boolean
   close?: boolean
+  /** 来自 promptCapabilities.image；驱动 Composer 识图提示与 ContentBlock::Image。 */
+  promptImage?: boolean
+  /** 来自 promptCapabilities.embeddedContext；驱动附件 resource_link 路径。 */
+  promptEmbeddedContext?: boolean
+}
+
+/**
+ * initialize 原始响应中方言允许窥视的最小形状。
+ * agentInfo / agentCapabilities 可为 null（ACP SDK）；投影时不得读取 audio 等未列字段。
+ */
+export interface GrokInitializeResponseLike {
+  protocolVersion: number
+  agentInfo?: { version?: string } | null
+  agentCapabilities?: {
+    loadSession?: boolean
+    sessionCapabilities?: {
+      resume?: unknown
+      close?: unknown
+    } | null
+    promptCapabilities?: {
+      image?: boolean
+      embeddedContext?: boolean
+      /** 仅观察用；投影函数不得消费。 */
+      audio?: boolean
+    } | null
+  } | null
 }
 
 export interface GrokHandshakeCompatResult {
@@ -104,6 +148,26 @@ export function buildGrokAcpClientInfo(version: string): GrokAcpClientInfo {
   return {
     name: GROK_ACP_CLIENT_INFO_NAME,
     version: trimmed
+  }
+}
+
+/**
+ * 从 initialize 响应投影 allow-list 子集。
+ * Mapper / Adapter 只能消费本函数结果，禁止直接读 promptCapabilities.audio 等未列字段。
+ */
+export function projectGrokHandshakeFields(
+  response: GrokInitializeResponseLike
+): GrokHandshakeProjectedFields {
+  const agentInfoVersion = response.agentInfo?.version?.trim()
+  return {
+    protocolVersion: response.protocolVersion,
+    ...(agentInfoVersion ? { agentInfoVersion } : {}),
+    loadSession: response.agentCapabilities?.loadSession === true,
+    resume: response.agentCapabilities?.sessionCapabilities?.resume != null,
+    close: response.agentCapabilities?.sessionCapabilities?.close != null,
+    // 备注：严格 === true；缺省或 false 都视为未声明识图 / 嵌入上下文；绝不读 audio。
+    promptImage: response.agentCapabilities?.promptCapabilities?.image === true,
+    promptEmbeddedContext: response.agentCapabilities?.promptCapabilities?.embeddedContext === true
   }
 }
 

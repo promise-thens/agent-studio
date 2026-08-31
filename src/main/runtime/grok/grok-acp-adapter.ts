@@ -48,6 +48,7 @@ import {
   classifyGrokSpawnProcessError,
   isGrokCliMissingSpawnError,
   isGrokSetModelResponseValid,
+  projectGrokHandshakeFields,
   resolveGrokAcpFailure
 } from './grok-acp-dialect'
 import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
@@ -735,11 +736,13 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       (text) => this.safeRedact(text),
       acp.PROTOCOL_VERSION
     )
+    // 备注：promptMedia 必须走 allow-list 投影，禁止旁路读取 audio 等未声明能力。
+    const handshake = projectGrokHandshakeFields(response)
     this.promptMedia = {
-      image: response.agentCapabilities?.promptCapabilities?.image === true,
-      embeddedContext: response.agentCapabilities?.promptCapabilities?.embeddedContext === true
+      image: handshake.promptImage === true,
+      embeddedContext: handshake.promptEmbeddedContext === true
     }
-    this.supportsCloseSession = response.agentCapabilities?.sessionCapabilities?.close != null
+    this.supportsCloseSession = handshake.close === true
     this.verifyCapability('runtime.connect', 'stable', undefined, false)
     this.status = {
       runtimeId: GROK_RUNTIME_ID,
@@ -1326,10 +1329,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
           accepted: false,
           responseShape: response === null ? 'null' : 'missing'
         })
-        throw this.createError(
-          'operation-failed',
-          'Grok Runtime 未确认 Agent Studio 模型绑定，已阻止继续执行。'
-        )
+        throw this.createError('operation-failed', GROK_ACP_PRODUCT_MESSAGES.setModelShapeRejected)
       }
       this.observe({ kind: 'set-model', accepted: true, responseShape: 'object' })
     } catch (error) {
