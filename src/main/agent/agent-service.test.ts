@@ -1265,10 +1265,69 @@ describe('AgentService Task / Turn 编排', () => {
     expect(result.task.takeoverEnabled).toBe(true)
     expect(result.task.takeoverApplied).toBe(false)
     expect(adapter.startTurn).not.toHaveBeenCalled()
-    expect(service.beginTakeoverControlPrompt(task.taskId)).toBe('/always-approve')
-    expect(service.markTakeoverCommandDispatched(task.taskId).takeoverApplied).toBe(true)
+    // send-command 已占 in-flight，禁止广告补发再 begin 一次。
+    expect(service.beginTakeoverControlPrompt(task.taskId)).toBeNull()
+    const startTurn = vi.fn(async () => undefined)
+    await service.runTakeoverControlPrompt(task.taskId, result.controlPrompt, startTurn)
+    expect(startTurn).toHaveBeenCalledWith(task.taskId, '/always-approve')
+    expect(service.getTaskRuntimeState(task.taskId).takeoverApplied).toBe(true)
     expect(service.beginTakeoverControlPrompt(task.taskId)).toBeNull()
     expect(adapter.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('从已 applied 的接管切到 assist 仍入队 /always-approve', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    const task = await service.createTask(WORKSPACE)
+    service.handleAvailableCommands({
+      taskId: task.taskId,
+      revision: 1,
+      commands: [{ name: 'always-approve', description: '完全接管' }]
+    })
+    const enabled = await service.setPermissionMode({
+      taskId: task.taskId,
+      mode: 'takeover',
+      confirmed: true
+    })
+    await service.runTakeoverControlPrompt(
+      task.taskId,
+      enabled.controlPrompt!,
+      async () => undefined
+    )
+    expect(service.getTaskRuntimeState(task.taskId).takeoverApplied).toBe(true)
+
+    const disabled = await service.setPermissionMode({ taskId: task.taskId, mode: 'assist' })
+    expect(disabled.decision).toEqual({ kind: 'send-command', commandName: 'always-approve' })
+    expect(disabled.controlPrompt).toBe('/always-approve')
+    expect(disabled.task.takeoverEnabled).toBe(false)
+    expect(disabled.task.takeoverMayStillBeActive).toBe(true)
+    expect(service.beginTakeoverControlPrompt(task.taskId)).toBeNull()
+
+    const startTurn = vi.fn(async () => undefined)
+    await service.runTakeoverControlPrompt(task.taskId, disabled.controlPrompt, startTurn)
+    expect(startTurn).toHaveBeenCalledWith(task.taskId, '/always-approve')
+    expect(service.getTaskRuntimeState(task.taskId).takeoverEnabled).toBe(false)
+    expect(service.getTaskRuntimeState(task.taskId).takeoverMayStillBeActive).toBe(true)
+  })
+
+  it('control turn 入队期间不能再切批准模式', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    const task = await service.createTask(WORKSPACE)
+    service.handleAvailableCommands({
+      taskId: task.taskId,
+      revision: 1,
+      commands: [{ name: 'always-approve', description: '完全接管' }]
+    })
+    await service.setPermissionMode({
+      taskId: task.taskId,
+      mode: 'takeover',
+      confirmed: true
+    })
+    await expect(
+      service.setPermissionMode({ taskId: task.taskId, mode: 'assist' })
+    ).rejects.toEqual(new AgentServiceError('invalid-state', '任务执行中不能切换批准模式。'))
+    service.abortTakeoverControlPrompt(task.taskId)
   })
 
   it('广告晚到才交出 controlPrompt，且 start 失败保持未 applied 可重试', async () => {

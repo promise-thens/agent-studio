@@ -692,9 +692,14 @@ function registerIpcHandlers(): void {
           const result = await service.setPermissionMode(request)
           if (result.decision.kind === 'send-command' && result.controlPrompt) {
             try {
-              await applyTakeoverControlPrompt(service, executor, request.taskId)
+              // enable/disable 都用已返回的 controlPrompt 入队，关接管不得再走 begin 闸门。
+              await service.runTakeoverControlPrompt(
+                request.taskId,
+                result.controlPrompt,
+                (taskId, prompt) => startTurnWithPrompt(service, executor, taskId, prompt)
+              )
             } catch {
-              // start 失败不得把 applied 写成 true；仍返回已写盘的未生效快照，UI 才能显示「接管未完全生效」。
+              // start 失败不得把 applied 写成 true；仍返回已写盘快照（enable 未生效 / disable 可能仍在）。
             }
             return { ...result, task: service.getTaskRuntimeState(request.taskId) }
           }

@@ -707,6 +707,11 @@ export class AgentService {
       await this.recordTakeoverToggleAudit(task, snapshot.takeoverEnabled)
     }
 
+    if (decision.kind === 'send-command') {
+      // 占 in-flight，避免广告补发与用户再切模式抢槽；真正入队由 runTakeoverControlPrompt。
+      this.takeoverControlInFlight.add(task.taskId)
+    }
+
     return {
       task: cloneTask(task),
       decision,
@@ -840,12 +845,13 @@ export class AgentService {
     return task
   }
 
-  /** 与模型选择器同一 busy：活动 Turn / 执行槽 / session 操作期间不能改批准模式。 */
+  /** 与模型选择器同一 busy：活动 Turn / 执行槽 / 接管斜杠入队期间不能改批准模式。 */
   private isPermissionModeLocked(): boolean {
     return (
       this.sessionOperationActive ||
       this.executionController.hasActiveTurn() ||
-      this.taskExecutor?.hasActiveExecution() === true
+      this.taskExecutor?.hasActiveExecution() === true ||
+      this.takeoverControlInFlight.size > 0
     )
   }
 
@@ -901,6 +907,31 @@ export class AgentService {
     }
     this.takeoverControlInFlight.add(taskId)
     return GROK_TAKEOVER_CONTROL_PROMPT
+  }
+
+  /**
+   * 用 setPermissionMode 已决定的 controlPrompt 入队 /always-approve。
+   * enable 与 disable 共用，不得再走 begin 的 takeoverEnabled 闸门。
+   */
+  async runTakeoverControlPrompt(
+    taskId: string,
+    prompt: string,
+    startTurn: (taskId: string, prompt: string) => Promise<unknown>
+  ): Promise<AgentTaskRuntimeState> {
+    if (prompt !== GROK_TAKEOVER_CONTROL_PROMPT) {
+      throw new AgentServiceError('invalid-input', '接管控制命令无效。')
+    }
+    this.requireTask(taskId)
+    if (!this.takeoverControlInFlight.has(taskId)) {
+      this.takeoverControlInFlight.add(taskId)
+    }
+    try {
+      await startTurn(taskId, prompt)
+      return this.markTakeoverCommandDispatched(taskId)
+    } catch (error) {
+      this.abortTakeoverControlPrompt(taskId)
+      throw error
+    }
   }
 
   /**
