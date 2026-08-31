@@ -10,6 +10,8 @@
 
 正式表格见 [grok-acp-observation.md](grok-acp-observation.md)。方言版本矩阵见 GACP-04 产出的 `grok-acp-dialect-matrix.md`。
 
+P0-19g Task 完全接管（`session/new` `_meta.yoloMode` / 空闲 `/always-approve`）见 [p0-19g-yolo-mode-observation.md](p0-19g-yolo-mode-observation.md)。
+
 ## 用脚本走正式产品路径
 
 不要另写 `grok agent stdio` Client。默认测试也不连真实 Grok。

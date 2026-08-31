@@ -77,11 +77,11 @@ Grok 工具
 
 ### 任务 1: 冻结生效路径
 
-- [ ] **第 1 步: 观察 session/new yoloMode**
+- [x] **第 1 步: 观察 session/new yoloMode**
 
 说明：隔离 grok-home 下 `newSession({ cwd, mcpServers, _meta: { yoloMode: true } })`，再让 Grok 写文件/跑命令，确认不再 `request_permission`。把请求 JSON 记入 observations。失败则试文档中的 `grok agent --always-approve`，并记录「连接级」副作用。
 
-- [ ] **第 2 步: 观察中途开关**
+- [x] **第 2 步: 观察中途开关**
 
 说明：普通 session 里发 `/always-approve`（若广告），看是否当轮生效、如何关。无命令则中途打开只能「下一 session」。把策略写成纯函数 `resolveTakeoverApply({ hasSession, advertisedCommands, idle })`。
 
