@@ -39,12 +39,15 @@ import {
 import {
   AGENT_STUDIO_MODEL_ALIAS,
   GROK_ACP_CLIENT_CAPABILITIES,
-  GROK_ACP_CLIENT_INFO_NAME,
-  GROK_ACP_CLIENT_INFO_VERSION,
+  GROK_ACP_PRODUCT_MESSAGES,
   GROK_PRODUCTION_AGENT_ARGV,
   GROK_SET_MODEL_METHOD,
+  buildGrokAcpClientInfo,
   buildGrokControlledE2ESpawnArgs,
-  isGrokSetModelResponseValid
+  classifyGrokConnectError,
+  classifyGrokSpawnProcessError,
+  isGrokSetModelResponseValid,
+  resolveGrokAcpFailure
 } from './grok-acp-dialect'
 import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
 import type { CommandEvidenceStore } from '../../command/command-evidence-store'
@@ -145,6 +148,12 @@ const MAX_TERMINAL_TOOL_CALL_IDS = 2_000
 export interface GrokAcpAdapterOptions {
   userDataPath: string
   getProviderConfig: () => ProviderRuntimeConfig | null
+  /**
+   * Main 在 app.whenReady() 后注入的 Client 版本。
+   * 打包用 app.getVersion()；开发用 `${app.getVersion()}-dev`；测试注入假版本。
+   * 禁止从 Renderer / IPC 传入。
+   */
+  getClientVersion: () => string
   redactText: (text: string) => string
   /** 仅由 Main 开发态 E2E bootstrap 注入；绝不接受 Renderer、IPC 或普通环境变量。 */
   controlledFixture?: ControlledAcpFixtureLaunch
@@ -240,10 +249,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
     const providerConfig = this.options.getProviderConfig()
     if (!providerConfig) {
-      const error = this.createError(
-        'runtime-unavailable',
-        '模型服务配置不可用，请重新配置 URL、Key 和模型。'
-      )
+      const resolved = resolveGrokAcpFailure('provider-config-missing')
+      const error = this.createError(resolved.adapterErrorCode, resolved.message)
       this.updateStatus({ state: 'error', message: error.message, workspace })
       throw error
     }
@@ -266,10 +273,10 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       try {
         grokHome = await writeGrokProviderConfig(this.options.userDataPath, providerConfig)
       } catch (error) {
-        const adapterError = this.createError(
-          'operation-failed',
-          `无法生成 Grok 配置：${this.redactError(error)}`
-        )
+        const resolved = resolveGrokAcpFailure('config-write-failed', {
+          redactedDetail: this.redactError(error)
+        })
+        const adapterError = this.createError(resolved.adapterErrorCode, resolved.message)
         this.updateStatus({ state: 'error', message: adapterError.message, workspace })
         throw adapterError
       }
@@ -328,10 +335,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       if (!this.isCurrentConnection(connection, child, connectionGeneration)) return this.status
 
       await this.disconnectInternal(false)
-      const adapterError = this.toAdapterError(error, 'operation-failed', '连接失败')
+      // 备注：协议不兼容等方言失败必须保留可区分文案，禁止再无差别包成“连接失败”。
+      const adapterError = this.resolveConnectFailure(error)
       this.updateStatus({
         state: 'error',
-        message: `连接失败：${adapterError.message}`,
+        message: adapterError.message,
         workspace
       })
       throw adapterError
@@ -669,10 +677,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     const response = await connection.initialize({
       protocolVersion: acp.PROTOCOL_VERSION,
       clientCapabilities: { ...GROK_ACP_CLIENT_CAPABILITIES },
-      clientInfo: {
-        name: GROK_ACP_CLIENT_INFO_NAME,
-        version: GROK_ACP_CLIENT_INFO_VERSION
-      }
+      // 备注：version 由 Main 注入；方言拒绝空值，Adapter 不写死安装包版本。
+      clientInfo: buildGrokAcpClientInfo(this.options.getClientVersion())
     })
     if (!this.isCurrentConnection(connection, child, connectionGeneration)) return false
 
@@ -1291,11 +1297,16 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       if (!(error instanceof AgentRuntimeAdapterError)) {
         this.observe({ kind: 'set-model', accepted: false, responseShape: 'failed' })
       }
-      const adapterError = this.toAdapterError(
-        error,
-        'operation-failed',
-        '绑定 Agent Studio 模型失败'
-      )
+      // 备注：只统一文案分类，不改变 fail-closed 与 disconnect 语义。
+      const adapterError =
+        error instanceof AgentRuntimeAdapterError
+          ? error
+          : this.createError(
+              'operation-failed',
+              resolveGrokAcpFailure('set-model-failed', {
+                redactedDetail: this.redactError(error)
+              }).message
+            )
       await this.disconnectInternal(false)
       this.updateStatus({ state: 'error', message: adapterError.message, workspace })
       throw adapterError
@@ -1477,7 +1488,12 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     error: unknown
   ): void {
     if (this.process !== child || this.connectionGeneration !== connectionGeneration) return
-    const message = `无法启动 Grok Build：${this.redactError(error)}`
+    const kind = classifyGrokSpawnProcessError(error)
+    // 备注：ENOENT 只展示“未安装 CLI”，禁止把 spawn 路径或 Node 原文送进 UI。
+    const message =
+      kind === 'cli-missing'
+        ? resolveGrokAcpFailure('cli-missing').message
+        : `无法启动 Grok Build：${this.redactError(error)}`
     this.failActiveTurn(message, 'runtime-process-error')
     this.clearFailedConnection()
     this.updateStatus({ state: 'error', message, workspace })
@@ -1493,10 +1509,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     if (this.process !== child || this.connectionGeneration !== connectionGeneration) return
 
     const hadActiveTurn = this.activeTurn != null
+    const resolved = resolveGrokAcpFailure('process-exited', { exitCode: code })
     const message =
       code === 0 && !hadActiveTurn
-        ? 'Grok Build 已断开'
-        : `Grok Build 已退出，代码 ${code ?? '未知'}`
+        ? GROK_ACP_PRODUCT_MESSAGES.processDisconnected
+        : resolved.message
     if (hadActiveTurn) this.failActiveTurn(message, 'runtime-process-exit')
     this.clearFailedConnection()
     if (this.status.state !== 'idle') {
@@ -1506,6 +1523,19 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         workspace
       })
     }
+  }
+
+  /**
+   * 将 connect 捕获错误映射为可区分的产品失败。
+   * 已归一化的 AdapterError 直接透传；协议不兼容不再二次包装成笼统“连接失败”。
+   */
+  private resolveConnectFailure(error: unknown): AgentRuntimeAdapterError {
+    if (error instanceof AgentRuntimeAdapterError) return error
+    const kind = classifyGrokConnectError(error)
+    const resolved = resolveGrokAcpFailure(kind, {
+      redactedDetail: this.redactError(error)
+    })
+    return this.createError(resolved.adapterErrorCode, resolved.message)
   }
 
   private clearFailedConnection(): void {

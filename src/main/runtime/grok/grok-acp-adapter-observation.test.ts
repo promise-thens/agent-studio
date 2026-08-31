@@ -308,6 +308,7 @@ function createObservedHarness(
   const adapter = new GrokAcpAdapter(sink, {
     userDataPath: '/tmp/agent-studio-gacp01-remaining',
     getProviderConfig: () => providerConfig(),
+    getClientVersion: () => '0.1.0-test',
     redactText: (text) => text.replaceAll(FAKE_KEY, '[REDACTED]'),
     ...(records ? { protocolObserver: { record: (item) => records.push(item) } } : {})
   })

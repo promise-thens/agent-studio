@@ -38,6 +38,7 @@ type RuntimeImageStoreInput = {
 }
 
 type RuntimeAdapterOptions = {
+  getClientVersion?: () => string
   storeRuntimeImage?: (input: RuntimeImageStoreInput) => Promise<{
     attachmentId: string
     attachmentKind: 'image'
@@ -284,6 +285,8 @@ vi.mock('electron', () => {
       whenReady: vi.fn(() => mocks.ready),
       on: vi.fn(),
       getPath: vi.fn(() => '/tmp/agent-studio-index-test'),
+      getVersion: vi.fn(() => '0.1.0'),
+      isPackaged: false,
       quit: vi.fn()
     },
     BrowserWindow: BrowserWindowMock,
@@ -575,6 +578,11 @@ describe('Main 删除与权限失效编排', () => {
     expect(typeof review?.listTurnCheckpoints).toBe('function')
     expect(typeof review?.previewLatestTurnRestore).toBe('function')
     expect(typeof review?.restoreLatestTurn).toBe('function')
+  })
+
+  it('组装层注入开发态 clientInfo.version，不把版本拼装交给 Renderer', () => {
+    expect(mocks.runtimeAdapterOptions?.getClientVersion).toBeTypeOf('function')
+    expect(mocks.runtimeAdapterOptions?.getClientVersion?.()).toBe('0.1.0-dev')
   })
 
   it('组装层把 Runtime 图片原子写入 Task 附件柜后只返回有限引用', async () => {

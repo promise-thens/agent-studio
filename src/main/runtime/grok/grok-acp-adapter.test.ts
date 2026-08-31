@@ -511,6 +511,126 @@ describe('Grok ACP 协议投影', () => {
 })
 
 describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
+  it('initialize 使用 Main 注入的 clientInfo.version，不写死常量', async () => {
+    const initialize = vi
+      .fn()
+      .mockResolvedValue(initializeResponse({ loadSession: true, resume: true }))
+    const connection = { initialize } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false, {
+      getClientVersion: () => '0.1.0-test'
+    })
+    const child = {} as ChildProcessWithoutNullStreams
+    harness.internal.process = child
+    harness.internal.connectionGeneration = 1
+
+    await expect(
+      harness.internal.initializeConnection(connection, child, WORKSPACE, 1)
+    ).resolves.toBe(true)
+
+    expect(initialize).toHaveBeenCalledWith({
+      protocolVersion: acp.PROTOCOL_VERSION,
+      clientCapabilities: {},
+      clientInfo: {
+        name: 'agent-studio',
+        version: '0.1.0-test'
+      }
+    })
+  })
+
+  it('spawn ENOENT 状态文案归类为未安装 CLI，不含路径与 Node 原文', () => {
+    const harness = createAdapterHarness(undefined, false)
+    const child = {} as ChildProcessWithoutNullStreams
+    harness.internal.process = child
+    harness.internal.connectionGeneration = 1
+    const spawnError = Object.assign(new Error('spawn /Users/tester/.grok/bin/grok ENOENT'), {
+      code: 'ENOENT'
+    })
+
+    harness.internal.handleRuntimeProcessError(child, 1, WORKSPACE, spawnError)
+
+    expect(harness.adapter.getStatus()).toMatchObject({
+      state: 'error',
+      workspace: WORKSPACE,
+      message: '还没有安装 Grok Build CLI。'
+    })
+    expect(harness.adapter.getStatus().message).not.toContain('ENOENT')
+    expect(harness.adapter.getStatus().message).not.toContain('/Users/tester')
+    expect(harness.adapter.getStatus().message).not.toContain(FAKE_SECRET)
+  })
+
+  it('协议版本不兼容时状态与抛错保留协议语义，不再包成无法区分的连接失败', async () => {
+    const initialize = vi.fn().mockResolvedValue({
+      protocolVersion: acp.PROTOCOL_VERSION + 1,
+      agentCapabilities: {}
+    } as acp.InitializeResponse)
+    const connection = { initialize } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false, {
+      getClientVersion: () => '0.1.0-test'
+    })
+    const child = {
+      kill: vi.fn(),
+      stdin: { destroyed: true },
+      stdout: { destroyed: true },
+      stderr: { destroyed: true, setEncoding: vi.fn(), on: vi.fn() }
+    } as unknown as ChildProcessWithoutNullStreams
+    harness.internal.process = child
+    harness.internal.connection = connection
+    harness.internal.connectionGeneration = 1
+
+    await expect(
+      harness.internal.initializeConnection(connection, child, WORKSPACE, 1)
+    ).rejects.toThrow(/ACP 协议版本不兼容/)
+
+    // 备注：connect() 捕获后应直接透出协议文案；此处验证 resolve 路径与产品常量一致。
+    const connectFailure = harness.internal.resolveConnectFailure(
+      new Error(
+        `ACP 协议版本不兼容：Runtime 返回 ${acp.PROTOCOL_VERSION + 1}，客户端支持 ${acp.PROTOCOL_VERSION}。`
+      )
+    )
+    expect(connectFailure.code).toBe('operation-failed')
+    expect(connectFailure.message).toContain('ACP 协议版本不兼容')
+    expect(connectFailure.message).not.toMatch(/^连接失败/)
+  })
+
+  it('Provider 缺失与 set_model 失败文案保持可区分', async () => {
+    const missingProvider = createAdapterHarness(undefined, false, {
+      getProviderConfig: () => null
+    })
+    // 备注：harness 默认会塞假 connection；connect 早退前必须清掉，才能走到 Provider 校验。
+    missingProvider.internal.connection = null
+    missingProvider.internal.status = {
+      ...missingProvider.internal.status,
+      state: 'idle',
+      message: '尚未连接 Grok Build',
+      workspace: undefined,
+      runtimeSessionId: undefined
+    }
+    await expect(missingProvider.adapter.connect(WORKSPACE)).rejects.toMatchObject({
+      code: 'runtime-unavailable',
+      message: '模型服务配置不可用，请重新配置 URL、Key 和模型。'
+    })
+
+    const newSession = vi.fn().mockResolvedValue({ sessionId: 'runtime-session-new' })
+    const request = vi.fn().mockResolvedValue(undefined)
+    const connection = {
+      newSession,
+      request
+    } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, false)
+    await expect(
+      harness.adapter.createSession({ workspace: WORKSPACE, taskId: 'task-test' })
+    ).rejects.toMatchObject({
+      code: 'operation-failed'
+    })
+    expect(harness.adapter.getStatus().message).toMatch(
+      /绑定 Agent Studio 模型失败|未确认 Agent Studio 模型绑定/
+    )
+    expect(harness.adapter.getStatus().message).not.toBe(
+      '模型服务配置不可用，请重新配置 URL、Key 和模型。'
+    )
+    expect(harness.adapter.getStatus().message).not.toBe('还没有安装 Grok Build CLI。')
+  })
+
   it('握手只更新当前连接，旧连接晚到结果不覆盖新快照', async () => {
     let resolveInitialize: ((response: acp.InitializeResponse) => void) | undefined
     const initialize = vi.fn().mockImplementation(
@@ -912,9 +1032,9 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
       return { stopReason: 'end_turn' as const }
     })
 
-    await expect(harness.adapter.startTurn(turnContext('task-image', 'turn-image'))).resolves.toEqual(
-      { outcome: 'completed' }
-    )
+    await expect(
+      harness.adapter.startTurn(turnContext('task-image', 'turn-image'))
+    ).resolves.toEqual({ outcome: 'completed' })
     expect(harness.events.filter((event) => event.kind === 'error')).toEqual([
       expect.objectContaining({
         code: 'runtime-attachment-rejected',
@@ -2703,6 +2823,13 @@ interface GrokAcpAdapterTestAccess {
     workspace: string,
     connectionGeneration: number
   ) => Promise<boolean>
+  handleRuntimeProcessError: (
+    child: ChildProcessWithoutNullStreams,
+    connectionGeneration: number,
+    workspace: string,
+    error: unknown
+  ) => void
+  resolveConnectFailure: (error: unknown) => AgentRuntimeAdapterError
   requestPermission: (
     params: acp.RequestPermissionRequest,
     sourceConnection: acp.ClientSideConnection
@@ -2823,6 +2950,7 @@ async function createInvalidPermissionIntegrationFixture(): Promise<InvalidPermi
   const adapter = new GrokAcpAdapter(sink, {
     userDataPath,
     getProviderConfig: () => providerConfig(),
+    getClientVersion: () => '0.1.0-test',
     redactText: redactFakeText
   })
   const internal = adapter as unknown as GrokAcpAdapterTestAccess
@@ -2900,6 +3028,8 @@ function createAdapterHarness(
   connection: acp.ClientSideConnection = {} as acp.ClientSideConnection,
   selected = true,
   extraOptions: {
+    getClientVersion?: () => string
+    getProviderConfig?: () => ProviderRuntimeConfig | null
     commandEvidenceStore?: CommandEvidenceStore
     resolveCommandEvidenceContext?: () => { environmentId: string } | null
     storeRuntimeImage?: (input: {
@@ -2937,6 +3067,8 @@ function createAdapterHarness(
     {
       userDataPath: '/tmp/agent-studio-test',
       getProviderConfig: () => providerConfig(),
+      // 备注：测试注入明确假版本，禁止依赖 Adapter 内写死常量。
+      getClientVersion: () => '0.1.0-test',
       redactText: redactFakeText,
       ...extraOptions
     }

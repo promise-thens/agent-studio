@@ -30,12 +30,6 @@ export const GROK_CONTROLLED_E2E_SPAWN_ARG_FLAGS = {
 
 export const GROK_ACP_CLIENT_INFO_NAME = 'agent-studio'
 
-/**
- * 握手里的 Client 版本字面量。
- * 任务 2 才改为真实应用版本；本任务保持 GACP-01 观察基线。
- */
-export const GROK_ACP_CLIENT_INFO_VERSION = '0.1.0'
-
 /** GACP-05 之前禁止改成 fs/terminal true。 */
 export const GROK_ACP_CLIENT_CAPABILITIES = {} as const
 
@@ -51,6 +45,27 @@ export const GROK_INITIALIZE_RESPONSE_ALLOWED_FIELDS = [
   'sessionCapabilities.close'
 ] as const
 
+/**
+ * 方言内部失败分类。只服务 runtime/grok 诊断；不得提升为通用 AgentRuntimeAdapterErrorCode。
+ */
+export type GrokAcpFailureKind =
+  | 'cli-missing'
+  | 'protocol-incompatible'
+  | 'provider-config-missing'
+  | 'set-model-failed'
+  | 'process-exited'
+  | 'config-write-failed'
+  | 'generic'
+
+/** 用户可感知且互相可区分的产品文案；不含路径、stderr 原文或密钥。 */
+export const GROK_ACP_PRODUCT_MESSAGES = {
+  cliMissing: '还没有安装 Grok Build CLI。',
+  providerConfigMissing: '模型服务配置不可用，请重新配置 URL、Key 和模型。',
+  setModelFailed: '绑定 Agent Studio 模型失败',
+  processDisconnected: 'Grok Build 已断开',
+  connectFailed: '连接失败'
+} as const
+
 /** 已投影的握手子集；方言检查不得读取未列出的原始扩展字段。 */
 export interface GrokHandshakeProjectedFields {
   protocolVersion: number
@@ -63,6 +78,33 @@ export interface GrokHandshakeProjectedFields {
 export interface GrokHandshakeCompatResult {
   ok: true
   notes: string[]
+}
+
+export interface GrokAcpClientInfo {
+  name: typeof GROK_ACP_CLIENT_INFO_NAME
+  version: string
+}
+
+export interface GrokAcpResolvedFailure {
+  kind: GrokAcpFailureKind
+  /** 映射到现有通用码的建议；Adapter 负责最终抛出，禁止新增 Grok 专属码。 */
+  adapterErrorCode: 'runtime-unavailable' | 'operation-failed'
+  message: string
+}
+
+/**
+ * 组装握手 clientInfo。version 必须由 Main 注入，禁止从 Renderer 接受。
+ * 空/空白 version 立即拒绝，避免再写死与安装包不一致的字面量。
+ */
+export function buildGrokAcpClientInfo(version: string): GrokAcpClientInfo {
+  const trimmed = version.trim()
+  if (!trimmed) {
+    throw new Error('Grok ACP clientInfo.version 不能为空。')
+  }
+  return {
+    name: GROK_ACP_CLIENT_INFO_NAME,
+    version: trimmed
+  }
 }
 
 /**
@@ -92,6 +134,102 @@ export function assertGrokHandshakeCompat(
  */
 export function isGrokSetModelResponseValid(response: unknown): boolean {
   return response !== null && typeof response === 'object' && !Array.isArray(response)
+}
+
+/**
+ * 识别 spawn 找不到二进制（ENOENT）。只看 code / message，不把路径带回产品文案。
+ */
+export function isGrokCliMissingSpawnError(error: unknown): boolean {
+  if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+    return true
+  }
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return /\bENOENT\b/.test(message)
+}
+
+/** spawn / 进程启动错误分类；ENOENT 固定为 cli-missing。 */
+export function classifyGrokSpawnProcessError(error: unknown): GrokAcpFailureKind {
+  return isGrokCliMissingSpawnError(error) ? 'cli-missing' : 'generic'
+}
+
+/**
+ * 握手或 connect 捕获错误分类。
+ * 协议版本文案必须可识别，避免再被笼统包成“连接失败”。
+ */
+export function classifyGrokConnectError(error: unknown): GrokAcpFailureKind {
+  if (isGrokCliMissingSpawnError(error)) return 'cli-missing'
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  if (message.includes('ACP 协议版本不兼容')) return 'protocol-incompatible'
+  if (message.includes(GROK_ACP_PRODUCT_MESSAGES.providerConfigMissing)) {
+    return 'provider-config-missing'
+  }
+  if (message.includes(GROK_ACP_PRODUCT_MESSAGES.setModelFailed)) return 'set-model-failed'
+  return 'generic'
+}
+
+/**
+ * 把方言失败 kind 收成现有通用错误码 + 可区分产品文案。
+ * redactedDetail 必须已脱敏；本函数不再做二次脱敏，也不拼接家目录或 stderr 原文。
+ */
+export function resolveGrokAcpFailure(
+  kind: GrokAcpFailureKind,
+  options: {
+    exitCode?: number | null
+    redactedDetail?: string
+  } = {}
+): GrokAcpResolvedFailure {
+  const detail = options.redactedDetail?.trim()
+
+  switch (kind) {
+    case 'cli-missing':
+      return {
+        kind,
+        adapterErrorCode: 'runtime-unavailable',
+        message: GROK_ACP_PRODUCT_MESSAGES.cliMissing
+      }
+    case 'provider-config-missing':
+      return {
+        kind,
+        adapterErrorCode: 'runtime-unavailable',
+        message: GROK_ACP_PRODUCT_MESSAGES.providerConfigMissing
+      }
+    case 'protocol-incompatible':
+      return {
+        kind,
+        adapterErrorCode: 'operation-failed',
+        message: detail && detail.includes('ACP 协议版本不兼容') ? detail : 'ACP 协议版本不兼容。'
+      }
+    case 'set-model-failed':
+      return {
+        kind,
+        adapterErrorCode: 'operation-failed',
+        message: detail
+          ? `${GROK_ACP_PRODUCT_MESSAGES.setModelFailed}：${detail}`
+          : GROK_ACP_PRODUCT_MESSAGES.setModelFailed
+      }
+    case 'process-exited':
+      return {
+        kind,
+        adapterErrorCode: 'operation-failed',
+        // 备注：干净断开文案由 Adapter 在无活跃 Turn 且 code===0 时单独处理。
+        message: `Grok Build 已退出，代码 ${options.exitCode ?? '未知'}`
+      }
+    case 'config-write-failed':
+      return {
+        kind,
+        adapterErrorCode: 'operation-failed',
+        message: `无法生成 Grok 配置：${detail || '未知错误'}`
+      }
+    case 'generic':
+    default:
+      return {
+        kind: 'generic',
+        adapterErrorCode: 'operation-failed',
+        message: detail
+          ? `${GROK_ACP_PRODUCT_MESSAGES.connectFailed}：${detail}`
+          : GROK_ACP_PRODUCT_MESSAGES.connectFailed
+      }
+  }
 }
 
 /** 组装受控 E2E spawn args；executable 仍是 process.execPath，不走生产 argv。 */

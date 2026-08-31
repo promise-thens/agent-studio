@@ -4,14 +4,18 @@ import {
   AGENT_STUDIO_MODEL_ALIAS,
   GROK_ACP_CLIENT_CAPABILITIES,
   GROK_ACP_CLIENT_INFO_NAME,
-  GROK_ACP_CLIENT_INFO_VERSION,
+  GROK_ACP_PRODUCT_MESSAGES,
   GROK_CONTROLLED_E2E_SPAWN_ARG_FLAGS,
   GROK_INITIALIZE_RESPONSE_ALLOWED_FIELDS,
   GROK_PRODUCTION_AGENT_ARGV,
   GROK_SET_MODEL_METHOD,
   assertGrokHandshakeCompat,
+  buildGrokAcpClientInfo,
   buildGrokControlledE2ESpawnArgs,
+  classifyGrokConnectError,
+  classifyGrokSpawnProcessError,
   isGrokSetModelResponseValid,
+  resolveGrokAcpFailure,
   type GrokHandshakeProjectedFields
 } from './grok-acp-dialect'
 
@@ -30,12 +34,23 @@ describe('Grok ACP 方言常量冻结', () => {
     expect(GROK_PRODUCTION_AGENT_ARGV).toContain(AGENT_STUDIO_MODEL_ALIAS)
   })
 
-  it('set_model 方法名与 clientInfo 冻结值保持 GACP-01 基线', () => {
+  it('set_model 方法名与 clientInfo 名称保持 GACP-01 基线，能力仍为空', () => {
     expect(GROK_SET_MODEL_METHOD).toBe('session/set_model')
     expect(GROK_ACP_CLIENT_INFO_NAME).toBe('agent-studio')
-    // 备注：本任务不改版本；任务 2 才对齐真实 app 版本。
-    expect(GROK_ACP_CLIENT_INFO_VERSION).toBe('0.1.0')
     expect(GROK_ACP_CLIENT_CAPABILITIES).toEqual({})
+  })
+
+  it('buildGrokAcpClientInfo 接受注入版本并拒绝空/空白', () => {
+    expect(buildGrokAcpClientInfo('0.1.0-test')).toEqual({
+      name: 'agent-studio',
+      version: '0.1.0-test'
+    })
+    expect(buildGrokAcpClientInfo(' 1.2.3-dev ')).toEqual({
+      name: 'agent-studio',
+      version: '1.2.3-dev'
+    })
+    expect(() => buildGrokAcpClientInfo('')).toThrow(/clientInfo\.version/)
+    expect(() => buildGrokAcpClientInfo('   ')).toThrow(/clientInfo\.version/)
   })
 
   it('initialize 允许读取字段列表锁定，其它字段不得进入产品逻辑', () => {
@@ -121,5 +136,81 @@ describe('Grok ACP set_model 响应守卫', () => {
     expect(isGrokSetModelResponseValid('ok')).toBe(false)
     expect(isGrokSetModelResponseValid(1)).toBe(false)
     expect(isGrokSetModelResponseValid(true)).toBe(false)
+  })
+})
+
+describe('Grok ACP 连接失败分类', () => {
+  const homePath = '/Users/tester/.grok/bin/grok'
+  const fakeKey = 'sk-fake-adapter-key-for-redaction'
+
+  it('spawn ENOENT（code 或 message）归类为 cli-missing，产品文案不含路径与 stderr 原文', () => {
+    const byCode = Object.assign(new Error(`spawn ${homePath} ENOENT`), { code: 'ENOENT' })
+    const byMessage = new Error(`spawn grok ENOENT\n${homePath}`)
+
+    expect(classifyGrokSpawnProcessError(byCode)).toBe('cli-missing')
+    expect(classifyGrokSpawnProcessError(byMessage)).toBe('cli-missing')
+
+    const resolved = resolveGrokAcpFailure('cli-missing')
+    expect(resolved.adapterErrorCode).toBe('runtime-unavailable')
+    expect(resolved.message).toBe(GROK_ACP_PRODUCT_MESSAGES.cliMissing)
+    expect(resolved.message).toBe('还没有安装 Grok Build CLI。')
+    expect(resolved.message).not.toContain(homePath)
+    expect(resolved.message).not.toContain('ENOENT')
+    expect(resolved.message).not.toContain('spawn')
+  })
+
+  it('协议版本不兼容可被识别，且产品文案保留协议语义而不是笼统连接失败', () => {
+    const error = new Error(
+      `ACP 协议版本不兼容：Runtime 返回 ${acp.PROTOCOL_VERSION + 1}，客户端支持 ${acp.PROTOCOL_VERSION}。`
+    )
+    expect(classifyGrokConnectError(error)).toBe('protocol-incompatible')
+
+    const resolved = resolveGrokAcpFailure('protocol-incompatible', {
+      redactedDetail: error.message
+    })
+    expect(resolved.adapterErrorCode).toBe('operation-failed')
+    expect(resolved.message).toContain('ACP 协议版本不兼容')
+    expect(resolved.message).not.toMatch(/^连接失败/)
+  })
+
+  it('各类失败产品文案互相可区分，且不回传家目录 / Key / Header', () => {
+    const kinds = [
+      resolveGrokAcpFailure('cli-missing').message,
+      resolveGrokAcpFailure('protocol-incompatible', {
+        redactedDetail: 'ACP 协议版本不兼容：Runtime 返回 2，客户端支持 1。'
+      }).message,
+      resolveGrokAcpFailure('provider-config-missing').message,
+      resolveGrokAcpFailure('set-model-failed').message,
+      resolveGrokAcpFailure('process-exited', { exitCode: 1 }).message,
+      resolveGrokAcpFailure('config-write-failed', {
+        redactedDetail: '磁盘写入失败'
+      }).message
+    ] as const
+
+    expect(new Set(kinds).size).toBe(kinds.length)
+    expect(kinds[0]).toBe('还没有安装 Grok Build CLI。')
+    expect(kinds[2]).toBe('模型服务配置不可用，请重新配置 URL、Key 和模型。')
+    expect(kinds[3]).toContain('绑定 Agent Studio 模型失败')
+    expect(kinds[4]).toBe('Grok Build 已退出，代码 1')
+
+    const joined = kinds.join('\n')
+    expect(joined).not.toContain(homePath)
+    expect(joined).not.toContain(fakeKey)
+    expect(joined).not.toContain('Authorization')
+    expect(joined).not.toContain('Bearer')
+  })
+
+  it('缺 Provider 映射 runtime-unavailable；其它连接类失败默认 operation-failed', () => {
+    expect(resolveGrokAcpFailure('provider-config-missing').adapterErrorCode).toBe(
+      'runtime-unavailable'
+    )
+    expect(resolveGrokAcpFailure('cli-missing').adapterErrorCode).toBe('runtime-unavailable')
+    expect(resolveGrokAcpFailure('set-model-failed').adapterErrorCode).toBe('operation-failed')
+    expect(resolveGrokAcpFailure('process-exited', { exitCode: null }).adapterErrorCode).toBe(
+      'operation-failed'
+    )
+    expect(resolveGrokAcpFailure('generic', { redactedDetail: 'timeout' }).message).toContain(
+      '连接失败'
+    )
   })
 })
