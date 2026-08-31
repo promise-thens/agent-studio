@@ -100,6 +100,11 @@ export interface AgentServiceOptions {
   taskExecutor?: TaskExecutor
   operationGate?: OperationGate
   onEvent?: (event: AgentEvent) => void
+  /**
+   * 接管 HUD 快照推送。request_permission 改 applied / mayStillBeActive 后必须推，
+   * 不得只改内存让 Renderer 继续写「正在完全接管」。
+   */
+  onTaskRuntimeState?: (task: AgentTaskRuntimeState) => void
   /** 创建 / 恢复 session 时注入已校验的 MCP 描述；缺省为空。 */
   getSessionMcpServers?: () => Promise<AgentRuntimeMcpServer[]> | AgentRuntimeMcpServer[]
   /** 共享记忆树等 Runtime 笔记根；缺省为空，写入会被当成项目外逃逸。 */
@@ -195,6 +200,9 @@ export class AgentService {
   private readonly taskExecutor?: TaskExecutor
   private readonly operationGate?: OperationGate
   private readonly onEvent: (event: AgentEvent) => void
+  private readonly onTaskRuntimeState?: (task: AgentTaskRuntimeState) => void
+  /** 防止 /always-approve 对同一 Task 连发两次（它是 toggle）。 */
+  private readonly takeoverControlInFlight = new Set<string>()
   private readonly getSessionMcpServers?: AgentServiceOptions['getSessionMcpServers']
   private readonly getTrustedExternalRoots?: AgentServiceOptions['getTrustedExternalRoots']
   private readonly ensureChangeBaseline?: AgentServiceOptions['ensureChangeBaseline']
@@ -217,6 +225,7 @@ export class AgentService {
     this.taskExecutor = options.taskExecutor
     this.operationGate = options.operationGate
     this.onEvent = options.onEvent ?? (() => undefined)
+    this.onTaskRuntimeState = options.onTaskRuntimeState
     this.getSessionMcpServers = options.getSessionMcpServers
     this.getTrustedExternalRoots = options.getTrustedExternalRoots
     this.ensureChangeBaseline = options.ensureChangeBaseline
@@ -526,9 +535,11 @@ export class AgentService {
       // 接管生效后仍收到 request_permission：Broker 照常走，HUD 标未完全生效。
       task.takeoverApplied = false
       delete task.takeoverPendingReason
+      this.publishTaskRuntimeState(task)
       void this.persistPermissionMode(task)
     } else if (task.takeoverMayStillBeActive) {
       delete task.takeoverMayStillBeActive
+      this.publishTaskRuntimeState(task)
     }
     const environmentId = createLocalEnvironmentId(task.projectId, task.workspace)
     void this.authorizeRuntimePermission(request, task.projectId, task.workspace, environmentId)
@@ -612,6 +623,8 @@ export class AgentService {
     const current = this.availableCommands.get(snapshot.taskId)
     if (current && snapshot.revision <= current.revision) return
     this.availableCommands.set(snapshot.taskId, cloneAvailableCommandSnapshot(snapshot))
+    const task = this.tasks.get(snapshot.taskId)
+    if (task) this.syncTakeoverApplyState(task)
   }
 
   /** Task 存在但尚未收到快照时返回 revision 0 空列表，供命令板显示等待/空。 */
@@ -664,7 +677,8 @@ export class AgentService {
     if (snapshot.takeoverEnabled) {
       delete task.takeoverMayStillBeActive
       if (decision.kind === 'send-command') {
-        task.takeoverApplied = true
+        // 必须等 control turn 入队成功后再 applied，避免 start 失败却 noop。
+        task.takeoverApplied = false
       } else if (decision.kind === 'new-session-meta') {
         task.takeoverApplied = false
       } else if (decision.kind === 'defer-next-session') {
@@ -688,6 +702,7 @@ export class AgentService {
     }
 
     await this.persistPermissionMode(task)
+    this.publishTaskRuntimeState(task)
     if (previousEnabled !== snapshot.takeoverEnabled) {
       await this.recordTakeoverToggleAudit(task, snapshot.takeoverEnabled)
     }
@@ -790,11 +805,11 @@ export class AgentService {
       throw new AgentServiceError('invalid-state', '先停掉当前任务。')
     }
     if (this.isTaskSessionActive(task)) {
-      this.markTakeoverAppliedIfLive(task)
+      this.syncTakeoverApplyState(task)
       return
     }
     await this.activateOrRebuildTaskSession(task, inheritedLease)
-    this.markTakeoverAppliedIfLive(this.requireTask(taskId))
+    this.syncTakeoverApplyState(this.requireTask(taskId))
   }
 
   /** 只读历史显式继续时重新连接 Project，并在当前能力验证后恢复原生会话。 */
@@ -835,35 +850,41 @@ export class AgentService {
   }
 
   /**
-   * 已 applied 的 session 禁止再发 /always-approve（toggle）。
-   * 未 applied 只更新 HUD 原因，真正发命令走 setPermissionMode 或 consumeTakeoverApplyCommand。
+   * 已 applied 禁止再发 /always-approve。未 applied 只更新 HUD 原因；
+   * 真正发命令由 beginTakeoverControlPrompt 交给调用方 startTurn。
    */
-  private markTakeoverAppliedIfLive(task: AgentTaskRecord): void {
-    if (task.takeoverEnabled !== true || !this.isTaskSessionActive(task)) return
+  private syncTakeoverApplyState(task: AgentTaskRecord): void {
+    if (task.takeoverEnabled !== true) return
     if (task.takeoverApplied === true) {
       delete task.takeoverPendingReason
       return
     }
     const decision = resolveTakeoverApply({
-      hasSession: true,
-      idle: !this.isPermissionModeLocked(),
+      hasSession: this.isTaskSessionActive(task),
+      idle: !this.isPermissionModeLocked() && !this.takeoverControlInFlight.has(task.taskId),
       advertisedCommands: this.getAvailableCommands(task.taskId).commands,
       desiredEnabled: true,
       currentlyApplied: false
     })
     if (decision.kind === 'defer-next-session') {
       task.takeoverPendingReason = decision.reason
+      this.publishTaskRuntimeState(task)
     }
   }
 
   /**
-   * 进入已恢复 session 后，若快照接管且尚未 applied、空闲且命令已广告，则交出 controlPrompt。
-   * 调用方必须立刻走与 startTurn 同一条 executor.start；此处先标 applied，避免 toggle 两次。
+   * 若快照接管且尚未 applied、空闲且命令已广告，则占用 in-flight 并交出 controlPrompt。
+   * 调用方必须 start 成功后再 markTakeoverCommandDispatched；失败要 abort。
+   * 此处不把 applied 置 true。
    */
-  consumeTakeoverApplyCommand(taskId: string): string | null {
-    const task = this.requireTask(taskId)
-    if (task.takeoverEnabled !== true || task.takeoverApplied === true) return null
-    if (this.isPermissionModeLocked() || !this.isTaskSessionActive(task)) return null
+  beginTakeoverControlPrompt(taskId: string): string | null {
+    const task = this.tasks.get(taskId)
+    if (!task || task.takeoverEnabled !== true || task.takeoverApplied === true) return null
+    if (this.takeoverControlInFlight.has(taskId)) return null
+    if (this.isPermissionModeLocked() || !this.isTaskSessionActive(task)) {
+      this.syncTakeoverApplyState(task)
+      return null
+    }
     const decision = resolveTakeoverApply({
       hasSession: true,
       idle: true,
@@ -872,14 +893,36 @@ export class AgentService {
       currentlyApplied: false
     })
     if (decision.kind !== 'send-command') {
-      if (decision.kind === 'defer-next-session') task.takeoverPendingReason = decision.reason
+      if (decision.kind === 'defer-next-session') {
+        task.takeoverPendingReason = decision.reason
+        this.publishTaskRuntimeState(task)
+      }
       return null
     }
-    task.takeoverApplied = true
-    delete task.takeoverPendingReason
-    delete task.takeoverMayStillBeActive
-    void this.persistPermissionMode(task)
+    this.takeoverControlInFlight.add(taskId)
     return GROK_TAKEOVER_CONTROL_PROMPT
+  }
+
+  /**
+   * control turn 已成功入队：enable 才把 applied 置 true。
+   * 这是把审批交给 Grok always-approve，不是 Broker 沙箱。
+   */
+  markTakeoverCommandDispatched(taskId: string): AgentTaskRuntimeState {
+    const task = this.requireTask(taskId)
+    this.takeoverControlInFlight.delete(taskId)
+    if (task.takeoverEnabled === true) {
+      task.takeoverApplied = true
+      delete task.takeoverPendingReason
+      delete task.takeoverMayStillBeActive
+      void this.persistPermissionMode(task)
+    }
+    this.publishTaskRuntimeState(task)
+    return cloneTask(task)
+  }
+
+  /** start 失败时释放 in-flight，保持未 applied 以便重试。 */
+  abortTakeoverControlPrompt(taskId: string): void {
+    this.takeoverControlInFlight.delete(taskId)
   }
 
   private async persistPermissionMode(task: AgentTaskRecord): Promise<void> {
@@ -892,6 +935,15 @@ export class AgentService {
     const persisted = this.taskStore.getTaskRecord(task.taskId)
     if (persisted.takeoverUpdatedAt) task.takeoverUpdatedAt = persisted.takeoverUpdatedAt
     task.updatedAt = persisted.updatedAt
+    this.publishTaskRuntimeState(task)
+  }
+
+  private publishTaskRuntimeState(task: AgentTaskRecord): void {
+    try {
+      this.onTaskRuntimeState?.(cloneTask(task))
+    } catch {
+      // Renderer 推送失败不得回滚接管快照。
+    }
   }
 
   /**
@@ -1026,7 +1078,7 @@ export class AgentService {
         if (!this.canCommitEnter(generation)) return this.supersededEntry(task.taskId)
         const liveTask = this.requireTask(task.taskId)
         if (this.isTaskSessionActive(liveTask)) {
-          this.markTakeoverAppliedIfLive(liveTask)
+          this.syncTakeoverApplyState(liveTask)
           return this.createEntryState(liveTask.taskId, {
             restore: 'ready',
             method: 'resume',
@@ -1036,7 +1088,7 @@ export class AgentService {
         try {
           const method = await this.activateTaskSession(liveTask, lease, generation)
           if (!this.canCommitEnter(generation)) return this.supersededEntry(liveTask.taskId)
-          this.markTakeoverAppliedIfLive(liveTask)
+          this.syncTakeoverApplyState(liveTask)
           if (method === 'load') {
             return this.createEntryState(liveTask.taskId, {
               restore: 'degraded',

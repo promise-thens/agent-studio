@@ -229,6 +229,64 @@ function parsePermissionCancellation(payload: unknown): AgentPermissionCancellat
   return { approvalId, taskId, turnId, reason: 'cancelled' }
 }
 
+const TASK_RUNTIME_STATES = [
+  'pending',
+  'running',
+  'waiting-permission',
+  'completed',
+  'failed',
+  'cancelled'
+] as const
+
+/**
+ * 接管 HUD 快照只重建公开字段；缺字段 fail-closed 为未接管 + assist。
+ * 不得把 Runtime session 引用带进 Renderer。
+ */
+function parseTaskRuntimeState(payload: unknown): AgentTaskRuntimeState | null {
+  if (!isPlainRecord(payload)) return null
+  const taskId = readBoundedText(payload.taskId, MAX_EVENT_FIELD_BYTES)
+  const workspace = readBoundedText(payload.workspace, MAX_EVENT_FIELD_BYTES)
+  const createdAt = readBoundedText(payload.createdAt, MAX_EVENT_FIELD_BYTES)
+  const updatedAt = readBoundedText(payload.updatedAt, MAX_EVENT_FIELD_BYTES)
+  if (!taskId || !workspace || !createdAt || !updatedAt) return null
+  if (payload.runtimeId !== 'grok' && payload.runtimeId !== 'codex') return null
+  if (!isOneOf(payload.state, TASK_RUNTIME_STATES)) return null
+  const activeTurnId =
+    payload.activeTurnId === undefined
+      ? undefined
+      : readBoundedText(payload.activeTurnId, MAX_EVENT_FIELD_BYTES)
+  const lastTurnId =
+    payload.lastTurnId === undefined
+      ? undefined
+      : readBoundedText(payload.lastTurnId, MAX_EVENT_FIELD_BYTES)
+  const takeoverUpdatedAt =
+    payload.takeoverUpdatedAt === undefined
+      ? undefined
+      : readBoundedText(payload.takeoverUpdatedAt, MAX_EVENT_FIELD_BYTES)
+  if (activeTurnId === null || lastTurnId === null || takeoverUpdatedAt === null) return null
+  const pendingReason =
+    payload.takeoverPendingReason === 'busy' ||
+    payload.takeoverPendingReason === 'command-unavailable'
+      ? payload.takeoverPendingReason
+      : undefined
+  return {
+    taskId,
+    runtimeId: payload.runtimeId,
+    workspace,
+    state: payload.state,
+    createdAt,
+    updatedAt,
+    takeoverEnabled: payload.takeoverEnabled === true,
+    permissionPromptStyle: payload.permissionPromptStyle === 'ask' ? 'ask' : 'assist',
+    takeoverApplied: payload.takeoverApplied === true,
+    ...(activeTurnId ? { activeTurnId } : {}),
+    ...(lastTurnId ? { lastTurnId } : {}),
+    ...(takeoverUpdatedAt ? { takeoverUpdatedAt } : {}),
+    ...(payload.takeoverMayStillBeActive === true ? { takeoverMayStillBeActive: true } : {}),
+    ...(pendingReason ? { takeoverPendingReason: pendingReason } : {})
+  }
+}
+
 /** Agent 事件 Push 逐字段重建，防止 Main 私有身份、Diff 正文或未知字段进入 Renderer。 */
 function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
   if (!isPlainRecord(payload)) return null
@@ -662,6 +720,13 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
         AGENT_PUSH_CHANNELS.availableCommands,
         listener,
         parseAvailableCommandSnapshot
+      ),
+    onTaskRuntimeState: (listener) =>
+      subscribe<AgentTaskRuntimeState>(
+        ipcRenderer,
+        AGENT_PUSH_CHANNELS.taskRuntimeState,
+        listener,
+        parseTaskRuntimeState
       )
   }
 }

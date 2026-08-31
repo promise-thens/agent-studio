@@ -18,6 +18,7 @@ const props = withDefaults(
     mode: TaskPermissionMode
     busy?: boolean
     disabled?: boolean
+    takeoverApplied?: boolean
   }>(),
   { busy: false, disabled: false }
 )
@@ -78,7 +79,9 @@ function closeMenu(restoreFocus = false): void {
 
 function chooseMode(mode: TaskPermissionMode): void {
   if (isDisabled.value) return
-  if (mode === props.mode) return closeMenu(true)
+  if (mode === props.mode && !(mode === 'takeover' && props.takeoverApplied !== true)) {
+    return closeMenu(true)
+  }
   selecting.value = true
   emit('select', mode)
   closeMenu(true)

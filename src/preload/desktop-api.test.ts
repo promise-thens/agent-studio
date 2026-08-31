@@ -152,7 +152,7 @@ describe('窄 Preload API', () => {
     )
   })
 
-  it('五种推送各自绑定唯一固定 channel', () => {
+  it('六种推送各自绑定唯一固定 channel', () => {
     const ipcRenderer = createIpcRenderer()
     const agent = createAgentDesktopApi(ipcRenderer)
 
@@ -161,13 +161,15 @@ describe('窄 Preload API', () => {
     agent.onPermission(vi.fn())
     agent.onPermissionCancelled(vi.fn())
     agent.onAvailableCommands(vi.fn())
+    agent.onTaskRuntimeState(vi.fn())
 
     expect(ipcRenderer.on.mock.calls.map(([channel]) => channel)).toEqual([
       AGENT_PUSH_CHANNELS.status,
       AGENT_PUSH_CHANNELS.event,
       AGENT_PUSH_CHANNELS.permission,
       AGENT_PUSH_CHANNELS.permissionCancelled,
-      AGENT_PUSH_CHANNELS.availableCommands
+      AGENT_PUSH_CHANNELS.availableCommands,
+      AGENT_PUSH_CHANNELS.taskRuntimeState
     ])
   })
 

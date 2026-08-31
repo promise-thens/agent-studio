@@ -5,8 +5,10 @@ import { tmpdir } from 'node:os'
 import type {
   AgentPermissionRequest,
   AgentRuntimeCapabilitySnapshot,
-  AgentRuntimeStatus
+  AgentRuntimeStatus,
+  AgentTaskRuntimeState
 } from '../../shared/agent'
+import { resolveTakeoverHudCopy } from '../../shared/task-takeover'
 import { createAgentRuntimeCapabilitySnapshot } from './runtime-capabilities'
 import type {
   AgentRuntimeAdapter,
@@ -1261,8 +1263,133 @@ describe('AgentService Task / Turn 编排', () => {
     expect(result.decision).toEqual({ kind: 'send-command', commandName: 'always-approve' })
     expect(result.controlPrompt).toBe('/always-approve')
     expect(result.task.takeoverEnabled).toBe(true)
-    expect(result.task.takeoverApplied).toBe(true)
+    expect(result.task.takeoverApplied).toBe(false)
     expect(adapter.startTurn).not.toHaveBeenCalled()
+    expect(service.beginTakeoverControlPrompt(task.taskId)).toBe('/always-approve')
+    expect(service.markTakeoverCommandDispatched(task.taskId).takeoverApplied).toBe(true)
+    expect(service.beginTakeoverControlPrompt(task.taskId)).toBeNull()
+    expect(adapter.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('广告晚到才交出 controlPrompt，且 start 失败保持未 applied 可重试', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const service = createService(adapter, ['task-a'])
+    const task = await service.createTask(WORKSPACE)
+    const enabled = await service.setPermissionMode({
+      taskId: task.taskId,
+      mode: 'takeover',
+      confirmed: true
+    })
+    expect(enabled.decision).toEqual({ kind: 'defer-next-session', reason: 'command-unavailable' })
+    expect(enabled.task.takeoverApplied).toBe(false)
+    expect(service.beginTakeoverControlPrompt(task.taskId)).toBeNull()
+
+    service.handleAvailableCommands({
+      taskId: task.taskId,
+      revision: 1,
+      commands: [{ name: 'always-approve', description: '完全接管' }]
+    })
+    expect(service.beginTakeoverControlPrompt(task.taskId)).toBe('/always-approve')
+    expect(service.getTaskRuntimeState(task.taskId).takeoverApplied).toBe(false)
+    service.abortTakeoverControlPrompt(task.taskId)
+    expect(service.getTaskRuntimeState(task.taskId).takeoverApplied).toBe(false)
+    expect(service.beginTakeoverControlPrompt(task.taskId)).toBe('/always-approve')
+    service.abortTakeoverControlPrompt(task.taskId)
+  })
+
+  it('仍收到 request_permission 时推送未完全生效 HUD', async () => {
+    const runtimeSnapshots: AgentTaskRuntimeState[] = []
+    const fixture = await createPermissionServiceFixture(['task-a', 'turn-a1'], {
+      onTaskRuntimeState: (task) => runtimeSnapshots.push(task)
+    })
+    const turnResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockImplementation(() => turnResult.promise)
+    try {
+      fixture.service.handleAvailableCommands({
+        taskId: fixture.taskId,
+        revision: 1,
+        commands: [{ name: 'always-approve', description: '完全接管' }]
+      })
+      await fixture.service.setPermissionMode({
+        taskId: fixture.taskId,
+        mode: 'takeover',
+        confirmed: true
+      })
+      fixture.service.markTakeoverCommandDispatched(fixture.taskId)
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId).takeoverApplied).toBe(true)
+
+      const running = fixture.service.startTurn(fixture.taskId, '仍要权限')
+      await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalled())
+      fixture.service.handlePermissionRequest(
+        permissionRequest(fixture.taskId, 'turn-a1', 'runtime-session-1', 'runtime-request-hud')
+      )
+      await waitForApproval(fixture.approvals, 0)
+      const afterPermission = fixture.service.getTaskRuntimeState(fixture.taskId)
+      expect(afterPermission.takeoverEnabled).toBe(true)
+      expect(afterPermission.takeoverApplied).toBe(false)
+      expect(
+        resolveTakeoverHudCopy({
+          takeoverEnabled: afterPermission.takeoverEnabled,
+          takeoverApplied: afterPermission.takeoverApplied,
+          executing: true
+        })
+      ).toBe('接管未完全生效')
+      expect(runtimeSnapshots.some((item) => item.takeoverApplied === false)).toBe(true)
+
+      turnResult.resolve({ outcome: 'completed' })
+      await running
+    } finally {
+      await fixture.dispose()
+    }
+  })
+
+  it('关接管后见到 request_permission 会清掉「接管可能仍在」', async () => {
+    const runtimeSnapshots: AgentTaskRuntimeState[] = []
+    const fixture = await createPermissionServiceFixture(['task-a', 'turn-a1'], {
+      onTaskRuntimeState: (task) => runtimeSnapshots.push(task)
+    })
+    const turnResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockImplementation(() => turnResult.promise)
+    try {
+      fixture.service.handleAvailableCommands({
+        taskId: fixture.taskId,
+        revision: 1,
+        commands: [{ name: 'always-approve', description: '完全接管' }]
+      })
+      await fixture.service.setPermissionMode({
+        taskId: fixture.taskId,
+        mode: 'takeover',
+        confirmed: true
+      })
+      fixture.service.markTakeoverCommandDispatched(fixture.taskId)
+      await fixture.service.setPermissionMode({ taskId: fixture.taskId, mode: 'assist' })
+      expect(fixture.service.getTaskRuntimeState(fixture.taskId).takeoverMayStillBeActive).toBe(
+        true
+      )
+
+      const running = fixture.service.startTurn(fixture.taskId, '关接管后权限')
+      await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalled())
+      fixture.service.handlePermissionRequest(
+        permissionRequest(fixture.taskId, 'turn-a1', 'runtime-session-1', 'runtime-request-off')
+      )
+      await waitForApproval(fixture.approvals, 0)
+      const afterOff = fixture.service.getTaskRuntimeState(fixture.taskId)
+      expect(afterOff.takeoverEnabled).toBe(false)
+      expect(afterOff.takeoverMayStillBeActive).toBeUndefined()
+      expect(
+        resolveTakeoverHudCopy({
+          takeoverEnabled: afterOff.takeoverEnabled,
+          takeoverApplied: afterOff.takeoverApplied,
+          takeoverMayStillBeActive: afterOff.takeoverMayStillBeActive,
+          executing: true
+        })
+      ).toBeNull()
+      expect(runtimeSnapshots.some((item) => item.takeoverMayStillBeActive !== true)).toBe(true)
+      turnResult.resolve({ outcome: 'completed' })
+      await running
+    } finally {
+      await fixture.dispose()
+    }
   })
 
   it('无 session 返回 new-session-meta 且不 startTurn', async () => {
@@ -1518,7 +1645,10 @@ interface PermissionServiceFixture {
  */
 async function createPermissionServiceFixture(
   ids: string[],
-  extra?: { getTrustedExternalRoots?: () => Promise<string[]> | string[] }
+  extra?: {
+    getTrustedExternalRoots?: () => Promise<string[]> | string[]
+    onTaskRuntimeState?: (task: AgentTaskRuntimeState) => void
+  }
 ): Promise<PermissionServiceFixture> {
   const userDataPath = await mkdtemp(join(tmpdir(), 'agent-service-permission-'))
   const projectPath = join(userDataPath, 'project')
@@ -1582,7 +1712,8 @@ async function createPermissionServiceFixture(
     permissionBroker: broker,
     ...(extra?.getTrustedExternalRoots
       ? { getTrustedExternalRoots: extra.getTrustedExternalRoots }
-      : {})
+      : {}),
+    ...(extra?.onTaskRuntimeState ? { onTaskRuntimeState: extra.onTaskRuntimeState } : {})
   })
   await service.connect(project.projectId)
   const task = await service.createTask(project.projectId)

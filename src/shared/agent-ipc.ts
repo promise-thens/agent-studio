@@ -36,7 +36,8 @@ export const AGENT_PUSH_CHANNELS = {
   event: 'agent:event',
   permission: 'agent:permission',
   permissionCancelled: 'agent:permission-cancelled',
-  availableCommands: 'agent:available-commands'
+  availableCommands: 'agent:available-commands',
+  taskRuntimeState: 'agent:task-runtime-state'
 } as const
 
 export interface AgentConnectRequest {
@@ -134,4 +135,9 @@ export interface AgentDesktopApi {
   onPermissionCancelled: (listener: (request: AgentPermissionCancellation) => void) => () => void
   /** Session 级命令快照推送；Preload 侧 parse 失败则丢弃，不进 Timeline。 */
   onAvailableCommands: (listener: (snapshot: AgentAvailableCommandSnapshot) => void) => () => void
+  /**
+   * Task 运行时快照推送，供接管 HUD 随 request_permission 刷新。
+   * 不含 Runtime session 引用或密钥。
+   */
+  onTaskRuntimeState: (listener: (task: AgentTaskRuntimeState) => void) => () => void
 }

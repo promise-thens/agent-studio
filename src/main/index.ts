@@ -440,6 +440,11 @@ async function initializeServices(
         // Service 持久化当前 session 快照；同步推给 Renderer（已投影，非 ACP 原文）
         agentService?.handleAvailableCommands(snapshot)
         sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.availableCommands, snapshot)
+        const service = agentService
+        const executor = taskExecutor
+        if (service && executor) {
+          void applyTakeoverControlPrompt(service, executor, snapshot.taskId, true)
+        }
       }
     },
     {
@@ -533,7 +538,9 @@ async function initializeServices(
         rendererTrust,
         AGENT_PUSH_CHANNELS.event,
         projectPublicAgentEvent(event, redactProviderText)
-      )
+      ),
+    onTaskRuntimeState: (task) =>
+      sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.taskRuntimeState, task)
   })
 }
 
@@ -620,6 +627,27 @@ async function startTurnWithPrompt(
   })
 }
 
+/**
+ * 仅在 control turn 入队成功后标 applied。失败保持未 applied，以便广告晚到或重试再发。
+ * swallowError 用于 enter / 晚到广告：不得阻断浏览。
+ */
+async function applyTakeoverControlPrompt(
+  service: AgentService,
+  executor: TaskExecutor,
+  taskId: string,
+  swallowError = false
+): Promise<void> {
+  const prompt = service.beginTakeoverControlPrompt(taskId)
+  if (!prompt) return
+  try {
+    await startTurnWithPrompt(service, executor, taskId, prompt)
+    service.markTakeoverCommandDispatched(taskId)
+  } catch (error) {
+    service.abortTakeoverControlPrompt(taskId)
+    if (!swallowError) throw error
+  }
+}
+
 function registerIpcHandlers(): void {
   const rendererTrust = createRendererTrustOptions()
   const desktopIpcMain: DesktopIpcMain = {
@@ -646,11 +674,7 @@ function registerIpcHandlers(): void {
         createTask: (projectId) => service.createTask(projectId),
         enterTask: async (taskId) => {
           const entry = await service.enterTask(taskId)
-          const controlPrompt = service.consumeTakeoverApplyCommand(taskId)
-          if (controlPrompt) {
-            // 恢复后补发接管命令，展示文本固定为 /always-approve，不含用户原文。
-            await startTurnWithPrompt(service, executor, taskId, controlPrompt)
-          }
+          await applyTakeoverControlPrompt(service, executor, taskId, true)
           return entry
         },
         startTurn: async (taskId, prompt, attachmentIds = []) =>
@@ -667,8 +691,12 @@ function registerIpcHandlers(): void {
         setPermissionMode: async (request) => {
           const result = await service.setPermissionMode(request)
           if (result.decision.kind === 'send-command' && result.controlPrompt) {
-            // 与 startTurn 同一条 executor.start；展示文本脱敏为 /always-approve。
-            await startTurnWithPrompt(service, executor, request.taskId, result.controlPrompt)
+            try {
+              await applyTakeoverControlPrompt(service, executor, request.taskId)
+            } catch {
+              // start 失败不得把 applied 写成 true；仍返回已写盘的未生效快照，UI 才能显示「接管未完全生效」。
+            }
+            return { ...result, task: service.getTaskRuntimeState(request.taskId) }
           }
           return result
         }

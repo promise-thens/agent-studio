@@ -47,7 +47,9 @@ const props = defineProps<{
   modelBusy?: boolean
   modelDisabled?: boolean
   permissionMode?: TaskPermissionMode
+  takeoverApplied?: boolean
   takeoverHud?: string | null
+  setPermissionMode: (mode: TaskPermissionMode) => Promise<void>
   /** 上下文 used/limit；没数据时不传或传空，模板藏起来。 */
   contextUsage?: string | null
   runtimeCommands?: AgentAvailableCommand[]
@@ -76,23 +78,44 @@ const emit = defineEmits<{
   'import-dropped-paths': [paths: string[]]
   'import-clipboard': []
   'remove-attachment': [attachmentId: string]
-  'permission-mode-select': [mode: TaskPermissionMode]
 }>()
 
 const pendingTakeover = ref(false)
+const takeoverConfirmBusy = ref(false)
+const takeoverConfirmError = ref('')
 
-function handlePermissionModeSelect(mode: TaskPermissionMode): void {
+async function handlePermissionModeSelect(mode: TaskPermissionMode): Promise<void> {
   if (props.modelBusy || props.modelDisabled) return
-  if (mode === 'takeover') {
+  if (mode === 'takeover' && props.permissionMode !== 'takeover') {
+    takeoverConfirmError.value = ''
     pendingTakeover.value = true
     return
   }
-  emit('permission-mode-select', mode)
+  try {
+    await props.setPermissionMode(mode)
+  } catch {
+    // 错误已由 App 写入对话；确认框路径另有可见错误。
+  }
 }
 
-function confirmTakeover(): void {
+function cancelTakeoverConfirm(): void {
+  if (takeoverConfirmBusy.value) return
   pendingTakeover.value = false
-  emit('permission-mode-select', 'takeover')
+  takeoverConfirmError.value = ''
+}
+
+async function confirmTakeover(): Promise<void> {
+  if (takeoverConfirmBusy.value) return
+  takeoverConfirmBusy.value = true
+  takeoverConfirmError.value = ''
+  try {
+    await props.setPermissionMode('takeover')
+    pendingTakeover.value = false
+  } catch (error) {
+    takeoverConfirmError.value = error instanceof Error ? error.message : '切换批准模式失败。'
+  } finally {
+    takeoverConfirmBusy.value = false
+  }
 }
 
 const textarea = ref<HTMLTextAreaElement | null>(null)
@@ -331,6 +354,7 @@ defineExpose({ focus, focusStop })
             :mode="permissionMode ?? 'assist'"
             :busy="modelBusy"
             :disabled="modelDisabled"
+            :takeover-applied="takeoverApplied === true"
             @select="handlePermissionModeSelect"
           />
           <span v-if="contextUsage" class="composer-usage" title="上下文用量">{{
@@ -406,8 +430,10 @@ defineExpose({ focus, focusStop })
     </p>
     <TaskTakeoverConfirmDialog
       v-if="pendingTakeover"
+      :busy="takeoverConfirmBusy"
+      :error="takeoverConfirmError"
       @confirm="confirmTakeover"
-      @cancel="pendingTakeover = false"
+      @cancel="cancelTakeoverConfirm"
     />
   </footer>
 </template>

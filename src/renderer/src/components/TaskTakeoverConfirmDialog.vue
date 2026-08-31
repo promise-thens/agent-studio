@@ -2,6 +2,11 @@
 import { nextTick, onMounted, ref } from 'vue'
 import { PhWarning as Warning } from '@phosphor-icons/vue'
 
+defineProps<{
+  busy?: boolean
+  error?: string
+}>()
+
 const emit = defineEmits<{
   confirm: []
   cancel: []
@@ -15,14 +20,14 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="modal-backdrop" @click.self="emit('cancel')">
+  <div class="modal-backdrop" @click.self="!busy && emit('cancel')">
     <section
       class="permission-dialog"
       role="dialog"
       aria-modal="true"
       aria-labelledby="takeover-confirm-title"
       aria-describedby="takeover-confirm-description"
-      @keydown.esc="emit('cancel')"
+      @keydown.esc="!busy && emit('cancel')"
     >
       <header>
         <div class="permission-icon" data-risk="L3">
@@ -38,6 +43,7 @@ onMounted(() => {
           </div>
         </div>
       </header>
+      <p v-if="error" class="takeover-confirm-error" role="alert">{{ error }}</p>
       <div class="permission-options">
         <button
           ref="cancelButton"
@@ -45,6 +51,7 @@ onMounted(() => {
           type="button"
           title="取消"
           autofocus
+          :disabled="busy"
           @click="emit('cancel')"
         >
           取消
@@ -53,9 +60,11 @@ onMounted(() => {
           class="danger-secondary-button"
           type="button"
           title="开始接管"
+          :disabled="busy"
+          :aria-busy="busy ? 'true' : 'false'"
           @click="emit('confirm')"
         >
-          开始接管
+          {{ busy ? '正在接管…' : '开始接管' }}
         </button>
       </div>
     </section>
@@ -79,7 +88,20 @@ onMounted(() => {
   cursor: pointer;
 }
 
-.danger-secondary-button:hover {
+.danger-secondary-button:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
+.takeover-confirm-error {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.danger-secondary-button:disabled,
+.primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 </style>

@@ -530,12 +530,14 @@ function applyPermissionRuntime(task: AgentTaskRuntimeState): void {
   }
 }
 
-/** 等主进程成功后再改 UI，禁止乐观切换接管。 */
+/** 等主进程成功后再改 UI，禁止乐观切换接管。无 Task 时先创建再 IPC，busy 必须抛错不得静默。 */
 async function setTaskPermissionMode(mode: TaskPermissionMode): Promise<void> {
-  const taskId = activeTaskId.value
-  if (!taskId || permissionModeBusy.value || composerChrome.value.modelBusy) return
+  if (permissionModeBusy.value || composerChrome.value.modelBusy) {
+    throw new Error('任务执行中不能切换批准模式。')
+  }
   permissionModeBusy.value = true
   try {
+    const taskId = activeTaskId.value || (await ensureActiveTask())
     applyPermissionRuntime(
       unwrapDesktopIpcResult(
         await window.agent.setPermissionMode({
@@ -547,6 +549,7 @@ async function setTaskPermissionMode(mode: TaskPermissionMode): Promise<void> {
     )
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
+    throw error
   } finally {
     permissionModeBusy.value = false
   }
@@ -712,6 +715,9 @@ onMounted(async () => {
     window.agent.onPermission((request) => {
       // 查看身份不参与权限决策；所有未过期审批都保留到用户显式处理或 Broker 收束。
       enqueuePermission(request)
+    }),
+    window.agent.onTaskRuntimeState((task) => {
+      applyPermissionRuntime(task)
     }),
     window.agent.onPermissionCancelled((request) => {
       removePermission(request)
@@ -1903,7 +1909,9 @@ function scrollMessagesToBottom(): void {
             :model-busy="composerChrome.modelBusy || permissionModeBusy"
             :model-disabled="!providerSummary?.configured"
             :permission-mode="composerPermissionMode"
+            :takeover-applied="activePermissionState?.takeoverApplied === true"
             :takeover-hud="composerTakeoverHud"
+            :set-permission-mode="setTaskPermissionMode"
             :context-usage="composerContextUsage"
             :runtime-commands="runtimeSlashCommands"
             :attachments="composerAttachmentViews"
@@ -1923,7 +1931,6 @@ function scrollMessagesToBottom(): void {
             @open-settings-grok-config="handleProductSlashAction('open-settings-grok-config')"
             @model-changed="handleModelChanged"
             @model-error="handleModelError"
-            @permission-mode-select="setTaskPermissionMode"
           />
         </template>
       </main>

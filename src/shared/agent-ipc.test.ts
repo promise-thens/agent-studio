@@ -33,6 +33,7 @@ describe('桌面 IPC 静态契约', () => {
       'agent:permission',
       'agent:permission-cancelled',
       'agent:available-commands',
+      'agent:task-runtime-state',
       'app:choose-project',
       'app:list-projects',
       'app:reveal-project',
