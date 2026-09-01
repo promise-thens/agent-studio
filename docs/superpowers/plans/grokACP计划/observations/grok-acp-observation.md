@@ -88,9 +88,13 @@
 | 4 | Runtime 崩溃 | `not-observed` |
 | 5 | 取消超时 | `not-observed` |
 
-## F. 子 Agent（本轮未见，不挡 GACP-02 / P0-10A）
+## F. 子 Agent（GACP-01 冻结 + GACP-06 再观察）
 
-本轮脚本没有专门派出子 Agent。下列字段全部 `not-observed`。GACP-06 在没有稳定父子字段前必须保持扁平工具行，禁止用标题聚类。缺这张表不得重开 GACP-01，也不得推迟换皮。
+GACP-06 不得重开 GACP-01。没有稳定父子字段时必须保持扁平工具行，禁止用标题聚类，也不回头挡住 GACP-02。
+
+### F.1 GACP-01 冻结（2026-08-19 真机脚本，Grok 1.0.5）
+
+本轮脚本没有专门派出子 Agent。下列字段全部 `not-observed`。该冻结结论仍有效，禁止补“应该有”。
 
 | 项 | 结果 |
 | --- | --- |
@@ -99,6 +103,30 @@
 | `agentId` 或等价稳定孩子身份 | `not-observed` |
 | 孩子 tool 是否另带 `sessionId` | `not-observed` |
 | 孩子权限是否单独 request | `not-observed` |
+
+### F.2 GACP-06 再观察（2026-09-01）
+
+| 项 | 值 |
+| --- | --- |
+| method | `sdk+mapper+fixtures` |
+| 日期 | 2026-09-01 |
+| 真机派出两个子 Agent | 未做（本环境不强制真机 GUI，禁止假装跑过） |
+| `@agentclientprotocol/sdk` | `1.3.0`（`acp.PROTOCOL_VERSION` = `1`） |
+| 对照 | SDK `experimental/v2` 不稳定 schema；产品仍钉 1.3 |
+
+**标准 `ToolCall` 字段（SDK 1.3 `schema.json` `$defs.ToolCall`）：** `toolCallId`、`title`，可选 `name`（experimental）、`kind`、`status`、`content`、`locations`、`rawInput`、`rawOutput`、`_meta`。
+
+**标准 `ToolCallUpdate` 字段：** 必填 `toolCallId`，其余同上且可 null patch。
+
+**未见、因此不得进观察白名单的键：** `parentToolCallId`、`parentId`、`agentId`、tool 上的嵌套 `sessionId`、任何 parent/child 稳定身份。对 `schema.json` 与 `schema/v2/schema.unstable.json` 检索 `parent` / `parentToolCallId` / `agentId` / `subagent` 均为空。
+
+**`sessionId` 位置：** 只在 `SessionNotification` 信封上，不在 `ToolCall` 本体。Mapper/Adapter 仍按当前 Runtime session 匹配；协议没有“孩子另开 session 仍属同一 Turn”的标准字段。
+
+**现有 Mapper 投影（`mapGrokSessionUpdate`）：** `tool_call` / `tool_call_update` 只写入 `toolCallId`、`title`、`status`；`kind`/`name`/`rawInput`/`rawOutput`/`_meta` 不进 Timeline 事件。夹具里即使塞入 `parentToolCallId`、`parentId`、`agentId`、`_meta.parentToolCallId`，以及标题含 `subagent` / `子 Agent`，也不得产生 `parentId`。
+
+**权限：** SDK `RequestPermissionRequest` 的 subject 仍是当前 session 的 `toolCall`；没有 per-child permission broker。产品继续走同一个 `PermissionBroker`，initiator 仍是当前 Runtime，不要给每个孩子单独一套永久授权。GACP-01 真机只见过 `execute` 的 `allow_once`/`reject_once`，未见子 Agent 单独 request。
+
+**白名单结论：** **空。** 公开/内部/历史 tool 事件可以有可选 `parentId` 管道，但 Grok Mapper **不得**从 title / `_meta` / 未知键发明它。任务 2 只用合成 `parentId` 测嵌套；无字段时 Timeline 保持扁平。
 
 ## G. 交接（遗留不挡后续开工）
 
