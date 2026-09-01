@@ -307,6 +307,17 @@ button:disabled {
   text-align: center;
 }
 
+/* 流内计划空态：跟在已有 Turn 后面，不占满剩余视口 */
+.conversation-plan-empty {
+  width: min(100%, 840px);
+  margin: 0 auto;
+  padding: 0 24px;
+  color: var(--text-3);
+  font-size: 15px;
+  line-height: 1.55;
+  text-align: center;
+}
+
 .conversation-turn {
   display: grid;
   gap: 14px;

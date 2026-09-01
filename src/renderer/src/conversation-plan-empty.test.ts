@@ -7,6 +7,7 @@ import type { TaskTimelineViewModel, TurnTimelineViewModel } from './task-timeli
 import { projectConversationTurn } from './conversation-turn-view'
 import {
   PLAN_EMPTY_COPY,
+  resolveConversationPlanEmptyClass,
   resolveConversationPlanEmptyCopy,
   resolvePlanChecklistEmptyCopy
 } from './conversation-plan-empty'
@@ -23,6 +24,16 @@ const conversationTurnSource = readFileSync(
 )
 const planChecklistSource = readFileSync(join(rendererDir, 'components/PlanChecklist.vue'), 'utf8')
 const inspectorSource = readFileSync(join(rendererDir, 'components/TaskInspector.vue'), 'utf8')
+const mainCss = readFileSync(join(rendererDir, 'assets/main.css'), 'utf8')
+
+/** 取第一个同名规则块，用来断言流式空态没有 flex:1。 */
+function cssRule(source: string, selector: string): string {
+  const start = source.indexOf(`${selector} {`)
+  expect(start).toBeGreaterThan(-1)
+  const open = source.indexOf('{', start)
+  const close = source.indexOf('}', open)
+  return source.slice(start, close + 1)
+}
 
 const PLAN_EMPTY_COPY_TEXT = 'Grok 还没给出计划'
 
@@ -163,6 +174,19 @@ describe('主列计划空态', () => {
 })
 
 describe('主列计划空态接线', () => {
+  it('已有 Turn 时计划空态走 conversation-plan-empty，不得再用满高 conversation-empty', () => {
+    expect(resolveConversationPlanEmptyClass(false)).toBe('conversation-empty')
+    expect(resolveConversationPlanEmptyClass(true)).toBe('conversation-plan-empty')
+    expect(conversationSource).toContain('resolveConversationPlanEmptyClass')
+    expect(conversationSource).toContain('planEmptyClass')
+    expect(conversationSource).toMatch(/v-if="planEmptyCopy"[\s\S]*:class="planEmptyClass"/)
+    expect(conversationSource).not.toMatch(/v-if="planEmptyCopy"[\s\S]*class="conversation-empty"/)
+
+    const inStream = cssRule(mainCss, '.conversation-plan-empty')
+    expect(inStream).not.toMatch(/flex:\s*1/)
+    expect(cssRule(mainCss, '.conversation-empty')).toMatch(/flex:\s*1/)
+  })
+
   it('App 把当前 Task 的 plan 模式传给对话列，不新 IPC、不进 Timeline', () => {
     const start = appSource.indexOf('<TaskConversation')
     const end = appSource.indexOf('/>', start)

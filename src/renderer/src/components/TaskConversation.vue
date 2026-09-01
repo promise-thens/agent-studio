@@ -2,7 +2,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentPermissionDecision, AgentPermissionRequest } from '../../../shared/agent'
 import type { ComposerPlanMode } from '../../../shared/session-plan-mode'
-import { resolveConversationPlanEmptyCopy } from '../conversation-plan-empty'
+import {
+  resolveConversationPlanEmptyClass,
+  resolveConversationPlanEmptyCopy
+} from '../conversation-plan-empty'
 import type { TaskTimelineViewModel, TurnTimelineViewModel } from '../task-timeline-reducer'
 import {
   conversationFollowSignature,
@@ -107,6 +110,10 @@ const planEmptyCopy = computed(() =>
     model: props.model,
     loading: props.loading
   })
+)
+/** 已有 Turn 时不用满高空态，避免把等待计划的句子撑满剩余视口。 */
+const planEmptyClass = computed(() =>
+  resolveConversationPlanEmptyClass(Boolean(props.model?.turns.length))
 )
 
 function applyPinSource(source: 'user-input' | 'layout-scroll'): void {
@@ -289,7 +296,7 @@ watch(
       />
     </div>
 
-    <div v-if="planEmptyCopy" class="conversation-empty" role="status">
+    <div v-if="planEmptyCopy" :class="planEmptyClass" role="status">
       {{ planEmptyCopy }}
     </div>
 

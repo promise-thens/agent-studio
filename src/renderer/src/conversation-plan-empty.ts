@@ -5,6 +5,9 @@ import type { TaskTimelineViewModel, TimelinePlanNode } from './task-timeline-re
 /** 主列 / 清单共用空态；禁止改写成 Timeline 事件或编造 ACP 条目。 */
 export const PLAN_EMPTY_COPY = 'Grok 还没给出计划'
 
+/** 对话流里已有 Turn 时的计划空态 class；禁止复用满高 `.conversation-empty`。 */
+export const CONVERSATION_PLAN_EMPTY_IN_STREAM_CLASS = 'conversation-plan-empty'
+
 function planNodesOf(
   model: Pick<TaskTimelineViewModel, 'turns'> | null | undefined
 ): TimelinePlanNode[] {
@@ -32,6 +35,14 @@ export function resolveConversationPlanEmptyCopy(input: {
   if (input.planMode !== 'plan') return ''
   if (planNodesOf(input.model).length > 0) return ''
   return PLAN_EMPTY_COPY
+}
+
+/**
+ * 无 Turn 时沿用满高 `.conversation-empty`；已有对话后只占流内一行。
+ * 不得带 flex:1，避免把「Grok 还没给出计划」垂直居中到剩余视口。
+ */
+export function resolveConversationPlanEmptyClass(hasTurns: boolean): string {
+  return hasTurns ? CONVERSATION_PLAN_EMPTY_IN_STREAM_CLASS : 'conversation-empty'
 }
 
 /**
