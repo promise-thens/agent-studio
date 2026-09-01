@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentPermissionDecision, AgentPermissionRequest } from '../../../shared/agent'
+import type { ComposerPlanMode } from '../../../shared/session-plan-mode'
+import { resolveConversationPlanEmptyCopy } from '../conversation-plan-empty'
 import type { TaskTimelineViewModel, TurnTimelineViewModel } from '../task-timeline-reducer'
 import {
   conversationFollowSignature,
@@ -38,6 +40,7 @@ const props = withDefaults(
     permissionTaskTitle?: string
     changeCard?: ChangeCardView | null
     restoreBusy?: boolean
+    planMode?: ComposerPlanMode
   }>(),
   {
     loading: false,
@@ -49,7 +52,8 @@ const props = withDefaults(
     permissionPending: false,
     permissionTaskTitle: '',
     changeCard: null,
-    restoreBusy: false
+    restoreBusy: false,
+    planMode: 'normal'
   }
 )
 
@@ -95,6 +99,15 @@ const unmatchedPermission = computed(() => {
   )
   return matched ? null : request
 })
+
+/** 空态只投影 UI，不写 Timeline；有 plan 节点时交给 PlanChecklist。 */
+const planEmptyCopy = computed(() =>
+  resolveConversationPlanEmptyCopy({
+    planMode: props.planMode ?? 'normal',
+    model: props.model,
+    loading: props.loading
+  })
+)
 
 function applyPinSource(source: 'user-input' | 'layout-scroll'): void {
   const root = messageList.value
@@ -229,7 +242,7 @@ watch(
     <div v-if="loading && !model?.turns.length" class="conversation-empty" role="status">
       正在加载对话…
     </div>
-    <div v-else-if="!model?.turns.length" class="conversation-empty">
+    <div v-else-if="!model?.turns.length && !planEmptyCopy" class="conversation-empty">
       {{ resolveConversationEmptyCopy(Boolean(model?.turns.length)) }}
     </div>
 
@@ -274,6 +287,10 @@ watch(
         @respond="$emit('respondPermission', $event)"
         @cancel-turn="$emit('cancelTurn')"
       />
+    </div>
+
+    <div v-if="planEmptyCopy" class="conversation-empty" role="status">
+      {{ planEmptyCopy }}
     </div>
 
     <p

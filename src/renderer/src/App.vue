@@ -1969,6 +1969,7 @@ function scrollMessagesToBottom(): void {
             :permission-task-title="permissionTaskTitle"
             :change-card="changeCard"
             :restore-busy="restoreBusy"
+            :plan-mode="composerPlanMode"
             @load-more-turns="loadMoreHistoryTurns"
             @load-more-events="loadMoreHistoryEvents"
             @retry-connect="retryRuntimeConnect"

@@ -670,6 +670,12 @@ button:disabled {
   list-style: none;
 }
 
+.plan-checklist[role='status'] {
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .plan-check-item {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
