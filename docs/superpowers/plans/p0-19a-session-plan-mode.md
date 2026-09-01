@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。步骤使用复选框 (`- [ ]`) 跟踪。
 >
-> **状态：** 待开始。
+> **状态：** 任务 1–3 代码已落地；开发版 GUI 未过。Grok CLI 1.0.13 不广告 `name === 'plan'`，当前产品路径是 disabled-path：开关 `disabled`、title「当前会话未提供 Plan」、发送不改写 prompt。不得把「开 Plan → 看到清单」标成 GUI 已过。
 >
 > **插入点：** [P0-19](p0-19-grok-host-capability-polish.md) 在 GACP-03 收口之后。主列计划清单皮肤跟 [P0-10A](p0-10a-claude-desktop-workbench-ui.md)，不另做检查器「计划」页。
 
@@ -68,49 +68,60 @@ Grok 请求 enter_plan_mode
 
 **任务目标：** 写清「开关 + 一句用户话」在 Grok ACP 里要发什么，避免猜。
 
-- [ ] **第 1 步: 对照 TUI 与 ACP**
+- [x] **第 1 步: 对照 TUI 与 ACP**
 
 说明：在 App `GROK_HOME` 开发版会话看 `available_commands_update` 是否包含 `plan` / `view-plan`。分别试：只发 `/plan`、发 `/plan 加登录`、先 `/plan` 再发正文。记录 Grok 是否进入 plan、是否出现 `enter_plan_mode` 权限、`plan` session/update 形状。写进 `docs/superpowers/plans/grokACP计划/observations/` 一小节，不重开 GACP-01 全表。
 
 预期：后续任务只实现已观察路径。若 Grok 从未广告 `plan`，开关保持禁用，本计划不得伪造命令。
 
-- [ ] **第 2 步: 选一条发送策略并写测试夹具**
+记录：隔离 ACP stdio 观察已写入 [p0-19a-plan-mode-observation.md](grokACP计划/observations/p0-19a-plan-mode-observation.md)。Grok 1.0.13 **未广告** `plan` / `view-plan`；`sessionUpdate: "plan"` 为 not-observed。手工发 `/plan` 仍会进 plan，产品路径不得复制这条伪造。
+
+- [x] **第 2 步: 选一条发送策略并写测试夹具**
 
 说明：把选定策略写成纯函数，例如 `resolvePlanSubmit({ mode, prompt, hasPlanCommand })`，覆盖：normal 原样；plan + 普通正文；plan + 已是 `/compact`；无 plan 命令；执行中。
 
 预期：无广告时永不改写 prompt。
 
+记录：策略已冻结为一次 `"/plan " + 正文`（仅当广告存在且空闲）。无广告永不改写。
+
 ### 任务 2: Composer 开关
 
 **任务目标：** 输入框 footer 在模型选择器旁提供 Plan 开关，有 `title` / `aria-label`，Titlebar 外区域保持可点。
 
-- [ ] **第 1 步: 失败测试**
+- [x] **第 1 步: 失败测试**
 
 说明：无 `plan` 命令时按钮 `disabled` 且说明原因；有命令且空闲时可切；执行中不可切；切到 plan 后提交走任务 1 的纯函数。
 
-- [ ] **第 2 步: 实现最小 UI**
+- [x] **第 2 步: 实现最小 UI**
 
 说明：复用现有 footer 变量，不要新颜色体系。小窗口可缩成图标，但必须留下模型选择器、输入、发送。
 
-- [ ] **第 3 步: 退出对齐**
+- [x] **第 3 步: 退出对齐**
 
 说明：用户切回 Normal 只影响下一轮。若观察里 Grok 有明确 exit 信号，再把开关拨回去；没有信号就保持用户选择，状态条可写「下一轮按 Plan 发送」。
+
+记录：不根据 `current_mode_update` 自动拨开关。进入 Plan 仍要求广告 `name === 'plan'`；退出 Plan 只要求空闲，广告消失后不得把开关卡在 pressed+disabled。
 
 ### 任务 3: 主列计划清单
 
 **任务目标：** Plan 条目在对话流里能看见 pending/completed，而不是只在 Timeline 调试卡。
 
-- [ ] **第 1 步: 确认 P0-10A 是否已渲染 plan 节点**
+- [x] **第 1 步: 确认 P0-10A 是否已渲染 plan 节点**
 
 说明：已有则补空态「Grok 还没给出计划」；没有则在 `conversation-turn-view.ts` 增加 plan block，复用已有 `TimelinePlanNode`。
+
+记录：P0-10A 已有 `PlanChecklist`。补了主列空态；已有 Turn 时用 `.conversation-plan-empty`，不用满高 `.conversation-empty`。
 
 - [ ] **第 2 步: 走查**
 
 说明：开发版：开 Plan → 发「给设置页加一个开关」→ 看到计划清单 → 确认后才出现写文件工具。拒绝 `enter_plan_mode` 时仍停在未改代码。
 
+记录：**未跑、未过。** 观察挡住了「开 Plan」：1.0.13 不广告 `plan`，开关保持禁用。未伪造广告去走 GUI。disabled-path 已用 Vitest 覆盖（按钮 disabled + title「当前会话未提供 Plan」+ send 不改写）。
+
 ## 验收标准
 
-- [ ] Grok 广告了 `plan` 时，空闲可切，发送语义与观察一致。
-- [ ] 没广告时不能发出桌面伪造的 `/plan`。
-- [ ] 主列看得到计划条目状态。
-- [ ] 目标文件 ESLint、相关 Vitest、`pnpm typecheck`；开发版走查有记录。
+- [x] 代码：Grok 若广告 `plan`，空闲可切，发送语义与观察一致（Vitest）。开发版 GUI 未走通「开 Plan」。
+- [x] 没广告时不能发出桌面伪造的 `/plan`。这是当前 1.0.13 的产品路径：开关 disabled，title「当前会话未提供 Plan」，send 不改写。
+- [x] 主列代码能渲染计划条目状态与空态。真机 `sessionUpdate: "plan"` 仍为 not-observed，未见真实 checklist。
+- [x] 目标文件 ESLint、相关 Vitest、`pnpm typecheck` 已跑。
+- [ ] 开发版 GUI 走查未过（不得标已过）。开 Plan → 看到清单这条被观察挡住。
