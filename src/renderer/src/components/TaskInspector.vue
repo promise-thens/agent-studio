@@ -1,35 +1,31 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { PhArrowsIn as ArrowsIn, PhArrowsOut as ArrowsOut, PhX as X } from '@phosphor-icons/vue'
 import type { PermissionAuditRecord } from '../../../shared/task-history'
 import type { TaskTimelineViewModel } from '../task-timeline-reducer'
 import type { TaskArtifactsController } from '../composables/useTaskArtifacts'
 import type { TaskChangesController } from '../composables/useTaskChanges'
 import {
   INSPECTOR_CARD_MARGIN,
-  INSPECTOR_TABS,
   clampInspectorCardRect,
   defaultInspectorCardRect,
-  inspectorPlaceholderCopy,
   inspectorReviewWorkspaceClass,
   isInspectorCardDragSource,
   moveInspectorCardRect,
-  nextInspectorTab,
-  permissionAuditInitiatorLabel,
-  permissionAuditReasonLabel,
-  permissionAuditScopeLabel,
-  projectInspectorTimelineSummary,
   resolveInspectorTab,
   type InspectorCardRect,
   type InspectorTab
 } from '../task-inspector'
-import TaskArtifactsPanel from './TaskArtifactsPanel.vue'
-import TaskChangesPanel from './TaskChangesPanel.vue'
+import InspectorPaneGrid from './InspectorPaneGrid.vue'
+import InspectorToolbar from './InspectorToolbar.vue'
+// TaskChangesPanel / TaskArtifactsPanel 由 InspectorPane 负责路由，保留在组件边界之外以便拓展。
+
+const INSPECTOR_SNAP_DISTANCE = 28
 
 const props = withDefaults(
   defineProps<{
     open: boolean
     activeTab: InspectorTab
+    docked?: boolean
     taskId?: string
     timeline: TaskTimelineViewModel | null
     timelineLoading?: boolean
@@ -41,6 +37,7 @@ const props = withDefaults(
     artifactsController?: TaskArtifactsController | null
   }>(),
   {
+    docked: false,
     taskId: '',
     timelineLoading: false,
     permissionAudits: () => [],
@@ -55,34 +52,23 @@ const props = withDefaults(
 const emit = defineEmits<{
   close: []
   'update:activeTab': [tab: InspectorTab]
+  'update:docked': [docked: boolean]
   loadMorePermissionAudits: []
 }>()
 
 const currentTab = computed(() => resolveInspectorTab(props.activeTab))
-const showChangesPanel = computed(
-  () => currentTab.value === 'changes' && Boolean(props.taskId) && Boolean(props.changesController)
-)
-const showArtifactsPanel = computed(
-  () =>
-    currentTab.value === 'artifacts' && Boolean(props.taskId) && Boolean(props.artifactsController)
-)
 const reviewWorkspaceClass = computed(() => inspectorReviewWorkspaceClass(currentTab.value))
-const placeholder = computed(() => {
-  if (currentTab.value === 'timeline' || showChangesPanel.value || showArtifactsPanel.value) {
-    return null
-  }
-  return inspectorPlaceholderCopy(currentTab.value)
-})
-const timelineSummary = computed(() => projectInspectorTimelineSummary(props.timeline))
 const cardRef = ref<HTMLElement | null>(null)
 const cardLeft = ref<number | null>(null)
 const cardTop = ref<number | null>(null)
 const expanded = ref(false)
+const splitEnabled = ref(false)
+const secondaryTab = ref<InspectorTab>('changes')
 const compactRect = ref<InspectorCardRect | null>(null)
 let dragOrigin: { pointerId: number; x: number; y: number; left: number; top: number } | null = null
 
 const cardStyle = computed(() => {
-  if (cardLeft.value == null || cardTop.value == null) return undefined
+  if (props.docked || cardLeft.value == null || cardTop.value == null) return undefined
   const style: Record<string, string> = {
     left: `${cardLeft.value}px`,
     top: `${cardTop.value}px`,
@@ -95,10 +81,6 @@ const cardStyle = computed(() => {
   }
   return style
 })
-
-const expandLabel = computed(() => (expanded.value ? '还原检查器大小' : '放大检查器'))
-
-// Esc 由 App 裁定：执行中先聚焦停止，只有焦点已在卡片内才关检查器。
 
 function readViewport(): { width: number; height: number } {
   const parent = cardRef.value?.offsetParent
@@ -135,7 +117,7 @@ function placeDefault(): void {
 }
 
 function clampCurrent(): void {
-  if (cardLeft.value == null || cardTop.value == null) return
+  if (props.docked || cardLeft.value == null || cardTop.value == null) return
   const viewport = readViewport()
   const size = readCardSize()
   applyRect(
@@ -150,9 +132,9 @@ function clampCurrent(): void {
   )
 }
 
-/** 从工具条空白处开始拖卡片；点到标签或按钮时不抢事件。 */
+/** 从工具条空白处拖动浮层；按钮和标签不会抢走点击事件。 */
 function onDragHandlePointerDown(event: PointerEvent): void {
-  if (event.button !== 0 || !isInspectorCardDragSource(event.target)) return
+  if (props.docked || event.button !== 0 || !isInspectorCardDragSource(event.target)) return
   if (cardLeft.value == null || cardTop.value == null) placeDefault()
   dragOrigin = {
     pointerId: event.pointerId,
@@ -186,8 +168,20 @@ function onDragHandlePointerMove(event: PointerEvent): void {
   )
 }
 
+/** 松开在右侧吸附区时转为三列布局，让聊天列自动让出空间。 */
 function onDragHandlePointerUp(event: PointerEvent): void {
   if (!dragOrigin || dragOrigin.pointerId !== event.pointerId) return
+  const viewport = readViewport()
+  const size = readCardSize()
+  const rightGap = viewport.width - (cardLeft.value ?? 0) - size.width
+  if (!props.docked && !expanded.value) {
+    compactRect.value = {
+      left: cardLeft.value ?? INSPECTOR_CARD_MARGIN,
+      top: cardTop.value ?? INSPECTOR_CARD_MARGIN,
+      width: size.width,
+      height: size.height
+    }
+  }
   dragOrigin = null
   if (
     event.currentTarget instanceof HTMLElement &&
@@ -195,10 +189,45 @@ function onDragHandlePointerUp(event: PointerEvent): void {
   ) {
     event.currentTarget.releasePointerCapture(event.pointerId)
   }
+  if (rightGap <= INSPECTOR_SNAP_DISTANCE) emit('update:docked', true)
+}
+
+/** 在悬浮与工作区右侧吸附之间切换，保留原有位置用于还原。 */
+function toggleDocked(): void {
+  const nextDocked = !props.docked
+  if (nextDocked && !expanded.value) {
+    const size = readCardSize()
+    compactRect.value = {
+      left: cardLeft.value ?? INSPECTOR_CARD_MARGIN,
+      top: cardTop.value ?? INSPECTOR_CARD_MARGIN,
+      width: size.width,
+      height: size.height
+    }
+  }
+  emit('update:docked', nextDocked)
+}
+
+/** 从三列吸附态退回悬浮态时恢复上一次的矩形，避免位置跳回错误尺寸。 */
+function restoreFloatingRect(): void {
+  void nextTick(() => {
+    const previous = compactRect.value
+    if (!previous) {
+      placeDefault()
+      return
+    }
+    applyRect(
+      clampInspectorCardRect({
+        ...previous,
+        viewportWidth: readViewport().width,
+        viewportHeight: readViewport().height
+      })
+    )
+  })
 }
 
 /** 放大铺满工作区；还原时回到放大前的位置和尺寸。 */
 function toggleExpanded(): void {
+  if (props.docked) return
   const viewport = readViewport()
   const size = readCardSize()
   if (!expanded.value) {
@@ -209,7 +238,7 @@ function toggleExpanded(): void {
       height: size.height
     }
     expanded.value = true
-    void nextTick(() => {
+    void nextTick(() =>
       applyRect(
         defaultInspectorCardRect({
           viewportWidth: viewport.width,
@@ -219,7 +248,7 @@ function toggleExpanded(): void {
           expanded: true
         })
       )
-    })
+    )
     return
   }
   expanded.value = false
@@ -239,6 +268,13 @@ function toggleExpanded(): void {
   })
 }
 
+function toggleSplit(): void {
+  if (!splitEnabled.value) {
+    secondaryTab.value = currentTab.value === 'timeline' ? 'changes' : 'timeline'
+  }
+  splitEnabled.value = !splitEnabled.value
+}
+
 function onWindowResize(): void {
   if (props.open) clampCurrent()
 }
@@ -251,9 +287,16 @@ watch(
       return
     }
     void nextTick(() => {
-      if (cardLeft.value == null) placeDefault()
+      if (!props.docked && cardLeft.value == null) placeDefault()
       else clampCurrent()
     })
+  }
+)
+
+watch(
+  () => props.docked,
+  (docked) => {
+    if (!docked) restoreFloatingRect()
   }
 )
 
@@ -264,42 +307,15 @@ watch(currentTab, () => {
 
 onMounted(() => {
   window.addEventListener('resize', onWindowResize)
-  if (props.open) void nextTick(placeDefault)
+  if (props.open && !props.docked) void nextTick(placeDefault)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onWindowResize)
 })
 
-function selectTab(tab: InspectorTab, focus = false): void {
-  const next = resolveInspectorTab(tab)
-  emit('update:activeTab', next)
-  if (!focus) return
-  void nextTick(() => {
-    document.getElementById(`inspector-tab-${next}`)?.focus()
-  })
-}
-
-function onTabListKeydown(event: KeyboardEvent): void {
-  if (event.key === 'ArrowRight') {
-    event.preventDefault()
-    selectTab(nextInspectorTab(currentTab.value, 1), true)
-    return
-  }
-  if (event.key === 'ArrowLeft') {
-    event.preventDefault()
-    selectTab(nextInspectorTab(currentTab.value, -1), true)
-    return
-  }
-  if (event.key === 'Home') {
-    event.preventDefault()
-    selectTab('timeline', true)
-    return
-  }
-  if (event.key === 'End') {
-    event.preventDefault()
-    selectTab('artifacts', true)
-  }
+function selectTab(tab: InspectorTab): void {
+  emit('update:activeTab', resolveInspectorTab(tab))
 }
 </script>
 
@@ -308,9 +324,16 @@ function onTabListKeydown(event: KeyboardEvent): void {
     v-if="open"
     ref="cardRef"
     class="task-inspector inspector-panel is-floating-card"
-    :class="[reviewWorkspaceClass, expanded ? 'is-expanded' : undefined]"
+    :class="[
+      reviewWorkspaceClass,
+      expanded ? 'is-expanded' : undefined,
+      docked ? 'is-docked' : undefined,
+      splitEnabled ? 'is-split' : undefined
+    ]"
     :style="cardStyle"
     data-inspector-drawer
+    :data-inspector-docked="docked ? 'true' : 'false'"
+    :data-inspector-split="splitEnabled ? 'true' : 'false'"
     role="complementary"
     aria-label="检查器"
   >
@@ -322,131 +345,35 @@ function onTabListKeydown(event: KeyboardEvent): void {
       @pointerup="onDragHandlePointerUp"
       @pointercancel="onDragHandlePointerUp"
     >
-      <div
-        class="inspector-tabs"
-        role="tablist"
-        aria-label="检查器标签"
-        @keydown="onTabListKeydown"
-      >
-        <button
-          v-for="tab in INSPECTOR_TABS"
-          :id="`inspector-tab-${tab.id}`"
-          :key="tab.id"
-          class="inspector-tab"
-          type="button"
-          role="tab"
-          :aria-controls="`inspector-panel-${tab.id}`"
-          :aria-selected="currentTab === tab.id"
-          :tabindex="currentTab === tab.id ? 0 : -1"
-          @click="selectTab(tab.id)"
-        >
-          {{ tab.label }}
-        </button>
-      </div>
-      <button
-        class="icon-button inspector-close"
-        type="button"
-        :title="expandLabel"
-        :aria-label="expandLabel"
-        @click="toggleExpanded()"
-      >
-        <ArrowsIn v-if="expanded" :size="16" />
-        <ArrowsOut v-else :size="16" />
-      </button>
-      <button
-        class="icon-button inspector-close"
-        type="button"
-        title="关闭检查器"
-        aria-label="关闭检查器"
-        @click="emit('close')"
-      >
-        <X :size="16" />
-      </button>
+      <InspectorToolbar
+        :active-tab="currentTab"
+        :expanded="expanded"
+        :docked="docked"
+        :split="splitEnabled"
+        @update:active-tab="selectTab"
+        @toggle-expanded="toggleExpanded"
+        @toggle-docked="toggleDocked"
+        @toggle-split="toggleSplit"
+        @close="emit('close')"
+      />
     </header>
 
-    <section
-      :id="`inspector-panel-${currentTab}`"
-      class="inspector-body"
-      role="tabpanel"
-      :aria-labelledby="`inspector-tab-${currentTab}`"
-    >
-      <template v-if="currentTab === 'timeline'">
-        <!-- Timeline 只读摘要：不挂计划主副本，P0-12/13/15 走其它标签。 -->
-        <div v-if="timelineLoading && timelineSummary.empty" class="timeline-state" role="status">
-          正在加载执行历史…
-        </div>
-        <div v-else-if="timelineSummary.empty" class="timeline-state" role="status">
-          {{ timelineSummary.statusLabel }}
-        </div>
-        <div v-else class="inspector-timeline-summary" role="status">
-          <p>{{ timelineSummary.turnCount }} 轮 · {{ timelineSummary.statusLabel }}</p>
-          <p v-if="timelineSummary.planLine">{{ timelineSummary.planLine }}</p>
-          <p v-if="timelineSummary.toolCount">{{ timelineSummary.toolCount }} 次工具</p>
-        </div>
-
-        <section v-if="showPermissionAudits" class="inspector-section audit-section">
-          <div class="inspector-heading">
-            <strong>权限审计</strong>
-            <span>{{ permissionAudits.length }}</span>
-          </div>
-          <div v-if="permissionAudits.length" class="permission-audit-list">
-            <article
-              v-for="audit in permissionAudits"
-              :key="audit.auditId"
-              class="permission-audit-item"
-              :data-risk="audit.risk"
-            >
-              <div>
-                <strong>{{ audit.title }}</strong>
-                <span>
-                  {{ audit.risk }} · {{ audit.operationType }} ·
-                  {{ permissionAuditInitiatorLabel(audit) }}
-                </span>
-              </div>
-              <p>{{ audit.impact }}</p>
-              <ul class="permission-audit-targets">
-                <li v-for="target in audit.targetSummaries" :key="target">{{ target }}</li>
-              </ul>
-              <p v-if="audit.detail" class="permission-audit-detail">{{ audit.detail }}</p>
-              <small>
-                {{ permissionAuditReasonLabel(audit.reason) }} ·
-                {{ permissionAuditScopeLabel(audit.scope) }} ·
-                {{ new Date(audit.createdAt).toLocaleString() }}
-                <template v-if="audit.truncated"> · 摘要已截断</template>
-              </small>
-            </article>
-            <button
-              v-if="permissionAuditCursor"
-              class="history-load-more"
-              type="button"
-              :disabled="loadingMorePermissionAudits"
-              @click="emit('loadMorePermissionAudits')"
-            >
-              {{ loadingMorePermissionAudits ? '正在加载…' : '加载更多审计' }}
-            </button>
-          </div>
-          <div v-else class="empty-state compact" role="status" aria-live="polite">
-            <p>当前 Task 暂无权限决策记录。</p>
-          </div>
-        </section>
-      </template>
-
-      <TaskChangesPanel
-        v-else-if="showChangesPanel && changesController"
-        :task-id="taskId"
-        :controller="changesController"
-      />
-
-      <TaskArtifactsPanel
-        v-else-if="showArtifactsPanel && artifactsController"
-        :task-id="taskId"
-        :controller="artifactsController"
-      />
-
-      <div v-else class="inspector-placeholder" role="status">
-        <strong>{{ placeholder?.heading }}</strong>
-        <p>{{ placeholder?.detail }}</p>
-      </div>
-    </section>
+    <InspectorPaneGrid
+      :primary-tab="currentTab"
+      :secondary-tab="secondaryTab"
+      :split="splitEnabled"
+      :task-id="taskId"
+      :timeline="timeline"
+      :timeline-loading="timelineLoading"
+      :permission-audits="permissionAudits"
+      :permission-audit-cursor="permissionAuditCursor"
+      :loading-more-permission-audits="loadingMorePermissionAudits"
+      :show-permission-audits="showPermissionAudits"
+      :changes-controller="changesController"
+      :artifacts-controller="artifactsController"
+      @update:primary-tab="selectTab"
+      @update:secondary-tab="secondaryTab = $event"
+      @load-more-permission-audits="emit('loadMorePermissionAudits')"
+    />
   </aside>
 </template>

@@ -247,9 +247,11 @@ const permissionResponsePending = computed(() =>
   isPermissionResponsePending(permission.value, respondingPermission.value)
 )
 let permissionExpiryTimer: ReturnType<typeof setTimeout> | null = null
-/** 检查器默认关上，从标题栏抽屉盖住右侧，不占第三列。 */
+/** 检查器默认关上；悬浮时覆盖右侧，吸附时才进入第三列。 */
 const showInspector = ref(INSPECTOR_DEFAULT_OPEN)
 const inspectorTab = ref<InspectorTab>(INSPECTOR_DEFAULT_TAB)
+/** 检查器默认悬浮；吸附后工作区切成三列，聊天列由 CSS Grid 自适应。 */
+const inspectorDocked = ref(false)
 const inspectorToggleTitle = computed(() => inspectorToggleLabel(showInspector.value))
 const taskChanges = useTaskChanges(() => activeTaskId.value)
 const taskArtifacts = useTaskArtifacts(() => activeTaskId.value)
@@ -1885,7 +1887,11 @@ function scrollMessagesToBottom(): void {
       />
     </div>
 
-    <div v-else class="workspace-layout">
+    <div
+      v-else
+      class="workspace-layout"
+      :class="{ 'is-inspector-docked': showInspector && inspectorDocked }"
+    >
       <ProjectSidebar
         :projects="workbench.projects.value"
         :selected-project-id="activeProjectId"
@@ -2028,6 +2034,7 @@ function scrollMessagesToBottom(): void {
       <TaskInspector
         :open="showInspector"
         :active-tab="inspectorTab"
+        :docked="inspectorDocked"
         :task-id="activeTaskId"
         :timeline="taskTimeline.activeTimeline.value"
         :timeline-loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
@@ -2039,6 +2046,7 @@ function scrollMessagesToBottom(): void {
         :artifacts-controller="taskArtifacts"
         @close="showInspector = false"
         @update:active-tab="inspectorTab = $event"
+        @update:docked="inspectorDocked = $event"
         @load-more-permission-audits="taskHistory.loadMorePermissionAudits"
       />
     </div>

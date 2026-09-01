@@ -6,7 +6,7 @@ import type {
   TurnTimelineViewModel
 } from './task-timeline-reducer'
 
-/** 检查器顶层标签；后续 P0-12/13/15 只填内容，不改这组 id。 */
+/** 检查器只保留全局审阅域；Turn 内子任务留在对话主列。 */
 export type InspectorTab = 'timeline' | 'changes' | 'terminal' | 'artifacts'
 
 export interface InspectorTabDefinition {
@@ -22,8 +22,9 @@ export interface InspectorPlaceholderCopy {
 /** 抽屉默认关上，避免常驻 310px 挤占对话列。 */
 export const INSPECTOR_DEFAULT_OPEN = false
 export const INSPECTOR_DEFAULT_TAB: InspectorTab = 'timeline'
-/** 主列仍是侧栏+对话两列；检查器以 overlay 悬浮卡盖住对话，不改栅格。 */
+/** 默认仍是侧栏+对话两列；用户吸附后由 App 临时切到第三列。 */
 export const WORKSPACE_PRIMARY_COLUMNS = ['sidebar', 'conversation'] as const
+/** 默认打开方式保持 overlay，docked 只作为当前工作区的临时布局状态。 */
 export const WORKSPACE_INSPECTOR_PLACEMENT = 'overlay' as const
 
 /** 对话卡「审核」只打开 Changes，不切 Timeline。 */
@@ -31,7 +32,7 @@ export function openChangesReview(): { open: true; tab: 'changes' } {
   return { open: true, tab: 'changes' }
 }
 
-/** Changes 才加宽成审阅工作区；其它标签保持普通悬浮卡尺寸。 */
+/** 变更、产物加宽成审阅工作区；时间线/终端保持普通悬浮卡。 */
 export function inspectorReviewWorkspaceClass(tab: InspectorTab): string {
   const resolved = resolveInspectorTab(tab)
   return resolved === 'changes' || resolved === 'artifacts' ? 'is-review-workspace' : ''

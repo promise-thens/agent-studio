@@ -2418,7 +2418,7 @@ button:disabled {
   background: color-mix(in srgb, var(--danger) 12%, var(--surface-2));
 }
 
-/* 检查器是可拖动的悬浮卡片，不改两栏栅格，也不贴右侧通栏。 */
+/* 检查器默认是可拖动的悬浮卡片；吸附后才让工作区切换为三列。 */
 .workspace-layout > .task-inspector {
   position: absolute;
   top: 12px;
@@ -2436,6 +2436,7 @@ button:disabled {
   background: color-mix(in srgb, var(--surface-1) 96%, var(--surface-0));
   box-shadow: 0 18px 48px rgb(2 5 9 / 34%);
   animation: inspector-slide-in 180ms ease;
+  resize: both;
 }
 
 /* 变更标签加宽，仍是悬浮卡。 */
@@ -2445,25 +2446,16 @@ button:disabled {
   min-width: 420px;
 }
 
+/* 分栏需要更宽的阅读画布，但仍保留窗口边距，避免遮住整个对话。 */
+.workspace-layout > .task-inspector.is-split:not(.is-expanded) {
+  width: min(860px, calc(100% - 24px));
+  min-width: 600px;
+}
+
 .workspace-layout > .task-inspector.is-expanded {
   width: calc(100% - 24px);
   height: calc(100% - 24px);
   min-width: 280px;
-}
-
-.task-inspector.is-review-workspace .inspector-body {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 0;
-}
-
-.task-inspector.is-review-workspace .inspector-body > .task-changes-panel,
-.task-inspector.is-review-workspace .inspector-body > .task-artifacts-panel {
-  flex: 1;
-  min-height: 0;
-  height: 100%;
-  padding: 8px 0 0;
 }
 
 .inspector-toolbar {
@@ -2491,6 +2483,41 @@ button:disabled {
 .inspector-toolbar .icon-button {
   cursor: pointer;
   -webkit-app-region: no-drag;
+}
+
+.inspector-toolbar-content {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inspector-toolbar-content.is-compact {
+  gap: 4px;
+}
+
+.inspector-toolbar-content.is-compact .inspector-tab {
+  min-height: 28px;
+  padding-inline: 7px;
+  font-size: 10px;
+}
+
+.inspector-toolbar-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.inspector-control {
+  width: 28px;
+  height: 28px;
+}
+
+.inspector-control[aria-pressed='true'] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .inspector-tabs {
@@ -2524,7 +2551,38 @@ button:disabled {
   height: 28px;
 }
 
-.inspector-body {
+.inspector-pane-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.inspector-pane-grid.is-split {
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+}
+
+.inspector-pane-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.inspector-pane-column.is-secondary {
+  background: color-mix(in srgb, var(--surface-0) 18%, transparent);
+}
+
+.inspector-pane-divider {
+  width: 1px;
+  background: color-mix(in srgb, var(--border) 82%, transparent);
+}
+
+.inspector-pane {
   min-width: 0;
   min-height: 0;
   flex: 1;
@@ -2536,12 +2594,65 @@ button:disabled {
   scrollbar-width: thin;
 }
 
-.inspector-body > .execution-timeline,
-.inspector-body > .task-changes-panel,
-.inspector-body > .task-artifacts-panel {
+/* 变更与产物由各自内部区域滚动，外层只负责填满当前分栏的剩余高度。 */
+.inspector-pane[data-inspector-tab='changes'],
+.inspector-pane[data-inspector-tab='artifacts'] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.inspector-pane[data-inspector-tab='changes'] > .task-changes-panel,
+.inspector-pane[data-inspector-tab='artifacts'] > .task-artifacts-panel {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.inspector-pane > .execution-timeline,
+.inspector-pane > .task-changes-panel,
+.inspector-pane > .task-artifacts-panel {
   width: 100%;
   margin: 0;
   padding: 4px 4px 16px;
+}
+
+/* 吸附态由 CSS Grid 给聊天列让出真实空间，移动和文本宽度会一起收缩。 */
+.workspace-layout.is-inspector-docked {
+  grid-template-columns: 220px minmax(360px, 1fr) minmax(320px, 38vw);
+}
+
+.workspace-layout.is-inspector-docked > .task-inspector {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  grid-column: 3;
+  grid-row: 1;
+  width: auto;
+  height: auto;
+  min-width: 280px;
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+  box-shadow: none;
+  resize: none;
+  animation: inspector-dock-in 180ms ease;
+}
+
+.workspace-layout.is-inspector-docked .inspector-pane-grid {
+  min-height: 0;
+}
+
+@keyframes inspector-dock-in {
+  from {
+    transform: translateX(12px);
+    opacity: 0.6;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 .inspector-placeholder {
@@ -3575,6 +3686,10 @@ button:disabled {
     grid-template-columns: 220px minmax(0, 1fr);
   }
 
+  .workspace-layout.is-inspector-docked {
+    grid-template-columns: 200px minmax(300px, 1fr) minmax(280px, 40vw);
+  }
+
   .workspace-layout > .task-inspector {
     width: min(360px, calc(100% - 24px));
     min-width: 260px;
@@ -3583,6 +3698,53 @@ button:disabled {
   .workspace-layout > .task-inspector.is-review-workspace:not(.is-expanded) {
     width: min(560px, calc(100% - 24px));
     min-width: 300px;
+  }
+
+  .workspace-layout.is-inspector-docked > .task-inspector {
+    width: auto;
+    min-width: 280px;
+  }
+
+  .workspace-layout > .task-inspector.is-split:not(.is-expanded) {
+    width: min(680px, calc(100% - 24px));
+    min-width: 420px;
+  }
+
+  .workspace-layout.is-inspector-docked > .task-inspector.is-split:not(.is-expanded) {
+    width: auto;
+    min-width: 280px;
+  }
+}
+
+@media (max-width: 980px) {
+  /* 小窗口无法稳定容纳三列，吸附态自动退回悬浮，聊天仍保留最小可用宽度。 */
+  .workspace-layout.is-inspector-docked {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .workspace-layout.is-inspector-docked > .task-inspector {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    grid-column: auto;
+    grid-row: auto;
+    width: min(360px, calc(100% - 24px));
+    height: min(560px, calc(100% - 24px));
+    min-width: 260px;
+    border-width: 1px;
+    border-radius: 12px;
+    box-shadow: 0 18px 48px rgb(2 5 9 / 34%);
+    resize: both;
+  }
+
+  .workspace-layout > .task-inspector.is-split:not(.is-expanded) {
+    width: min(560px, calc(100% - 24px));
+    min-width: 320px;
+  }
+
+  .workspace-layout.is-inspector-docked > .task-inspector.is-split:not(.is-expanded) {
+    width: min(360px, calc(100% - 24px));
+    min-width: 260px;
   }
 }
 
@@ -3859,7 +4021,7 @@ button:disabled {
 }
 
 /* 覆盖审阅工作区的通用内边距，让产物双栏保持统一边界且不产生多层留白。 */
-.task-inspector.is-review-workspace .inspector-body > .task-artifacts-panel {
+.task-inspector.is-review-workspace .inspector-pane > .task-artifacts-panel {
   padding: 0 12px 12px;
 }
 
