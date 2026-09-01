@@ -321,9 +321,11 @@ function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
     case 'tool-call': {
       const toolCallId = readBoundedText(payload.toolCallId, MAX_EVENT_FIELD_BYTES)
       const title = readBoundedText(payload.title, MAX_EVENT_FIELD_BYTES, true)
+      const parentId = readOptionalParentId(payload.parentId)
       if (
         !toolCallId ||
         title === null ||
+        parentId === null ||
         (payload.status !== undefined && !isOneOf(payload.status, AGENT_TOOL_STATUSES))
       ) {
         return null
@@ -333,15 +335,18 @@ function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
         kind: 'tool-call',
         toolCallId,
         title,
-        ...(payload.status === undefined ? {} : { status: payload.status })
+        ...(payload.status === undefined ? {} : { status: payload.status }),
+        ...(parentId === undefined ? {} : { parentId })
       }
     }
     case 'tool-update': {
       const toolCallId = readBoundedText(payload.toolCallId, MAX_EVENT_FIELD_BYTES)
       const title = readOptionalEventText(payload.title)
+      const parentId = readOptionalParentId(payload.parentId)
       if (
         !toolCallId ||
         title === null ||
+        parentId === null ||
         (payload.status !== undefined && !isOneOf(payload.status, AGENT_TOOL_STATUSES))
       ) {
         return null
@@ -351,7 +356,8 @@ function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
         kind: 'tool-update',
         toolCallId,
         ...(title === undefined ? {} : { title }),
-        ...(payload.status === undefined ? {} : { status: payload.status })
+        ...(payload.status === undefined ? {} : { status: payload.status }),
+        ...(parentId === undefined ? {} : { parentId })
       }
     }
     case 'plan': {
@@ -445,6 +451,14 @@ function parsePublicAgentEventBase(payload: Record<string, unknown>): PublicAgen
 
 function readOptionalEventText(value: unknown): string | undefined | null {
   return value === undefined ? undefined : readBoundedText(value, MAX_EVENT_FIELD_BYTES, true)
+}
+
+/**
+ * parentId 必须是有界非空字符串；缺省省略，非法/超长则整条事件拒绝，避免半棵脏树进 Renderer。
+ */
+function readOptionalParentId(value: unknown): string | undefined | null {
+  if (value === undefined) return undefined
+  return readBoundedText(value, MAX_EVENT_FIELD_BYTES)
 }
 
 function parsePlanEntry(value: unknown): {

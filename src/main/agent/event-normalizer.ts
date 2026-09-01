@@ -192,14 +192,16 @@ function limitDraft(event: AgentEventDraft): LimitedDraft {
     case 'tool-call': {
       const toolCallId = limitText(event.toolCallId, MAX_SHORT_TEXT_BYTES)
       const title = limitText(event.title, MAX_SHORT_TEXT_BYTES)
-      truncated ||= toolCallId.truncated || title.truncated
+      const parentId = copyOptionalParentId(event.parentId)
+      truncated ||= toolCallId.truncated || title.truncated || parentId.truncated
       return {
         event: {
           ...base,
           kind: 'tool-call',
           toolCallId: toolCallId.value,
           title: title.value,
-          ...(event.status != null ? { status: event.status } : {})
+          ...(event.status != null ? { status: event.status } : {}),
+          ...(parentId.value != null ? { parentId: parentId.value } : {})
         },
         truncated
       }
@@ -207,14 +209,16 @@ function limitDraft(event: AgentEventDraft): LimitedDraft {
     case 'tool-update': {
       const toolCallId = limitText(event.toolCallId, MAX_SHORT_TEXT_BYTES)
       const title = limitOptionalText(event.title, MAX_SHORT_TEXT_BYTES)
-      truncated ||= toolCallId.truncated || title.truncated
+      const parentId = copyOptionalParentId(event.parentId)
+      truncated ||= toolCallId.truncated || title.truncated || parentId.truncated
       return {
         event: {
           ...base,
           kind: 'tool-update',
           toolCallId: toolCallId.value,
           ...(title.value != null ? { title: title.value } : {}),
-          ...(event.status != null ? { status: event.status } : {})
+          ...(event.status != null ? { status: event.status } : {}),
+          ...(parentId.value != null ? { parentId: parentId.value } : {})
         },
         truncated
       }
@@ -376,6 +380,21 @@ function limitOptionalText(
 ): { value?: string; truncated: boolean } {
   if (value == null) return { truncated: false }
   return limitText(value, maxBytes)
+}
+
+/**
+ * parentId 只走短文本白名单：空白不当成稳定父身份，超长截断。
+ * 不得从 title / _meta / 未知键补这个字段。
+ */
+function copyOptionalParentId(value: string | null | undefined): {
+  value?: string
+  truncated: boolean
+} {
+  const limited = limitOptionalText(value, MAX_SHORT_TEXT_BYTES)
+  if (limited.value == null || !limited.value.trim()) {
+    return { truncated: limited.truncated }
+  }
+  return limited
 }
 
 /** 按 Unicode code point 截断，避免在中文或 emoji 的 UTF-8 字节中间切开。 */

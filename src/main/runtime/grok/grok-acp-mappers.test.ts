@@ -298,3 +298,94 @@ describe('mapGrokPermissionRequest 读/写映射', () => {
     expect(deletion?.impact).not.toContain('指定文件')
   })
 })
+
+describe('mapGrokSessionUpdate 子 Agent parentId', () => {
+  it('标题含 subagent / 子 Agent 时不发明 parentId', () => {
+    for (const title of ['subagent 探查测试结构', '子 Agent 改登录逻辑']) {
+      const events = mapGrokSessionUpdate(
+        {
+          sessionId: SESSION_ID,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tool-subagent-title',
+            title,
+            status: 'in_progress'
+          }
+        },
+        redactFakeText
+      )
+
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({
+        kind: 'tool-call',
+        toolCallId: 'tool-subagent-title',
+        title
+      })
+      expect(events[0]).not.toHaveProperty('parentId')
+      expect(JSON.stringify(events)).not.toContain('"parentId"')
+    }
+  })
+
+  it('ACP 未知键 parentToolCallId / _meta / agentId 不得映射为 parentId', () => {
+    const events = mapGrokSessionUpdate(
+      {
+        sessionId: SESSION_ID,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'child-1',
+          title: '读取文件',
+          status: 'pending',
+          parentToolCallId: 'parent-1',
+          parentId: 'parent-1',
+          agentId: 'agent-child',
+          rawInput: { apiKey: FAKE_KEY },
+          _meta: { parentToolCallId: 'parent-1', secret: FAKE_KEY }
+        } as unknown as acp.SessionUpdate
+      },
+      redactFakeText
+    )
+
+    expect(events[0]).toMatchObject({
+      kind: 'tool-call',
+      toolCallId: 'child-1',
+      title: '读取文件'
+    })
+    expect(events[0]).not.toHaveProperty('parentId')
+    const serialized = JSON.stringify(events)
+    expect(serialized).not.toContain('"parentId"')
+    expect(serialized).not.toContain('parentToolCallId')
+    expect(serialized).not.toContain('agentId')
+    expect(serialized).not.toContain('_meta')
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain(FAKE_KEY)
+  })
+
+  it('tool_call_update 同样不从未知键或标题发明 parentId', () => {
+    const events = mapGrokSessionUpdate(
+      {
+        sessionId: SESSION_ID,
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'child-1',
+          title: 'subagent 探查测试结构',
+          status: 'completed',
+          parentToolCallId: 'parent-1',
+          _meta: { agentId: 'agent-child' }
+        } as unknown as acp.SessionUpdate
+      },
+      redactFakeText
+    )
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'tool-update',
+        toolCallId: 'child-1',
+        title: 'subagent 探查测试结构',
+        status: 'completed'
+      })
+    ])
+    expect(events[0]).not.toHaveProperty('parentId')
+    expect(JSON.stringify(events)).not.toContain('"parentId"')
+    expect(JSON.stringify(events)).not.toContain('parentToolCallId')
+  })
+})

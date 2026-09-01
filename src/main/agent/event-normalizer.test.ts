@@ -165,6 +165,80 @@ describe('AgentEventNormalizer', () => {
     expect(structuredClone(event)).toEqual(event)
     expect(JSON.parse(JSON.stringify(event))).toEqual(event)
   })
+
+  it('无 parentId 的工具事件形状不变，标题含 subagent 不得发明父子关系', () => {
+    const event = createNormalizer().normalize({
+      ...draftBase(),
+      kind: 'tool-call',
+      toolCallId: 'tool-1',
+      title: 'subagent 探查测试结构',
+      status: 'in_progress'
+    })
+
+    expect(event).toEqual({
+      ...draftBase(),
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: OBSERVED_AT,
+      kind: 'tool-call',
+      toolCallId: 'tool-1',
+      title: 'subagent 探查测试结构',
+      status: 'in_progress'
+    })
+    expect(event).not.toHaveProperty('parentId')
+  })
+
+  it('工具草稿未知键必须丢掉，白名单 parentId 经短文本限长后保留', () => {
+    const longParent = `parent-${'中'.repeat(3_000)}`
+    const event = createNormalizer().normalize({
+      ...draftBase(),
+      kind: 'tool-call',
+      toolCallId: 'child-1',
+      title: '子 Agent 改登录逻辑',
+      status: 'in_progress',
+      parentId: longParent,
+      parentToolCallId: 'should-drop',
+      rawInput: { apiKey: 'fake-secret' },
+      _meta: { parentToolCallId: 'meta-parent' }
+    } as unknown as AgentEventDraft)
+
+    expect(event).toMatchObject({
+      kind: 'tool-call',
+      toolCallId: 'child-1',
+      title: '子 Agent 改登录逻辑',
+      status: 'in_progress',
+      truncated: true
+    })
+    if (event?.kind !== 'tool-call') throw new Error('预期得到 tool-call')
+    expect(event.parentId).toBeDefined()
+    expect(event.parentId?.startsWith('parent-')).toBe(true)
+    expect(Buffer.byteLength(event.parentId ?? '', 'utf8')).toBeLessThanOrEqual(4 * 1024)
+    const serialized = JSON.stringify(event)
+    expect(serialized).not.toContain('parentToolCallId')
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain('fake-secret')
+    expect(serialized).not.toContain('_meta')
+  })
+
+  it('tool-update 同样只拷贝白名单 parentId，不把协议键透传出去', () => {
+    const event = createNormalizer().normalize({
+      ...draftBase(),
+      kind: 'tool-update',
+      toolCallId: 'child-1',
+      status: 'completed',
+      parentId: 'parent-tool-1',
+      parentToolCallId: 'drop-me'
+    } as unknown as AgentEventDraft)
+
+    expect(event).toMatchObject({
+      kind: 'tool-update',
+      toolCallId: 'child-1',
+      status: 'completed',
+      parentId: 'parent-tool-1'
+    })
+    expect(JSON.stringify(event)).not.toContain('parentToolCallId')
+  })
 })
 
 function createNormalizer(): AgentEventNormalizer {

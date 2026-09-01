@@ -216,6 +216,7 @@ export function mapGrokSessionUpdate(
         }
       ]
     case 'tool_call': {
+      // 观察白名单为空：SDK 1.3 ToolCall 无稳定 parent/agentId。不得从 title/_meta/未知键发明 parentId。
       const toolEvent: AgentEventDraft = {
         ...base,
         kind: 'tool-call',
@@ -226,6 +227,7 @@ export function mapGrokSessionUpdate(
       return appendMappedDiffEvent(toolEvent, update.toolCallId, update.content, base, redactText)
     }
     case 'tool_call_update': {
+      // 观察白名单为空：SDK 1.3 ToolCallUpdate 同样无 parentToolCallId，不读 _meta。
       const toolEvent: AgentEventDraft = {
         ...base,
         kind: 'tool-update',

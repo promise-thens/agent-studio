@@ -44,6 +44,10 @@ export type PublicAgentToolCallEvent = PublicAgentEventBase & {
   toolCallId: string
   title: string
   status?: AgentToolStatus
+  /**
+   * 父 tool 的稳定 toolCallId。无白名单来源时缺省，Renderer 不得据此猜树。
+   */
+  parentId?: string
 }
 
 export type PublicAgentToolUpdateEvent = PublicAgentEventBase & {
@@ -51,6 +55,10 @@ export type PublicAgentToolUpdateEvent = PublicAgentEventBase & {
   toolCallId: string
   title?: string
   status?: AgentToolStatus
+  /**
+   * 父 tool 的稳定 toolCallId。无白名单来源时缺省，Renderer 不得据此猜树。
+   */
+  parentId?: string
 }
 
 export type PublicAgentToolEvent = PublicAgentToolCallEvent | PublicAgentToolUpdateEvent

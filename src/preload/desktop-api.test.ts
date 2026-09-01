@@ -339,6 +339,70 @@ describe('窄 Preload API', () => {
     expect(JSON.stringify(listener.mock.calls)).not.toContain('private')
   })
 
+  it('工具事件只接受有界 parentId，未知键与超长值不得进入 Renderer', () => {
+    const ipcRenderer = createIpcRenderer()
+    const agent = createAgentDesktopApi(ipcRenderer)
+    const listener = vi.fn()
+    agent.onEvent(listener)
+    const eventHandler = ipcRenderer.on.mock.calls[0]?.[1]
+    const base = {
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-18T00:00:00.000Z',
+      kind: 'tool-call',
+      toolCallId: 'child-1',
+      title: '读取文件',
+      status: 'in_progress'
+    }
+
+    eventHandler?.({}, { ...base, parentId: 'parent-tool-1' })
+    eventHandler?.({}, { ...base, sequence: 2, title: 'subagent 探查测试结构' })
+    eventHandler?.(
+      {},
+      {
+        ...base,
+        sequence: 3,
+        kind: 'tool-update',
+        title: '子 Agent 改登录逻辑',
+        status: 'completed',
+        parentId: 'parent-tool-1',
+        parentToolCallId: 'should-drop',
+        rawInput: { apiKey: 'fake-secret' },
+        _meta: { parentToolCallId: 'meta-parent' },
+        runtimeSessionId: 'runtime-private'
+      }
+    )
+    eventHandler?.({}, { ...base, sequence: 4, parentId: 'p'.repeat(4 * 1024 + 1) })
+    eventHandler?.({}, { ...base, sequence: 5, parentId: '' })
+
+    expect(listener.mock.calls.map((call) => call[0])).toEqual([
+      { ...base, parentId: 'parent-tool-1' },
+      { ...base, sequence: 2, title: 'subagent 探查测试结构' },
+      {
+        runtimeId: 'grok',
+        capabilityState: 'native',
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        sequence: 3,
+        observedAt: '2026-08-18T00:00:00.000Z',
+        kind: 'tool-update',
+        toolCallId: 'child-1',
+        title: '子 Agent 改登录逻辑',
+        status: 'completed',
+        parentId: 'parent-tool-1'
+      }
+    ])
+    expect(listener).toHaveBeenCalledTimes(3)
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('parentToolCallId')
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('rawInput')
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('fake-secret')
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('runtime-private')
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('_meta')
+  })
+
   it('进入对话只重建公开恢复状态，剥掉 runtimeSessionId', async () => {
     const ipcRenderer = createIpcRenderer()
     ipcRenderer.invoke.mockResolvedValue({

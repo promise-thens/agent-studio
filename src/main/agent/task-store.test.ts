@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, open, readFile, readdir, rm, writeFile } from 'node:fs/
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentRuntimeCapabilitySnapshot } from '../../shared/agent'
+import type { AgentEvent, AgentRuntimeCapabilitySnapshot } from '../../shared/agent'
 import { ProjectRegistry } from '../project/project-registry'
 import { AtomicJsonWriter } from '../storage/atomic-json-file'
 import { TaskStore, projectPersistedAgentEvent } from './task-store'
@@ -247,6 +247,92 @@ describe('TaskStore', () => {
     ])
     expect(JSON.stringify(page)).not.toContain('private-session')
     expect(JSON.stringify(page)).not.toContain('base64')
+  })
+
+  it('工具事件 parentId 可持久化往返，未知键不得落盘', async () => {
+    const { store } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '派出子任务',
+      model: { modelId: 'model-1' }
+    })
+    await store.appendEvent(
+      projectPersistedAgentEvent(
+        {
+          runtimeId: 'grok',
+          capabilityState: 'native',
+          runtimeSessionId: 'private-session',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          sequence: 1,
+          observedAt: '2026-08-12T00:00:00.000Z',
+          kind: 'tool-call',
+          toolCallId: 'child-1',
+          title: '读取文件',
+          status: 'in_progress',
+          parentId: 'parent-fake-secret',
+          parentToolCallId: 'should-drop',
+          rawInput: { apiKey: 'fake-secret' }
+        } as unknown as AgentEvent,
+        (text) => text.replaceAll('fake-secret', '[REDACTED]')
+      )
+    )
+
+    const page = await store.listEvents('task-1', 'turn-1')
+    expect(page.items).toEqual([
+      expect.objectContaining({
+        kind: 'tool-call',
+        toolCallId: 'child-1',
+        title: '读取文件',
+        status: 'in_progress',
+        parentId: 'parent-[REDACTED]'
+      })
+    ])
+    const serialized = JSON.stringify(page)
+    expect(serialized).not.toContain('private-session')
+    expect(serialized).not.toContain('parentToolCallId')
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain('fake-secret')
+  })
+
+  it('无 parentId 的工具事件持久化后仍不含该键', async () => {
+    const { store } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '普通工具',
+      model: { modelId: 'model-1' }
+    })
+    await store.appendEvent(
+      projectPersistedAgentEvent(
+        {
+          runtimeId: 'grok',
+          capabilityState: 'native',
+          runtimeSessionId: 'private-session',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          sequence: 1,
+          observedAt: '2026-08-12T00:00:00.000Z',
+          kind: 'tool-update',
+          toolCallId: 'tool-1',
+          title: '子 Agent 改登录逻辑',
+          status: 'completed'
+        },
+        (text) => text
+      )
+    )
+
+    const page = await store.listEvents('task-1', 'turn-1')
+    expect(page.items).toEqual([
+      expect.objectContaining({
+        kind: 'tool-update',
+        toolCallId: 'tool-1',
+        title: '子 Agent 改登录逻辑',
+        status: 'completed'
+      })
+    ])
+    expect(page.items[0]).not.toHaveProperty('parentId')
   })
 
   it('同 Task 重绑 Runtime session 时保留历史身份，且详情 DTO 仍不暴露 session ID', async () => {

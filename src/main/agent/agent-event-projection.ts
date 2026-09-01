@@ -9,6 +9,7 @@ import type { PublicAgentDiffReviewReference, PublicAgentEvent } from '../../sha
 
 const MAX_PUBLIC_DIFF_PATHS = 20
 const MAX_PUBLIC_DIFF_PATH_BYTES = 4 * 1024
+const MAX_PUBLIC_SHORT_TEXT_BYTES = 4 * 1024
 
 /**
  * 把 Main 内部事件投影为 Renderer 公开 DTO。
@@ -45,22 +46,28 @@ export function projectPublicAgentEvent(
         attachmentKind: 'image',
         originalName: redactText(event.originalName)
       }
-    case 'tool-call':
+    case 'tool-call': {
+      const parentId = copyPublicParentId(event.parentId, redactText)
       return {
         ...base,
         kind: 'tool-call',
         toolCallId: redactText(event.toolCallId),
         title: redactText(event.title),
-        ...(event.status ? { status: event.status } : {})
+        ...(event.status ? { status: event.status } : {}),
+        ...(parentId ? { parentId } : {})
       }
-    case 'tool-update':
+    }
+    case 'tool-update': {
+      const parentId = copyPublicParentId(event.parentId, redactText)
       return {
         ...base,
         kind: 'tool-update',
         toolCallId: redactText(event.toolCallId),
         ...(event.title ? { title: redactText(event.title) } : {}),
-        ...(event.status ? { status: event.status } : {})
+        ...(event.status ? { status: event.status } : {}),
+        ...(parentId ? { parentId } : {})
       }
+    }
     case 'plan':
       return {
         ...base,
@@ -96,6 +103,19 @@ export function projectPublicAgentEvent(
         ...(event.code ? { code: redactText(event.code) } : {})
       }
   }
+}
+
+/**
+ * 公开 parentId 必须先脱敏再按 toolCallId 同一套短文本上限截断。
+ * 空白不当成稳定父身份，避免历史/实时树用空键分组。
+ */
+function copyPublicParentId(
+  parentId: string | undefined,
+  redactText: (text: string) => string
+): string | undefined {
+  if (!parentId?.trim()) return undefined
+  const redacted = limitUtf8Text(redactText(parentId), MAX_PUBLIC_SHORT_TEXT_BYTES)
+  return redacted.trim() ? redacted : undefined
 }
 
 function projectDiffReference(

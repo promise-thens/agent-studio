@@ -334,6 +334,10 @@ export type AgentToolCallEvent = AgentEventBase & {
   toolCallId: string
   title: string
   status?: AgentToolStatus
+  /**
+   * 父 tool 的稳定 toolCallId。只允许观察白名单映射；缺省表示扁平工具行，禁止用标题猜测。
+   */
+  parentId?: string
 }
 
 export type AgentToolUpdateEvent = AgentEventBase & {
@@ -341,6 +345,10 @@ export type AgentToolUpdateEvent = AgentEventBase & {
   toolCallId: string
   title?: string
   status?: AgentToolStatus
+  /**
+   * 父 tool 的稳定 toolCallId。只允许观察白名单映射；缺省表示扁平工具行，禁止用标题猜测。
+   */
+  parentId?: string
 }
 
 export type AgentToolEvent = AgentToolCallEvent | AgentToolUpdateEvent

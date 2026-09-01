@@ -143,12 +143,16 @@ export type PersistedAgentEvent =
       toolCallId: string
       title: string
       status?: AgentToolStatus
+      /** 父 tool 的稳定 toolCallId；历史回放必须与实时同一字段，禁止用标题补。 */
+      parentId?: string
     })
   | (PersistedAgentEventBase & {
       kind: 'tool-update'
       toolCallId: string
       title?: string
       status?: AgentToolStatus
+      /** 父 tool 的稳定 toolCallId；历史回放必须与实时同一字段，禁止用标题补。 */
+      parentId?: string
     })
   | (PersistedAgentEventBase & { kind: 'plan'; entries: AgentPlanEntry[] })
   | (PersistedAgentEventBase & { kind: 'diff'; diffs: AgentDiff[]; toolCallId?: string })

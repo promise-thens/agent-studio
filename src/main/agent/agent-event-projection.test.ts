@@ -125,4 +125,65 @@ describe('projectPublicAgentEvent', () => {
     expect(JSON.stringify(projected)).not.toContain('after')
     expect(JSON.stringify(projected)).not.toContain('fake patch body')
   })
+
+  it('工具事件无 parentId 时形状不变，未知键与 parentToolCallId 丢弃', () => {
+    const event = {
+      ...BASE_EVENT,
+      kind: 'tool-call',
+      toolCallId: 'child-1',
+      title: 'subagent 探查测试结构',
+      status: 'in_progress',
+      parentToolCallId: 'should-drop',
+      rawInput: { apiKey: 'fake-secret' },
+      _meta: { parent: 'x' }
+    } as unknown as AgentEvent
+
+    const projected = projectPublicAgentEvent(event, (text) =>
+      text.replace('fake-secret', '[REDACTED]')
+    )
+
+    expect(projected).toEqual({
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-18T00:00:00.000Z',
+      kind: 'tool-call',
+      toolCallId: 'child-1',
+      title: 'subagent 探查测试结构',
+      status: 'in_progress'
+    })
+    expect(projected).not.toHaveProperty('parentId')
+    expect(JSON.stringify(projected)).not.toContain('runtime-session-private')
+    expect(JSON.stringify(projected)).not.toContain('parentToolCallId')
+    expect(JSON.stringify(projected)).not.toContain('rawInput')
+  })
+
+  it('白名单 parentId 脱敏限长后进入公开工具事件', () => {
+    const event = {
+      ...BASE_EVENT,
+      kind: 'tool-update',
+      toolCallId: 'child-1',
+      title: '子 Agent 改登录逻辑',
+      status: 'completed',
+      parentId: `parent-fake-secret-${'中'.repeat(3_000)}`
+    } as unknown as AgentEvent
+
+    const projected = projectPublicAgentEvent(event, (text) =>
+      text.replaceAll('fake-secret', '[REDACTED]')
+    )
+
+    expect(projected).toMatchObject({
+      kind: 'tool-update',
+      toolCallId: 'child-1',
+      title: '子 Agent 改登录逻辑',
+      status: 'completed'
+    })
+    if (projected.kind !== 'tool-update') throw new Error('预期得到 tool-update')
+    expect(projected.parentId).toContain('parent-[REDACTED]-')
+    expect(projected.parentId).not.toContain('fake-secret')
+    expect(Buffer.byteLength(projected.parentId ?? '', 'utf8')).toBeLessThanOrEqual(4 * 1024)
+    expect(JSON.stringify(projected)).not.toContain('runtime-session-private')
+  })
 })

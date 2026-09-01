@@ -2,7 +2,7 @@
 
 > **致执行者：** 产品已确认要做通用多 Agent 工作台。Grok Build 会分发子 Agent；界面不要把它们摊成一长串互不相关的工具卡，而要做成可折叠的嵌套任务，对标 Claude Code Desktop。
 >
-> **状态：** 待开始（前置：P0-10A 壳；GACP-01 已关闭且未见父子字段）
+> **状态：** 任务 1 观察已补（method: `sdk+mapper+fixtures`，白名单为空）；任务 2/3 未开始（前置：P0-10A 壳；GACP-01 已关闭且未见父子字段）
 >
 > **插入点：** P0-10A 换皮之后再接分组。GACP-01 观察表 F 节全部 `not-observed`，因此本计划先保持扁平，有稳定父子字段后才能嵌套，不能靠猜 title。不要重开 GACP-01，也不要挡 GACP-02 / P0-10A。
 
@@ -127,13 +127,15 @@ Turn
 
 ## 任务 1: 先观察，再决定能不能嵌套
 
-- [ ] **第 1 步: 补观察表 F 节（不必重开 GACP-01）**
+- [x] **第 1 步: 补观察表 F 节（不必重开 GACP-01）**
       说明：真机让 Grok 分两个探查任务。记录 tool 标题、kind、是否有 parent、是否新 session、权限算谁的。写回 `observations/grok-acp-observation.md` F 节即可。
       预期：有稳定字段才进入任务 2；否则只做扁平工具行，不假装树，也不回头挡住 GACP-02。
+      落地：2026-09-01 method=`sdk+mapper+fixtures`。SDK 1.3 / v2 草案均无 `parentToolCallId`/`agentId`；真机派出两个子 Agent 未做。白名单为空。
 
-- [ ] **第 2 步: 公开事件加可选 parent**
+- [x] **第 2 步: 公开事件加可选 parent**
       说明：仅映射观察白名单字段。Preload 丢弃未知键。
       预期：没有字段时旧 Timeline 测试全绿。
+      落地：内部/公开/历史 tool 事件增加可选 `parentId`，经 normalizer → persist → public projection → preload 白名单拷贝。Mapper 不发明该字段。
 
 ## 任务 2: reducer 出 agent-group 节点
 
