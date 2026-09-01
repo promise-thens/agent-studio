@@ -90,7 +90,7 @@
 | 1 | [GACP-03](grokACP计划/gacp-03-structured-permission-evidence.md) | 4 | 询问模式：能过的自动过；browser/screen 保持 L3 | 计划写已落地，真机/GUI 未收口 | P0-11 |
 | 1b | [P0-19g](p0-19g-task-takeover-always-approve.md) | 5 | Task 完全接管（always-approve），默认关 | 代码已落地；开发版 GUI 未走查 | GACP-03；须先观察 yoloMode |
 | 2 | [P0-19a](p0-19a-session-plan-mode.md) | 4 | Plan mode 开关与主列清单 | 代码已落地；1.0.13 为 disabled-path；开发版 GUI 未过 | 与接管互斥 |
-| 3 | [GACP-06](grokACP计划/gacp-06-subagent-timeline.md) | 3 | 子 Agent 嵌套时间线；无父子字段保持扁平 | 待开始 | 先观察字段；皮肤跟 P0-10A |
+| 3 | [GACP-06](grokACP计划/gacp-06-subagent-timeline.md) | 3 | 子 Agent 嵌套时间线；无父子字段保持扁平 | 代码已落地；无父子字段保持扁平；GUI 未走查 | 先观察字段；皮肤跟 P0-10A |
 | 4 | [P0-19b](p0-19b-grok-sandbox-profile.md) | 4 | Grok Sandbox 档位与空闲重启 | 待开始 | 空闲重启纪律 |
 | 5 | [P0-19c](p0-19c-turn-rewind.md) | 4 | 对话 /rewind 与文件 latest-turn 恢复分开 | 待开始 | P0-12 |
 | 6 | [P0-19d](p0-19d-hooks-surface.md) | 3 | Hooks 只读库存，桌面不执行 | 待开始 | grok-home 扫描模式 |
@@ -111,7 +111,7 @@ P0-14 Worktree 仍是 P0-B，可与 GACP-06 并行，不挡本表。
 | [GACP-03](grokACP计划/gacp-03-structured-permission-evidence.md) | 4 | 能过的自动过，不要一个个点 | 计划写已落地，真机/GUI 未收口；纳入 P0-19 | P0-11 后；P0-19 第 1 项 |
 | [GACP-04](grokACP计划/gacp-04-grok-acp-dialect-compat.md) | 4 | Grok ACP 方言兼容契约 | 代码已落地；相关 Vitest 已过（lifecycle/permission E2E 与 GUI 未跑） | P0-10 后、P2 前；不挡 P0-19 |
 | [GACP-05](grokACP计划/gacp-05-client-capability-advertisement.md) | 3 | Client 能力广告 | 待开始 | P0-15 后；未实现不得广告 |
-| [GACP-06](grokACP计划/gacp-06-subagent-timeline.md) | 3 | 子 Agent 嵌套时间线 | 待开始 | P0-10A 换皮之后接分组；GACP-01 未见父子字段，禁止猜树 |
+| [GACP-06](grokACP计划/gacp-06-subagent-timeline.md) | 3 | 子 Agent 嵌套时间线 | 代码已落地；无父子字段保持扁平；GUI 未走查 | P0-10A 换皮之后接分组；GACP-01 未见父子字段，禁止猜树 |
 
 当前 `clientCapabilities: {}` 是诚实状态。GACP-05 之前禁止打开 `fs` / `terminal`。P0-08 尚未完成的 Windows/Linux 生命周期仍留在 P0-08；GACP-01 不再回填这些平台项。
 

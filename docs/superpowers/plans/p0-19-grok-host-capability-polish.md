@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。本文件是**程序索引**，不是一次性写完的实现清单。每个子系统只在对应分计划里落地。
 >
-> **状态：** 已立项（2026-08-31 产品确认）。GACP-03 / P0-19g / P0-19a 代码已落地（开发版 GUI 未过）。下一步 GACP-06。
+> **状态：** 已立项（2026-08-31 产品确认）。GACP-03 / P0-19g / P0-19a / GACP-06 代码已落地（开发版 GUI 未过）。下一步 P0-19b。
 >
 > **插入点：** 当前主线。P1 扩展与 P2 Codex 搁置期间，Grok 日用能力按本程序推进。P0-13 产物走查仍建议做，但 **2026-08-31 确认：P0-10C 至 P0-13 的开发版走查暂时可以通过，不挡 P0-19 新能力开工**。走查可并行补，未走查不得把对应计划标成「开发版 GUI 已过」。
 
@@ -46,7 +46,7 @@
 | Grok 已有 | 桌面现状 | 本程序去向 |
 |---|---|---|
 | Plan mode（`/plan`，先方案再改代码） | 无模式切换；Timeline 已能画 `plan` 节点 | [P0-19a](p0-19a-session-plan-mode.md) |
-| 子 Agent 并行 | 工具扁平；GACP-01 未见父子字段 | 既有 [GACP-06](grokACP计划/gacp-06-subagent-timeline.md)，先观察再嵌套 |
+| 子 Agent 并行 | 代码已落地扁平 + 可选 parentId 暗门；真机白名单仍空 | 既有 [GACP-06](grokACP计划/gacp-06-subagent-timeline.md)；无稳定字段禁止猜树 |
 | 权限 ask / auto / always-approve | 只有 Broker，容易一个个点 | 询问模式收口 [GACP-03](grokACP计划/gacp-03-structured-permission-evidence.md)；完全接管 [P0-19g](p0-19g-task-takeover-always-approve.md) |
 | Sandbox（workspace / read-only / strict） | 未暴露；spawn 无 `--sandbox` | [P0-19b](p0-19b-grok-sandbox-profile.md) |
 | `/rewind` 回退一轮 | 只有 latest-turn 文件撤销 | [P0-19c](p0-19c-turn-rewind.md) 分清对话回退与文件恢复 |
