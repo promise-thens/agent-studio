@@ -1,6 +1,12 @@
 import type { AgentToolStatus } from '../../shared/agent'
 import { formatToolVerbPhrase, type ConversationToolBlock } from './conversation-turn-view'
 
+/** 根卡 + 一层 ToolRow；禁止再套第三层 SubagentCard。 */
+export const SUBAGENT_CARD_MAX_DEPTH = 2
+
+/** 诚实停止：没有 child cancel，停的是整场 Turn，不是某一张卡。 */
+export const SUBAGENT_STOP_COPY = '停止会结束整场 Turn，不能只停这张卡。'
+
 export interface ConversationSubagentMountBlock {
   kind: string
 }
@@ -13,6 +19,21 @@ export interface SubagentToolRowView {
   detail?: string
 }
 
+export interface SubagentStopPolicy {
+  hasChildCancel: false
+  scope: 'turn'
+  copy: typeof SUBAGENT_STOP_COPY
+}
+
+/** 卡片内部若再遇到 group/subagent，摊成 ToolRow，不再递归套卡。 */
+export type SubagentFlattenInput =
+  | ConversationToolBlock
+  | {
+      kind: 'subagent' | 'agent-group'
+      nodeId: string
+      tools: readonly SubagentFlattenInput[]
+    }
+
 export interface SubagentCardView {
   name: string
   status: 'running' | 'completed' | 'failed'
@@ -22,6 +43,10 @@ export interface SubagentCardView {
   /** 失败只标在这张卡上，不并进父助手消息。 */
   errorInParentMessage: false
   tools: SubagentToolRowView[]
+  maxDepth: typeof SUBAGENT_CARD_MAX_DEPTH
+  nestedCardCount: 0
+  stop: SubagentStopPolicy
+  rowKeys: string[]
 }
 
 export interface SubagentToolOwnership {
@@ -60,19 +85,57 @@ export function toSubagentToolRows(tools: readonly ConversationToolBlock[]): Sub
   }))
 }
 
+/** 没有 child cancel 协议，只提供停整场 Turn。 */
+export function subagentStopPolicy(): SubagentStopPolicy {
+  return {
+    hasChildCancel: false,
+    scope: 'turn',
+    copy: SUBAGENT_STOP_COPY
+  }
+}
+
+function isNestedSubagentGroup(
+  item: SubagentFlattenInput
+): item is Extract<SubagentFlattenInput, { kind: 'subagent' | 'agent-group' }> {
+  return item.kind === 'subagent' || item.kind === 'agent-group'
+}
+
+/**
+ * 深度限制 2：卡片内部只出 ToolRow。
+ * 孩子自己又是 group 时摊平，避免第三层 SubagentCard。
+ */
+export function flattenSubagentToolsToRows(
+  tools: readonly SubagentFlattenInput[]
+): SubagentToolRowView[] {
+  const rows: SubagentToolRowView[] = []
+  for (const item of tools) {
+    if (isNestedSubagentGroup(item)) {
+      rows.push(...flattenSubagentToolsToRows(item.tools))
+      continue
+    }
+    rows.push(...toSubagentToolRows([item]))
+  }
+  return rows
+}
+
 export function toSubagentCardView(block: {
   name: string
   status: 'running' | 'completed' | 'failed'
-  tools: readonly ConversationToolBlock[]
+  tools: readonly SubagentFlattenInput[]
 }): SubagentCardView {
+  const tools = flattenSubagentToolsToRows(block.tools)
   return {
     name: block.name,
     status: block.status,
     statusLabel: subagentStatusLabel(block.status),
-    countLine: formatSubagentCountLine(block.tools.length),
+    countLine: formatSubagentCountLine(tools.length),
     defaultExpanded: block.status === 'running',
     errorInParentMessage: false,
-    tools: toSubagentToolRows(block.tools)
+    tools,
+    maxDepth: SUBAGENT_CARD_MAX_DEPTH,
+    nestedCardCount: 0,
+    stop: subagentStopPolicy(),
+    rowKeys: tools.map((row) => row.key)
   }
 }
 

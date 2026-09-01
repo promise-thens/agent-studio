@@ -983,6 +983,13 @@ button:disabled {
   background: color-mix(in srgb, var(--surface-2) 58%, transparent);
 }
 
+.subagent-stop-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 .conversation-availability {
   margin: 0;
   color: var(--text-3);

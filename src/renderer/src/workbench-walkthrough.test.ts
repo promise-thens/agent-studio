@@ -17,6 +17,7 @@ const root = dirname(fileURLToPath(import.meta.url))
 const mainCss = readFileSync(join(root, 'assets/main.css'), 'utf8')
 const baseCss = readFileSync(join(root, 'assets/base.css'), 'utf8')
 const conversationTurnSource = readFileSync(join(root, 'components/ConversationTurn.vue'), 'utf8')
+const subagentCardSource = readFileSync(join(root, 'components/SubagentCard.vue'), 'utf8')
 const conversationTurnViewSource = readFileSync(join(root, 'conversation-turn-view.ts'), 'utf8')
 const toolRowSource = readFileSync(join(root, 'components/ToolRow.vue'), 'utf8')
 const permissionSource = readFileSync(join(root, 'components/PermissionPrompt.vue'), 'utf8')
@@ -167,6 +168,7 @@ describe('工作台对照走查（夹具，非桌面 GUI）', () => {
       toolRowSource,
       permissionSource,
       composerSource,
+      subagentCardSource,
       blocks,
       historyCanSend: historySend.canSend,
       permissionPresentation: resolvePermissionCardPresentation(),
@@ -183,6 +185,11 @@ describe('工作台对照走查（夹具，非桌面 GUI）', () => {
     expect(facts.permissionBlocksConversation).toBe(false)
     expect(facts.subagentMountedWithoutParent).toBe(false)
     expect(facts.twoSubagentsShareTools).toBe(false)
+    expect(facts.hasFakeSubagentChildCancel).toBe(false)
+    expect(subagentCardSource).toContain('v-for="tool in tools"')
+    expect(subagentCardSource).toContain(':key="tool.key"')
+    expect(subagentCardSource).not.toMatch(/<SubagentCard\b/)
+    expect(subagentCardSource).toContain("status === 'running'")
     expect(blocks.some(shouldMountSubagentCard)).toBe(false)
     expect(facts.enterSendsWithImeGuard).toBe(true)
     expect(permissionSource).toContain('resolvePermissionOriginLabel')

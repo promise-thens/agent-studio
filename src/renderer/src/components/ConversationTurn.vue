@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { AgentPermissionDecision, AgentPermissionRequest } from '../../../shared/agent'
-import { shouldMountSubagentCard, toSubagentToolRows } from '../conversation-subagent-view'
+import { flattenSubagentToolsToRows, shouldMountSubagentCard } from '../conversation-subagent-view'
 import {
   formatToolVerbPhrase,
   projectConversationTurn,
@@ -152,7 +152,7 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
         data-process-kind="subagent"
         :name="block.name"
         :status="block.status"
-        :tools="toSubagentToolRows(block.tools)"
+        :tools="flattenSubagentToolsToRows(block.tools)"
       />
 
       <div v-else-if="block.kind === 'message'" class="conversation-assistant" data-kind="message">

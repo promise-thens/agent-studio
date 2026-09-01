@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { projectConversationTurn } from './conversation-turn-view'
 import type { ConversationSubagentBlock } from './conversation-turn-view'
@@ -10,13 +13,23 @@ import {
   type TurnTimelineViewModel
 } from './task-timeline-reducer'
 import {
+  SUBAGENT_CARD_MAX_DEPTH,
+  SUBAGENT_STOP_COPY,
+  flattenSubagentToolsToRows,
   formatSubagentCountLine,
   isolateSubagentToolOwnership,
   shouldMountSubagentCard,
   subagentStatusLabel,
+  subagentStopPolicy,
   toSubagentCardView,
   toSubagentToolRows
 } from './conversation-subagent-view'
+
+const root = dirname(fileURLToPath(import.meta.url))
+const subagentCardSource = readFileSync(join(root, 'components/SubagentCard.vue'), 'utf8')
+const conversationTurnSource = readFileSync(join(root, 'components/ConversationTurn.vue'), 'utf8')
+const taskListSource = readFileSync(join(root, 'components/TaskList.vue'), 'utf8')
+const sidebarSource = readFileSync(join(root, 'components/ProjectSidebar.vue'), 'utf8')
 
 function tool(
   toolCallId: string,
@@ -295,5 +308,167 @@ describe('子 Agent 第 7 节皮肤', () => {
       }
     ])
     expect(rows[0]?.label).not.toContain('ls -la')
+  })
+})
+
+describe('GACP-06 任务 3 折叠/停止/深度', () => {
+  it('进行中默认展开，完成和失败默认折', () => {
+    expect(
+      toSubagentCardView(fixtureSubagent('a', '探查测试结构', 'running', [])).defaultExpanded
+    ).toBe(true)
+    expect(
+      toSubagentCardView(fixtureSubagent('b', '改登录逻辑', 'completed', [])).defaultExpanded
+    ).toBe(false)
+    expect(
+      toSubagentCardView(fixtureSubagent('c', '探查测试结构', 'failed', [])).defaultExpanded
+    ).toBe(false)
+    expect(subagentCardSource).toContain("status === 'running'")
+    expect(subagentCardSource).toContain('@toggle')
+    expect(subagentCardSource).toContain(':aria-label=')
+    expect(subagentCardSource).toContain(':title="name"')
+  })
+
+  it('两个并行孩子互不串工具，v-for 用稳定 nodeId 而不是 index', () => {
+    const exploring = fixtureSubagent('task-1:turn-1:tool:child-a', '探查测试结构', 'running', [
+      {
+        kind: 'tool',
+        nodeId: 'task-1:turn-1:tool:read-pkg',
+        label: '读了 package.json',
+        status: 'in_progress',
+        tools: [tool('read-pkg', '读取 package.json', 'in_progress')]
+      }
+    ])
+    const editing = fixtureSubagent('task-1:turn-1:tool:child-b', '改登录逻辑', 'completed', [
+      {
+        kind: 'tool',
+        nodeId: 'task-1:turn-1:tool:write-auth',
+        label: '写入 src/auth.ts',
+        status: 'completed',
+        tools: [tool('write-auth', '写入 src/auth.ts')]
+      }
+    ])
+    const exploringView = toSubagentCardView(exploring)
+    const editingView = toSubagentCardView(editing)
+
+    expect(isolateSubagentToolOwnership([exploring, editing]).sharedToolNodeIds).toEqual([])
+    expect(exploringView.rowKeys).toEqual(['task-1:turn-1:tool:read-pkg'])
+    expect(editingView.rowKeys).toEqual(['task-1:turn-1:tool:write-auth'])
+    expect(subagentCardSource).toContain('v-for="tool in tools"')
+    expect(subagentCardSource).toContain(':key="tool.key"')
+    expect(subagentCardSource).not.toContain('v-for="(tool, index)')
+    expect(subagentCardSource).not.toContain('${tool.label}:${index}')
+    expect(conversationTurnSource).toContain(':key="block.nodeId"')
+    expect(conversationTurnSource).not.toMatch(/v-for="\(block,\s*index\)"/)
+  })
+
+  it('失败只标在这张卡上，不写进父助手消息', () => {
+    const blocks = projectConversationTurn(
+      turn('completed', [
+        agentGroup('spawn-fail', '探查测试结构', 'failed', [
+          tool('read-1', '读取 src/auth.ts', 'failed')
+        ]),
+        {
+          nodeId: 'task-1:turn-1:message:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'message',
+          text: '父 Agent 汇总回复'
+        }
+      ])
+    )
+    const subagent = blocks.find((block) => block.kind === 'subagent')
+    const message = blocks.find((block) => block.kind === 'message')
+    const view = toSubagentCardView(
+      subagent && subagent.kind === 'subagent'
+        ? subagent
+        : fixtureSubagent('missing', '探查测试结构', 'failed', [])
+    )
+
+    expect(subagent).toMatchObject({
+      kind: 'subagent',
+      status: 'failed',
+      name: '探查测试结构'
+    })
+    expect(message).toMatchObject({ kind: 'message', text: '父 Agent 汇总回复' })
+    expect(message && 'text' in message ? message.text : '').not.toMatch(/失败|探查测试结构/)
+    expect(view.errorInParentMessage).toBe(false)
+    expect(view.status).toBe('failed')
+  })
+
+  it('没有 child cancel：源码无「停止此子任务」，文案写清停的是整场 Turn', () => {
+    const policy = subagentStopPolicy()
+    const view = toSubagentCardView(
+      fixtureSubagent('task-1:turn-1:tool:child-a', '探查测试结构', 'running', [])
+    )
+
+    expect(policy.hasChildCancel).toBe(false)
+    expect(policy.scope).toBe('turn')
+    expect(policy.copy).toBe(SUBAGENT_STOP_COPY)
+    expect(policy.copy).toContain('整场 Turn')
+    expect(policy.copy).not.toContain('停止此子任务')
+    expect(view.stop).toEqual(policy)
+    expect(subagentCardSource).not.toContain('停止此子任务')
+    expect(subagentCardSource).not.toContain('cancelTurn')
+    expect(subagentCardSource).toContain('SUBAGENT_STOP_COPY')
+    expect(conversationTurnSource).not.toContain('停止此子任务')
+    expect(conversationTurnSource).toContain('flattenSubagentToolsToRows(block.tools)')
+  })
+
+  it('深度限制 2：嵌套 group 摊成 ToolRow，不再套第三层 SubagentCard', () => {
+    const nestedGroup = {
+      kind: 'subagent' as const,
+      nodeId: 'task-1:turn-1:tool:inner',
+      name: '更里一层',
+      status: 'running' as const,
+      tools: [
+        {
+          kind: 'tool' as const,
+          nodeId: 'task-1:turn-1:tool:read-inner',
+          label: '读了 inner.ts',
+          status: 'completed' as const,
+          tools: [tool('read-inner', '读取 inner.ts')]
+        }
+      ]
+    }
+    const rows = flattenSubagentToolsToRows([
+      {
+        kind: 'tool',
+        nodeId: 'task-1:turn-1:tool:read-1',
+        label: '读了 src/auth.ts',
+        status: 'completed',
+        tools: [tool('read-1', '读取 src/auth.ts')]
+      },
+      nestedGroup
+    ])
+    const view = toSubagentCardView({
+      name: '探查测试结构',
+      status: 'running',
+      tools: [
+        {
+          kind: 'tool',
+          nodeId: 'task-1:turn-1:tool:read-1',
+          label: '读了 src/auth.ts',
+          status: 'completed',
+          tools: [tool('read-1', '读取 src/auth.ts')]
+        },
+        nestedGroup
+      ]
+    })
+
+    expect(SUBAGENT_CARD_MAX_DEPTH).toBe(2)
+    expect(view.maxDepth).toBe(2)
+    expect(view.nestedCardCount).toBe(0)
+    expect(rows.map((row) => row.key)).toEqual([
+      'task-1:turn-1:tool:read-1',
+      'task-1:turn-1:tool:read-inner'
+    ])
+    expect(view.rowKeys).toEqual(['task-1:turn-1:tool:read-1', 'task-1:turn-1:tool:read-inner'])
+    expect(view.tools.some((row) => 'kind' in row)).toBe(false)
+    expect(subagentCardSource).toContain('ToolRow')
+    expect(subagentCardSource).not.toMatch(/<SubagentCard\b/)
+    expect(conversationTurnSource.match(/<SubagentCard\b/g)).toHaveLength(1)
+    expect(taskListSource).not.toContain('SubagentCard')
+    expect(sidebarSource).not.toContain('SubagentCard')
   })
 })

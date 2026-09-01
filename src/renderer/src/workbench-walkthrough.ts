@@ -20,6 +20,8 @@ export interface WorkbenchWalkthroughFacts {
   subagentMountedWithoutParent: boolean
   twoSubagentsShareTools: boolean
   enterSendsWithImeGuard: boolean
+  /** 没有 child cancel 协议时，卡片和主列都不得出现假的「停止此子任务」。 */
+  hasFakeSubagentChildCancel: boolean
 }
 
 /**
@@ -33,6 +35,7 @@ export function collectWorkbenchWalkthroughFacts(input: {
   toolRowSource: string
   permissionSource: string
   composerSource: string
+  subagentCardSource: string
   blocks: readonly { kind: string; label?: string }[]
   historyCanSend: boolean
   permissionPresentation: { variant: string; role: string }
@@ -66,7 +69,10 @@ export function collectWorkbenchWalkthroughFacts(input: {
     subagentMountedWithoutParent: input.blocks.some((block) => block.kind === 'subagent'),
     twoSubagentsShareTools: input.subagentOwnership.sharedToolNodeIds.length > 0,
     enterSendsWithImeGuard:
-      input.composerSource.includes('isComposing') && input.composerSource.includes('229')
+      input.composerSource.includes('isComposing') && input.composerSource.includes('229'),
+    hasFakeSubagentChildCancel:
+      input.subagentCardSource.includes('停止此子任务') ||
+      input.conversationTurnSource.includes('停止此子任务')
   }
 }
 
