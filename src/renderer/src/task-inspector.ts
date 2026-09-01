@@ -3,7 +3,6 @@ import type { PermissionAuditRecord } from '../../shared/task-history'
 import type {
   TaskTimelineViewModel,
   TimelinePlanNode,
-  TimelineToolNode,
   TurnTimelineViewModel
 } from './task-timeline-reducer'
 
@@ -230,7 +229,12 @@ export function projectInspectorTimelineSummary(
   const latest = turns[turns.length - 1]
   const toolCount = turns.reduce(
     (total, turn) =>
-      total + turn.nodes.filter((node): node is TimelineToolNode => node.kind === 'tool').length,
+      total +
+      turn.nodes.reduce((count, node) => {
+        if (node.kind === 'tool') return count + 1
+        if (node.kind === 'agent-group') return count + 1 + node.children.length
+        return count
+      }, 0),
     0
   )
   return {

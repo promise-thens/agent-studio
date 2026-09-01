@@ -110,6 +110,13 @@ function nodeFollowLength(node: TurnTimelineViewModel['nodes'][number]): number 
       0
     )
   if (node.kind === 'tool') return node.title.length + node.status.length
+  if (node.kind === 'agent-group') {
+    return (
+      node.title.length +
+      node.status.length +
+      node.children.reduce((total, child) => total + child.title.length + child.status.length, 0)
+    )
+  }
   return 0
 }
 

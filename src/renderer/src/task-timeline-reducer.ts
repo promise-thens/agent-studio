@@ -102,6 +102,7 @@ export type TaskTimelineNode =
   | TimelineAttachmentNode
   | TimelinePlanNode
   | TimelineToolNode
+  | TimelineAgentGroupNode
   | TimelineCommandNode
   | TimelinePermissionNode
   | TimelineDiffNode
@@ -144,7 +145,20 @@ export interface TimelineToolNode extends TimelineNodeBase {
   toolCallId: string
   title: string
   status: AgentToolStatus | 'unknown'
+  /** 父 tool 的 toolCallId；缺省或悬空时保持扁平，不得按标题猜树。 */
+  parentId?: string
   command?: TimelineCommandEvidenceView
+}
+
+/** 子 Agent 根节点：仅当本 Turn 确有孩子指向该 toolCallId 时才从父流提升。 */
+export interface TimelineAgentGroupNode extends TimelineNodeBase {
+  kind: 'agent-group'
+  toolCallId: string
+  title: string
+  status: AgentToolStatus | 'unknown'
+  parentId?: string
+  command?: TimelineCommandEvidenceView
+  children: TimelineToolNode[]
 }
 
 export interface TimelineCommandNode extends TimelineNodeBase {
@@ -247,6 +261,8 @@ export interface TaskTimelineViewModel {
 export interface TimelineSelectorContext {
   executionSnapshot: TaskExecutionSnapshot
 }
+
+const TERMINAL_TOOL_STATES = new Set<AgentToolStatus>(['completed', 'failed', 'cancelled'])
 
 const SILENT_PERMISSION_OPERATION_NOUN: Record<AgentOperationType, string> = {
   'read-project': '读取',
@@ -537,7 +553,9 @@ function projectNodes(
       const existing = tools.get(key)
       if (existing) {
         if (event.title) existing.title = event.title
-        if (event.status) existing.status = event.status
+        const retained = nextRetainedToolStatus(existing.status, event.status)
+        if (retained) existing.status = retained
+        if (event.parentId) existing.parentId = event.parentId
         const matched = matchCommandEvidence(commands, event.toolCallId)
         if (matched) existing.command = toCommandEvidenceView(matched)
       } else {
@@ -547,7 +565,8 @@ function projectNodes(
           kind: 'tool',
           toolCallId: event.toolCallId,
           title: event.title ?? event.toolCallId,
-          status: event.status ?? 'unknown'
+          status: event.status ?? 'unknown',
+          ...(event.parentId ? { parentId: event.parentId } : {})
         }
         const matched = matchCommandEvidence(commands, event.toolCallId)
         if (matched) node.command = toCommandEvidenceView(matched)
@@ -624,11 +643,135 @@ function projectNodes(
       reason: 'history-truncated',
       message: '部分执行历史因容量限制不可用。'
     })
-  return nodes.sort(
-    (left, right) =>
-      (left.firstSequence ?? 0) - (right.firstSequence ?? 0) ||
-      left.nodeId.localeCompare(right.nodeId)
+  return groupAgentToolNodes(nodes.sort(compareTimelineNodes))
+}
+
+/**
+ * 分组键只有 parentId。标题含 subagent / 子 Agent 不得聚类。
+ * 根必须是本 Turn 已出现的 toolCallId；悬空 parentId 保持扁平，不造空壳。
+ * 孩子先到时先扁平，根到达后再收进 group，且不得在父流复制。
+ */
+function groupAgentToolNodes(nodes: TaskTimelineNode[]): TaskTimelineNode[] {
+  const tools = nodes.filter((node): node is TimelineToolNode => node.kind === 'tool')
+  const toolsByCallId = new Map(tools.map((tool) => [tool.toolCallId, tool]))
+  const validRootIds = new Set<string>()
+  for (const tool of tools) {
+    if (tool.parentId && tool.parentId !== tool.toolCallId && toolsByCallId.has(tool.parentId)) {
+      validRootIds.add(tool.parentId)
+    }
+  }
+  if (validRootIds.size === 0) return nodes
+
+  const childrenByRoot = new Map<string, TimelineToolNode[]>()
+  const absorbedIds = new Set<string>()
+  for (const tool of tools) {
+    const rootId = resolveAgentGroupRoot(tool, toolsByCallId, validRootIds)
+    if (!rootId || tool.toolCallId === rootId) continue
+    absorbedIds.add(tool.toolCallId)
+    const children = childrenByRoot.get(rootId) ?? []
+    children.push(tool)
+    childrenByRoot.set(rootId, children)
+  }
+
+  const grouped: TaskTimelineNode[] = []
+  for (const node of nodes) {
+    if (node.kind !== 'tool') {
+      grouped.push(node)
+      continue
+    }
+    if (absorbedIds.has(node.toolCallId)) continue
+    if (!validRootIds.has(node.toolCallId)) {
+      grouped.push(node)
+      continue
+    }
+    grouped.push(
+      toAgentGroupNode(
+        node,
+        (childrenByRoot.get(node.toolCallId) ?? []).slice().sort(compareTimelineNodes)
+      )
+    )
+  }
+  return grouped
+}
+
+/** 沿 parentId 链走到本 Turn 最外层有效根；中途悬空则停止，避免造空壳。 */
+function resolveAgentGroupRoot(
+  tool: TimelineToolNode,
+  toolsByCallId: Map<string, TimelineToolNode>,
+  validRootIds: Set<string>
+): string | undefined {
+  let current = tool.parentId
+  let found: string | undefined
+  const seen = new Set<string>()
+  while (current && !seen.has(current)) {
+    seen.add(current)
+    if (!toolsByCallId.has(current)) break
+    if (validRootIds.has(current)) found = current
+    current = toolsByCallId.get(current)?.parentId
+  }
+  return found
+}
+
+function toAgentGroupNode(
+  root: TimelineToolNode,
+  children: TimelineToolNode[]
+): TimelineAgentGroupNode {
+  return {
+    nodeId: root.nodeId,
+    taskId: root.taskId,
+    turnId: root.turnId,
+    source: root.source,
+    ...(root.firstSequence != null ? { firstSequence: root.firstSequence } : {}),
+    ...(root.capabilityState ? { capabilityState: root.capabilityState } : {}),
+    ...(root.truncated ? { truncated: true as const } : {}),
+    kind: 'agent-group',
+    toolCallId: root.toolCallId,
+    title: root.title,
+    status: root.status,
+    ...(root.parentId ? { parentId: root.parentId } : {}),
+    ...(root.command ? { command: root.command } : {}),
+    children
+  }
+}
+
+function compareTimelineNodes(left: TaskTimelineNode, right: TaskTimelineNode): number {
+  return (
+    (left.firstSequence ?? 0) - (right.firstSequence ?? 0) ||
+    left.nodeId.localeCompare(right.nodeId)
   )
+}
+
+/**
+ * 终态拒绝回退，与 EventNormalizer 一致：历史乱序不得把已完成卡打回 running。
+ * in_progress → pending 同样拒绝，避免进度条倒退。
+ */
+function nextRetainedToolStatus(
+  current: AgentToolStatus | 'unknown' | undefined,
+  incoming: AgentToolStatus | undefined
+): AgentToolStatus | 'unknown' | undefined {
+  if (!incoming) return current
+  if (current === 'in_progress' && incoming === 'pending') return current
+  if (
+    current &&
+    current !== 'unknown' &&
+    TERMINAL_TOOL_STATES.has(current) &&
+    incoming !== current
+  ) {
+    return current
+  }
+  return incoming
+}
+
+function collectNodeCommandViews(node: TaskTimelineNode): TimelineCommandEvidenceView[] {
+  if (node.kind === 'command-evidence') return [node.command]
+  if (node.kind === 'tool' && node.command) return [node.command]
+  if (node.kind === 'agent-group') {
+    return [
+      ...(node.command ? [node.command] : []),
+      ...node.children.flatMap((child) => (child.command ? [child.command] : []))
+    ]
+  }
+  return []
 }
 
 function selectTurnUsage(
@@ -718,11 +861,7 @@ function selectTaskResultReview(
   const warnings: string[] = []
   if (latest?.historyTruncated) warnings.push('部分执行历史不可用。')
   if (latest?.statusConflict) warnings.push('实时执行状态与持久化状态不一致。')
-  const commandViews = (latest?.nodes ?? []).flatMap((node) => {
-    if (node.kind === 'command-evidence') return [node.command]
-    if (node.kind === 'tool' && node.command) return [node.command]
-    return []
-  })
+  const commandViews = (latest?.nodes ?? []).flatMap(collectNodeCommandViews)
   const uniqueCommands = dedupeCommandViews(commandViews)
   const latestEvidences = uniqueCommands
     .map((view) => facts.commandEvidenceById[view.commandId])

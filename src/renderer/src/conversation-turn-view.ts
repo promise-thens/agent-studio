@@ -16,6 +16,7 @@ import { isActiveConversationTurn } from './task-conversation-view'
 import {
   formatSilentPermissionSummary,
   isSilentPermissionAuditReason,
+  type TimelineAgentGroupNode,
   type TimelineAttachmentNode,
   type TimelinePermissionNode,
   type TimelineTextNode,
@@ -328,7 +329,7 @@ function collectRuntimeMediaPlacements(
 
 /**
  * 把 P0-09 Turn 节点收成主列对话块。
- * 用户句只保留一处；无父子字段时不产出 subagent 组，工具保持扁平。
+ * 用户句只保留一处；仅消费 reducer 的 agent-group，无 parentId 时不产出 subagent 空壳。
  */
 export function projectConversationTurn(
   turn: TurnTimelineViewModel,
@@ -415,6 +416,11 @@ export function projectConversationTurn(
             : formatSilentPermissionSummary(node.audit.operationType, count),
         count
       })
+      index += 1
+      continue
+    }
+    if (node.kind === 'agent-group') {
+      blocks.push(toSubagentBlock(node))
       index += 1
       continue
     }
@@ -532,6 +538,47 @@ function insertPermissionAfterProcess(
     return
   }
   blocks.splice(blocks.length - fromEnd, 0, permission)
+}
+
+/** 只消费 reducer 给出的 agent-group；孩子走内部 ToolRow，不再插回父流。 */
+function toSubagentBlock(node: TimelineAgentGroupNode): ConversationSubagentBlock {
+  const presented = presentToolTitle(node.title)
+  return {
+    kind: 'subagent',
+    nodeId: node.nodeId,
+    name: presented.label || node.toolCallId,
+    status: toSubagentCardStatus(node.status),
+    tools: projectGroupedToolBlocks(node.children)
+  }
+}
+
+/** 卡片只有 running/completed/failed；cancelled 视为失败，pending 仍算进行中。 */
+function toSubagentCardStatus(
+  status: TimelineAgentGroupNode['status']
+): ConversationSubagentBlock['status'] {
+  if (status === 'failed' || status === 'cancelled') return 'failed'
+  if (status === 'completed') return 'completed'
+  return 'running'
+}
+
+function projectGroupedToolBlocks(tools: TimelineToolNode[]): ConversationToolBlock[] {
+  const blocks: ConversationToolBlock[] = []
+  let index = 0
+  while (index < tools.length) {
+    const node = tools[index]
+    if (!node) break
+    const run: TimelineToolNode[] = [node]
+    if (isReadToolTitle(node.title)) {
+      while (index + 1 < tools.length && isReadToolTitle(tools[index + 1]?.title ?? '')) {
+        index += 1
+        const next = tools[index]
+        if (next) run.push(next)
+      }
+    }
+    blocks.push(toToolBlock(run))
+    index += 1
+  }
+  return blocks
 }
 
 function toPlanBlock(

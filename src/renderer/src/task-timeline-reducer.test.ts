@@ -6,7 +6,9 @@ import type { PermissionAuditRecord, TurnHistoryRecord } from '../../shared/task
 import {
   createTaskTimelineFacts,
   reduceTaskTimelineFacts,
-  selectTaskTimeline
+  selectTaskTimeline,
+  type TaskTimelineFacts,
+  type TaskTimelineNode
 } from './task-timeline-reducer'
 
 const TURN: TurnHistoryRecord = {
@@ -650,6 +652,260 @@ describe('Task Timeline reducer', () => {
     expect(permissionNodes[1]?.summary).toBeUndefined()
   })
 })
+
+describe('子 Agent agent-group 分组', () => {
+  it('parentId 指向本 Turn 已有 tool 时，根变成 agent-group，孩子不出现在顶层', () => {
+    const nodes = timelineNodes([
+      thoughtEvent(1),
+      toolCall(2, 'spawn-explore', '探查测试结构', 'in_progress'),
+      toolCall(3, 'read-1', '读取 src/auth.ts', 'completed', 'spawn-explore'),
+      messageEvent(4, '父 Agent 汇总回复')
+    ])
+
+    expect(nodes.map((node) => node.kind)).toEqual(['thought', 'agent-group', 'message'])
+    expect(nodes.find((node) => node.kind === 'tool')).toBeUndefined()
+    expect(nodes.find((node) => node.kind === 'agent-group')).toMatchObject({
+      kind: 'agent-group',
+      nodeId: 'task-1:turn-1:tool:spawn-explore',
+      toolCallId: 'spawn-explore',
+      title: '探查测试结构',
+      status: 'in_progress',
+      children: [
+        expect.objectContaining({
+          kind: 'tool',
+          toolCallId: 'read-1',
+          title: '读取 src/auth.ts',
+          parentId: 'spawn-explore'
+        })
+      ]
+    })
+  })
+
+  it('无 parentId 即使标题含 subagent / 子 Agent 也保持扁平，不造空壳', () => {
+    const nodes = timelineNodes([
+      toolCall(1, 'child-1', 'subagent 探查测试结构', 'in_progress'),
+      toolCall(2, 'child-2', '子 Agent 改登录逻辑', 'completed')
+    ])
+
+    expect(nodes.map((node) => node.kind)).toEqual(['tool', 'tool'])
+    expect(nodes.some((node) => node.kind === 'agent-group')).toBe(false)
+    expect(nodes.map((node) => ('title' in node ? node.title : ''))).toEqual([
+      'subagent 探查测试结构',
+      '子 Agent 改登录逻辑'
+    ])
+  })
+
+  it('孩子先到、根后到：先扁平；根到达后收进 group 且不复制', () => {
+    const withChild = reduceEvents([
+      toolCall(1, 'read-1', '读取 package.json', 'in_progress', 'spawn-explore')
+    ])
+    const before = selectNodes(withChild)
+    expect(before.map((node) => node.kind)).toEqual(['tool'])
+    expect(before[0]).toMatchObject({ kind: 'tool', toolCallId: 'read-1' })
+    expect(before.some((node) => node.kind === 'agent-group')).toBe(false)
+
+    const withRoot = reduceTaskTimelineFacts(withChild, {
+      type: 'events/ingest-public',
+      events: [toolCall(2, 'spawn-explore', '探查测试结构', 'in_progress')]
+    })
+    const after = selectNodes(withRoot)
+    const groups = after.filter((node) => node.kind === 'agent-group')
+    const tools = after.filter((node) => node.kind === 'tool')
+
+    expect(groups).toHaveLength(1)
+    expect(tools).toHaveLength(0)
+    expect(groups[0]).toMatchObject({
+      kind: 'agent-group',
+      toolCallId: 'spawn-explore',
+      firstSequence: 2,
+      children: [expect.objectContaining({ toolCallId: 'read-1', firstSequence: 1 })]
+    })
+    expect(
+      after.filter((node) => 'toolCallId' in node && node.toolCallId === 'read-1')
+    ).toHaveLength(0)
+    expect(groups[0]?.children.filter((child) => child.toolCallId === 'read-1')).toHaveLength(1)
+  })
+
+  it('悬空 parentId 不造空壳 group，保持扁平', () => {
+    const nodes = timelineNodes([
+      toolCall(1, 'orphan-1', '读取 missing-parent.ts', 'completed', 'never-seen-spawn')
+    ])
+
+    expect(nodes).toEqual([
+      expect.objectContaining({
+        kind: 'tool',
+        toolCallId: 'orphan-1',
+        parentId: 'never-seen-spawn'
+      })
+    ])
+    expect(nodes.some((node) => node.kind === 'agent-group')).toBe(false)
+  })
+
+  it('group 与内部 tool 终态后，晚到 in_progress/pending 不得打回 running', () => {
+    const nodes = timelineNodes([
+      toolCall(1, 'spawn-edit', '改登录逻辑', 'completed'),
+      toolCall(2, 'write-1', '写入 src/auth.ts', 'completed', 'spawn-edit'),
+      toolUpdate(3, 'write-1', 'in_progress', 'spawn-edit'),
+      toolUpdate(4, 'spawn-edit', 'pending'),
+      toolUpdate(5, 'spawn-edit', 'in_progress')
+    ])
+    const group = nodes.find((node) => node.kind === 'agent-group')
+
+    expect(group).toMatchObject({
+      kind: 'agent-group',
+      toolCallId: 'spawn-edit',
+      status: 'completed',
+      children: [expect.objectContaining({ toolCallId: 'write-1', status: 'completed' })]
+    })
+    expect(group && 'status' in group ? group.status : '').not.toBe('in_progress')
+    expect(group && 'status' in group ? group.status : '').not.toBe('pending')
+  })
+
+  it('两个并行根的孩子不串组', () => {
+    const nodes = timelineNodes([
+      toolCall(1, 'spawn-explore', '探查测试结构', 'in_progress'),
+      toolCall(2, 'read-pkg', '读取 package.json', 'completed', 'spawn-explore'),
+      toolCall(3, 'spawn-edit', '改登录逻辑', 'completed'),
+      toolCall(4, 'write-auth', '写入 src/auth.ts', 'completed', 'spawn-edit')
+    ])
+    const groups = nodes.filter((node) => node.kind === 'agent-group')
+
+    expect(nodes.map((node) => node.kind)).toEqual(['agent-group', 'agent-group'])
+    expect(groups.map((group) => group.toolCallId)).toEqual(['spawn-explore', 'spawn-edit'])
+    expect(groups[0]?.children.map((child) => child.toolCallId)).toEqual(['read-pkg'])
+    expect(groups[1]?.children.map((child) => child.toolCallId)).toEqual(['write-auth'])
+    expect(groups[0]?.children.some((child) => child.toolCallId === 'write-auth')).toBe(false)
+    expect(groups[1]?.children.some((child) => child.toolCallId === 'read-pkg')).toBe(false)
+  })
+
+  it('切 Task 时树互不污染，错身份事件进 issue 而不是串组', () => {
+    const task1 = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+      type: 'events/ingest-public',
+      events: [
+        toolCall(1, 'spawn-1', '探查测试结构', 'in_progress'),
+        toolCall(2, 'read-1', '读取 a.ts', 'completed', 'spawn-1')
+      ]
+    })
+    const task2 = reduceTaskTimelineFacts(createTaskTimelineFacts('task-2'), {
+      type: 'events/ingest-public',
+      events: [
+        { ...toolCall(1, 'spawn-2', '改登录逻辑', 'completed'), taskId: 'task-2' },
+        {
+          ...toolCall(2, 'write-2', '写入 b.ts', 'completed', 'spawn-2'),
+          taskId: 'task-2'
+        }
+      ]
+    })
+    const polluted = reduceTaskTimelineFacts(task1, {
+      type: 'events/ingest-public',
+      events: [{ ...toolCall(3, 'spawn-2', '改登录逻辑', 'completed'), taskId: 'task-2' }]
+    })
+
+    expect(selectNodes(task1).map((node) => node.kind)).toEqual(['agent-group'])
+    expect(selectNodes(task1)[0]).toMatchObject({ toolCallId: 'spawn-1' })
+    expect(selectNodes(task2)[0]).toMatchObject({
+      kind: 'agent-group',
+      toolCallId: 'spawn-2'
+    })
+    expect(
+      selectNodes(polluted).some((node) => 'toolCallId' in node && node.toolCallId === 'spawn-2')
+    ).toBe(false)
+    expect(Object.values(polluted.integrityIssuesByKey)).toContainEqual(
+      expect.objectContaining({ code: 'identity-mismatch', taskId: 'task-1' })
+    )
+  })
+
+  it('实时乱序与历史顺序收敛为同一棵 agent-group 树', () => {
+    const events = [
+      thoughtEvent(1),
+      toolCall(2, 'spawn-explore', '探查测试结构', 'in_progress'),
+      toolCall(3, 'read-1', '读取 src/auth.ts', 'completed', 'spawn-explore'),
+      toolCall(4, 'spawn-edit', '改登录逻辑', 'completed'),
+      toolCall(5, 'write-1', '写入 src/auth.ts', 'completed', 'spawn-edit'),
+      messageEvent(6, '父 Agent 汇总回复')
+    ]
+    const historyFirst = reduceTaskTimelineFacts(
+      reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+        type: 'turns/upsert',
+        turns: [TURN]
+      }),
+      { type: 'events/ingest-public', events }
+    )
+    const liveReversed = reduceTaskTimelineFacts(
+      reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+        type: 'events/ingest-public',
+        events: [...events].reverse()
+      }),
+      { type: 'turns/upsert', turns: [TURN] }
+    )
+
+    expect(selectNodes(liveReversed)).toEqual(selectNodes(historyFirst))
+    expect(selectNodes(historyFirst).map((node) => node.kind)).toEqual([
+      'user-prompt',
+      'thought',
+      'agent-group',
+      'agent-group',
+      'message'
+    ])
+  })
+})
+
+function thoughtEvent(sequence: number): PublicAgentEvent {
+  return { ...BASE, sequence, kind: 'agent-thought', text: '分析' }
+}
+
+function messageEvent(sequence: number, text: string): PublicAgentEvent {
+  return { ...BASE, sequence, kind: 'agent-message', text }
+}
+
+function toolCall(
+  sequence: number,
+  toolCallId: string,
+  title: string,
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled',
+  parentId?: string
+): PublicAgentEvent {
+  return {
+    ...BASE,
+    sequence,
+    kind: 'tool-call',
+    toolCallId,
+    title,
+    status,
+    ...(parentId ? { parentId } : {})
+  }
+}
+
+function toolUpdate(
+  sequence: number,
+  toolCallId: string,
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled',
+  parentId?: string
+): PublicAgentEvent {
+  return {
+    ...BASE,
+    sequence,
+    kind: 'tool-update',
+    toolCallId,
+    status,
+    ...(parentId ? { parentId } : {})
+  }
+}
+
+function reduceEvents(events: readonly PublicAgentEvent[]): TaskTimelineFacts {
+  return reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+    type: 'events/ingest-public',
+    events
+  })
+}
+
+function selectNodes(state: TaskTimelineFacts): TaskTimelineNode[] {
+  return selectTaskTimeline(state, { executionSnapshot: snapshot('running') }).turns[0]?.nodes ?? []
+}
+
+function timelineNodes(events: readonly PublicAgentEvent[]): TaskTimelineNode[] {
+  return selectNodes(reduceEvents(events))
+}
 
 function permissionAudit(
   overrides: Partial<PermissionAuditRecord> &

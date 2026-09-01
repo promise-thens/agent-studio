@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { projectConversationTurn } from './conversation-turn-view'
 import type { ConversationSubagentBlock } from './conversation-turn-view'
-import type { TimelineToolNode, TurnTimelineViewModel } from './task-timeline-reducer'
+import {
+  createTaskTimelineFacts,
+  reduceTaskTimelineFacts,
+  selectTaskTimeline,
+  type TimelineAgentGroupNode,
+  type TimelineToolNode,
+  type TurnTimelineViewModel
+} from './task-timeline-reducer'
 import {
   formatSubagentCountLine,
   isolateSubagentToolOwnership,
@@ -56,6 +63,25 @@ function fixtureSubagent(
   return { kind: 'subagent', nodeId, name, status, tools }
 }
 
+function agentGroup(
+  toolCallId: string,
+  title: string,
+  status: TimelineToolNode['status'],
+  children: TimelineToolNode[]
+): TimelineAgentGroupNode {
+  return {
+    nodeId: `task-1:turn-1:tool:${toolCallId}`,
+    taskId: 'task-1',
+    turnId: 'turn-1',
+    source: 'agent-event',
+    kind: 'agent-group',
+    toolCallId,
+    title,
+    status,
+    children
+  }
+}
+
 describe('子 Agent 卡挂载门禁', () => {
   it('无 parent 字段时投影不产出 subagent，主列不得挂载空壳', () => {
     const blocks = projectConversationTurn(
@@ -70,6 +96,119 @@ describe('子 Agent 卡挂载门禁', () => {
     expect(shouldMountSubagentCard(undefined)).toBe(false)
     expect(shouldMountSubagentCard({ kind: 'tool' })).toBe(false)
     expect(shouldMountSubagentCard({ kind: 'subagent' })).toBe(true)
+  })
+
+  it('agent-group 投影成 subagent 卡，孩子不出现在父流', () => {
+    const blocks = projectConversationTurn(
+      turn('running', [
+        {
+          nodeId: 'task-1:turn-1:thought:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'thought',
+          text: '先分两路'
+        },
+        agentGroup('spawn-explore', '探查测试结构', 'in_progress', [
+          tool('read-1', '读取 src/auth.ts', 'completed')
+        ]),
+        {
+          nodeId: 'task-1:turn-1:message:1',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          source: 'agent-event',
+          kind: 'message',
+          text: '父 Agent 汇总回复'
+        }
+      ])
+    )
+    const subagent = blocks.find((block) => block.kind === 'subagent')
+
+    expect(blocks.map((block) => block.kind)).toEqual(['user', 'thought', 'subagent', 'message'])
+    expect(subagent).toMatchObject({
+      kind: 'subagent',
+      nodeId: 'task-1:turn-1:tool:spawn-explore',
+      name: '探查测试结构',
+      status: 'running',
+      tools: [
+        expect.objectContaining({ nodeId: 'task-1:turn-1:tool:read-1', label: '读了 src/auth.ts' })
+      ]
+    })
+    expect(blocks.filter((block) => block.kind === 'tool')).toHaveLength(0)
+    expect(shouldMountSubagentCard(subagent)).toBe(true)
+  })
+
+  it('两个并行 agent-group 投影后工具不串 nodeId', () => {
+    const blocks = projectConversationTurn(
+      turn('running', [
+        agentGroup('spawn-explore', '探查测试结构', 'in_progress', [
+          tool('read-pkg', '读取 package.json', 'in_progress')
+        ]),
+        agentGroup('spawn-edit', '改登录逻辑', 'completed', [
+          tool('write-auth', '写入 src/auth.ts')
+        ])
+      ])
+    )
+    const cards = blocks.filter(
+      (block): block is ConversationSubagentBlock => block.kind === 'subagent'
+    )
+
+    expect(cards).toHaveLength(2)
+    expect(cards.map((card) => card.status)).toEqual(['running', 'completed'])
+    expect(isolateSubagentToolOwnership(cards)).toEqual({
+      sharedToolNodeIds: [],
+      toolsByCard: {
+        'task-1:turn-1:tool:spawn-explore': ['task-1:turn-1:tool:read-pkg'],
+        'task-1:turn-1:tool:spawn-edit': ['task-1:turn-1:tool:write-auth']
+      }
+    })
+  })
+
+  it('同一套 reducer 有 parentId 才成组，实时投影可挂载 SubagentCard', () => {
+    const state = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+      type: 'events/ingest-public',
+      events: [
+        {
+          runtimeId: 'grok',
+          capabilityState: 'native',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          observedAt: '2026-08-18T00:00:01.000Z',
+          sequence: 1,
+          kind: 'tool-call',
+          toolCallId: 'spawn-explore',
+          title: '探查测试结构',
+          status: 'in_progress'
+        },
+        {
+          runtimeId: 'grok',
+          capabilityState: 'native',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          observedAt: '2026-08-18T00:00:02.000Z',
+          sequence: 2,
+          kind: 'tool-call',
+          toolCallId: 'read-1',
+          title: '读取 src/auth.ts',
+          status: 'completed',
+          parentId: 'spawn-explore'
+        }
+      ]
+    })
+    const view = selectTaskTimeline(state, {
+      executionSnapshot: { executorEpoch: 'epoch', executionRevision: 0, execution: null }
+    }).turns[0]
+    expect(view).toBeDefined()
+    const blocks = projectConversationTurn(view!)
+    const cards = blocks.filter((block) => shouldMountSubagentCard(block))
+
+    expect(cards).toHaveLength(1)
+    expect(cards[0]).toMatchObject({
+      kind: 'subagent',
+      name: '探查测试结构',
+      status: 'running'
+    })
+    expect(blocks.some((block) => block.kind === 'tool')).toBe(false)
   })
 })
 
