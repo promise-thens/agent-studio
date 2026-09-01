@@ -2181,10 +2181,67 @@ button:disabled {
 
 .composer-footer .model-selector,
 .composer-footer .permission-mode-menu,
+.composer-footer .composer-plan-switch,
 .composer-footer .send-button,
 .composer-footer .stop-button,
 .composer-footer .attach-button {
   flex: 0 0 auto;
+}
+
+.composer-plan-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-height: 25px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--text-3);
+  background: transparent;
+  cursor: pointer;
+}
+
+.composer-plan-switch.is-plan {
+  color: var(--accent);
+}
+
+.composer-plan-switch:hover:not(:disabled),
+.composer-plan-switch[aria-pressed='true'] {
+  border-color: var(--border);
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+
+.composer-plan-switch.is-plan:hover:not(:disabled),
+.composer-plan-switch.is-plan[aria-pressed='true'] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.composer-plan-switch > span {
+  overflow: hidden;
+  min-width: 0;
+  font-size: 9px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-plan-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.composer-plan-status {
+  overflow: hidden;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 9px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer-takeover-hud {
@@ -3387,16 +3444,19 @@ button:disabled {
   }
 }
 
-/* 980 保底：模型、批准模式和发送/停止必须仍在输入框内；优先藏 usage。 */
+/* 980 保底：模型、批准模式、Plan 和发送/停止必须仍在输入框内；优先藏 usage。 */
 @media (max-width: 980px) {
   .composer-footer .model-selector,
   .composer-footer .permission-mode-menu,
+  .composer-footer .composer-plan-switch,
   .composer-footer .send-button,
   .composer-footer .stop-button,
   .composer-footer .attach-button {
     display: inline-flex;
   }
 
+  .composer-plan-switch > span,
+  .composer-plan-status,
   .composer-usage {
     display: none;
   }

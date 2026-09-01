@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import {
+  PhListChecks as ListChecks,
   PhPaperclip as Paperclip,
   PhPaperPlaneTilt as PaperPlaneTilt,
   PhStop as Stop,
@@ -26,6 +27,8 @@ import {
   type SlashCommandItem
 } from '../slash-command-palette'
 import type { TaskPermissionMode } from '../../../shared/task-takeover'
+import { isPlanCommandAdvertised, type ComposerPlanMode } from '../../../shared/session-plan-mode'
+import { resolveComposerPlanStatusCopy, resolveComposerPlanSwitch } from '../composer-plan-mode'
 import ModelSelector from './ModelSelector.vue'
 import SlashCommandPalette from './SlashCommandPalette.vue'
 import TaskPermissionModeMenu from './TaskPermissionModeMenu.vue'
@@ -51,6 +54,9 @@ const props = defineProps<{
   takeoverMayStillBeActive?: boolean
   takeoverHud?: string | null
   setPermissionMode: (mode: TaskPermissionMode) => Promise<void>
+  /** Plan 是独立轴，不是第四个批准档；无广告时按钮保持 disabled。 */
+  planMode?: ComposerPlanMode
+  setPlanMode: (mode: ComposerPlanMode) => Promise<void>
   /** 上下文 used/limit；没数据时不传或传空，模板藏起来。 */
   contextUsage?: string | null
   runtimeCommands?: AgentAvailableCommand[]
@@ -84,6 +90,34 @@ const emit = defineEmits<{
 const pendingTakeover = ref(false)
 const takeoverConfirmBusy = ref(false)
 const takeoverConfirmError = ref('')
+
+const planSwitch = computed(() =>
+  resolveComposerPlanSwitch({
+    advertisedCommands: props.runtimeCommands ?? [],
+    mode: props.planMode ?? 'normal',
+    modelBusy: Boolean(props.modelBusy),
+    composerAction: props.action,
+    hasActiveExecution: props.action === 'stop'
+  })
+)
+const planStatusCopy = computed(() =>
+  resolveComposerPlanStatusCopy({
+    mode: props.planMode ?? 'normal',
+    idle: !props.modelBusy && props.action === 'send',
+    hasPlanCommand: isPlanCommandAdvertised(props.runtimeCommands ?? [])
+  })
+)
+
+/** 只改下一轮发送策略，不得 cancel 当前 turn；无广告或执行中直接忽略。 */
+async function togglePlanMode(): Promise<void> {
+  if (planSwitch.value.disabled) return
+  const next: ComposerPlanMode = (props.planMode ?? 'normal') === 'plan' ? 'normal' : 'plan'
+  try {
+    await props.setPlanMode(next)
+  } catch {
+    // App 已写入错误；本地不得乐观拨开关。
+  }
+}
 
 async function handlePermissionModeSelect(mode: TaskPermissionMode): Promise<void> {
   if (props.modelBusy || props.modelDisabled) return
@@ -378,6 +412,22 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
             :takeover-may-still-be-active="takeoverMayStillBeActive === true"
             @select="handlePermissionModeSelect"
           />
+          <button
+            type="button"
+            class="composer-plan-switch"
+            :class="{ 'is-plan': planSwitch.pressed }"
+            :title="planSwitch.title"
+            :aria-label="planSwitch.title"
+            :aria-pressed="planSwitch.pressed"
+            :disabled="planSwitch.disabled"
+            @click="togglePlanMode"
+          >
+            <ListChecks :size="13" weight="fill" />
+            <span>Plan</span>
+          </button>
+          <span v-if="planStatusCopy" class="composer-plan-status" role="status">{{
+            planStatusCopy
+          }}</span>
           <span v-if="contextUsage" class="composer-usage" title="上下文用量">{{
             contextUsage
           }}</span>

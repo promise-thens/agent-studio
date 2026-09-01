@@ -15,8 +15,14 @@ import type {
 import {
   resolveTakeoverHudCopy,
   taskPermissionModeFromSnapshot,
+  type PermissionPromptStyle,
   type TaskPermissionMode
 } from '../../shared/task-takeover'
+import {
+  isPlanCommandAdvertised,
+  resolvePlanSubmit,
+  type ComposerPlanMode
+} from '../../shared/session-plan-mode'
 import type {
   AgentAvailableCommand,
   AgentAvailableCommandSnapshot
@@ -108,6 +114,12 @@ import {
   matchProductSlashSubmit,
   type SlashCommandItem
 } from './slash-command-palette'
+import {
+  resolveComposerPlanSwitch,
+  resolveOpenPlanPermissionChange,
+  resolvePlanModeAfterOpenPlanIpc,
+  resolvePlanModeAfterTakeoverApplied
+} from './composer-plan-mode'
 import {
   createAndSelectTask,
   deriveSessionTitle,
@@ -501,13 +513,18 @@ const taskPermission = ref<
       takeoverEnabled: boolean
       takeoverApplied: boolean
       takeoverMayStillBeActive?: boolean
+      permissionPromptStyle: PermissionPromptStyle
     }
   >
 >({})
+const composerPlanModeByTask = ref<Record<string, ComposerPlanMode>>({})
 const permissionModeBusy = ref(false)
 const activePermissionState = computed(() => taskPermission.value[activeTaskId.value] ?? null)
 const composerPermissionMode = computed<TaskPermissionMode>(
   () => activePermissionState.value?.mode ?? 'assist'
+)
+const composerPlanMode = computed<ComposerPlanMode>(
+  () => composerPlanModeByTask.value[activeTaskId.value] ?? 'normal'
 )
 const composerTakeoverHud = computed(() => {
   const state = activePermissionState.value
@@ -521,15 +538,18 @@ const composerTakeoverHud = computed(() => {
 })
 
 function applyPermissionRuntime(task: AgentTaskRuntimeState): void {
+  const permissionPromptStyle: PermissionPromptStyle =
+    task.permissionPromptStyle === 'ask' ? 'ask' : 'assist'
   taskPermission.value = {
     ...taskPermission.value,
     [task.taskId]: {
       mode: taskPermissionModeFromSnapshot({
         takeoverEnabled: task.takeoverEnabled === true,
-        permissionPromptStyle: task.permissionPromptStyle === 'ask' ? 'ask' : 'assist'
+        permissionPromptStyle
       }),
       takeoverEnabled: task.takeoverEnabled === true,
       takeoverApplied: task.takeoverApplied === true,
+      permissionPromptStyle,
       ...(task.takeoverMayStillBeActive ? { takeoverMayStillBeActive: true } : {})
     }
   }
@@ -552,11 +572,68 @@ async function setTaskPermissionMode(mode: TaskPermissionMode): Promise<void> {
         })
       ).task
     )
+    if (mode === 'takeover') {
+      composerPlanModeByTask.value = {
+        ...composerPlanModeByTask.value,
+        [taskId]: resolvePlanModeAfterTakeoverApplied()
+      }
+    }
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
     throw error
   } finally {
     permissionModeBusy.value = false
+  }
+}
+
+/**
+ * Plan 只存在 Renderer：按 Task 记录，不进 Timeline、不新 IPC。
+ * 打开 Plan 若正接管，必须等批准模式 IPC 成功后再拨开关，禁止乐观 UI。
+ */
+async function setTaskPlanMode(mode: ComposerPlanMode): Promise<void> {
+  const switchState = resolveComposerPlanSwitch({
+    advertisedCommands: runtimeSlashCommands.value,
+    mode: composerPlanMode.value,
+    modelBusy: composerChrome.value.modelBusy || permissionModeBusy.value,
+    composerAction: composerAction.value,
+    hasActiveExecution: Boolean(activeExecution.value)
+  })
+  if (!switchState.canToggle) return
+
+  let taskId: string
+  try {
+    taskId = activeTaskId.value || (await ensureActiveTask())
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+    return
+  }
+
+  if (mode === 'plan') {
+    const change = resolveOpenPlanPermissionChange({
+      permissionMode: composerPermissionMode.value,
+      previousStyle: activePermissionState.value?.permissionPromptStyle
+    })
+    let ipcSucceeded = true
+    if (change.permissionModeToSet) {
+      try {
+        await setTaskPermissionMode(change.permissionModeToSet)
+      } catch {
+        ipcSucceeded = false
+      }
+    }
+    if (
+      resolvePlanModeAfterOpenPlanIpc({
+        permissionChangeRequired: Boolean(change.permissionModeToSet),
+        ipcSucceeded
+      }) !== 'plan'
+    ) {
+      return
+    }
+  }
+
+  composerPlanModeByTask.value = {
+    ...composerPlanModeByTask.value,
+    [taskId]: mode
   }
 }
 
@@ -1308,8 +1385,15 @@ async function sendPrompt(): Promise<void> {
       appendMessage('user', displayText)
       await nextTick()
       taskComposer.value?.focus()
+      // 气泡继续用用户原文；只有交给 Grok 的 prompt 才按广告改写为 `/plan …`。
+      const planSubmit = resolvePlanSubmit({
+        mode: composerPlanModeByTask.value[taskId] ?? 'normal',
+        prompt: text,
+        hasPlanCommand: isPlanCommandAdvertised(runtimeSlashCommands.value),
+        idle: !activeExecution.value && composerAction.value === 'send'
+      })
       const admitted = unwrapDesktopIpcResult(
-        await window.agent.startTurn(taskId, text, attachmentIds)
+        await window.agent.startTurn(taskId, planSubmit.prompt, attachmentIds)
       )
       clearDraftAttachmentPreviews()
       draftAttachments.value = []
@@ -1914,6 +1998,8 @@ function scrollMessagesToBottom(): void {
             :takeover-may-still-be-active="activePermissionState?.takeoverMayStillBeActive === true"
             :takeover-hud="composerTakeoverHud"
             :set-permission-mode="setTaskPermissionMode"
+            :plan-mode="composerPlanMode"
+            :set-plan-mode="setTaskPlanMode"
             :context-usage="composerContextUsage"
             :runtime-commands="runtimeSlashCommands"
             :attachments="composerAttachmentViews"
