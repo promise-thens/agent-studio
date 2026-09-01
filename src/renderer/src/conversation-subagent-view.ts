@@ -89,33 +89,29 @@ export function toSubagentToolRows(tools: readonly ConversationToolBlock[]): Sub
 
 export type SubagentCardStatus = 'running' | 'completed' | 'failed'
 
-export interface SubagentCardExpansionController {
+/** 弹层默认关；进行中也不自动盖住对话，只在用户点药丸时打开。 */
+export interface SubagentPopupController {
   readonly open: boolean
-  applyStatus(status: SubagentCardStatus): void
-  applyToggle(nativeOpen: boolean): void
+  show(): void
+  hide(): void
+  toggle(): void
 }
 
-/**
- * 未手势时跟随 status === 'running'（完成/失败默认折）。
- * 用户点过 summary 后尊重手势；:open 同步触发的 toggle 不记成手势。
- */
-export function createSubagentCardExpansion(
-  status: SubagentCardStatus
-): SubagentCardExpansionController {
-  let open = status === 'running'
-  let userOverrode = false
+/** 子代理详情走 Teleport 弹层，不在对话流里展开。 */
+export function createSubagentPopupController(): SubagentPopupController {
+  let open = false
   return {
     get open() {
       return open
     },
-    applyStatus(nextStatus) {
-      if (userOverrode) return
-      open = nextStatus === 'running'
+    show() {
+      open = true
     },
-    applyToggle(nativeOpen) {
-      if (nativeOpen === open) return
-      userOverrode = true
-      open = nativeOpen
+    hide() {
+      open = false
+    },
+    toggle() {
+      open = !open
     }
   }
 }
@@ -164,7 +160,7 @@ export function toSubagentCardView(block: {
     status: block.status,
     statusLabel: subagentStatusLabel(block.status),
     countLine: formatSubagentCountLine(tools.length),
-    defaultExpanded: block.status === 'running',
+    defaultExpanded: false,
     errorInParentMessage: false,
     tools,
     maxDepth: SUBAGENT_CARD_MAX_DEPTH,

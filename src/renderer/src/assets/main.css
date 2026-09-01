@@ -935,21 +935,25 @@ button:disabled {
 
 .subagent-pill {
   display: grid;
+  width: 100%;
   margin: 0;
   padding: 8px 12px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 55%, transparent);
   border-radius: 999px;
   background: color-mix(in srgb, var(--surface-3) 88%, transparent);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
-.subagent-card summary {
-  display: grid;
-  gap: 2px;
+.subagent-pill:hover {
+  background: color-mix(in srgb, var(--surface-3) 100%, var(--surface-1));
 }
 
 .subagent-heading {
   display: grid;
-  grid-template-columns: 7px 10px minmax(0, 1fr) auto;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
 }
@@ -978,25 +982,97 @@ button:disabled {
   font-weight: 650;
 }
 
-.subagent-panel {
+.subagent-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 36;
   display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--surface-0) 62%, transparent);
+  -webkit-app-region: no-drag;
+}
+
+.subagent-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(560px, 100%);
+  max-height: min(72vh, 640px);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--surface-1);
+}
+
+.subagent-dialog-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-strong) 55%, transparent);
+}
+
+.subagent-dialog-identity {
+  min-width: 0;
+}
+
+.subagent-dialog-identity h2 {
+  margin: 4px 0 0;
+  color: var(--text-1);
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.subagent-type,
+.subagent-id {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+}
+
+.subagent-dialog-meta {
+  display: flex;
+  flex: 0 0 auto;
   gap: 8px;
-  margin-top: 8px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 48%, transparent);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  align-items: center;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.subagent-dialog-status {
+  font-weight: 650;
+}
+
+.subagent-dialog[data-status='completed'] .subagent-dialog-status {
+  color: var(--success);
+}
+
+.subagent-dialog[data-status='failed'] .subagent-dialog-status {
+  color: var(--danger);
+}
+
+.subagent-dialog-body {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  padding: 14px 16px 16px;
+  overflow: auto;
+}
+
+.subagent-dialog-body h3 {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .subagent-meta {
   margin: 0;
-  color: var(--text-3);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.subagent-count {
-  padding-left: 25px;
   color: var(--text-3);
   font-size: 12px;
   font-weight: 500;
