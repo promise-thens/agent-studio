@@ -23,25 +23,27 @@ export interface ComposerPlanSwitchState {
 }
 
 /**
- * Plan 开关能否切换只看精确广告 `name === 'plan'` 和是否空闲。
- * modelBusy、停止按钮、活动执行任一条都锁住，避免执行中改下一轮策略。
+ * 进入 Plan 必须精确广告 `name === 'plan'` 且空闲；退出 Plan 只要求空闲。
+ * 广告中途消失时不得把开关卡在 pressed+disabled，否则用户回不去 Normal。
+ * modelBusy、停止按钮、活动执行仍锁住双向切换，避免执行中改下一轮策略。
  */
 export function resolveComposerPlanSwitch(input: ComposerPlanSwitchInput): ComposerPlanSwitchState {
   const advertised = isPlanCommandAdvertised(input.advertisedCommands)
   const executing = input.modelBusy || input.composerAction === 'stop' || input.hasActiveExecution
-  const canToggle = advertised && !executing
-  const title = !advertised
-    ? PLAN_SWITCH_UNAVAILABLE_TITLE
-    : executing
-      ? '任务执行中，暂时不能切换 Plan'
-      : input.mode === 'plan'
-        ? '关闭 Plan 模式'
+  const leavingPlan = input.mode === 'plan'
+  const canToggle = !executing && (leavingPlan || advertised)
+  const title = executing
+    ? '任务执行中，暂时不能切换 Plan'
+    : leavingPlan
+      ? '关闭 Plan 模式'
+      : !advertised
+        ? PLAN_SWITCH_UNAVAILABLE_TITLE
         : '开启 Plan 模式'
   return {
     disabled: !canToggle,
     canToggle,
     title,
-    pressed: input.mode === 'plan'
+    pressed: leavingPlan
   }
 }
 

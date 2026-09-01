@@ -33,7 +33,7 @@ function extractFunction(source: string, name: string): string {
 }
 
 describe('Composer Plan 开关决策', () => {
-  it('无 plan 命令时按钮 disabled，title 含「当前会话未提供 Plan」', () => {
+  it('无 plan 命令且当前是 Normal 时按钮 disabled，title 含「当前会话未提供 Plan」', () => {
     const idle = resolveComposerPlanSwitch({
       advertisedCommands: noPlanAdvertised,
       mode: 'normal',
@@ -46,17 +46,33 @@ describe('Composer Plan 开关决策', () => {
     expect(idle.title).toContain('当前会话未提供 Plan')
     expect(idle.title).toBe(PLAN_SWITCH_UNAVAILABLE_TITLE)
     expect(idle.pressed).toBe(false)
+  })
 
-    const empty = resolveComposerPlanSwitch({
+  it('已在 Plan 时广告消失且空闲仍可切回 Normal，不得 pressed+disabled 卡死', () => {
+    const dropped = resolveComposerPlanSwitch({
       advertisedCommands: [],
       mode: 'plan',
       modelBusy: false,
       composerAction: 'send',
       hasActiveExecution: false
     })
-    expect(empty.disabled).toBe(true)
-    expect(empty.canToggle).toBe(false)
-    expect(empty.title).toContain('当前会话未提供 Plan')
+    expect(dropped.disabled).toBe(false)
+    expect(dropped.canToggle).toBe(true)
+    expect(dropped.pressed).toBe(true)
+    expect(dropped.title).toBe('关闭 Plan 模式')
+    expect(dropped.title).not.toContain('当前会话未提供 Plan')
+
+    const noPlanName = resolveComposerPlanSwitch({
+      advertisedCommands: noPlanAdvertised,
+      mode: 'plan',
+      modelBusy: false,
+      composerAction: 'send',
+      hasActiveExecution: false
+    })
+    expect(noPlanName.canToggle).toBe(true)
+    expect(noPlanName.disabled).toBe(false)
+    expect(noPlanName.pressed).toBe(true)
+    expect(noPlanName.title).toBe('关闭 Plan 模式')
   })
 
   it('有 name === plan 且空闲时可切', () => {
@@ -92,7 +108,7 @@ describe('Composer Plan 开关决策', () => {
     ).toBe(false)
   })
 
-  it('执行中（modelBusy / composer action=stop / 有活动执行）不可切', () => {
+  it('执行中（modelBusy / composer action=stop / 有活动执行）不可进入也不可退出 Plan', () => {
     const advertised = {
       advertisedCommands: planAdvertised,
       mode: 'normal' as const
@@ -115,6 +131,13 @@ describe('Composer Plan 开关决策', () => {
       composerAction: 'send',
       hasActiveExecution: true
     })
+    const leavingWhileBusy = resolveComposerPlanSwitch({
+      advertisedCommands: [],
+      mode: 'plan',
+      modelBusy: true,
+      composerAction: 'send',
+      hasActiveExecution: false
+    })
 
     expect(busy.canToggle).toBe(false)
     expect(busy.disabled).toBe(true)
@@ -122,6 +145,10 @@ describe('Composer Plan 开关决策', () => {
     expect(stopping.disabled).toBe(true)
     expect(executing.canToggle).toBe(false)
     expect(executing.disabled).toBe(true)
+    expect(leavingWhileBusy.canToggle).toBe(false)
+    expect(leavingWhileBusy.disabled).toBe(true)
+    expect(leavingWhileBusy.pressed).toBe(true)
+    expect(leavingWhileBusy.title).toBe('任务执行中，暂时不能切换 Plan')
   })
 
   it('plan 且空闲且已广告时状态条写「下一轮按 Plan 发送」', () => {

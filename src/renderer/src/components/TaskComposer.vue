@@ -108,7 +108,7 @@ const planStatusCopy = computed(() =>
   })
 )
 
-/** 只改下一轮发送策略，不得 cancel 当前 turn；无广告或执行中直接忽略。 */
+/** 只改下一轮发送策略，不得 cancel 当前 turn。进入 Plan 仍需广告；退出只要空闲。 */
 async function togglePlanMode(): Promise<void> {
   if (planSwitch.value.disabled) return
   const next: ComposerPlanMode = (props.planMode ?? 'normal') === 'plan' ? 'normal' : 'plan'

@@ -589,6 +589,7 @@ async function setTaskPermissionMode(mode: TaskPermissionMode): Promise<void> {
 /**
  * Plan 只存在 Renderer：按 Task 记录，不进 Timeline、不新 IPC。
  * 打开 Plan 若正接管，必须等批准模式 IPC 成功后再拨开关，禁止乐观 UI。
+ * 退出 Plan 只要求空闲；广告消失后仍允许回到 Normal，避免开关卡死。
  */
 async function setTaskPlanMode(mode: ComposerPlanMode): Promise<void> {
   const switchState = resolveComposerPlanSwitch({
