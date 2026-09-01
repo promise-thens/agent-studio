@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。
 >
-> **状态：** 待开始。
+> **状态：** 任务 1–3 代码已落地；开发版 GUI 走查未跑。接管默认关，Composer 三档 ask/assist/takeover。
 >
 > **插入点：** [P0-19](p0-19-grok-host-capability-polish.md) 在 GACP-03 之后、Plan mode 之前。2026-08-31 产品更正：通用 Agent 要能完全接管，因此**要写** always-approve，但必须是当前 Task 的显式开关，不是静默默认 yolo。
 

@@ -88,8 +88,8 @@
 | ---: | --- | ---: | --- | --- | --- |
 | 0 | 已写未验走查 | 5 | P0-13 优先，再 10C/D/E、11、12 | 暂时可以通过，不挡开工 | 对应代码已落地；未走查不得标 GUI 已过 |
 | 1 | [GACP-03](grokACP计划/gacp-03-structured-permission-evidence.md) | 4 | 询问模式：能过的自动过；browser/screen 保持 L3 | 计划写已落地，真机/GUI 未收口 | P0-11 |
-| 1b | [P0-19g](p0-19g-task-takeover-always-approve.md) | 5 | Task 完全接管（always-approve），默认关 | 待开始 | GACP-03；须先观察 yoloMode |
-| 2 | [P0-19a](p0-19a-session-plan-mode.md) | 4 | Plan mode 开关与主列清单 | 待开始 | 与接管互斥 |
+| 1b | [P0-19g](p0-19g-task-takeover-always-approve.md) | 5 | Task 完全接管（always-approve），默认关 | 代码已落地；开发版 GUI 未走查 | GACP-03；须先观察 yoloMode |
+| 2 | [P0-19a](p0-19a-session-plan-mode.md) | 4 | Plan mode 开关与主列清单 | 代码已落地；1.0.13 为 disabled-path；开发版 GUI 未过 | 与接管互斥 |
 | 3 | [GACP-06](grokACP计划/gacp-06-subagent-timeline.md) | 3 | 子 Agent 嵌套时间线；无父子字段保持扁平 | 待开始 | 先观察字段；皮肤跟 P0-10A |
 | 4 | [P0-19b](p0-19b-grok-sandbox-profile.md) | 4 | Grok Sandbox 档位与空闲重启 | 待开始 | 空闲重启纪律 |
 | 5 | [P0-19c](p0-19c-turn-rewind.md) | 4 | 对话 /rewind 与文件 latest-turn 恢复分开 | 待开始 | P0-12 |
@@ -98,7 +98,7 @@
 | 8 | [P0-19f](p0-19f-browser-computer-use-surface.md) | 4 | 浏览器/电脑插件：L3、截图 Artifact、可见停止 | 待开始 | P0-10E、GACP-03、P0-13 |
 | 后 | P3-05～07 | 3 | 桌面受管浏览器 / Chrome 桥 / macOS Helper | 后置 | 仅当 19f 仍缺共享页面 |
 
-P0-14 Worktree 仍是 P0-B，可在 GACP-03 后与 19a 并行，不挡本表。
+P0-14 Worktree 仍是 P0-B，可与 GACP-06 并行，不挡本表。
 
 ## Grok ACP 加深
 
