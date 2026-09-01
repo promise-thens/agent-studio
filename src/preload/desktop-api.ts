@@ -67,7 +67,12 @@ import {
   type ArtifactContent,
   type ArtifactDescriptor
 } from '../shared/artifact'
-import { TASK_INVOKE_CHANNELS, type TaskDesktopApi } from '../shared/task-ipc'
+import {
+  parseSubagentActivityPage,
+  TASK_INVOKE_CHANNELS,
+  type SubagentActivityPage,
+  type TaskDesktopApi
+} from '../shared/task-ipc'
 import { ATTACHMENT_LIMITS } from '../shared/task-attachment'
 
 export interface NarrowIpcRenderer {
@@ -1238,6 +1243,18 @@ export function createTaskDesktopApi(
         return { ok: false, error: { code: 'operation-failed', message: '产物内容无效。' } }
       }
       return { ok: true, value: parsed as ArtifactContent }
+    },
+    getSubagentActivity: async (taskId, shortId) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getSubagentActivity, {
+        taskId,
+        shortId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const parsed = parseSubagentActivityPage(result.value)
+      if (!parsed) {
+        return { ok: false, error: { code: 'operation-failed', message: '子代理活动无效。' } }
+      }
+      return { ok: true, value: parsed as SubagentActivityPage }
     }
   }
 }

@@ -16,20 +16,23 @@ import {
   SUBAGENT_AMBIGUOUS_COPY,
   SUBAGENT_CARD_MAX_DEPTH,
   SUBAGENT_STOP_COPY,
-  createSubagentPopupController,
   flattenSubagentToolsToRows,
   formatSubagentCountLine,
   formatSubagentDuration,
   isolateSubagentToolOwnership,
   shouldMountSubagentCard,
+  subagentActivityRows,
+  subagentEmptyActivityCopy,
   subagentStatusLabel,
   subagentStopPolicy,
+  subagentToolsFromActivity,
   toSubagentCardView,
   toSubagentToolRows
 } from './conversation-subagent-view'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const subagentCardSource = readFileSync(join(root, 'components/SubagentCard.vue'), 'utf8')
+const mainCss = readFileSync(join(root, 'assets/main.css'), 'utf8')
 const conversationTurnSource = readFileSync(join(root, 'components/ConversationTurn.vue'), 'utf8')
 const taskListSource = readFileSync(join(root, 'components/TaskList.vue'), 'utf8')
 const sidebarSource = readFileSync(join(root, 'components/ProjectSidebar.vue'), 'utf8')
@@ -154,7 +157,7 @@ describe('子 Agent 卡挂载门禁', () => {
     expect(shouldMountSubagentCard(subagent)).toBe(true)
   })
 
-  it('Grok spawn 标题原样做 heading，带耗时；并行提示不编造孩子', () => {
+  it('Grok spawn 标题拆出友好名称、类型和短 ID，并保留耗时', () => {
     const heading = '[subagent:general-purpose] Demo subagent run (01a05b79)'
     const blocks = projectConversationTurn(
       turn('completed', [
@@ -171,7 +174,9 @@ describe('子 Agent 卡挂载门禁', () => {
 
     expect(card).toMatchObject({
       kind: 'subagent',
-      name: heading,
+      name: 'Demo subagent run',
+      agentType: 'general-purpose',
+      shortId: '01a05b79',
       durationLabel: '12 秒'
     })
     expect(card && 'groupingHint' in card ? card.groupingHint : undefined).toBeUndefined()
@@ -265,6 +270,30 @@ describe('子 Agent 卡挂载门禁', () => {
   })
 })
 
+describe('子 Agent 独立会话补读', () => {
+  it('把子 session 工具行收人话标签，空态说明独立会话', () => {
+    expect(subagentEmptyActivityCopy('pending')).toMatch(/正在读取/)
+    expect(subagentEmptyActivityCopy('missing')).toMatch(/独立会话/)
+    expect(
+      subagentToolsFromActivity([
+        {
+          toolCallId: 't-read',
+          title: 'Read `index.html`',
+          status: 'completed'
+        }
+      ])
+    ).toEqual([
+      {
+        kind: 'tool',
+        nodeId: 't-read',
+        label: '读了 index.html',
+        status: 'completed',
+        tools: []
+      }
+    ])
+  })
+})
+
 describe('子 Agent 耗时', () => {
   it('用首尾 observedAt 算耗时，缺时间或 0 秒不编造', () => {
     expect(formatSubagentDuration('2026-09-01T05:00:00.000Z', '2026-09-01T05:00:12.000Z')).toBe(
@@ -285,7 +314,7 @@ describe('子 Agent 第 7 节皮肤', () => {
     expect(subagentStatusLabel('running')).toBe('进行中')
     expect(subagentStatusLabel('completed')).toBe('已完成')
     expect(subagentStatusLabel('failed')).toBe('失败')
-    expect(formatSubagentCountLine(3)).toBe('已运行 3 个工具 · 点开查看')
+    expect(formatSubagentCountLine(3)).toBe('3 个动作 · 点开查看')
 
     const failed = fixtureSubagent('task-1:turn-1:tool:child-fail', '探查测试结构', 'failed', [
       {
@@ -301,7 +330,7 @@ describe('子 Agent 第 7 节皮肤', () => {
     expect(view.name).toBe('探查测试结构')
     expect(view.status).toBe('failed')
     expect(view.statusLabel).toBe('失败')
-    expect(view.countLine).toBe('已运行 1 个工具 · 点开查看')
+    expect(view.countLine).toBe('1 个动作 · 点开查看')
     expect(view.defaultExpanded).toBe(false)
     expect(view.errorInParentMessage).toBe(false)
     expect(toSubagentToolRows(failed.tools).map((row) => row.key)).toEqual([
@@ -329,7 +358,7 @@ describe('子 Agent 第 7 节皮肤', () => {
       }
     ])
 
-    expect(toSubagentCardView(exploring).defaultExpanded).toBe(false)
+    expect(toSubagentCardView(exploring).defaultExpanded).toBe(true)
     expect(toSubagentCardView(editing).defaultExpanded).toBe(false)
 
     const ownership = isolateSubagentToolOwnership([exploring, editing])
@@ -367,40 +396,40 @@ describe('子 Agent 第 7 节皮肤', () => {
 })
 
 describe('GACP-06 任务 3 折叠/停止/深度', () => {
-  it('对话里只留药丸，详情走弹层；进行中也不自动弹出', () => {
+  it('子代理在主对话内折叠展开；进行中默认展开，终态默认折叠', () => {
     expect(
       toSubagentCardView(fixtureSubagent('a', '探查测试结构', 'running', [])).defaultExpanded
-    ).toBe(false)
+    ).toBe(true)
     expect(
       toSubagentCardView(fixtureSubagent('b', '改登录逻辑', 'completed', [])).defaultExpanded
     ).toBe(false)
-    const popup = createSubagentPopupController()
-    expect(popup.open).toBe(false)
-    popup.show()
-    expect(popup.open).toBe(true)
-    popup.hide()
-    expect(popup.open).toBe(false)
-    popup.toggle()
-    expect(popup.open).toBe(true)
-    expect(subagentCardSource).toContain('createSubagentPopupController')
-    expect(subagentCardSource).toContain('<Teleport to="body">')
-    expect(subagentCardSource).toContain('role="dialog"')
-    expect(subagentCardSource).toContain('subagent-dialog')
-    expect(subagentCardSource).toContain('做了什么')
-    expect(subagentCardSource).not.toContain('<details')
-    expect(subagentCardSource).toContain(':aria-label=')
-    expect(subagentCardSource).toContain('subagent-pill')
-    expect(subagentCardSource).toContain('durationLabel')
-    expect(subagentCardSource).toContain('groupingNote')
+    expect(subagentCardSource).not.toContain('<Teleport')
+    expect(subagentCardSource).toContain('<details')
+    expect(subagentCardSource).toContain('ref="detailsRef"')
+    expect(subagentCardSource).not.toContain(':open="opened"')
+    expect(subagentCardSource).not.toContain('role="dialog"')
+    expect(subagentCardSource).toContain('subagent-summary')
+    expect(subagentCardSource).toContain('执行结果')
+    expect(subagentCardSource).toContain('getSubagentActivity')
+    expect(subagentCardSource).toContain('v-for="tool in rows"')
+    expect(mainCss).not.toContain('.subagent-inspect')
   })
 
-  it('弹层由用户打开和关闭，状态变化不会自动盖住对话', () => {
-    const popup = createSubagentPopupController()
-    expect(popup.open).toBe(false)
-    popup.show()
-    expect(popup.open).toBe(true)
-    popup.hide()
-    expect(popup.open).toBe(false)
+  it('子 session 的连续读取聚合去重，异常状态优先', () => {
+    expect(
+      subagentActivityRows([
+        { toolCallId: 'read-1', title: 'Read `index.html`', status: 'completed' },
+        { toolCallId: 'read-2', title: 'Read `index.html`', status: 'completed' },
+        { toolCallId: 'read-3', title: 'Read `admin.html`', status: 'failed' }
+      ])
+    ).toEqual([
+      {
+        key: 'read-1',
+        label: '读取 2 个文件',
+        status: 'failed',
+        files: ['index.html', 'admin.html']
+      }
+    ])
   })
 
   it('两个并行孩子互不串工具，v-for 用稳定 nodeId 而不是 index', () => {
@@ -428,7 +457,7 @@ describe('GACP-06 任务 3 折叠/停止/深度', () => {
     expect(isolateSubagentToolOwnership([exploring, editing]).sharedToolNodeIds).toEqual([])
     expect(exploringView.rowKeys).toEqual(['task-1:turn-1:tool:read-pkg'])
     expect(editingView.rowKeys).toEqual(['task-1:turn-1:tool:write-auth'])
-    expect(subagentCardSource).toContain('v-for="tool in tools"')
+    expect(subagentCardSource).toContain('v-for="tool in rows"')
     expect(subagentCardSource).toContain(':key="tool.key"')
     expect(subagentCardSource).not.toContain('v-for="(tool, index)')
     expect(subagentCardSource).not.toContain('${tool.label}:${index}')
@@ -487,7 +516,7 @@ describe('GACP-06 任务 3 折叠/停止/深度', () => {
     expect(subagentCardSource).not.toContain('cancelTurn')
     expect(subagentCardSource).toContain('SUBAGENT_STOP_COPY')
     expect(conversationTurnSource).not.toContain('停止此子任务')
-    expect(conversationTurnSource).toContain('flattenSubagentToolsToRows(block.tools)')
+    expect(subagentCardSource).toContain('flattenSubagentToolsToRows')
   })
 
   it('深度限制 2：嵌套 group 摊成 ToolRow，不再套第三层 SubagentCard', () => {

@@ -21,7 +21,7 @@ import type {
   TaskChangeSetQueryResult,
   TurnChangeCheckpoint
 } from '../../shared/git-review'
-import type { PublicAgentEventPage } from '../../shared/task-ipc'
+import type { PublicAgentEventPage, SubagentActivityPage } from '../../shared/task-ipc'
 import { TASK_INVOKE_CHANNELS } from '../../shared/task-ipc'
 import type { ArtifactContentService } from '../artifact/artifact-content-service'
 import { ArtifactRegistryError, type ArtifactRegistry } from '../artifact/artifact-registry'
@@ -85,6 +85,8 @@ export interface TaskIpcDependencies {
     taskId: string,
     path: string
   ) => Promise<import('../../shared/task-ipc').TaskAttachmentPreview>
+  /** 只读 Grok 子 session 工具行；不得把 JSONL 路径回给 Renderer。 */
+  getSubagentActivity?: (taskId: string, shortId: string) => Promise<SubagentActivityPage>
   getArtifactRegistry?: () => ArtifactRegistry | null
   getArtifactContent?: () => ArtifactContentService | null
 }
@@ -395,6 +397,22 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
     pickFiles: () => dependencies.pickFiles?.() ?? Promise.resolve(null),
     readClipboard: () => dependencies.readClipboard?.() ?? Promise.resolve([]),
     getChangeMediaPreview: dependencies.getChangeMediaPreview
+  })
+
+  /**
+   * 只读子代理工具行。shortId 必须是 spawn 标题里的有界身份，禁止当路径用。
+   */
+  register(TASK_INVOKE_CHANNELS.getSubagentActivity, async (args) => {
+    const request = readRequest(args, ['taskId', 'shortId'])
+    const taskId = readCommandIdentity(request, 'taskId')
+    const shortId = readText(request, 'shortId')!
+    if (!/^[A-Za-z0-9_-]{6,32}$/.test(shortId)) {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    requireExistingTask(dependencies.getHistory, taskId)
+    const reader = dependencies.getSubagentActivity
+    if (!reader) return { source: 'missing' as const, tools: [] }
+    return reader(taskId, shortId)
   })
 }
 

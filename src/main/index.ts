@@ -55,6 +55,7 @@ import {
   type Gacp01ObserveBootstrap
 } from './e2e/gacp01-observe-bootstrap'
 import { createGrokAcpFileObserver } from './runtime/grok/grok-acp-protocol-observer'
+import { readGrokSubagentSessionActivity } from './runtime/grok/grok-subagent-session-activity'
 import type { DesktopIpcMain } from './ipc-types'
 import { ProviderConfigStore, type ProviderRuntimeConfig } from './provider/provider-config-store'
 import { ProviderConnectionTester } from './provider/provider-connection-tester'
@@ -881,6 +882,26 @@ function registerIpcHandlers(): void {
       requireTaskChangeMediaPreviewService().getPreview(taskId, path),
     getArtifactRegistry: () => artifactRegistry,
     getArtifactContent: () => artifactContentService,
+    getSubagentActivity: async (taskId, shortId) => {
+      // 子代理活动只允许绑定当前 Task 私有的父 Runtime session，禁止跨 Task 扫描旧会话。
+      const store = taskStore
+      if (!store) return { source: 'missing', tools: [] }
+      try {
+        const record = store.getTaskRecord(taskId)
+        if (record.runtimeId !== 'grok' || record.runtimeSession.runtimeId !== 'grok') {
+          return { source: 'missing', tools: [] }
+        }
+        return await readGrokSubagentSessionActivity({
+          grokHome: getManagedGrokHome(app.getPath('userData')),
+          workspacePath: record.runtimeSession.workspace,
+          parentRuntimeSessionId: record.runtimeSession.runtimeSessionId,
+          shortId,
+          redactText: (text) => redactSensitiveText(text, getKnownSecrets())
+        })
+      } catch {
+        return { source: 'missing', tools: [] }
+      }
+    },
     getHistory: () => {
       const store = taskStore
       const service = agentService

@@ -2,7 +2,7 @@
 
 > **致执行者：** 产品已确认要做通用多 Agent 工作台。Grok Build 会分发子 Agent；界面不要把它们摊成一长串互不相关的工具卡，而要做成可折叠的嵌套任务，对标 Claude Code Desktop。
 >
-> **状态：** 代码已落地。`parentId` 优先成组；无 parent 时只认结构化 `[subagent:` spawn 行（Grok Build 药丸），点开看孩子工具与耗时。中文「子 Agent」标题仍不聚类。开发版 GUI 未走查。
+> **状态：** 代码已落地。`parentId` 优先成组；无 parent 时只认结构化 `[subagent:` spawn 行。子任务回到主对话折叠卡，运行中默认展开，终态默认折叠；展开先看真实最后回复，再看聚合后的工具活动。中文「子 Agent」标题仍不聚类。2026-09-01 已用现有 Grok 历史子 session 完成开发版展开/折叠与结果展示走查。
 >
 > **插入点：** P0-10A 换皮之后再接分组。GACP-01 观察表 F 节全部 `not-observed`。禁止用随便出现的 subagent 字符串猜树。不要重开 GACP-01，也不要挡 GACP-02 / P0-10A。
 
@@ -80,6 +80,8 @@ Grok ACP session/update（tool_call 或后续标准父子字段）
 
 - 公开事件仍不得带 `runtimeSessionId`。
 - 子 Agent 卡片标题、摘要脱敏限长。
+- spawn-only 子任务只允许在当前 Task 私有的父 Runtime session 下补读；父 `runtimeSessionId` 仅留 Main，不得进入 Shared / Preload / Renderer。
+- 最终回复只认终态子 session 的最后连续 `agent_message_chunk`，整段拼接后统一脱敏并限制为 32 KiB；思想、Prompt、rawInput/rawOutput 永不公开。
 - 停止子任务只能走现有 `cancelTurn`（整 Turn）或未来明确的 child cancel；没有协议就不要做假的「停这个孩子」按钮。
 
 ## 已锁定的展示语义
@@ -102,12 +104,13 @@ Turn
 # 备注：折叠态一行标题 + 一行计数，不要再输出 Tool · in_progress。
 ┌──────────────────────────────────────────┐
 │ ● 探查测试结构                 进行中  ▾ │
-│   3 个工具 · 点开查看                     │
+│   general-purpose · 3 个动作 · 12 秒       │
 └──────────────────────────────────────────┘
 ```
 
 - 进行中：左边小点用 accent；完成默认折叠；失败左边改 `--danger`。
-- 展开后内部只用 `ToolRow`，左缩进 12px，不要再套一层大卡片。
+- 展开后先展示真实“执行结果”，再展示 `ToolRow` 活动明细；连续读取聚合并去重，左缩进 12px，不要再套一层大卡片。
+- 原始 `[subagent:type]` 协议串与短 ID 不进入主标题；类型作为低优先级元信息展示。
 - 卡片 `nodeId` 用稳定 `toolCallId` 或观察得到的 `agentId`，不要用数组下标。
 - 同一孩子的后续 tool 挂到这张卡里，不要再在父流里重复插一条。
 - 父消息、孩子卡片按 sequence 排，孩子内部再按自己的 sequence 排。
@@ -152,9 +155,9 @@ Turn
 ## 任务 3: Claude Desktop 风格卡片
 
 - [x] **第 1 步: 折叠卡片 UI**
-      说明：默认收起，显示名称、状态、工具数。展开是这个孩子的小时间线。图标有 `aria-label`。
+      说明：终态默认收起，显示友好名称、状态、类型、动作数和耗时；运行中默认展开。展开是这个孩子的小时间线。
       预期：两个并行孩子互不串工具。
-      落地：复用 `SubagentCard.vue`；主列经 `ConversationTurn` 挂载；合成 `parentId` 测试覆盖并行不串工具。
+      落地：复用 `SubagentCard.vue`；主列经 `ConversationTurn` 挂载；移除 Inspector 第五个子代理标签与大浮层；合成 `parentId` 测试覆盖并行不串工具。
 
 - [x] **第 2 步: 停止语义诚实**
       说明：没有 child cancel 协议时，只提供停整场 Turn，文案写清。
@@ -164,7 +167,21 @@ Turn
 - [x] **第 3 步: 性能**
       说明：默认只展开进行中的那张卡；深度限制 2。
       预期：长任务下输入区仍可点。
-      落地：进行中默认展开、离开 running 折叠；深度 2（根卡 + 一层 ToolRow）。开发版 GUI 长任务可点性未走查。
+      落地：进行中默认展开；初始终态卡默认折叠，用户已打开的运行卡完成后保持上下文可见。深度 2（根卡 + 一层 ToolRow）。2026-09-01 开发版已验证完成卡可重复展开/折叠，结果区不另开嵌套滚动。
+
+## 任务 4: spawn-only 子 session 结果补读
+
+- [x] **第 1 步: 绑定当前 Task 的父 Runtime session**
+      说明：禁止只按 workspace + shortId 扫描全部历史父 session。
+      落地：Main 从 `TaskStore` 读取私有父 `runtimeSessionId` 与 workspace，只访问该父 session 的 `subagents` 目录；私有身份不穿 IPC。
+
+- [x] **第 2 步: 提取真实最终回复**
+      说明：不调用模型二次总结，不把过程播报冒充最终结论。
+      落地：只在 completed / failed 终态返回最后连续 `agent_message_chunk`；后续思想或工具活动会清空候选。拼接后统一脱敏，32 KiB UTF-8 限长并公开 `truncated`。
+
+- [x] **第 3 步: 活动聚合与兼容回包**
+      说明：结果字段可选，旧 missing / tools 回包继续兼容。
+      落地：连续读取合并、路径去重；Preload 重建白名单对象，丢弃未知键与 raw 数据。
 
 ---
 

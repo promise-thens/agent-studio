@@ -81,6 +81,8 @@ export interface ConversationSubagentBlock {
   kind: 'subagent'
   nodeId: string
   name: string
+  agentType?: string
+  shortId?: string
   status: 'running' | 'completed' | 'failed'
   tools: ConversationToolBlock[]
   durationLabel?: string
@@ -556,7 +558,9 @@ function toSubagentBlock(node: TimelineAgentGroupNode): ConversationSubagentBloc
   return {
     kind: 'subagent',
     nodeId: node.nodeId,
-    name: spawn?.heading || presented.label || node.toolCallId,
+    name: spawn?.name || presented.label || node.toolCallId,
+    ...(spawn?.agentType ? { agentType: spawn.agentType } : {}),
+    ...(spawn?.shortId ? { shortId: spawn.shortId } : {}),
     status: toSubagentCardStatus(node.status),
     tools: projectGroupedToolBlocks(node.children),
     ...(durationLabel ? { durationLabel } : {}),

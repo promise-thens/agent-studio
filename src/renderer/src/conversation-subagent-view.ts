@@ -1,4 +1,6 @@
 import type { AgentToolStatus } from '../../shared/agent'
+import type { SubagentActivityToolRow } from '../../shared/task-ipc'
+import { presentToolTitle } from './conversation-tool-presentation'
 import { formatToolVerbPhrase, type ConversationToolBlock } from './conversation-turn-view'
 
 /** 根卡 + 一层 ToolRow；禁止再套第三层 SubagentCard。 */
@@ -72,9 +74,90 @@ export function subagentStatusLabel(status: 'running' | 'completed' | 'failed'):
   return '已完成'
 }
 
-/** 折叠态第二行：计数 + 点开提示，不要再写 Tool · in_progress。 */
+/** 折叠态第二行：计数 + 点开提示，不暴露 Runtime 工具术语。 */
 export function formatSubagentCountLine(toolCount: number): string {
-  return `已运行 ${toolCount} 个工具 · 点开查看`
+  return toolCount > 0 ? `${toolCount} 个动作 · 点开查看` : '点开查看活动'
+}
+
+/** 父 ACP 时间线没有孩子工具时，检查器说明为什么是空的。 */
+export function subagentEmptyActivityCopy(
+  source: 'pending' | 'grok-session' | 'missing' | undefined
+): string {
+  if (source === 'pending') return '正在读取这个子代理的工具记录…'
+  if (source === 'missing') {
+    return '子代理在独立会话里工作。父对话只有 spawn 行，还没读到它的工具记录。'
+  }
+  return '还没有可展示的工具活动。'
+}
+
+/** 把 Grok 子 session 工具行收成检查器 ToolRow 能吃的对话块。 */
+export function subagentToolsFromActivity(
+  tools: readonly SubagentActivityToolRow[]
+): ConversationToolBlock[] {
+  return tools.map((row) => {
+    const presented = presentToolTitle(row.title)
+    return {
+      kind: 'tool',
+      nodeId: row.toolCallId,
+      label: presented.label,
+      status: row.status,
+      tools: [],
+      ...(presented.detail ? { detail: presented.detail } : {})
+    }
+  })
+}
+
+/** 子 session 连续读取合成一行，完成态不再用重复状态淹没真正异常。 */
+export function subagentActivityRows(
+  tools: readonly SubagentActivityToolRow[]
+): SubagentToolRowView[] {
+  const rows: SubagentToolRowView[] = []
+  let index = 0
+  while (index < tools.length) {
+    const first = tools[index]
+    if (!first) break
+    const presented = presentToolTitle(first.title)
+    if (presented.label.startsWith('读了 ')) {
+      const run: SubagentActivityToolRow[] = [first]
+      while (index + 1 < tools.length) {
+        const next = tools[index + 1]
+        if (!next || !presentToolTitle(next.title).label.startsWith('读了 ')) break
+        run.push(next)
+        index += 1
+      }
+      const files = [
+        ...new Set(
+          run
+            .map((item) => presentToolTitle(item.title).label.replace(/^读了\s+/, ''))
+            .filter(Boolean)
+        )
+      ]
+      if (run.length > 1) {
+        rows.push({
+          key: run[0]!.toolCallId,
+          label: `读取 ${files.length || run.length} 个文件`,
+          status: groupedActivityStatus(run),
+          files
+        })
+        index += 1
+        continue
+      }
+    }
+    rows.push({
+      key: first.toolCallId,
+      label: presented.label,
+      status: first.status,
+      files: [],
+      ...(presented.detail ? { detail: presented.detail } : {})
+    })
+    index += 1
+  }
+  return rows
+}
+
+/** 折叠态显示真实动作数量；合并读取行仍按底层工具数量计数。 */
+export function countSubagentTools(tools: readonly ConversationToolBlock[]): number {
+  return tools.reduce((count, tool) => count + Math.max(1, tool.tools.length), 0)
 }
 
 export function toSubagentToolRows(tools: readonly ConversationToolBlock[]): SubagentToolRowView[] {
@@ -88,33 +171,6 @@ export function toSubagentToolRows(tools: readonly ConversationToolBlock[]): Sub
 }
 
 export type SubagentCardStatus = 'running' | 'completed' | 'failed'
-
-/** 弹层默认关；进行中也不自动盖住对话，只在用户点药丸时打开。 */
-export interface SubagentPopupController {
-  readonly open: boolean
-  show(): void
-  hide(): void
-  toggle(): void
-}
-
-/** 子代理详情走 Teleport 弹层，不在对话流里展开。 */
-export function createSubagentPopupController(): SubagentPopupController {
-  let open = false
-  return {
-    get open() {
-      return open
-    },
-    show() {
-      open = true
-    },
-    hide() {
-      open = false
-    },
-    toggle() {
-      open = !open
-    }
-  }
-}
 
 /** 没有 child cancel 协议，只提供停整场 Turn。 */
 export function subagentStopPolicy(): SubagentStopPolicy {
@@ -160,7 +216,7 @@ export function toSubagentCardView(block: {
     status: block.status,
     statusLabel: subagentStatusLabel(block.status),
     countLine: formatSubagentCountLine(tools.length),
-    defaultExpanded: false,
+    defaultExpanded: block.status === 'running',
     errorInParentMessage: false,
     tools,
     maxDepth: SUBAGENT_CARD_MAX_DEPTH,
@@ -168,6 +224,18 @@ export function toSubagentCardView(block: {
     stop: subagentStopPolicy(),
     rowKeys: tools.map((row) => row.key)
   }
+}
+
+function groupedActivityStatus(
+  tools: readonly SubagentActivityToolRow[]
+): AgentToolStatus | 'unknown' {
+  const statuses = new Set(tools.map((tool) => tool.status))
+  if (statuses.has('failed')) return 'failed'
+  if (statuses.has('in_progress')) return 'in_progress'
+  if (statuses.has('pending')) return 'pending'
+  if (statuses.has('cancelled')) return 'cancelled'
+  if (statuses.size === 1 && statuses.has('completed')) return 'completed'
+  return 'unknown'
 }
 
 /** 每个孩子只认自己的 tool nodeId，两个并行子 Agent 不得共用同一行。 */

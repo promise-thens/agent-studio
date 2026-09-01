@@ -1,135 +1,153 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { PhX as X } from '@phosphor-icons/vue'
-import type { AgentToolStatus } from '../../../shared/agent'
+import { computed, onMounted, ref, watch } from 'vue'
+import type { ConversationToolBlock } from '../conversation-turn-view'
 import {
   SUBAGENT_STOP_COPY,
-  createSubagentPopupController,
-  subagentStatusLabel
+  countSubagentTools,
+  flattenSubagentToolsToRows,
+  formatSubagentCountLine,
+  subagentActivityRows,
+  subagentEmptyActivityCopy,
+  subagentStatusLabel,
+  type SubagentToolRowView
 } from '../conversation-subagent-view'
-import { parseSubagentSpawnTitle } from '../subagent-spawn-title'
+import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
+import AssistantMarkdown from './AssistantMarkdown.vue'
 import ToolRow from './ToolRow.vue'
 
 const props = defineProps<{
+  taskId: string
   name: string
+  agentType?: string
+  shortId?: string
   status: 'running' | 'completed' | 'failed'
-  tools: readonly {
-    key: string
-    label: string
-    status: AgentToolStatus | 'unknown'
-    files?: readonly string[]
-    detail?: string
-  }[]
+  tools: readonly ConversationToolBlock[]
   durationLabel?: string
   groupingNote?: string
 }>()
 
 const statusLabel = computed(() => subagentStatusLabel(props.status))
-const spawn = computed(() => parseSubagentSpawnTitle(props.name))
-const popupTitle = computed(() => spawn.value?.name || props.name)
-const popup = createSubagentPopupController()
-const open = ref(popup.open)
+const detailsRef = ref<HTMLDetailsElement | null>(null)
+const opened = ref(props.status === 'running')
+const userToggled = ref(false)
+const loading = ref(false)
+const loaded = ref(false)
+const activitySource = ref<'pending' | 'grok-session' | 'missing' | undefined>()
+const loadedRows = ref<SubagentToolRowView[]>([])
+const loadedToolCount = ref(0)
+const result = ref<{ text: string; truncated: boolean } | null>(null)
 
-function syncOpen(): void {
-  open.value = popup.open
+const rows = computed(() =>
+  props.tools.length ? flattenSubagentToolsToRows(props.tools) : loadedRows.value
+)
+const toolCount = computed(() =>
+  props.tools.length ? countSubagentTools(props.tools) : loadedToolCount.value
+)
+const countLine = computed(() => formatSubagentCountLine(toolCount.value))
+const summaryMeta = computed(() =>
+  [props.agentType, countLine.value, props.durationLabel].filter(Boolean).join(' · ')
+)
+const emptyCopy = computed(() => subagentEmptyActivityCopy(activitySource.value))
+const accessibleLabel = computed(
+  () => `${props.name}，${statusLabel.value}，${summaryMeta.value || '点开查看'}`
+)
+
+/** 首次展开时才补读子 session；结果与工具都只消费经过 Preload 校验的回包。 */
+async function loadActivity(force = false): Promise<void> {
+  if (!props.shortId || loading.value || (loaded.value && !force)) return
+  loading.value = true
+  activitySource.value = 'pending'
+  try {
+    const page = unwrapDesktopIpcResult(
+      await window.task.getSubagentActivity(props.taskId, props.shortId)
+    )
+    loadedRows.value = subagentActivityRows(page.tools)
+    loadedToolCount.value = page.tools.length
+    result.value = page.result ?? null
+    activitySource.value = page.source
+    loaded.value = true
+  } catch {
+    activitySource.value = 'missing'
+  } finally {
+    loading.value = false
+  }
 }
 
-function showPopup(): void {
-  popup.show()
-  syncOpen()
-}
-
-function hidePopup(): void {
-  popup.hide()
-  syncOpen()
-}
-
-function onPillClick(): void {
-  showPopup()
-}
-
-function onKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Escape' || !open.value) return
-  event.preventDefault()
-  hidePopup()
+function onToggle(event: Event): void {
+  const target = event.currentTarget
+  if (!(target instanceof HTMLDetailsElement)) return
+  opened.value = target.open
+  userToggled.value = true
+  if (target.open) void loadActivity()
 }
 
 onMounted(() => {
-  window.addEventListener('keydown', onKeydown)
+  if (detailsRef.value) detailsRef.value.open = opened.value
+  if (opened.value) void loadActivity()
 })
-onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onKeydown)
-})
+
+watch(
+  () => props.status,
+  (status, previous) => {
+    if (!userToggled.value && status === 'running') {
+      opened.value = true
+      if (detailsRef.value) detailsRef.value.open = true
+    }
+    // 子任务刚进入终态时重新读取一次，拿到真实最后回复而不是运行中的半截文本。
+    if (previous === 'running' && status !== 'running' && opened.value) void loadActivity(true)
+  }
+)
 </script>
 
 <template>
-  <!-- 对话只留药丸；点开 Teleport 弹层看这个孩子做了什么。 -->
-  <div class="subagent-card" :data-status="status">
-    <button
-      class="subagent-pill"
-      type="button"
-      :title="name"
-      :aria-label="`${name}，${statusLabel}`"
-      :aria-expanded="open"
-      aria-haspopup="dialog"
-      @click="onPillClick"
-    >
+  <!-- 子代理是父 Turn 内的任务卡：第一眼看状态与结论，工具流水账退到第二层。 -->
+  <details ref="detailsRef" class="subagent-card" :data-status="status" @toggle="onToggle">
+    <summary class="subagent-summary" :aria-label="accessibleLabel">
       <span class="subagent-heading">
         <span class="subagent-dot" aria-hidden="true" />
-        <span class="subagent-name">{{ name }}</span>
+        <span class="subagent-identity">
+          <span class="subagent-name">{{ name }}</span>
+          <span class="subagent-summary-meta">{{ summaryMeta }}</span>
+        </span>
         <span class="subagent-status">{{ statusLabel }}</span>
+        <span class="subagent-caret" aria-hidden="true" />
       </span>
-    </button>
+    </summary>
 
-    <Teleport to="body">
-      <div v-if="open" class="subagent-overlay" @click.self="hidePopup">
-        <section
-          class="subagent-dialog"
-          :data-status="status"
-          role="dialog"
-          aria-modal="true"
-          :aria-label="`${popupTitle} 做了什么`"
-        >
-          <header class="subagent-dialog-header">
-            <div class="subagent-dialog-identity">
-              <p v-if="spawn" class="subagent-type">{{ spawn.agentType }}</p>
-              <h2>{{ popupTitle }}</h2>
-              <p v-if="spawn?.shortId" class="subagent-id">{{ spawn.shortId }}</p>
-            </div>
-            <div class="subagent-dialog-meta">
-              <span class="subagent-dialog-status">{{ statusLabel }}</span>
-              <span v-if="durationLabel">{{ durationLabel }}</span>
-              <button
-                class="icon-button"
-                type="button"
-                title="关闭子代理卡片"
-                aria-label="关闭子代理卡片"
-                @click="hidePopup"
-              >
-                <X :size="16" />
-              </button>
-            </div>
-          </header>
-          <div class="subagent-dialog-body">
-            <p v-if="groupingNote" class="subagent-meta">{{ groupingNote }}</p>
-            <h3>做了什么</h3>
-            <p v-if="!tools.length && !groupingNote" class="subagent-meta">
-              还没有可展示的工具活动。
-            </p>
-            <div v-else class="subagent-tools">
-              <ToolRow
-                v-for="tool in tools"
-                :key="tool.key"
-                :label="tool.label"
-                :status="tool.status"
-                :files="tool.files ?? []"
-                :detail="tool.detail"
-              />
-            </div>
-            <p v-if="status === 'running'" class="subagent-stop-hint">{{ SUBAGENT_STOP_COPY }}</p>
-          </div>
-        </section>
-      </div>
-    </Teleport>
-  </div>
+    <div class="subagent-body">
+      <p v-if="groupingNote" class="subagent-meta">{{ groupingNote }}</p>
+
+      <section v-if="result" class="subagent-result" aria-label="子代理执行结果">
+        <header class="subagent-section-heading">
+          <h4>执行结果</h4>
+          <span v-if="result.truncated">内容已截断</span>
+        </header>
+        <AssistantMarkdown :text="result.text" />
+      </section>
+
+      <section class="subagent-activity" aria-label="子代理活动明细">
+        <header class="subagent-section-heading">
+          <h4>活动明细</h4>
+          <span v-if="loading">正在刷新…</span>
+        </header>
+        <p v-if="!rows.length" class="subagent-meta" role="status">
+          {{ emptyCopy }}
+        </p>
+        <div v-else class="subagent-tools">
+          <ToolRow
+            v-for="tool in rows"
+            :key="tool.key"
+            :label="tool.label"
+            :status="tool.status"
+            :files="tool.files ?? []"
+            :detail="tool.detail"
+          />
+        </div>
+      </section>
+
+      <p v-if="status === 'running'" class="subagent-stop-hint">
+        {{ SUBAGENT_STOP_COPY }}
+      </p>
+    </div>
+  </details>
 </template>

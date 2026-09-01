@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { AGENT_INVOKE_CHANNELS, AGENT_PUSH_CHANNELS } from './agent-ipc'
 import { APP_INVOKE_CHANNELS, APP_PUSH_CHANNELS } from './app-ipc'
-import { TASK_INVOKE_CHANNELS } from './task-ipc'
+import { TASK_INVOKE_CHANNELS, parseSubagentActivityPage } from './task-ipc'
 
 describe('桌面 IPC 静态契约', () => {
   it('所有 Agent 与 App channel 都固定且唯一', () => {
@@ -88,7 +88,8 @@ describe('桌面 IPC 静态契约', () => {
       'task:remove-attachment',
       'task:get-attachment-preview',
       'task:get-attachment-image',
-      'task:get-change-media-preview'
+      'task:get-change-media-preview',
+      'task:get-subagent-activity'
     ])
   })
 
@@ -105,5 +106,35 @@ describe('桌面 IPC 静态契约', () => {
     expect(channels).not.toContain('agent:send-prompt')
     expect(channels).not.toContain('agent:cancel')
     expect(channels).not.toContain('app:choose-workspace')
+  })
+})
+
+describe('子代理活动公开回包', () => {
+  it('只保留有界工具事实与真实最终回复，未知键不得穿透', () => {
+    expect(
+      parseSubagentActivityPage({
+        source: 'grok-session',
+        tools: [{ toolCallId: 'tool-1', title: 'Read `index.html`', status: 'completed' }],
+        result: { text: '分析完成。', truncated: false, rawOutput: 'secret' },
+        runtimeSessionId: 'private-session'
+      })
+    ).toEqual({
+      source: 'grok-session',
+      tools: [{ toolCallId: 'tool-1', title: 'Read `index.html`', status: 'completed' }],
+      result: { text: '分析完成。', truncated: false }
+    })
+  })
+
+  it('拒绝 NUL 与超过 32 KiB 的结果文本', () => {
+    const base = { source: 'grok-session', tools: [] }
+    expect(
+      parseSubagentActivityPage({ ...base, result: { text: 'bad\0text', truncated: false } })
+    ).toBeNull()
+    expect(
+      parseSubagentActivityPage({
+        ...base,
+        result: { text: '中'.repeat(11_000), truncated: true }
+      })
+    ).toBeNull()
   })
 })

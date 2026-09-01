@@ -874,6 +874,53 @@ describe('窄 Preload API', () => {
     })
   })
 
+  it('子代理活动只接受有界回包，未知键列表不得混进 Renderer', async () => {
+    const ipcRenderer = createIpcRenderer()
+    const task = createTaskDesktopApi(ipcRenderer)
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        source: 'grok-session',
+        tools: [
+          {
+            toolCallId: 't-read',
+            title: 'Read `index.html`',
+            status: 'completed',
+            rawInput: { secret: 'sk' }
+          }
+        ],
+        result: {
+          text: '最终发现：四个页面都只读分析完成。',
+          truncated: false,
+          rawOutput: '不得穿透'
+        }
+      }
+    })
+    const parsed = await task.getSubagentActivity('task-1', '01a05bc9')
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith(TASK_INVOKE_CHANNELS.getSubagentActivity, {
+      taskId: 'task-1',
+      shortId: '01a05bc9'
+    })
+    expect(parsed).toEqual({
+      ok: true,
+      value: {
+        source: 'grok-session',
+        tools: [{ toolCallId: 't-read', title: 'Read `index.html`', status: 'completed' }],
+        result: { text: '最终发现：四个页面都只读分析完成。', truncated: false }
+      }
+    })
+    expect(JSON.stringify(parsed)).not.toContain('rawInput')
+    expect(JSON.stringify(parsed)).not.toContain('rawOutput')
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { source: 'mystery', tools: [] }
+    })
+    expect(await task.getSubagentActivity('task-1', '01a05bc9')).toMatchObject({
+      ok: false,
+      error: { code: 'operation-failed' }
+    })
+  })
+
   it('变更审阅 API 丢掉绝对路径、fingerprint 和 porcelain', async () => {
     const ipcRenderer = createIpcRenderer()
     const task = createTaskDesktopApi(ipcRenderer)

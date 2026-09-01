@@ -45,7 +45,7 @@ export function reducedMotionDisablesExpandAnimations(source: string): boolean {
   const hasZeroDuration =
     /animation-duration:\s*0s/.test(css) && /transition-duration:\s*0s/.test(css)
   const inspectorOff = /\.workspace-layout\s*>\s*\.task-inspector[\s\S]*animation:\s*none/.test(css)
-  const detailsOff = /\.subagent-card[\s\S]*transition-duration:\s*0s/.test(css)
+  const detailsOff = /\.subagent-summary[\s\S]*transition-duration:\s*0s/.test(css)
   const spinnerOff = /\.conversation-spinner[\s\S]*animation:\s*none/.test(css)
   return hasZeroDuration && inspectorOff && detailsOff && spinnerOff
 }
@@ -54,16 +54,15 @@ export function reducedMotionDisablesExpandAnimations(source: string): boolean {
 export function subagentSkinMatchesToolRowDensity(css: string): SubagentSkinDensity {
   const tool = extractCssRuleBlock(css, '.tool-row')
   const card = extractCssRuleBlock(css, '.subagent-card')
-  const plan = extractCssRuleBlock(css, '.conversation-plan')
+  const summary = extractCssRuleBlock(css, '.subagent-summary')
   const tools = extractCssRuleBlock(css, '.subagent-tools')
-  const failed = extractCssRuleBlock(css, ".subagent-card[data-status='failed']")
+  const failed = extractCssRuleBlock(css, ".subagent-card[data-status='failed'] .subagent-status")
   const toolFont = readPx(tool, 'font-size')
   const cardFont = readPx(card, 'font-size')
-  const cardRadius = readPx(card, 'border-radius')
-  const planRadius = readPx(plan, 'border-radius')
+  const summaryRadius = readPx(summary, 'border-radius')
   return {
     sharedFontSizePx: toolFont !== null && toolFont === cardFont ? toolFont : null,
-    sharedRadiusPx: cardRadius !== null && cardRadius === planRadius ? cardRadius : null,
+    sharedRadiusPx: summaryRadius,
     toolIndentPx: readPx(tools, 'padding-left'),
     failedUsesDanger: failed.includes('--danger')
   }

@@ -13,6 +13,7 @@ import type {
   TaskChangeSetQueryResult,
   TurnChangeCheckpoint
 } from './git-review'
+import type { AgentToolStatus } from './agent'
 import type { DesktopIpcResult } from './ipc-result'
 import type {
   DeletionPreview,
@@ -51,8 +52,79 @@ export const TASK_INVOKE_CHANNELS = {
   removeAttachment: 'task:remove-attachment',
   getAttachmentPreview: 'task:get-attachment-preview',
   getAttachmentImage: 'task:get-attachment-image',
-  getChangeMediaPreview: 'task:get-change-media-preview'
+  getChangeMediaPreview: 'task:get-change-media-preview',
+  getSubagentActivity: 'task:get-subagent-activity'
 } as const
+
+/** 子代理工具来自 Grok 子 session 落盘；missing 表示父时间线没有孩子工具。 */
+export type SubagentActivitySource = 'grok-session' | 'missing'
+
+export interface SubagentActivityToolRow {
+  toolCallId: string
+  title: string
+  status: AgentToolStatus | 'unknown'
+}
+
+/** 子代理真实最后回复；不是桌面端二次生成的摘要。 */
+export interface SubagentActivityResult {
+  text: string
+  truncated: boolean
+}
+
+export interface SubagentActivityPage {
+  source: SubagentActivitySource
+  tools: SubagentActivityToolRow[]
+  result?: SubagentActivityResult
+}
+
+const SUBAGENT_ACTIVITY_STATUSES = new Set<AgentToolStatus | 'unknown'>([
+  'pending',
+  'in_progress',
+  'completed',
+  'failed',
+  'cancelled',
+  'unknown'
+])
+
+/** Preload 再校验主进程回包，丢掉未知键和超长列表。 */
+export function parseSubagentActivityPage(value: unknown): SubagentActivityPage | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  if (record.source !== 'grok-session' && record.source !== 'missing') return null
+  if (!Array.isArray(record.tools) || record.tools.length > 200) return null
+  const tools: SubagentActivityToolRow[] = []
+  for (const item of record.tools) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+    const row = item as Record<string, unknown>
+    if (typeof row.toolCallId !== 'string' || !row.toolCallId.trim() || row.toolCallId.length > 256)
+      return null
+    if (typeof row.title !== 'string' || row.title.length > 4 * 1024) return null
+    if (!SUBAGENT_ACTIVITY_STATUSES.has(row.status as AgentToolStatus | 'unknown')) return null
+    tools.push({
+      toolCallId: row.toolCallId,
+      title: row.title,
+      status: row.status as AgentToolStatus | 'unknown'
+    })
+  }
+  let result: SubagentActivityResult | undefined
+  if (record.result != null) {
+    if (!record.result || typeof record.result !== 'object' || Array.isArray(record.result)) {
+      return null
+    }
+    const rawResult = record.result as Record<string, unknown>
+    if (
+      typeof rawResult.text !== 'string' ||
+      !rawResult.text.trim() ||
+      rawResult.text.includes('\0') ||
+      new TextEncoder().encode(rawResult.text).byteLength > 32 * 1024 ||
+      typeof rawResult.truncated !== 'boolean'
+    ) {
+      return null
+    }
+    result = { text: rawResult.text, truncated: rawResult.truncated }
+  }
+  return { source: record.source, tools, ...(result ? { result } : {}) }
+}
 
 export interface PublicAgentEventPage {
   items: PublicAgentEvent[]
@@ -143,4 +215,8 @@ export interface TaskDesktopApi {
     taskId: string,
     artifactId: string
   ) => Promise<DesktopIpcResult<ArtifactContent>>
+  getSubagentActivity: (
+    taskId: string,
+    shortId: string
+  ) => Promise<DesktopIpcResult<SubagentActivityPage>>
 }

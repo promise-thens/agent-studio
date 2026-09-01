@@ -345,6 +345,22 @@ describe('Task 历史 IPC', () => {
     expect(fixture.history.renameTask).toHaveBeenCalledTimes(1)
   })
 
+  it('子代理活动拒绝路径型 shortId，缺 reader 时诚实 missing', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.getSubagentActivity, {
+        taskId: 'task-1',
+        shortId: '../etc'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.getSubagentActivity, {
+        taskId: 'task-1',
+        shortId: '01a05bc9'
+      })
+    ).toEqual({ ok: true, value: { source: 'missing', tools: [] } })
+  })
+
   it('归档只接受 taskId，并原样交给历史服务', async () => {
     const fixture = createFixture()
     expect(await fixture.invoke(TASK_INVOKE_CHANNELS.archive, { taskId: 'task-1' })).toMatchObject({
