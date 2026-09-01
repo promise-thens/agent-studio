@@ -85,6 +85,39 @@ export function toSubagentToolRows(tools: readonly ConversationToolBlock[]): Sub
   }))
 }
 
+export type SubagentCardStatus = 'running' | 'completed' | 'failed'
+
+export interface SubagentCardExpansionController {
+  readonly open: boolean
+  applyStatus(status: SubagentCardStatus): void
+  applyToggle(nativeOpen: boolean): void
+}
+
+/**
+ * 未手势时跟随 status === 'running'（完成/失败默认折）。
+ * 用户点过 summary 后尊重手势；:open 同步触发的 toggle 不记成手势。
+ */
+export function createSubagentCardExpansion(
+  status: SubagentCardStatus
+): SubagentCardExpansionController {
+  let open = status === 'running'
+  let userOverrode = false
+  return {
+    get open() {
+      return open
+    },
+    applyStatus(nextStatus) {
+      if (userOverrode) return
+      open = nextStatus === 'running'
+    },
+    applyToggle(nativeOpen) {
+      if (nativeOpen === open) return
+      userOverrode = true
+      open = nativeOpen
+    }
+  }
+}
+
 /** 没有 child cancel 协议，只提供停整场 Turn。 */
 export function subagentStopPolicy(): SubagentStopPolicy {
   return {

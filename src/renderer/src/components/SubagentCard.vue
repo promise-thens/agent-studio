@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { AgentToolStatus } from '../../../shared/agent'
-import { SUBAGENT_STOP_COPY, subagentStatusLabel } from '../conversation-subagent-view'
+import {
+  SUBAGENT_STOP_COPY,
+  createSubagentCardExpansion,
+  subagentStatusLabel
+} from '../conversation-subagent-view'
 import ToolRow from './ToolRow.vue'
 
 const props = defineProps<{
@@ -17,12 +21,22 @@ const props = defineProps<{
 }>()
 
 const statusLabel = computed(() => subagentStatusLabel(props.status))
-/** 进行中默认展开；完成/失败默认折。用户点 summary 仍可改，Vue 不得把 open 绑死。 */
-const expanded = ref(props.status === 'running')
+/** 未手势覆盖时跟随 running；用户点过 summary 后不再被 status 绑死。 */
+const expansion = createSubagentCardExpansion(props.status)
+const expanded = ref(expansion.open)
 
-/** 把原生 details 的开合写回，避免完成卡点开后又被 :open=false 折回去。 */
+watch(
+  () => props.status,
+  (status) => {
+    expansion.applyStatus(status)
+    expanded.value = expansion.open
+  }
+)
+
+/** 原生 details 开合写回控制器；与当前 open 相同的事件是 :open 同步，不是手势。 */
 function onToggle(event: Event): void {
-  expanded.value = (event.currentTarget as HTMLDetailsElement).open
+  expansion.applyToggle((event.currentTarget as HTMLDetailsElement).open)
+  expanded.value = expansion.open
 }
 </script>
 

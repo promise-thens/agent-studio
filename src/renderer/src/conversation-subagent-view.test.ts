@@ -15,6 +15,7 @@ import {
 import {
   SUBAGENT_CARD_MAX_DEPTH,
   SUBAGENT_STOP_COPY,
+  createSubagentCardExpansion,
   flattenSubagentToolsToRows,
   formatSubagentCountLine,
   isolateSubagentToolOwnership,
@@ -322,10 +323,47 @@ describe('GACP-06 任务 3 折叠/停止/深度', () => {
     expect(
       toSubagentCardView(fixtureSubagent('c', '探查测试结构', 'failed', [])).defaultExpanded
     ).toBe(false)
-    expect(subagentCardSource).toContain("status === 'running'")
+    expect(createSubagentCardExpansion('running').open).toBe(true)
+    expect(createSubagentCardExpansion('completed').open).toBe(false)
+    expect(createSubagentCardExpansion('failed').open).toBe(false)
+    expect(subagentCardSource).toContain('createSubagentCardExpansion')
+    expect(subagentCardSource).toContain('applyStatus')
+    expect(subagentCardSource).toContain('applyToggle')
+    expect(subagentCardSource).toMatch(/watch\(\s*\(\)\s*=>\s*props\.status/)
     expect(subagentCardSource).toContain('@toggle')
     expect(subagentCardSource).toContain(':aria-label=')
     expect(subagentCardSource).toContain(':title="name"')
+  })
+
+  it('未手势时 live running→completed 收起；手势过则尊重用户', () => {
+    const live = createSubagentCardExpansion('running')
+    expect(live.open).toBe(true)
+    live.applyStatus('completed')
+    expect(live.open).toBe(false)
+
+    const failed = createSubagentCardExpansion('running')
+    failed.applyStatus('failed')
+    expect(failed.open).toBe(false)
+
+    const userCollapsed = createSubagentCardExpansion('running')
+    userCollapsed.applyToggle(false)
+    expect(userCollapsed.open).toBe(false)
+    userCollapsed.applyStatus('completed')
+    expect(userCollapsed.open).toBe(false)
+
+    const userInspected = createSubagentCardExpansion('running')
+    userInspected.applyStatus('completed')
+    expect(userInspected.open).toBe(false)
+    userInspected.applyToggle(true)
+    expect(userInspected.open).toBe(true)
+    userInspected.applyStatus('completed')
+    expect(userInspected.open).toBe(true)
+
+    const echo = createSubagentCardExpansion('running')
+    echo.applyStatus('completed')
+    echo.applyToggle(false)
+    echo.applyStatus('running')
+    expect(echo.open).toBe(true)
   })
 
   it('两个并行孩子互不串工具，v-for 用稳定 nodeId 而不是 index', () => {
