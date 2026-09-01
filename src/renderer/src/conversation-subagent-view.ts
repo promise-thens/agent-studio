@@ -7,6 +7,8 @@ export const SUBAGENT_CARD_MAX_DEPTH = 2
 /** 诚实停止：没有 child cancel，停的是整场 Turn，不是某一张卡。 */
 export const SUBAGENT_STOP_COPY = '停止会结束整场 Turn，不能只停这张卡。'
 
+export { SUBAGENT_AMBIGUOUS_COPY, formatSubagentDuration } from './subagent-spawn-title'
+
 export interface ConversationSubagentMountBlock {
   kind: string
 }
@@ -56,7 +58,7 @@ export interface SubagentToolOwnership {
 
 /**
  * 主列只在投影真的给出 subagent 块时挂载卡片。
- * GACP-01 未见父子字段，禁止用标题猜树，因此通常不会走到 true。
+ * 结构化 `[subagent:` 或 parentId 才会成组；禁止用中文标题猜树。
  */
 export function shouldMountSubagentCard(
   block: ConversationSubagentMountBlock | null | undefined
@@ -67,7 +69,7 @@ export function shouldMountSubagentCard(
 export function subagentStatusLabel(status: 'running' | 'completed' | 'failed'): string {
   if (status === 'running') return '进行中'
   if (status === 'failed') return '失败'
-  return '完成'
+  return '已完成'
 }
 
 /** 折叠态第二行：计数 + 点开提示，不要再写 Tool · in_progress。 */

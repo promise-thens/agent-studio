@@ -18,6 +18,8 @@ const props = defineProps<{
     files?: readonly string[]
     detail?: string
   }[]
+  durationLabel?: string
+  groupingNote?: string
 }>()
 
 const statusLabel = computed(() => subagentStatusLabel(props.status))
@@ -41,26 +43,30 @@ function onToggle(event: Event): void {
 </script>
 
 <template>
-  <!-- 第 7 节皮肤：一行标题+状态，一行计数；展开后只有缩进的 ToolRow。 -->
+  <!-- Grok Build 药丸行：点开才看这个孩子的工具、耗时和状态。 -->
   <details class="subagent-card" :data-status="status" :open="expanded" @toggle="onToggle">
-    <summary :title="name" :aria-label="`${name}，${statusLabel}`">
+    <summary class="subagent-pill" :title="name" :aria-label="`${name}，${statusLabel}`">
       <span class="subagent-heading">
         <span class="subagent-caret" aria-hidden="true" />
         <span class="subagent-dot" aria-hidden="true" />
         <span class="subagent-name">{{ name }}</span>
         <span class="subagent-status">{{ statusLabel }}</span>
       </span>
-      <span class="subagent-count">已运行 {{ tools.length }} 个工具 · 点开查看</span>
     </summary>
-    <div class="subagent-tools">
-      <ToolRow
-        v-for="tool in tools"
-        :key="tool.key"
-        :label="tool.label"
-        :status="tool.status"
-        :files="tool.files ?? []"
-        :detail="tool.detail"
-      />
+    <div class="subagent-panel">
+      <p v-if="durationLabel" class="subagent-meta">跑了 {{ durationLabel }}</p>
+      <p v-if="groupingNote" class="subagent-meta">{{ groupingNote }}</p>
+      <p v-else-if="tools.length" class="subagent-meta">已运行 {{ tools.length }} 个工具</p>
+      <div class="subagent-tools">
+        <ToolRow
+          v-for="tool in tools"
+          :key="tool.key"
+          :label="tool.label"
+          :status="tool.status"
+          :files="tool.files ?? []"
+          :detail="tool.detail"
+        />
+      </div>
       <p v-if="status === 'running'" class="subagent-stop-hint">{{ SUBAGENT_STOP_COPY }}</p>
     </div>
   </details>

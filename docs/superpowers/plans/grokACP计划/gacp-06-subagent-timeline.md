@@ -2,9 +2,9 @@
 
 > **致执行者：** 产品已确认要做通用多 Agent 工作台。Grok Build 会分发子 Agent；界面不要把它们摊成一长串互不相关的工具卡，而要做成可折叠的嵌套任务，对标 Claude Code Desktop。
 >
-> **状态：** 代码已落地；真机嵌套因观察白名单为空走扁平；开发版 GUI 未走查。
+> **状态：** 代码已落地。`parentId` 优先成组；无 parent 时只认结构化 `[subagent:` spawn 行（Grok Build 药丸），点开看孩子工具与耗时。中文「子 Agent」标题仍不聚类。开发版 GUI 未走查。
 >
-> **插入点：** P0-10A 换皮之后再接分组。GACP-01 观察表 F 节全部 `not-observed`，因此本计划先保持扁平，有稳定父子字段后才能嵌套，不能靠猜 title。不要重开 GACP-01，也不要挡 GACP-02 / P0-10A。
+> **插入点：** P0-10A 换皮之后再接分组。GACP-01 观察表 F 节全部 `not-observed`。禁止用随便出现的 subagent 字符串猜树。不要重开 GACP-01，也不要挡 GACP-02 / P0-10A。
 
 **优先级：** P0-A 增强 / 权重 3（不影响单 Agent 闭环，但决定「像不像 Codex / Claude Desktop」）
 

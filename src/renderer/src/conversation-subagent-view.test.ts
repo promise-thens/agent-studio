@@ -13,11 +13,13 @@ import {
   type TurnTimelineViewModel
 } from './task-timeline-reducer'
 import {
+  SUBAGENT_AMBIGUOUS_COPY,
   SUBAGENT_CARD_MAX_DEPTH,
   SUBAGENT_STOP_COPY,
   createSubagentCardExpansion,
   flattenSubagentToolsToRows,
   formatSubagentCountLine,
+  formatSubagentDuration,
   isolateSubagentToolOwnership,
   shouldMountSubagentCard,
   subagentStatusLabel,
@@ -152,6 +154,43 @@ describe('子 Agent 卡挂载门禁', () => {
     expect(shouldMountSubagentCard(subagent)).toBe(true)
   })
 
+  it('Grok spawn 标题原样做 heading，带耗时；并行提示不编造孩子', () => {
+    const heading = '[subagent:general-purpose] Demo subagent run (01a05b79)'
+    const blocks = projectConversationTurn(
+      turn('completed', [
+        {
+          ...agentGroup('spawn-1', heading, 'completed', [
+            tool('read-1', '读取 src/auth.ts', 'completed')
+          ]),
+          firstObservedAt: '2026-09-01T05:00:00.000Z',
+          lastObservedAt: '2026-09-01T05:00:12.000Z'
+        }
+      ])
+    )
+    const card = blocks.find((block) => block.kind === 'subagent')
+
+    expect(card).toMatchObject({
+      kind: 'subagent',
+      name: heading,
+      durationLabel: '12 秒'
+    })
+    expect(card && 'groupingHint' in card ? card.groupingHint : undefined).toBeUndefined()
+
+    const parallel = projectConversationTurn(
+      turn('running', [
+        {
+          ...agentGroup('spawn-a', '[subagent:explore] A (aaa1)', 'in_progress', []),
+          groupingHint: 'ambiguous-parallel'
+        }
+      ])
+    )
+    expect(parallel.find((block) => block.kind === 'subagent')).toMatchObject({
+      groupingHint: 'ambiguous-parallel',
+      groupingNote: SUBAGENT_AMBIGUOUS_COPY,
+      tools: []
+    })
+  })
+
   it('两个并行 agent-group 投影后工具不串 nodeId', () => {
     const blocks = projectConversationTurn(
       turn('running', [
@@ -226,10 +265,25 @@ describe('子 Agent 卡挂载门禁', () => {
   })
 })
 
+describe('子 Agent 耗时', () => {
+  it('用首尾 observedAt 算耗时，缺时间或 0 秒不编造', () => {
+    expect(formatSubagentDuration('2026-09-01T05:00:00.000Z', '2026-09-01T05:00:12.000Z')).toBe(
+      '12 秒'
+    )
+    expect(formatSubagentDuration('2026-09-01T05:00:00.000Z', '2026-09-01T05:01:05.000Z')).toBe(
+      '1 分 05 秒'
+    )
+    expect(formatSubagentDuration('2026-09-01T05:00:00.000Z', '2026-09-01T05:00:00.000Z')).toBe(
+      undefined
+    )
+    expect(formatSubagentDuration(undefined, '2026-09-01T05:00:12.000Z')).toBeUndefined()
+  })
+})
+
 describe('子 Agent 第 7 节皮肤', () => {
   it('折叠态是名字+状态+工具计数，失败单独标，不把错误糊进父消息', () => {
     expect(subagentStatusLabel('running')).toBe('进行中')
-    expect(subagentStatusLabel('completed')).toBe('完成')
+    expect(subagentStatusLabel('completed')).toBe('已完成')
     expect(subagentStatusLabel('failed')).toBe('失败')
     expect(formatSubagentCountLine(3)).toBe('已运行 3 个工具 · 点开查看')
 
@@ -333,6 +387,9 @@ describe('GACP-06 任务 3 折叠/停止/深度', () => {
     expect(subagentCardSource).toContain('@toggle')
     expect(subagentCardSource).toContain(':aria-label=')
     expect(subagentCardSource).toContain(':title="name"')
+    expect(subagentCardSource).toContain('subagent-pill')
+    expect(subagentCardSource).toContain('durationLabel')
+    expect(subagentCardSource).toContain('groupingNote')
   })
 
   it('未手势时 live running→completed 收起；手势过则尊重用户', () => {

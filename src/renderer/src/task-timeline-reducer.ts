@@ -21,6 +21,7 @@ import {
   toCommandEvidenceView,
   type TimelineCommandEvidenceView
 } from './command-evidence-presentation'
+import { isSubagentSpawnTitle } from './subagent-spawn-title'
 
 export type { TimelineCommandEvidenceView }
 
@@ -147,10 +148,14 @@ export interface TimelineToolNode extends TimelineNodeBase {
   status: AgentToolStatus | 'unknown'
   /** 父 tool 的 toolCallId；缺省或悬空时保持扁平，不得按标题猜树。 */
   parentId?: string
+  /** 该 tool 最后一次被接受的 sequence，用来判断 spawn 窗口是否已关闭。 */
+  lastSequence?: number
+  firstObservedAt?: string
+  lastObservedAt?: string
   command?: TimelineCommandEvidenceView
 }
 
-/** 子 Agent 根节点：仅当本 Turn 确有孩子指向该 toolCallId 时才从父流提升。 */
+/** 子 Agent 根：parentId 孩子，或结构化 `[subagent:` spawn 行。 */
 export interface TimelineAgentGroupNode extends TimelineNodeBase {
   kind: 'agent-group'
   toolCallId: string
@@ -159,6 +164,10 @@ export interface TimelineAgentGroupNode extends TimelineNodeBase {
   parentId?: string
   command?: TimelineCommandEvidenceView
   children: TimelineToolNode[]
+  firstObservedAt?: string
+  lastObservedAt?: string
+  /** 多个 spawn 同时打开，窗口工具无法唯一归属。 */
+  groupingHint?: 'ambiguous-parallel'
 }
 
 export interface TimelineCommandNode extends TimelineNodeBase {
@@ -556,6 +565,8 @@ function projectNodes(
         const retained = nextRetainedToolStatus(existing.status, event.status)
         if (retained) existing.status = retained
         if (event.parentId) existing.parentId = event.parentId
+        existing.lastSequence = event.sequence
+        existing.lastObservedAt = event.observedAt
         const matched = matchCommandEvidence(commands, event.toolCallId)
         if (matched) existing.command = toCommandEvidenceView(matched)
       } else {
@@ -566,6 +577,9 @@ function projectNodes(
           toolCallId: event.toolCallId,
           title: event.title ?? event.toolCallId,
           status: event.status ?? 'unknown',
+          lastSequence: event.sequence,
+          firstObservedAt: event.observedAt,
+          lastObservedAt: event.observedAt,
           ...(event.parentId ? { parentId: event.parentId } : {})
         }
         const matched = matchCommandEvidence(commands, event.toolCallId)
@@ -647,30 +661,50 @@ function projectNodes(
 }
 
 /**
- * 分组键只有 parentId。标题含 subagent / 子 Agent 不得聚类。
- * 根必须是本 Turn 已出现的 toolCallId；悬空 parentId 保持扁平，不造空壳。
- * 孩子先到时先扁平，根到达后再收进 group，且不得在父流复制。
+ * parentId 优先。结构化 `[subagent:` spawn 行即使没有孩子也提升为卡。
+ * 标题里随便出现 subagent / 子 Agent 不得聚类。
+ * 时间窗口：仅当恰好一个 spawn 在该 sequence 仍打开时才收孩子；并行打开则不抢。
  */
 function groupAgentToolNodes(nodes: TaskTimelineNode[]): TaskTimelineNode[] {
   const tools = nodes.filter((node): node is TimelineToolNode => node.kind === 'tool')
   const toolsByCallId = new Map(tools.map((tool) => [tool.toolCallId, tool]))
-  const validRootIds = new Set<string>()
+  const parentRootIds = new Set<string>()
   for (const tool of tools) {
     if (tool.parentId && tool.parentId !== tool.toolCallId && toolsByCallId.has(tool.parentId)) {
-      validRootIds.add(tool.parentId)
+      parentRootIds.add(tool.parentId)
     }
   }
+  const spawnRoots = tools.filter((tool) => isSubagentSpawnTitle(tool.title))
+  const spawnRootIds = new Set(spawnRoots.map((tool) => tool.toolCallId))
+  const validRootIds = new Set([...parentRootIds, ...spawnRootIds])
   if (validRootIds.size === 0) return nodes
 
   const childrenByRoot = new Map<string, TimelineToolNode[]>()
   const absorbedIds = new Set<string>()
+  const ambiguousSpawnIds = new Set<string>()
+
   for (const tool of tools) {
-    const rootId = resolveAgentGroupRoot(tool, toolsByCallId, validRootIds)
-    if (!rootId || tool.toolCallId === rootId) continue
-    absorbedIds.add(tool.toolCallId)
-    const children = childrenByRoot.get(rootId) ?? []
-    children.push(tool)
-    childrenByRoot.set(rootId, children)
+    const parentRoot = resolveAgentGroupRoot(tool, toolsByCallId, parentRootIds)
+    if (parentRoot && tool.toolCallId !== parentRoot) {
+      absorbedIds.add(tool.toolCallId)
+      appendChild(childrenByRoot, parentRoot, tool)
+    }
+  }
+
+  for (const tool of tools) {
+    if (absorbedIds.has(tool.toolCallId) || spawnRootIds.has(tool.toolCallId)) continue
+    const sequence = tool.firstSequence ?? 0
+    const openSpawns = spawnRoots.filter((spawn) => isSpawnOpenAt(spawn, sequence))
+    if (openSpawns.length === 1) {
+      const rootId = openSpawns[0]?.toolCallId
+      if (!rootId) continue
+      absorbedIds.add(tool.toolCallId)
+      appendChild(childrenByRoot, rootId, tool)
+      continue
+    }
+    if (openSpawns.length > 1) {
+      for (const spawn of openSpawns) ambiguousSpawnIds.add(spawn.toolCallId)
+    }
   }
 
   const grouped: TaskTimelineNode[] = []
@@ -684,14 +718,32 @@ function groupAgentToolNodes(nodes: TaskTimelineNode[]): TaskTimelineNode[] {
       grouped.push(node)
       continue
     }
+    const children = (childrenByRoot.get(node.toolCallId) ?? []).slice().sort(compareTimelineNodes)
     grouped.push(
-      toAgentGroupNode(
-        node,
-        (childrenByRoot.get(node.toolCallId) ?? []).slice().sort(compareTimelineNodes)
-      )
+      toAgentGroupNode(node, children, {
+        groupingHint: ambiguousSpawnIds.has(node.toolCallId) ? 'ambiguous-parallel' : undefined
+      })
     )
   }
   return grouped
+}
+
+function appendChild(
+  childrenByRoot: Map<string, TimelineToolNode[]>,
+  rootId: string,
+  tool: TimelineToolNode
+): void {
+  const children = childrenByRoot.get(rootId) ?? []
+  children.push(tool)
+  childrenByRoot.set(rootId, children)
+}
+
+/** spawn 未终态则一直打开；终态后只覆盖 lastSequence 之前的孩子。 */
+function isSpawnOpenAt(spawn: TimelineToolNode, sequence: number): boolean {
+  const first = spawn.firstSequence ?? 0
+  if (sequence < first) return false
+  if (spawn.status === 'unknown' || !TERMINAL_TOOL_STATES.has(spawn.status)) return true
+  return sequence <= (spawn.lastSequence ?? first)
 }
 
 /** 沿 parentId 链走到本 Turn 最外层有效根；中途悬空则停止，避免造空壳。 */
@@ -714,8 +766,10 @@ function resolveAgentGroupRoot(
 
 function toAgentGroupNode(
   root: TimelineToolNode,
-  children: TimelineToolNode[]
+  children: TimelineToolNode[],
+  options?: { groupingHint?: 'ambiguous-parallel' }
 ): TimelineAgentGroupNode {
+  const observed = collectGroupObservedAt(root, children)
   return {
     nodeId: root.nodeId,
     taskId: root.taskId,
@@ -730,7 +784,22 @@ function toAgentGroupNode(
     status: root.status,
     ...(root.parentId ? { parentId: root.parentId } : {}),
     ...(root.command ? { command: root.command } : {}),
-    children
+    children,
+    ...(observed.firstObservedAt ? { firstObservedAt: observed.firstObservedAt } : {}),
+    ...(observed.lastObservedAt ? { lastObservedAt: observed.lastObservedAt } : {}),
+    ...(options?.groupingHint ? { groupingHint: options.groupingHint } : {})
+  }
+}
+
+function collectGroupObservedAt(
+  root: TimelineToolNode,
+  children: TimelineToolNode[]
+): { firstObservedAt?: string; lastObservedAt?: string } {
+  const stamps = [root, ...children].flatMap((node) => [node.firstObservedAt, node.lastObservedAt])
+  const known = stamps.filter((value): value is string => Boolean(value)).sort()
+  return {
+    ...(known[0] ? { firstObservedAt: known[0] } : {}),
+    ...(known.at(-1) ? { lastObservedAt: known.at(-1) } : {})
   }
 }
 

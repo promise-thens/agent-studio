@@ -12,6 +12,11 @@ import {
   presentCommandEvidenceSummary
 } from './command-evidence-presentation'
 import { isReadToolTitle, presentToolTitle } from './conversation-tool-presentation'
+import {
+  SUBAGENT_AMBIGUOUS_COPY,
+  formatSubagentDuration,
+  parseSubagentSpawnTitle
+} from './subagent-spawn-title'
 import { isActiveConversationTurn } from './task-conversation-view'
 import {
   formatSilentPermissionSummary,
@@ -78,6 +83,9 @@ export interface ConversationSubagentBlock {
   name: string
   status: 'running' | 'completed' | 'failed'
   tools: ConversationToolBlock[]
+  durationLabel?: string
+  groupingHint?: 'ambiguous-parallel'
+  groupingNote?: string
 }
 
 export interface ConversationMessageBlock {
@@ -542,13 +550,19 @@ function insertPermissionAfterProcess(
 
 /** 只消费 reducer 给出的 agent-group；孩子走内部 ToolRow，不再插回父流。 */
 function toSubagentBlock(node: TimelineAgentGroupNode): ConversationSubagentBlock {
+  const spawn = parseSubagentSpawnTitle(node.title)
   const presented = presentToolTitle(node.title)
+  const durationLabel = formatSubagentDuration(node.firstObservedAt, node.lastObservedAt)
   return {
     kind: 'subagent',
     nodeId: node.nodeId,
-    name: presented.label || node.toolCallId,
+    name: spawn?.heading || presented.label || node.toolCallId,
     status: toSubagentCardStatus(node.status),
-    tools: projectGroupedToolBlocks(node.children)
+    tools: projectGroupedToolBlocks(node.children),
+    ...(durationLabel ? { durationLabel } : {}),
+    ...(node.groupingHint
+      ? { groupingHint: node.groupingHint, groupingNote: SUBAGENT_AMBIGUOUS_COPY }
+      : {})
   }
 }
 

@@ -681,6 +681,79 @@ describe('子 Agent agent-group 分组', () => {
     })
   })
 
+  it('[subagent:type] 无 parentId 时仍提升为 agent-group，窗口内工具收进卡', () => {
+    const nodes = timelineNodes([
+      toolCall(
+        1,
+        'spawn-1',
+        '[subagent:general-purpose] Demo subagent run (01a05b79)',
+        'in_progress'
+      ),
+      toolCall(2, 'read-1', '读取 src/auth.ts', 'completed'),
+      toolUpdate(3, 'spawn-1', 'completed')
+    ])
+    const group = nodes.find((node) => node.kind === 'agent-group')
+
+    expect(nodes.map((node) => node.kind)).toEqual(['agent-group'])
+    expect(group).toMatchObject({
+      kind: 'agent-group',
+      toolCallId: 'spawn-1',
+      title: '[subagent:general-purpose] Demo subagent run (01a05b79)',
+      status: 'completed',
+      children: [expect.objectContaining({ toolCallId: 'read-1', title: '读取 src/auth.ts' })]
+    })
+  })
+
+  it('spawn 终态之后的工具不收进该卡', () => {
+    const nodes = timelineNodes([
+      toolCall(1, 'spawn-1', '[subagent:explore] 探查', 'completed'),
+      toolCall(2, 'read-1', '读取 src/auth.ts', 'completed')
+    ])
+
+    expect(nodes.map((node) => node.kind)).toEqual(['agent-group', 'tool'])
+    expect(nodes.find((node) => node.kind === 'agent-group')).toMatchObject({
+      toolCallId: 'spawn-1',
+      children: []
+    })
+    expect(nodes.find((node) => node.kind === 'tool')).toMatchObject({ toolCallId: 'read-1' })
+  })
+
+  it('两个并行 spawn 打开时中间工具保持扁平，两张卡仍在', () => {
+    const nodes = timelineNodes([
+      toolCall(1, 'spawn-a', '[subagent:explore] A (aaa1)', 'in_progress'),
+      toolCall(2, 'spawn-b', '[subagent:general-purpose] B (bbb2)', 'in_progress'),
+      toolCall(3, 'read-1', '读取 package.json', 'completed')
+    ])
+    const groups = nodes.filter((node) => node.kind === 'agent-group')
+    const tools = nodes.filter((node) => node.kind === 'tool')
+
+    expect(groups.map((group) => group.toolCallId)).toEqual(['spawn-a', 'spawn-b'])
+    expect(groups[0]?.children).toEqual([])
+    expect(groups[1]?.children).toEqual([])
+    expect(tools.map((tool) => tool.toolCallId)).toEqual(['read-1'])
+    expect(groups.map((group) => group.groupingHint)).toEqual([
+      'ambiguous-parallel',
+      'ambiguous-parallel'
+    ])
+  })
+
+  it('parentId 优先于 [subagent:] 时间窗口', () => {
+    const nodes = timelineNodes([
+      toolCall(1, 'spawn-a', '[subagent:explore] A (aaa1)', 'in_progress'),
+      toolCall(2, 'spawn-b', '[subagent:general-purpose] B (bbb2)', 'in_progress'),
+      toolCall(3, 'read-1', '读取 a.ts', 'completed', 'spawn-b')
+    ])
+    const groups = nodes.filter((node) => node.kind === 'agent-group')
+
+    expect(nodes.some((node) => node.kind === 'tool')).toBe(false)
+    expect(groups.find((group) => group.toolCallId === 'spawn-a')?.children).toEqual([])
+    expect(
+      groups
+        .find((group) => group.toolCallId === 'spawn-b')
+        ?.children.map((child) => child.toolCallId)
+    ).toEqual(['read-1'])
+  })
+
   it('无 parentId 即使标题含 subagent / 子 Agent 也保持扁平，不造空壳', () => {
     const nodes = timelineNodes([
       toolCall(1, 'child-1', 'subagent 探查测试结构', 'in_progress'),

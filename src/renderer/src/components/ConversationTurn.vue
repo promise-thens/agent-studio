@@ -153,6 +153,8 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
         :name="block.name"
         :status="block.status"
         :tools="flattenSubagentToolsToRows(block.tools)"
+        :duration-label="block.durationLabel"
+        :grouping-note="block.groupingNote"
       />
 
       <div v-else-if="block.kind === 'message'" class="conversation-assistant" data-kind="message">

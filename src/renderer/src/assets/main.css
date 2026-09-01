@@ -929,12 +929,22 @@ button:disabled {
   background: var(--danger);
 }
 
+.subagent-card[data-status='completed'] .subagent-status {
+  color: var(--success);
+}
+
+.subagent-pill {
+  display: grid;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-3) 88%, transparent);
+}
+
 .subagent-card summary {
   display: grid;
   gap: 2px;
-  margin-left: -6px;
-  padding: 4px 6px;
-  border-radius: 8px;
 }
 
 .subagent-heading {
@@ -957,12 +967,32 @@ button:disabled {
   color: var(--text-2);
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  font-weight: 550;
 }
 
 .subagent-status {
   color: var(--text-3);
   font-size: 12px;
   font-weight: 650;
+}
+
+.subagent-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 48%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+}
+
+.subagent-meta {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .subagent-count {
@@ -975,12 +1005,9 @@ button:disabled {
 .subagent-tools {
   display: grid;
   gap: 6px;
-  margin-top: 8px;
-  padding: 9px 10px;
+  margin-top: 0;
+  padding: 0;
   padding-left: 16px;
-  border-left: 1px solid color-mix(in srgb, var(--border-strong) 62%, transparent);
-  border-radius: 0 9px 9px 0;
-  background: color-mix(in srgb, var(--surface-2) 58%, transparent);
 }
 
 .subagent-stop-hint {

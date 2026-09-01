@@ -24,7 +24,7 @@ describe('子 Agent 与 ToolRow/计划卡密度', () => {
     expect(density.toolIndentPx).toBe(16)
     expect(density.failedUsesDanger).toBe(true)
     expect(subagentSource).toContain('已运行')
-    expect(subagentSource).toContain('点开查看')
+    expect(subagentSource).toContain('subagent-pill')
     expect(conversationTurnSource).toContain('shouldMountSubagentCard')
   })
 })
