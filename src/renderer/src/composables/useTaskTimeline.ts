@@ -106,7 +106,7 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
     factsByTaskId.value = { ...factsByTaskId.value, [taskId]: next }
   }
 
-  /** 高频流式文本在同一微任务内合并；终态、权限和错误必须立刻可见。 */
+  /** 高频文本在同一微任务内合并；计划快照和终态必须立刻可见，避免 Inspector 像滞后刷新。 */
   function flushPendingEvents(): void {
     if (disposed) return
     pendingEventFlush = false
@@ -130,6 +130,7 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
     if (
       event.kind === 'turn-complete' ||
       event.kind === 'error' ||
+      event.kind === 'plan' ||
       event.kind === 'tool-call' ||
       event.kind === 'tool-update'
     ) {

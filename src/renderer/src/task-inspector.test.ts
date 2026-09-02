@@ -17,6 +17,7 @@ import {
   moveInspectorCardRect,
   nextInspectorTab,
   openChangesReview,
+  projectInspectorPlan,
   projectInspectorTimelineSummary,
   resolveInspectorTab,
   toggleInspectorOpen,
@@ -43,11 +44,18 @@ describe('Inspector 开关与标签', () => {
     expect(INSPECTOR_DEFAULT_TAB).toBe('timeline')
     expect(INSPECTOR_TABS.map((tab) => tab.id)).toEqual([
       'timeline',
+      'plan',
       'changes',
       'terminal',
       'artifacts'
     ])
-    expect(INSPECTOR_TABS.map((tab) => tab.label)).toEqual(['时间线', '变更', '终端', '产物'])
+    expect(INSPECTOR_TABS.map((tab) => tab.label)).toEqual([
+      '时间线',
+      '计划',
+      '变更',
+      '终端',
+      '产物'
+    ])
   })
 
   it('开关只翻转布尔值，标题栏文案随开合变化', () => {
@@ -125,10 +133,11 @@ describe('Inspector 开关与标签', () => {
   })
 
   it('未知标签回退到 Timeline，左右方向键循环', () => {
-    expect(isInspectorTab('plan')).toBe(false)
-    expect(resolveInspectorTab('plan')).toBe('timeline')
+    expect(isInspectorTab('plan')).toBe(true)
+    expect(resolveInspectorTab('plan')).toBe('plan')
     expect(resolveInspectorTab(undefined)).toBe('timeline')
-    expect(nextInspectorTab('timeline', 1)).toBe('changes')
+    expect(nextInspectorTab('timeline', 1)).toBe('plan')
+    expect(nextInspectorTab('plan', 1)).toBe('changes')
     expect(nextInspectorTab('artifacts', 1)).toBe('timeline')
     expect(nextInspectorTab('timeline', -1)).toBe('artifacts')
   })
@@ -141,6 +150,7 @@ describe('Inspector 占位文案', () => {
     expect(inspectorPlaceholderCopy('changes').detail).toMatch(/变更|审阅/)
     expect(inspectorPlaceholderCopy('artifacts').heading).toBe('选择一个 Task')
     expect(inspectorPlaceholderCopy('artifacts').detail).toMatch(/Markdown|图片|Diff/)
+    expect(inspectorPlaceholderCopy('plan').heading).toBe('暂无计划')
   })
 
   it('Terminal 标明 P0-15 用户交互终端，不把命令证据缺失写成终端未接入', () => {
@@ -150,7 +160,7 @@ describe('Inspector 占位文案', () => {
     expect(copy.heading + copy.detail).not.toMatch(/命令证据缺失|命令证据尚未|尚未接入命令/)
   })
 
-  it('默认关、默认 Timeline，主列仍是两列 overlay，摘要不是计划主副本', () => {
+  it('默认关、默认 Timeline，Plan 作为独立标签且主列仍是两列 overlay', () => {
     expect(INSPECTOR_DEFAULT_OPEN).toBe(false)
     expect(INSPECTOR_DEFAULT_TAB).toBe('timeline')
     expect(WORKSPACE_PRIMARY_COLUMNS).toEqual(['sidebar', 'conversation'])
@@ -227,6 +237,79 @@ describe('Inspector 占位文案', () => {
     expect(summary.toolCount).toBe(1)
     expect(summary).not.toHaveProperty('entries')
     expect(JSON.stringify(summary)).not.toContain('找现有 auth')
+  })
+
+  it('Timeline Inspector 直接投影最新计划快照，保留空快照并复制条目', () => {
+    const entries = [
+      { content: '读取现有实现', priority: 'high' as const, status: 'completed' as const },
+      { content: '补充测试', priority: 'low' as const, status: 'in_progress' as const }
+    ]
+    const timeline: Pick<TaskTimelineViewModel, 'turns'> = {
+      turns: [
+        {
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          prompt: '修复计划展示',
+          model: { modelId: 'model-1' },
+          status: 'running',
+          statusProvisional: false,
+          statusConflict: false,
+          createdAt: '2026-08-12T00:00:00.000Z',
+          nodes: [
+            {
+              nodeId: 'task-1:turn-1:plan',
+              taskId: 'task-1',
+              turnId: 'turn-1',
+              source: 'agent-event',
+              kind: 'plan',
+              entries
+            }
+          ],
+          usage: { contextSamples: [] },
+          historyTruncated: false
+        }
+      ]
+    }
+
+    const view = projectInspectorPlan(timeline)
+    expect(view).toEqual({ entries, completedCount: 1 })
+    expect(view?.entries).not.toBe(entries)
+    const olderEntries = [
+      { content: '先确认需求', priority: 'medium' as const, status: 'completed' as const }
+    ]
+    const currentPlan = timeline.turns[0]!.nodes[0]
+    if (currentPlan?.kind !== 'plan') throw new Error('expected plan node')
+    const twoTurns: Pick<TaskTimelineViewModel, 'turns'> = {
+      turns: [
+        {
+          ...timeline.turns[0]!,
+          turnId: 'turn-0',
+          nodes: [{ ...currentPlan, entries: olderEntries }]
+        },
+        timeline.turns[0]!
+      ]
+    }
+    expect(projectInspectorPlan(twoTurns, 'turn-0')).toEqual({
+      entries: olderEntries,
+      completedCount: 1
+    })
+    expect(projectInspectorPlan({ turns: [{ ...timeline.turns[0], nodes: [] }] })).toBeNull()
+    expect(
+      projectInspectorPlan({
+        turns: [
+          {
+            ...timeline.turns[0],
+            nodes: [
+              {
+                ...currentPlan,
+                kind: 'plan',
+                entries: []
+              }
+            ]
+          }
+        ]
+      })
+    ).toEqual({ entries: [], completedCount: 0 })
   })
 })
 

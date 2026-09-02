@@ -13,6 +13,7 @@ withDefaults(
     secondaryTab: InspectorTab
     split: boolean
     taskId?: string
+    focusTurnId?: string | null
     timeline: TaskTimelineViewModel | null
     timelineLoading?: boolean
     permissionAudits?: readonly PermissionAuditRecord[]
@@ -24,6 +25,7 @@ withDefaults(
   }>(),
   {
     taskId: '',
+    focusTurnId: null,
     timelineLoading: false,
     permissionAudits: () => [],
     permissionAuditCursor: null,
@@ -56,6 +58,7 @@ function loadMorePermissionAudits(): void {
         pane-id="primary"
         :active-tab="primaryTab"
         :task-id="taskId"
+        :focus-turn-id="focusTurnId"
         :timeline="timeline"
         :timeline-loading="timelineLoading"
         :permission-audits="permissionAudits"
@@ -84,6 +87,7 @@ function loadMorePermissionAudits(): void {
         pane-id="secondary"
         :active-tab="secondaryTab"
         :task-id="taskId"
+        :focus-turn-id="focusTurnId"
         :timeline="timeline"
         :timeline-loading="timelineLoading"
         :permission-audits="permissionAudits"

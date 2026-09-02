@@ -52,7 +52,7 @@ describe('prefers-reduced-motion 关掉展开动画', () => {
 })
 
 describe('运行态动效', () => {
-  it('只有非终态持续运动，并提供明确的文字尾标', () => {
+  it('只有非终态持续运动，并提供顶部状态条与等待提示', () => {
     expect(mainCss).toContain('@keyframes process-node-pulse')
     expect(mainCss).toContain('@keyframes process-rail-flow')
     expect(mainCss).toContain('@keyframes run-indicator-spin')
@@ -60,9 +60,9 @@ describe('运行态动效', () => {
     expect(mainCss).toMatch(
       /\.conversation-process-step\[data-status='in_progress'\]::after[\s\S]*process-node-pulse/
     )
-    expect(conversationTurnSource).toContain('conversation-run-indicator')
-    expect(conversationTurnSource).toContain("return '正在运行'")
-    expect(conversationTurnSource).toContain("return '等待你的确认'")
+    expect(conversationTurnSource).toContain('conversation-turn-meta')
+    expect(conversationTurnSource).toContain('等待 Runtime 新事件')
+    expect(conversationTurnSource).toContain('conversation-turn-meta-duration')
     expect(conversationTurnSource).toContain('aria-live="polite"')
   })
 })

@@ -120,6 +120,9 @@ interface TimelineNodeBase {
   source: 'turn-record' | 'agent-event' | 'permission-audit' | 'admission' | 'command-evidence'
   capabilityState?: AgentCapabilityState
   truncated?: true
+  /** 公开事件在主进程被观察到的时间，用于主对话显示最近活动。 */
+  firstObservedAt?: string
+  lastObservedAt?: string
 }
 
 export interface TimelineTextNode extends TimelineNodeBase {
@@ -234,6 +237,8 @@ export interface TurnTimelineViewModel {
   createdAt: string
   dispatchedAt?: string
   endedAt?: string
+  /** 当前 Turn 最近一条公开事件的本地观察时间。 */
+  lastEventAt?: string
   nodes: TaskTimelineNode[]
   usage: TurnUsageViewModel
   historyTruncated: boolean
@@ -445,6 +450,17 @@ function selectTurnTimeline(
   )
   const nodes = projectNodes(turn, trustedEvents, record, commands)
   const status = selectTurnStatus(turn, context.executionSnapshot)
+  const execution =
+    context.executionSnapshot.execution?.taskId === turn.taskId &&
+    context.executionSnapshot.execution.turnId === turn.turnId
+      ? context.executionSnapshot.execution
+      : undefined
+  const dispatchedAt =
+    (execution && 'dispatchedAt' in execution ? execution.dispatchedAt : undefined) ??
+    record?.dispatchedAt
+  const endedAt =
+    (execution && 'endedAt' in execution ? execution.endedAt : undefined) ?? record?.endedAt
+  const lastEventAt = acceptedEvents.at(-1)?.observedAt
   return {
     taskId: turn.taskId,
     turnId: turn.turnId,
@@ -454,8 +470,9 @@ function selectTurnTimeline(
     statusProvisional: status.provisional,
     statusConflict: status.conflict,
     createdAt,
-    ...(record?.dispatchedAt ? { dispatchedAt: record.dispatchedAt } : {}),
-    ...(record?.endedAt ? { endedAt: record.endedAt } : {}),
+    ...(dispatchedAt ? { dispatchedAt } : {}),
+    ...(endedAt ? { endedAt } : {}),
+    ...(lastEventAt ? { lastEventAt } : {}),
     nodes,
     usage: selectTurnUsage(record, trustedEvents),
     historyTruncated: record?.historyTruncated === true,
@@ -498,6 +515,8 @@ function projectNodes(
       firstSequence: event.sequence,
       source: 'agent-event' as const,
       capabilityState: event.capabilityState,
+      firstObservedAt: event.observedAt,
+      lastObservedAt: event.observedAt,
       ...(event.truncated ? { truncated: true as const } : {})
     }
     if (event.kind === 'agent-message' || event.kind === 'agent-thought') {
@@ -518,6 +537,7 @@ function projectNodes(
       else {
         nodes.push(node)
       }
+      if (existing) node.lastObservedAt = event.observedAt
       if (event.messageId) {
         messageNodes.set(key, node)
         previousAnonymousText = undefined

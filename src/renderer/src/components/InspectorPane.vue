@@ -7,6 +7,7 @@ import type { TaskChangesController } from '../composables/useTaskChanges'
 import { inspectorPlaceholderCopy, resolveInspectorTab, type InspectorTab } from '../task-inspector'
 import TaskArtifactsPanel from './TaskArtifactsPanel.vue'
 import TaskChangesPanel from './TaskChangesPanel.vue'
+import InspectorPlanPane from './InspectorPlanPane.vue'
 import InspectorTimelinePane from './InspectorTimelinePane.vue'
 
 const props = withDefaults(
@@ -14,6 +15,7 @@ const props = withDefaults(
     paneId: string
     activeTab: InspectorTab
     taskId?: string
+    focusTurnId?: string | null
     timeline: TaskTimelineViewModel | null
     timelineLoading?: boolean
     permissionAudits?: readonly PermissionAuditRecord[]
@@ -25,6 +27,7 @@ const props = withDefaults(
   }>(),
   {
     taskId: '',
+    focusTurnId: null,
     timelineLoading: false,
     permissionAudits: () => [],
     permissionAuditCursor: null,
@@ -47,8 +50,14 @@ const showArtifactsPanel = computed(
   () =>
     currentTab.value === 'artifacts' && Boolean(props.taskId) && Boolean(props.artifactsController)
 )
+const showPlanPanel = computed(() => currentTab.value === 'plan')
 const placeholder = computed(() => {
-  if (currentTab.value === 'timeline' || showChangesPanel.value || showArtifactsPanel.value) {
+  if (
+    currentTab.value === 'timeline' ||
+    showPlanPanel.value ||
+    showChangesPanel.value ||
+    showArtifactsPanel.value
+  ) {
     return null
   }
   return inspectorPlaceholderCopy(currentTab.value)
@@ -78,6 +87,12 @@ function tabPanelId(): string {
       :loading-more-permission-audits="loadingMorePermissionAudits"
       :show-permission-audits="showPermissionAudits"
       @load-more-permission-audits="emit('loadMorePermissionAudits')"
+    />
+
+    <InspectorPlanPane
+      v-else-if="showPlanPanel"
+      :timeline="timeline"
+      :focus-turn-id="focusTurnId"
     />
 
     <TaskChangesPanel

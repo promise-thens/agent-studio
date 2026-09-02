@@ -121,6 +121,35 @@ describe('useTaskTimeline', () => {
     )
   })
 
+  it('Plan 快照绕过流式文本批处理，接收后立即进入 Inspector 可消费的 Timeline', () => {
+    const controller = useTaskTimeline({ manageSubscriptions: false })
+    const planEvent: PublicAgentEvent = {
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-18T00:00:00.000Z',
+      kind: 'plan',
+      entries: [
+        { content: '先读取现有实现', priority: 'high', status: 'in_progress' },
+        { content: '补充测试', priority: 'low', status: 'pending' }
+      ]
+    }
+
+    controller.acceptLiveEvent(planEvent)
+    controller.setActiveTask('task-1')
+
+    expect(controller.activeTimeline.value?.turns[0]?.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'plan',
+          entries: planEvent.entries
+        })
+      ])
+    )
+  })
+
   it('终态事件会先清空流式批次并立即进入 Timeline', () => {
     const controller = useTaskTimeline({ manageSubscriptions: false })
     const complete: PublicAgentEvent = {

@@ -23,7 +23,15 @@ const conversationTurnSource = readFileSync(
   'utf8'
 )
 const planChecklistSource = readFileSync(join(rendererDir, 'components/PlanChecklist.vue'), 'utf8')
-const inspectorSource = readFileSync(join(rendererDir, 'components/TaskInspector.vue'), 'utf8')
+const inspectorPaneSource = readFileSync(join(rendererDir, 'components/InspectorPane.vue'), 'utf8')
+const inspectorPlanSource = readFileSync(
+  join(rendererDir, 'components/InspectorPlanPane.vue'),
+  'utf8'
+)
+const timelineComposableSource = readFileSync(
+  join(rendererDir, 'composables/useTaskTimeline.ts'),
+  'utf8'
+)
 const mainCss = readFileSync(join(rendererDir, 'assets/main.css'), 'utf8')
 
 /** 取第一个同名规则块，用来断言流式空态没有 flex:1。 */
@@ -187,7 +195,7 @@ describe('主列计划空态接线', () => {
     expect(cssRule(mainCss, '.conversation-empty')).toMatch(/flex:\s*1/)
   })
 
-  it('App 把当前 Task 的 plan 模式传给对话列，不新 IPC、不进 Timeline', () => {
+  it('App 把当前 Task 的 Plan 模式传给对话列；详情由 Timeline Inspector 复用快照', () => {
     const start = appSource.indexOf('<TaskConversation')
     const end = appSource.indexOf('/>', start)
     const conversationTag = appSource.slice(start, end + 2)
@@ -204,7 +212,17 @@ describe('主列计划空态接线', () => {
     expect(planChecklistSource).toContain('resolvePlanChecklistEmptyCopy')
     expect(planChecklistSource).toMatch(/role="status"/)
     expect(planChecklistSource).toMatch(/v-else[\s\S]*class="plan-checklist"/)
-    expect(inspectorSource).not.toContain('inspector-tab-plan')
-    expect(inspectorSource).not.toContain("tab === 'plan'")
+    expect(inspectorPaneSource).toContain('showPlanPanel')
+    expect(inspectorPaneSource).toContain('<InspectorPlanPane')
+  })
+
+  it('计划点击打开现有 Inspector 的独立 Plan 标签，并由同一份 reducer 快照即时刷新', () => {
+    expect(conversationTurnSource).toContain('@click="$emit(\'openPlan\', turn.turnId)"')
+    expect(conversationSource).toContain('@open-plan="$emit(\'openPlan\', $event)"')
+    expect(appSource).toContain('@open-plan="openPlanReview"')
+    expect(appSource).toContain("inspectorTab.value = 'plan'")
+    expect(inspectorPlanSource).toContain('<PlanChecklist')
+    expect(inspectorPlanSource).toContain('projectInspectorPlan')
+    expect(timelineComposableSource).toMatch(/event\.kind === 'plan'[\s\S]*dispatch\(event\.taskId/)
   })
 })

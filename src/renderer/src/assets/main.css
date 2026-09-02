@@ -481,6 +481,88 @@ button:disabled {
   min-width: 0;
 }
 
+/* Turn 状态条固定在本轮内容顶部，把状态、耗时和最近活动从长流水线里提出来。 */
+.conversation-turn-meta {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 13px 15px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 64%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+}
+
+.conversation-turn-meta-main,
+.conversation-turn-meta-subline {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.conversation-turn-meta-main {
+  color: var(--text-1);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.conversation-turn-meta-main strong {
+  font-weight: 650;
+}
+
+.conversation-turn-meta-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.conversation-turn-meta[data-status='running'] .conversation-turn-meta-dot,
+.conversation-turn-meta[data-status='queued'] .conversation-turn-meta-dot,
+.conversation-turn-meta[data-status='waiting-permission'] .conversation-turn-meta-dot,
+.conversation-turn-meta[data-status='cancelling'] .conversation-turn-meta-dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+  animation: process-node-pulse 1.6s ease-in-out infinite;
+}
+
+.conversation-turn-meta[data-status='completed'] .conversation-turn-meta-dot {
+  background: var(--success);
+}
+
+.conversation-turn-meta[data-status='failed'] .conversation-turn-meta-dot,
+.conversation-turn-meta[data-status='cancelled'] .conversation-turn-meta-dot,
+.conversation-turn-meta[data-status='interrupted'] .conversation-turn-meta-dot {
+  background: var(--danger);
+}
+
+.conversation-turn-meta-duration {
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.conversation-turn-meta-step {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--text-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-turn-meta-subline {
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.conversation-turn-meta-warning {
+  color: var(--danger);
+}
+
 .conversation-process-step + .conversation-assistant {
   margin-top: 4px;
   padding-top: 4px;
@@ -646,6 +728,20 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conversation-plan-open-hint {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.conversation-plan > summary:hover .conversation-plan-open-hint,
+.conversation-plan > summary:focus-visible .conversation-plan-open-hint {
+  color: var(--accent);
 }
 
 .conversation-thought-body {
@@ -2743,6 +2839,27 @@ button:disabled {
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+}
+
+/* 计划清单是 Timeline 的可回看主内容；更新时间提示保持轻量，不抢步骤层级。 */
+.inspector-plan-section {
+  display: grid;
+  gap: 10px;
+  margin: 0 8px 10px;
+}
+
+.inspector-plan-section .inspector-heading small {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.inspector-plan-section .plan-checklist {
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 58%, transparent);
 }
 
 .task-changes-panel {

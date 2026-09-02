@@ -36,7 +36,7 @@ const timelineSummary = computed(() => projectInspectorTimelineSummary(props.tim
 </script>
 
 <template>
-  <!-- Timeline 只读摘要：计划主清单仍留在对话主列，避免双栏状态分叉。 -->
+  <!-- Timeline 只读执行摘要；完整计划由独立 Plan 标签承载，避免和审计信息混在一起。 -->
   <div v-if="timelineLoading && timelineSummary.empty" class="timeline-state" role="status">
     正在加载执行历史…
   </div>

@@ -158,6 +158,29 @@ describe('Task Timeline reducer', () => {
     })
   })
 
+  it('运行中的 execution snapshot 补齐 dispatch 时间，并保留最近事件时间', () => {
+    const state = reduceTaskTimelineFacts(
+      reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+        type: 'turn/admitted',
+        admission: {
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          executionId: 'execution-1',
+          promptDisplayText: '实时任务',
+          model: { modelId: 'model-1' },
+          acceptedAt: '2026-08-18T00:00:00.000Z'
+        }
+      }),
+      { type: 'events/ingest-public', events: [EVENTS[0]!] }
+    )
+    expect(
+      selectTaskTimeline(state, { executionSnapshot: snapshot('running') }).turns[0]
+    ).toMatchObject({
+      dispatchedAt: '2026-08-18T00:00:01.000Z',
+      lastEventAt: '2026-08-18T00:00:01.000Z'
+    })
+  })
+
   it('相同 sequence 冲突不保留争议正文并生成有限 issue', () => {
     const first = { ...BASE, sequence: 1, kind: 'agent-message' as const, text: 'A' }
     const second = { ...first, text: 'B' }

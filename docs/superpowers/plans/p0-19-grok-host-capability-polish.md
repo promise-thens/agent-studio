@@ -112,7 +112,7 @@
 - 不自己实现记忆引擎、MCP 运行时、`/compact` / `/dream` 语义。
 - 不把桌面做成 Marketplace Host 或 MCP Host。
 - 不把 always-approve 做成静默默认或全局 config；接管只按 [P0-19g](p0-19g-task-takeover-always-approve.md) 做当前 Task 显式开关。
-- 不在 Inspector 新增第五个顶层标签。现有 id 仍是 `timeline | changes | terminal | artifacts`；浏览器证据进 Timeline + Artifacts，终端标签继续留给 P0-15 用户 PTY，**不得**把 Agent 后台命令写进用户 Shell。
+- Inspector 现有顶层标签为 `timeline | plan | changes | terminal | artifacts`；计划详情独立放在 Plan，浏览器证据进 Timeline + Artifacts，终端标签继续留给 P0-15 用户 PTY，**不得**把 Agent 后台命令写进用户 Shell。
 - 不做共享 BrowserView、CDP 任意转发、Chrome Profile 读取、macOS 虚拟光标。
 - 不为 Codex 复制本程序的表面。
 

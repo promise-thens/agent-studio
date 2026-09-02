@@ -27,6 +27,7 @@ const props = withDefaults(
     activeTab: InspectorTab
     docked?: boolean
     taskId?: string
+    focusTurnId?: string | null
     timeline: TaskTimelineViewModel | null
     timelineLoading?: boolean
     permissionAudits?: readonly PermissionAuditRecord[]
@@ -39,6 +40,7 @@ const props = withDefaults(
   {
     docked: false,
     taskId: '',
+    focusTurnId: null,
     timelineLoading: false,
     permissionAudits: () => [],
     permissionAuditCursor: null,
@@ -363,6 +365,7 @@ function selectTab(tab: InspectorTab): void {
       :secondary-tab="secondaryTab"
       :split="splitEnabled"
       :task-id="taskId"
+      :focus-turn-id="focusTurnId"
       :timeline="timeline"
       :timeline-loading="timelineLoading"
       :permission-audits="permissionAudits"

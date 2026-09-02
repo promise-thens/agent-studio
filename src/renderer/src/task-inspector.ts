@@ -1,4 +1,8 @@
-import type { AgentPermissionResolutionReason, AgentRuntimeId } from '../../shared/agent'
+import type {
+  AgentPermissionResolutionReason,
+  AgentPlanEntry,
+  AgentRuntimeId
+} from '../../shared/agent'
 import type { PermissionAuditRecord } from '../../shared/task-history'
 import type {
   TaskTimelineViewModel,
@@ -7,7 +11,7 @@ import type {
 } from './task-timeline-reducer'
 
 /** 检查器只保留全局审阅域；Turn 内子任务留在对话主列。 */
-export type InspectorTab = 'timeline' | 'changes' | 'terminal' | 'artifacts'
+export type InspectorTab = 'timeline' | 'plan' | 'changes' | 'terminal' | 'artifacts'
 
 export interface InspectorTabDefinition {
   id: InspectorTab
@@ -140,8 +144,15 @@ export interface InspectorTimelineSummary {
   toolCount: number
 }
 
+/** Inspector Plan 标签展示的当前计划快照；来源始终是同一份 Timeline reducer 事实。 */
+export interface InspectorPlanView {
+  entries: AgentPlanEntry[]
+  completedCount: number
+}
+
 export const INSPECTOR_TABS: readonly InspectorTabDefinition[] = [
   { id: 'timeline', label: '时间线' },
+  { id: 'plan', label: '计划' },
   { id: 'changes', label: '变更' },
   { id: 'terminal', label: '终端' },
   { id: 'artifacts', label: '产物' }
@@ -200,19 +211,41 @@ function inspectorTurnStatusLabel(status: TurnTimelineViewModel['status']): stri
 }
 
 function latestPlanLine(turns: readonly TurnTimelineViewModel[]): string | null {
+  const plan = latestPlanNode(turns)
+  if (!plan || plan.entries.length === 0) return null
+  const completed = plan.entries.filter((entry) => entry.status === 'completed').length
+  return `计划 · ${completed}/${plan.entries.length}`
+}
+
+/** 从最新 Turn 取最后一张 Plan 快照，避免维护第二份会滞后的 plan state。 */
+export function latestPlanNode(turns: readonly TurnTimelineViewModel[]): TimelinePlanNode | null {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const plan = [...turns[index].nodes]
       .reverse()
       .find((node): node is TimelinePlanNode => node.kind === 'plan')
-    if (!plan || plan.entries.length === 0) continue
-    const completed = plan.entries.filter((entry) => entry.status === 'completed').length
-    return `计划 · ${completed}/${plan.entries.length}`
+    if (plan) return plan
   }
   return null
 }
 
+/** 供 Inspector 直接渲染完整清单，同时把条目复制成只读视图。 */
+export function projectInspectorPlan(
+  timeline: Pick<TaskTimelineViewModel, 'turns'> | null | undefined,
+  focusTurnId?: string | null
+): InspectorPlanView | null {
+  const turns = timeline?.turns ?? []
+  const focusedTurn = focusTurnId ? turns.find((turn) => turn.turnId === focusTurnId) : undefined
+  const plan = latestPlanNode(focusedTurn ? [focusedTurn] : turns)
+  if (!plan) return null
+  const entries = plan.entries.map((entry) => ({ ...entry }))
+  return {
+    entries,
+    completedCount: entries.filter((entry) => entry.status === 'completed').length
+  }
+}
+
 /**
- * Timeline 标签只给只读摘要，方便 P0-12/13/15 挂内容；计划条目仍只活在主列。
+ * Timeline 标签承载执行摘要与同一份计划快照，方便长对话之外稳定回看；不维护第二份计划状态。
  */
 export function projectInspectorTimelineSummary(
   timeline: Pick<TaskTimelineViewModel, 'turns'> | null | undefined
@@ -250,6 +283,12 @@ export function projectInspectorTimelineSummary(
 export function inspectorPlaceholderCopy(
   tab: Exclude<InspectorTab, 'timeline'>
 ): InspectorPlaceholderCopy {
+  if (tab === 'plan') {
+    return {
+      heading: '暂无计划',
+      detail: '当前 Task 还没有收到 Runtime 的 Plan 快照。'
+    }
+  }
   if (tab === 'changes') {
     return {
       heading: '选择一个 Task',

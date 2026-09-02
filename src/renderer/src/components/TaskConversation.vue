@@ -44,6 +44,8 @@ const props = withDefaults(
     changeCard?: ChangeCardView | null
     restoreBusy?: boolean
     planMode?: ComposerPlanMode
+    /** App 共享时钟，用来刷新活动 Turn 的耗时。 */
+    clockTick?: number
   }>(),
   {
     loading: false,
@@ -56,7 +58,8 @@ const props = withDefaults(
     permissionTaskTitle: '',
     changeCard: null,
     restoreBusy: false,
-    planMode: 'normal'
+    planMode: 'normal',
+    clockTick: 0
   }
 )
 
@@ -69,6 +72,7 @@ defineEmits<{
   reviewChanges: []
   restoreChanges: []
   reviewFile: [path: string]
+  openPlan: [turnId: string]
 }>()
 
 const messageList = ref<HTMLElement | null>(null)
@@ -268,9 +272,11 @@ watch(
         :permission-task-title="permissionTaskTitle"
         :has-more-events="eventAfterSequenceByTurn?.[turn.turnId] != null"
         :loading-more-events="loadingEventTurnIds?.includes(turn.turnId) ?? false"
+        :clock-tick="clockTick"
         @respond-permission="$emit('respondPermission', $event)"
         @cancel-turn="$emit('cancelTurn')"
         @load-more-events="$emit('loadMoreEvents', $event)"
+        @open-plan="$emit('openPlan', $event)"
       />
 
       <TaskChangeCard

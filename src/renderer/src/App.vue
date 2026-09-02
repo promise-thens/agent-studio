@@ -250,6 +250,8 @@ let permissionExpiryTimer: ReturnType<typeof setTimeout> | null = null
 /** 检查器默认关上；悬浮时覆盖右侧，吸附时才进入第三列。 */
 const showInspector = ref(INSPECTOR_DEFAULT_OPEN)
 const inspectorTab = ref<InspectorTab>(INSPECTOR_DEFAULT_TAB)
+/** 计划从对话打开时记住被点击的 Turn；普通打开则回看最新计划。 */
+const inspectorPlanTurnId = ref<string | null>(null)
 /** 检查器默认悬浮；吸附后工作区切成三列，聊天列由 CSS Grid 自适应。 */
 const inspectorDocked = ref(false)
 const inspectorToggleTitle = computed(() => inspectorToggleLabel(showInspector.value))
@@ -262,7 +264,21 @@ function openChangeReview(path?: string): void {
   const next = openChangesReview()
   showInspector.value = next.open
   inspectorTab.value = next.tab
+  inspectorPlanTurnId.value = null
   if (path) void taskChanges.selectPath(path)
+}
+
+/** 对话里的计划入口直接打开现有 Inspector 的独立 Plan 标签，不维护第二份状态。 */
+function openPlanReview(turnId: string): void {
+  showInspector.value = true
+  inspectorTab.value = 'plan'
+  inspectorPlanTurnId.value = turnId
+}
+
+/** 关闭 Inspector 时一并清掉计划聚焦，下一次普通打开回到最新计划。 */
+function closeInspector(): void {
+  showInspector.value = false
+  inspectorPlanTurnId.value = null
 }
 
 function startChangeRestore(): void {
@@ -272,7 +288,14 @@ function startChangeRestore(): void {
 const taskViews = ref<Record<string, TaskViewState>>({})
 const taskOrder = ref<string[]>([])
 /** 以 workbench 的查看身份驱动 Timeline；保留后台 facts，但绝不将旧 Task 展示到新 Project。 */
-watch(activeTaskId, (taskId) => taskTimeline.setActiveTask(taskId), { flush: 'sync' })
+watch(
+  activeTaskId,
+  (taskId) => {
+    inspectorPlanTurnId.value = null
+    taskTimeline.setActiveTask(taskId)
+  },
+  { flush: 'sync' }
+)
 /** 尚未建立 Task 时只承接真实错误消息，不伪造 Runtime 欢迎回复。 */
 const welcomeMessages = ref<ChatMessage[]>([])
 const emptyPlanEntries = ref<AgentPlanEntry[]>([])
@@ -1583,7 +1606,9 @@ function schedulePermissionExpiry(): void {
 }
 
 function toggleInspector(): void {
-  showInspector.value = toggleInspectorOpen(showInspector.value)
+  const nextOpen = toggleInspectorOpen(showInspector.value)
+  showInspector.value = nextOpen
+  if (!nextOpen) inspectorPlanTurnId.value = null
 }
 
 /**
@@ -1962,6 +1987,7 @@ function scrollMessagesToBottom(): void {
           <TaskConversation
             :conversation-key="activeTaskId"
             :model="taskTimeline.activeTimeline.value"
+            :clock-tick="nowTick"
             :loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
             :has-more-turns="
               Boolean(activeTaskView?.mode === 'history' && taskHistory.turnCursor.value)
@@ -1985,6 +2011,7 @@ function scrollMessagesToBottom(): void {
             @review-changes="openChangeReview()"
             @restore-changes="startChangeRestore"
             @review-file="openChangeReview"
+            @open-plan="openPlanReview"
           />
 
           <TaskComposer
@@ -2036,6 +2063,7 @@ function scrollMessagesToBottom(): void {
         :active-tab="inspectorTab"
         :docked="inspectorDocked"
         :task-id="activeTaskId"
+        :focus-turn-id="inspectorPlanTurnId"
         :timeline="taskTimeline.activeTimeline.value"
         :timeline-loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
         :permission-audits="taskHistory.permissionAudits.value"
@@ -2044,7 +2072,7 @@ function scrollMessagesToBottom(): void {
         :show-permission-audits="activeTaskView?.mode === 'history'"
         :changes-controller="taskChanges"
         :artifacts-controller="taskArtifacts"
-        @close="showInspector = false"
+        @close="closeInspector"
         @update:active-tab="inspectorTab = $event"
         @update:docked="inspectorDocked = $event"
         @load-more-permission-audits="taskHistory.loadMorePermissionAudits"
