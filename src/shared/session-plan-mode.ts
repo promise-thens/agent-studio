@@ -3,8 +3,8 @@ import { AVAILABLE_COMMAND_NAME_PATTERN } from './agent-available-command'
 /**
  * Composer Plan 模式与 Grok `/plan` 的纯改写。
  *
- * 真机 1.0.13：`available_commands_update` 未广告 `plan`；未广告时禁止伪造斜杠。
- * 广告存在且空闲时，用一次 `session/prompt` 发送 `/plan ` + 正文，不要拆两次 prompt。
+ * Grok 1.0.13 可能不在 available_commands_update 广告 `plan`；宿主在确认 runtimeId 后可走受控实验路径。
+ * 广告存在或受控实验路径启用且空闲时，用一次 `session/prompt` 发送 `/plan ` + 正文，不要拆两次 prompt。
  */
 
 /** Grok 广告的 Plan 斜杠命令 name（无前导 /）。匹配必须精确 `name === 'plan'`。 */
@@ -31,10 +31,11 @@ export function resolvePlanSubmit(input: {
   mode: ComposerPlanMode
   prompt: string
   hasPlanCommand: boolean
+  allowUnadvertisedPlan?: boolean
   idle: boolean
 }): { prompt: string } {
-  const { mode, prompt, hasPlanCommand, idle } = input
-  if (mode !== 'plan' || !hasPlanCommand || !idle) {
+  const { mode, prompt, hasPlanCommand, allowUnadvertisedPlan = false, idle } = input
+  if (mode !== 'plan' || (!hasPlanCommand && !allowUnadvertisedPlan) || !idle) {
     return { prompt }
   }
   if (isAlreadyRuntimeSlashPrompt(prompt)) {

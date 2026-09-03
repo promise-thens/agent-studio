@@ -4,6 +4,7 @@ import type { GrokMemoryDocument, GrokMemoryEnabledState, GrokMemorySummary } fr
 import type { McpServerInput, McpServerSummary } from './mcp-server-config'
 import type { MarketplacePluginSummary } from './runtime-marketplace-plugin'
 import type { RuntimePluginDetail, RuntimePluginSummary } from './runtime-plugin'
+import type { MacosFolderAccessNotice } from './macos-folder-access'
 import type { DeletionPreview, ProjectSummary } from './task-history'
 
 export const APP_INVOKE_CHANNELS = {
@@ -32,7 +33,9 @@ export const APP_INVOKE_CHANNELS = {
   listMarketplacePlugins: 'app:list-marketplace-plugins',
   installPlugin: 'app:install-plugin',
   uninstallPlugin: 'app:uninstall-plugin',
-  addMarketplaceSource: 'app:add-marketplace-source'
+  addMarketplaceSource: 'app:add-marketplace-source',
+  probeMacosFolderAccess: 'app:probe-macos-folder-access',
+  openMacosFilesPrivacySettings: 'app:open-macos-files-privacy-settings'
 } as const
 
 export const APP_PUSH_CHANNELS = {
@@ -104,6 +107,10 @@ export interface AppAddMarketplaceSourceRequest {
   gitUrl: string
 }
 
+export interface AppProbeMacosFolderAccessRequest {
+  projectId: string
+}
+
 /** Renderer 只能通过 App 域注册 Project、读写外观偏好与插件摘要，不能自行提交执行路径或 git URL 当安装源。 */
 export interface AppDesktopApi {
   chooseProject: () => Promise<DesktopIpcResult<ProjectSummary | null>>
@@ -143,5 +150,12 @@ export interface AppDesktopApi {
   installPlugin: (name: string, trust: boolean) => Promise<DesktopIpcResult<null>>
   uninstallPlugin: (pluginId: string) => Promise<DesktopIpcResult<null>>
   addMarketplaceSource: (gitUrl: string) => Promise<DesktopIpcResult<null>>
+  /**
+   * 用已注册 projectId 探测文稿/桌面/下载 TCC。
+   * 主进程读目录触发系统弹窗；Renderer 不得提交路径。
+   */
+  probeMacosFolderAccess: (projectId: string) => Promise<DesktopIpcResult<MacosFolderAccessNotice>>
+  /** 打开系统「文件和文件夹」设置页，不打开屏幕录制。 */
+  openMacosFilesPrivacySettings: () => Promise<DesktopIpcResult<null>>
   onAppearanceChanged: (listener: (state: AppAppearanceState) => void) => () => void
 }

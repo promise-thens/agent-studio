@@ -28,9 +28,11 @@ import type {
 } from '../../shared/task-execution'
 import type { AgentRuntimeSessionRef } from './agent-runtime-adapter'
 import {
+  isTakeoverControlTurn,
   readPermissionPromptStyle,
   readTakeoverSnapshot,
-  type PermissionPromptStyle
+  type PermissionPromptStyle,
+  type InternalTurnKind
 } from '../../shared/task-takeover'
 import { ProjectRegistry } from '../project/project-registry'
 import { createLocalEnvironmentId } from '../security/permission-policy'
@@ -352,11 +354,13 @@ export class TaskStore {
     promptDisplayText: string
     model: TurnModelSnapshot
     attachmentIds?: string[]
+    turnKind?: InternalTurnKind
   }): Promise<TurnRecordV1> {
     return this.createTurnRecord({
       ...input,
       initialState: 'queued',
       activeExecutionId: input.executionId,
+      ...(input.turnKind ? { turnKind: input.turnKind } : {}),
       ...(input.attachmentIds?.length ? { attachmentIds: input.attachmentIds } : {})
     })
   }
@@ -386,6 +390,7 @@ export class TaskStore {
     environmentId?: string
     activeExecutionId?: string
     attachmentIds?: string[]
+    turnKind?: InternalTurnKind
   }): Promise<TurnRecordV1> {
     return this.enqueueTask(input.taskId, async () => {
       const task = this.requireTask(input.taskId)
@@ -414,6 +419,7 @@ export class TaskStore {
         turnId: input.turnId,
         taskId: input.taskId,
         promptDisplayText: input.promptDisplayText,
+        ...(input.turnKind ? { turnKind: input.turnKind } : {}),
         model: input.model,
         state: input.initialState,
         createdAt: observedAt,
@@ -889,7 +895,9 @@ export class TaskStore {
     const turns: TurnRecordV1[] = []
     for (const turnId of turnIds) {
       try {
-        turns.push(await this.readTurn(task, turnId))
+        const turn = await this.readTurn(task, turnId)
+        // 普通 Turn 列表隐藏内部控制命令；历史文件仍保留，便于审计和故障排查。
+        if (!isTakeoverControlTurn(turn)) turns.push(turn)
       } catch {
         // 单 Turn 损坏只从列表省略，不阻断同 Task 其它 Turn。
       }
@@ -1769,6 +1777,7 @@ function stripTurnSchema(turn: TurnRecordV1): TurnHistoryRecord {
     turnId: turn.turnId,
     taskId: turn.taskId,
     promptDisplayText: turn.promptDisplayText,
+    ...(turn.turnKind ? { turnKind: turn.turnKind } : {}),
     model: turn.model,
     state: turn.state,
     createdAt: turn.createdAt,

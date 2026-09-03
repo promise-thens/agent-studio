@@ -34,7 +34,7 @@ export function overlayConsumesEscape(target: EventTarget | null): boolean {
     target instanceof Element &&
     Boolean(
       target.closest(
-        '.modal-backdrop, .permission-dialog, .permission-inline-card, .slash-command-palette, .attachment-image-backdrop'
+        '.modal-backdrop, .permission-dialog, .permission-inline-card, .question-inline-card, .slash-command-palette, .composer-add-menu, .attachment-image-backdrop'
       )
     )
   )

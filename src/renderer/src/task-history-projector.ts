@@ -1,6 +1,7 @@
 import type { AgentPlanEntry, AgentToolStatus } from '../../shared/agent'
 import type { PublicAgentEvent } from '../../shared/agent-event'
 import type { TurnHistoryRecord } from '../../shared/task-history'
+import { isTakeoverControlTurn } from '../../shared/task-takeover'
 
 export interface ProjectedChatMessage {
   id: string
@@ -72,6 +73,8 @@ export function projectTaskHistory(
   for (const turn of [...turns].sort((left, right) =>
     left.createdAt.localeCompare(right.createdAt)
   )) {
+    // 接管控制命令保留在主进程历史中，但不伪装成用户对话消息。
+    if (isTakeoverControlTurn(turn)) continue
     projection.messages.push({
       id: `${turn.taskId}:${turn.turnId}:user`,
       turnId: turn.turnId,

@@ -156,7 +156,7 @@ describe('useTaskHistory', () => {
     })
   })
 
-  it('初始化、Task 分页和 Turn/Event 分页追加时按身份去重', async () => {
+  it('初始化与 Task/Turn 分页时自动读完每个 Turn 的事件', async () => {
     const history = useTaskHistory()
     await history.selectProject(project.projectId)
     await history.loadMoreTasks()
@@ -164,13 +164,13 @@ describe('useTaskHistory', () => {
 
     await history.openTask('task-1')
     await history.loadMoreTurns()
-    await history.loadMoreEvents('turn-1')
     await history.loadMorePermissionAudits()
     expect(history.openedTurns.value.map((turn) => turn.turnId)).toEqual(['turn-1', 'turn-2'])
     expect(history.eventsByTurn.value['turn-1']?.map((event) => event.sequence)).toEqual([1, 2])
     expect(history.eventAfterSequenceByTurn.value['turn-1']).toBeNull()
     expect(history.eventWatermarkByTurn.value['turn-1']).toBe(2)
-    expect(window.task.listEvents).toHaveBeenLastCalledWith('task-1', 'turn-1', 1, 200)
+    expect(window.task.listEvents).toHaveBeenCalledWith('task-1', 'turn-1', 0, 200)
+    expect(window.task.listEvents).toHaveBeenCalledWith('task-1', 'turn-1', 1, 200)
     expect(history.hasMoreEvents('turn-1')).toBe(false)
     expect(history.permissionAudits.value.map((audit) => audit.auditId)).toEqual([
       'audit-1',
@@ -412,6 +412,7 @@ describe('useTaskHistory', () => {
     const oldEventPage = deferred<Awaited<ReturnType<typeof window.task.listEvents>>>()
     const history = useTaskHistory()
     await history.openTask('task-a')
+    history.eventAfterSequenceByTurn.value = { 'turn-1': 1 }
     vi.mocked(window.task.listEvents).mockImplementationOnce(() => oldEventPage.promise)
 
     const loadingOldEvents = history.loadMoreEvents('turn-1')
@@ -436,7 +437,9 @@ describe('useTaskHistory', () => {
     await loadingOldEvents
 
     expect(history.openedTask.value?.taskId).toBe('task-b')
-    expect(history.eventsByTurn.value['turn-1']?.map((event) => event.taskId)).toEqual(['task-b'])
+    expect(history.eventsByTurn.value['turn-1']?.every((event) => event.taskId === 'task-b')).toBe(
+      true
+    )
     expect(history.loadingEventTurnIds.value).toEqual([])
   })
 

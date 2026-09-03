@@ -21,6 +21,7 @@ import { appearanceWindowBackground, type AppAppearanceState } from '../shared/a
 import { AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
 import { APP_PUSH_CHANNELS } from '../shared/app-ipc'
 import { sanitizeExternalHref } from '../shared/external-href'
+import { TAKEOVER_CONTROL_TURN_KIND } from '../shared/task-takeover'
 import type {
   ProviderConfigInput,
   ProviderConfigSummary,
@@ -45,6 +46,10 @@ import { TaskExecutionController } from './agent/task-execution-controller'
 import { AppearanceController, type NativeThemeAdapter } from './appearance/appearance-controller'
 import { AppearanceStore } from './appearance/appearance-store'
 import { registerAppIpcHandlers } from './app-ipc'
+import {
+  openMacosFilesPrivacySettings,
+  probeMacosWorkspaceFolderAccess
+} from './security/macos-folder-access'
 import { createAppShutdownGate } from './app-shutdown'
 import {
   resolveControlledAcpE2eBootstrap,
@@ -437,6 +442,17 @@ async function initializeServices(
       onPermissionCancelled: (request) => {
         agentService?.handlePermissionCancellation(request)
       },
+      onQuestion: (request) => {
+        const service = agentService
+        if (!service) {
+          runtimeAdapter?.respondQuestion?.(request.requestId, { action: 'cancel' })
+          return
+        }
+        service.handleQuestionRequest(request)
+      },
+      onQuestionCancelled: (request) => {
+        agentService?.handleQuestionCancellation(request)
+      },
       onAvailableCommands: (snapshot) => {
         // Service 持久化当前 session 快照；同步推给 Renderer（已投影，非 ACP 原文）
         agentService?.handleAvailableCommands(snapshot)
@@ -541,7 +557,11 @@ async function initializeServices(
         projectPublicAgentEvent(event, redactProviderText)
       ),
     onTaskRuntimeState: (task) =>
-      sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.taskRuntimeState, task)
+      sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.taskRuntimeState, task),
+    onQuestion: (request) =>
+      sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.question, request),
+    onQuestionCancelled: (request) =>
+      sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.questionCancelled, request)
   })
 }
 
@@ -595,7 +615,8 @@ async function startTurnWithPrompt(
   executor: TaskExecutor,
   taskId: string,
   prompt: string,
-  attachmentIds: string[] = []
+  attachmentIds: string[] = [],
+  turnKind?: typeof TAKEOVER_CONTROL_TURN_KIND
 ): Promise<TaskExecutionSnapshot> {
   await service.waitForEnter(taskId)
   await service.ensureTaskSessionForTurn(taskId)
@@ -613,6 +634,7 @@ async function startTurnWithPrompt(
     resolvedExecutionRoot: task.environment.rootSnapshot,
     prompt,
     promptDisplayText: redactProviderText(prompt),
+    ...(turnKind ? { turnKind } : {}),
     ...(attachmentIds.length ? { attachmentIds } : {}),
     model: (() => {
       const config = requireProviderRuntimeConfig()
@@ -641,7 +663,7 @@ async function applyTakeoverControlPrompt(
   const prompt = service.beginTakeoverControlPrompt(taskId)
   if (!prompt) return
   try {
-    await startTurnWithPrompt(service, executor, taskId, prompt)
+    await startTurnWithPrompt(service, executor, taskId, prompt, [], TAKEOVER_CONTROL_TURN_KIND)
     service.markTakeoverCommandDispatched(taskId)
   } catch (error) {
     service.abortTakeoverControlPrompt(taskId)
@@ -697,7 +719,15 @@ function registerIpcHandlers(): void {
               await service.runTakeoverControlPrompt(
                 request.taskId,
                 result.controlPrompt,
-                (taskId, prompt) => startTurnWithPrompt(service, executor, taskId, prompt)
+                (taskId, prompt) =>
+                  startTurnWithPrompt(
+                    service,
+                    executor,
+                    taskId,
+                    prompt,
+                    [],
+                    TAKEOVER_CONTROL_TURN_KIND
+                  )
               )
             } catch {
               // start 失败不得把 applied 写成 true；仍返回已写盘快照（enable 未生效 / disable 可能仍在）。
@@ -786,6 +816,7 @@ function registerIpcHandlers(): void {
       return { text }
     },
     saveGrokConfig: async (text) => {
+      assertGrokConfigCanReload()
       try {
         await requireGrokHomeConfig().writeText(text)
       } catch (error) {
@@ -793,6 +824,10 @@ function registerIpcHandlers(): void {
           throw new DesktopIpcFailure('invalid-input', error.message)
         }
         throw error
+      }
+      // 备注：Grok 进程启动时读 toml，空闲已连接时必须重载，手改的 context_window 才会生效。
+      if (agentService?.getStatus().state === 'ready') {
+        await reloadGrokRuntimeAfterConfigSave(agentService)
       }
     },
     listMemories: (projectHint) => requireGrokMemoryStore().list(projectHint),
@@ -847,6 +882,32 @@ function registerIpcHandlers(): void {
     uninstallPlugin: ({ pluginId }) =>
       runManagedPluginCli(['plugin', 'uninstall', pluginId, '--confirm']),
     addMarketplaceSource: ({ gitUrl }) => runManagedMarketplaceAdd(gitUrl),
+    /**
+     * 选中或恢复工作区时由 Renderer 带 projectId 调用。
+     * 读 canonicalRoot 触发文稿/桌面/下载 TCC，失败只回状态，不断开 Runtime。
+     */
+    probeMacosFolderAccess: async (projectId) => {
+      try {
+        const root = await requireProjectRegistry().resolveAvailableRoot(projectId)
+        return await probeMacosWorkspaceFolderAccess(root, {
+          platform: process.platform,
+          homedir: homedir(),
+          isPackaged: app.isPackaged,
+          readDirectory: (directory) => fs.readdir(directory)
+        })
+      } catch (error) {
+        if (error instanceof DesktopIpcFailure) throw error
+        if (error instanceof ProjectRegistryError && error.code === 'project-unavailable') {
+          throw new DesktopIpcFailure('project-unavailable', '该项目目录已删除或无法访问。')
+        }
+        throw error
+      }
+    },
+    openMacosFilesPrivacySettings: async () => {
+      await openMacosFilesPrivacySettings({
+        openExternal: (url) => shell.openExternal(url)
+      })
+    },
     deleteProjectHistory: async (projectId, token) => {
       const preparation = requireTaskStore().prepareProjectHistoryDeletion(projectId, token)
       let deletionLease: Awaited<ReturnType<PermissionBroker['beginProjectDeletion']>>
@@ -1203,12 +1264,34 @@ async function persistProviderConfig(
 async function restoreProviderRuntime(
   currentAgent: AgentService,
   reconnect: { projectId: string; selectedTaskId: string | null },
-  lease: OperationLease
+  lease?: OperationLease
 ): Promise<void> {
   await currentAgent.connect(reconnect.projectId, lease)
   if (reconnect.selectedTaskId) {
     await currentAgent.ensureTaskSessionForTurn(reconnect.selectedTaskId, lease)
   }
+}
+
+/** 任务执行中禁止保存 Grok 配置，避免文件已改但正在跑的进程仍用旧窗口。 */
+function assertGrokConfigCanReload(): void {
+  const state = agentService?.getStatus().state
+  if (state === 'busy' || state === 'connecting') {
+    throw new DesktopIpcFailure('invalid-state', '任务执行中，结束后才能保存并重载 Grok 配置。')
+  }
+}
+
+/**
+ * 把已连接的 Grok 进程拆掉再拉起来，让刚写入的 App config.toml 被 Runtime 重新读取。
+ * 找不到 Project 时只断开，避免把目录路径当成身份重连。
+ */
+async function reloadGrokRuntimeAfterConfigSave(currentAgent: AgentService): Promise<void> {
+  const status = currentAgent.getStatus()
+  if (status.state !== 'ready') return
+  const projectId = requireProjectRegistry().findActiveProjectIdByRoot(status.workspace ?? '')
+  const selectedTaskId = currentAgent.getSelectedTaskId()
+  await currentAgent.disconnect()
+  if (!projectId) return
+  await restoreProviderRuntime(currentAgent, { projectId, selectedTaskId })
 }
 
 /** Bearer 表单留空时仅允许复用相同 origin 下已安全保存的 Key。 */

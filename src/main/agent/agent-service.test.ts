@@ -8,6 +8,7 @@ import type {
   AgentRuntimeStatus,
   AgentTaskRuntimeState
 } from '../../shared/agent'
+import type { AgentQuestionRequest } from '../../shared/agent-question'
 import { resolveTakeoverHudCopy } from '../../shared/task-takeover'
 import { createAgentRuntimeCapabilitySnapshot } from './runtime-capabilities'
 import type {
@@ -1579,6 +1580,43 @@ describe('AgentService Task / Turn 编排', () => {
       await fixture.dispose()
     }
   })
+
+  it('TaskExecutor 活动 Turn 的问答不会被旧 Service 快照自动取消', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const questions: AgentQuestionRequest[] = []
+    const respondQuestion = vi.fn()
+    ;(adapter as unknown as { respondQuestion: typeof respondQuestion }).respondQuestion =
+      respondQuestion
+    const service = createServiceWithTaskExecutor(adapter, questions)
+    const task = await service.createTask(WORKSPACE)
+
+    service.handleQuestionRequest({
+      requestId: 'runtime-question-1',
+      runtimeId: 'grok',
+      taskId: task.taskId,
+      turnId: 'executor-turn-1',
+      runtimeSessionId: 'runtime-session-1',
+      title: '需要你的选择',
+      message: '请选择一项。',
+      questions: [
+        {
+          id: 'choice',
+          question: '选哪一个？',
+          kind: 'single',
+          options: [{ value: 'a', label: '选项 A' }],
+          required: true
+        }
+      ],
+      canSkip: false
+    })
+
+    expect(respondQuestion).not.toHaveBeenCalled()
+    expect(questions).toHaveLength(1)
+    expect(questions[0]).toMatchObject({
+      taskId: task.taskId,
+      turnId: 'executor-turn-1'
+    })
+  })
 })
 
 class FakeRuntimeAdapter implements AgentRuntimeAdapter {
@@ -1771,6 +1809,25 @@ function createService(
     createId: () => ids[idIndex++] ?? `unexpected-id-${idIndex}`,
     now: () => new Date(Date.UTC(2026, 7, 11, 0, 0, clock++)).toISOString(),
     ...(operationGate ? { operationGate } : {})
+  })
+}
+
+function createServiceWithTaskExecutor(
+  adapter: FakeRuntimeAdapter,
+  questions: AgentQuestionRequest[]
+): AgentService {
+  // 备注：用最小执行器身份夹具复现新执行路径，验证 Service 不再误读旧 activeTurnId。
+  const taskExecutor = {
+    getActiveRuntimeTurn: () => ({
+      taskId: 'task-a',
+      turnId: 'executor-turn-1',
+      runtimeSessionId: 'runtime-session-1'
+    })
+  }
+  return new AgentService(adapter, new TaskExecutionController(), {
+    createId: () => 'task-a',
+    onQuestion: (request) => questions.push(request),
+    taskExecutor: taskExecutor as unknown as import('./task-executor').TaskExecutor
   })
 }
 

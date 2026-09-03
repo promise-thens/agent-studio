@@ -21,6 +21,7 @@ import {
   type AgentPermissionCancellation,
   type AgentSetPermissionModeResult
 } from '../shared/agent-ipc'
+import { parseAgentQuestionRequest, type AgentQuestionRequest } from '../shared/agent-question'
 import { parseAppAppearanceState } from '../shared/app-appearance'
 import {
   APP_INVOKE_CHANNELS,
@@ -35,6 +36,7 @@ import {
 } from '../shared/grok-memory'
 import { parseMcpServerSummary } from '../shared/mcp-server-config'
 import type { DesktopIpcResult } from '../shared/ipc-result'
+import { parseMacosFolderAccessNotice } from '../shared/macos-folder-access'
 import {
   parseMarketplacePluginSummary,
   type MarketplacePluginSummary
@@ -232,6 +234,18 @@ function parsePermissionCancellation(payload: unknown): AgentPermissionCancellat
   const turnId = readPermissionText(payload.turnId)
   if (!approvalId || !taskId || !turnId) return null
   return { approvalId, taskId, turnId, reason: 'cancelled' }
+}
+
+/** 问答取消 Push 只允许公开 questionId 与 Task/Turn 身份。 */
+function parseQuestionCancellation(
+  payload: unknown
+): Pick<AgentQuestionRequest, 'questionId' | 'taskId' | 'turnId'> | null {
+  if (!isPlainRecord(payload)) return null
+  const questionId = readPermissionText(payload.questionId)
+  const taskId = readPermissionText(payload.taskId)
+  const turnId = readPermissionText(payload.turnId)
+  if (!questionId || !taskId || !turnId) return null
+  return { questionId, taskId, turnId }
 }
 
 const TASK_RUNTIME_STATES = [
@@ -701,6 +715,13 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
         turnId: request.turnId,
         decision: request.decision
       }) as Promise<DesktopIpcResult<null>>,
+    respondQuestion: (request) =>
+      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.respondQuestion, {
+        questionId: request.questionId,
+        taskId: request.taskId,
+        turnId: request.turnId,
+        response: request.response
+      }) as Promise<DesktopIpcResult<null>>,
     setPermissionMode: (request) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, {
         taskId: request.taskId,
@@ -731,6 +752,20 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
         AGENT_PUSH_CHANNELS.permissionCancelled,
         listener,
         parsePermissionCancellation
+      ),
+    onQuestion: (listener) =>
+      subscribe<AgentQuestionRequest>(
+        ipcRenderer,
+        AGENT_PUSH_CHANNELS.question,
+        listener,
+        parseAgentQuestionRequest
+      ),
+    onQuestionCancelled: (listener) =>
+      subscribe<Pick<AgentQuestionRequest, 'questionId' | 'taskId' | 'turnId'>>(
+        ipcRenderer,
+        AGENT_PUSH_CHANNELS.questionCancelled,
+        listener,
+        parseQuestionCancellation
       ),
     // Preload 再 parse 一次：主进程可信但跨进程载荷仍可能被篡改或残缺，失败则静默丢弃
     onAvailableCommands: (listener) =>
@@ -968,6 +1003,21 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
       })) as DesktopIpcResult<unknown>
       return parseNullIpcResult(result, '市场源添加结果无效。')
     },
+    probeMacosFolderAccess: async (projectId) => {
+      const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.probeMacosFolderAccess, {
+        projectId
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const notice = parseMacosFolderAccessNotice(result.value)
+      if (!notice) {
+        return { ok: false, error: { code: 'operation-failed', message: '文件夹权限状态无效。' } }
+      }
+      return { ok: true, value: notice }
+    },
+    openMacosFilesPrivacySettings: () =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.openMacosFilesPrivacySettings) as ReturnType<
+        AppDesktopApi['openMacosFilesPrivacySettings']
+      >,
     onAppearanceChanged: (listener) =>
       subscribe(ipcRenderer, APP_PUSH_CHANNELS.appearance, listener, parseAppAppearanceState)
   }

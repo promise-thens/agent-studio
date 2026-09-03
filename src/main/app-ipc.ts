@@ -27,6 +27,7 @@ import {
   type RuntimePluginDetail,
   type RuntimePluginSummary
 } from '../shared/runtime-plugin'
+import type { MacosFolderAccessNotice } from '../shared/macos-folder-access'
 import type { DeletionPreview, ProjectSummary } from '../shared/task-history'
 import type { DesktopIpcMain } from './ipc-types'
 import {
@@ -64,6 +65,8 @@ export interface AppIpcDependencies {
   installPlugin: (input: { name: string; trust: boolean }) => Promise<null>
   uninstallPlugin: (input: { pluginId: string }) => Promise<null>
   addMarketplaceSource: (input: { gitUrl: string }) => Promise<null>
+  probeMacosFolderAccess: (projectId: string) => Promise<MacosFolderAccessNotice>
+  openMacosFilesPrivacySettings: () => Promise<void>
   sanitizeError: (error: unknown) => string
 }
 
@@ -322,6 +325,19 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
     const request = readRequest(args, ['gitUrl'])
     const gitUrl = readMarketplaceGitUrl(readText(request, 'gitUrl', MAX_MARKETPLACE_GIT_URL_BYTES))
     await dependencies.addMarketplaceSource({ gitUrl })
+    return null
+  })
+  /**
+   * 只接受已注册 projectId。主进程用 canonicalRoot 读目录触发 TCC，
+   * 不让 Renderer 指定路径，也不把绝对路径回传。
+   */
+  register(APP_INVOKE_CHANNELS.probeMacosFolderAccess, (args) => {
+    const request = readRequest(args, ['projectId'])
+    return dependencies.probeMacosFolderAccess(readText(request, 'projectId'))
+  })
+  register(APP_INVOKE_CHANNELS.openMacosFilesPrivacySettings, async (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    await dependencies.openMacosFilesPrivacySettings()
     return null
   })
 }

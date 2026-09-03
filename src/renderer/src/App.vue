@@ -15,6 +15,7 @@ import type {
 import {
   resolveTakeoverHudCopy,
   taskPermissionModeFromSnapshot,
+  TAKEOVER_CONTROL_TURN_KIND,
   type PermissionPromptStyle,
   type TaskPermissionMode
 } from '../../shared/task-takeover'
@@ -38,6 +39,7 @@ import type {
 } from '../../shared/provider'
 import type { ConversationEntryState, DeletionPreview } from '../../shared/task-history'
 import type { TaskAttachmentDescriptor } from '../../shared/task-attachment'
+import type { AgentQuestionRequest, AgentQuestionResponse } from '../../shared/agent-question'
 import {
   createAgentEventGuard,
   createAgentMessageKey,
@@ -49,6 +51,7 @@ import BrandMark from './components/BrandMark.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import ExecutionSurfaceBanner from './components/ExecutionSurfaceBanner.vue'
+import MacosFolderAccessBanner from './components/MacosFolderAccessBanner.vue'
 import PluginsPage from './components/PluginsPage.vue'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import TaskComposer from './components/TaskComposer.vue'
@@ -60,6 +63,7 @@ import { useTaskArtifacts } from './composables/useTaskArtifacts'
 import { useTaskChanges } from './composables/useTaskChanges'
 import { useTaskTimeline } from './composables/useTaskTimeline'
 import { createAttachmentPreviewUrl } from './attachment-preview-url'
+import { useMacosFolderAccess } from './composables/useMacosFolderAccess'
 import { useTaskWorkbench } from './composables/useTaskWorkbench'
 import {
   evaluateTaskComposerSend,
@@ -67,7 +71,7 @@ import {
   pickLatestContextUsage,
   resolveCancelTurnRequest,
   resolveComposerChrome,
-  resolveComposerContextUsage,
+  resolveComposerContextUsagePresentation,
   resolveStopButtonAriaLabel,
   resolveStopButtonTitle,
   resolveTaskHeaderFacts,
@@ -183,6 +187,7 @@ const status = ref<AgentRuntimeStatus>({
   message: '尚未连接 Grok Build'
 })
 const workbench = useTaskWorkbench()
+const macosFolderAccess = useMacosFolderAccess()
 const taskHistory = workbench.history
 const taskTimeline = useTaskTimeline({ manageSubscriptions: false })
 const executionSnapshot = workbench.executionSnapshot
@@ -245,6 +250,12 @@ const respondingPermission = ref<{
 } | null>(null)
 const permissionResponsePending = computed(() =>
   isPermissionResponsePending(permission.value, respondingPermission.value)
+)
+const questionQueue = ref<AgentQuestionRequest[]>([])
+const question = computed(() => questionQueue.value[0] ?? null)
+const respondingQuestion = ref<string | null>(null)
+const questionResponsePending = computed(
+  () => Boolean(question.value && respondingQuestion.value === question.value.questionId)
 )
 let permissionExpiryTimer: ReturnType<typeof setTimeout> | null = null
 /** 检查器默认关上；悬浮时覆盖右侧，吸附时才进入第三列。 */
@@ -345,6 +356,8 @@ const activeSidebarTaskId = computed(() =>
 
 const cleanupListeners: Array<() => void> = []
 const acceptAgentEvent = createAgentEventGuard()
+/** 记住已确认的内部控制 Turn，处理终态后的迟到事件时仍保持静默。 */
+const silentControlTurnKeys = new Set<string>()
 /** 驱动整轮任务耗时的实时刷新。 */
 const nowTick = ref(Date.now())
 let durationTimer: ReturnType<typeof setInterval> | null = null
@@ -523,7 +536,7 @@ const composerChrome = computed(() =>
 )
 const composerAction = computed(() => composerChrome.value.action)
 const composerContextUsage = computed(() =>
-  resolveComposerContextUsage(pickLatestContextUsage(taskTimeline.activeTimeline.value))
+  resolveComposerContextUsagePresentation(pickLatestContextUsage(taskTimeline.activeTimeline.value))
 )
 const promptMediaHint = computed(() =>
   status.value.promptMedia && status.value.promptMedia.image === false
@@ -619,6 +632,7 @@ async function setTaskPermissionMode(mode: TaskPermissionMode): Promise<void> {
 async function setTaskPlanMode(mode: ComposerPlanMode): Promise<void> {
   const switchState = resolveComposerPlanSwitch({
     advertisedCommands: runtimeSlashCommands.value,
+    allowUnadvertisedPlan: status.value.runtimeId === 'grok',
     mode: composerPlanMode.value,
     modelBusy: composerChrome.value.modelBusy || permissionModeBusy.value,
     composerAction: composerAction.value,
@@ -706,6 +720,13 @@ const newChatDisabledReason = computed(() => {
   return connectCapability.value.reason ?? createSessionCapability.value.reason ?? ''
 })
 const activeProjectId = computed(() => workbench.selectedProjectId.value)
+watch(
+  activeProjectId,
+  (projectId) => {
+    void macosFolderAccess.probe(projectId || null)
+  },
+  { immediate: true }
+)
 const currentModel = computed<ProviderModelOption | null>(() => {
   const summary = providerSummary.value
   if (!summary?.modelId) return null
@@ -790,6 +811,10 @@ watch([hasStreamingMessage, isTurnTiming, activeTaskId, () => status.value.state
 })
 
 watch(executionSnapshot, (snapshot) => {
+  const execution = snapshot.execution
+  if (execution?.turnKind === TAKEOVER_CONTROL_TURN_KIND) {
+    silentControlTurnKeys.add(`${execution.taskId}:${execution.turnId}`)
+  }
   taskTimeline.acceptExecutionSnapshot(snapshot)
 })
 
@@ -817,7 +842,10 @@ onMounted(async () => {
     window.agent.onStatus((nextStatus) => {
       status.value = nextStatus
       syncWorkspaceDisplay(nextStatus.workspace)
-      if (nextStatus.state === 'idle' || nextStatus.state === 'error') clearPermissionQueue()
+      if (nextStatus.state === 'idle' || nextStatus.state === 'error') {
+        clearPermissionQueue()
+        clearQuestionQueue()
+      }
     }),
     window.agent.onEvent(handleAgentEvent),
     window.agent.onPermission((request) => {
@@ -830,6 +858,12 @@ onMounted(async () => {
     window.agent.onPermissionCancelled((request) => {
       removePermission(request)
       respondingPermission.value = clearRespondingPermission(respondingPermission.value, request)
+    }),
+    window.agent.onQuestion((request) => {
+      enqueueQuestion(request)
+    }),
+    window.agent.onQuestionCancelled((request) => {
+      removeQuestion(request.questionId)
     }),
     window.app.onAppearanceChanged(applyAppearanceState),
     window.agent.onAvailableCommands((snapshot) => {
@@ -883,6 +917,7 @@ onBeforeUnmount(() => {
     clearTimeout(permissionExpiryTimer)
     permissionExpiryTimer = null
   }
+  clearQuestionQueue()
   if (durationTimer) {
     clearInterval(durationTimer)
     durationTimer = null
@@ -1416,6 +1451,7 @@ async function sendPrompt(): Promise<void> {
         mode: composerPlanModeByTask.value[taskId] ?? 'normal',
         prompt: text,
         hasPlanCommand: isPlanCommandAdvertised(runtimeSlashCommands.value),
+        allowUnadvertisedPlan: status.value.runtimeId === 'grok',
         idle: !activeExecution.value && composerAction.value === 'send'
       })
       const admitted = unwrapDesktopIpcResult(
@@ -1563,6 +1599,68 @@ async function respondPermission(decision: AgentPermissionDecision): Promise<voi
   }
 }
 
+/** 问答按 arrival 顺序展示；每张卡只允许对应的 questionId 在途，避免重复提交。 */
+async function respondQuestion(response: AgentQuestionResponse): Promise<void> {
+  const request = question.value
+  if (!request || respondingQuestion.value) return
+  respondingQuestion.value = request.questionId
+  try {
+    unwrapDesktopIpcResult(
+      await window.agent.respondQuestion({
+        questionId: request.questionId,
+        taskId: request.taskId,
+        turnId: request.turnId,
+        response
+      })
+    )
+    if (
+      request.kind === 'plan-approval' &&
+      (response.action === 'approve-plan' || response.action === 'abandon-plan')
+    ) {
+      // Grok 已确认退出/放弃当前 Plan；同步 Composer，避免下一轮被错误包装成 /plan。
+      composerPlanModeByTask.value = {
+        ...composerPlanModeByTask.value,
+        [request.taskId]: 'normal'
+      }
+    }
+    questionQueue.value = questionQueue.value.filter(
+      (item) => item.questionId !== request.questionId
+    )
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    if (respondingQuestion.value === request.questionId) respondingQuestion.value = null
+  }
+}
+
+function enqueueQuestion(request: AgentQuestionRequest): void {
+  if (questionQueue.value.some((item) => item.questionId === request.questionId)) return
+  questionQueue.value = [...questionQueue.value, request]
+}
+
+function removeQuestion(questionId: string): void {
+  questionQueue.value = questionQueue.value.filter((item) => item.questionId !== questionId)
+  if (respondingQuestion.value === questionId) respondingQuestion.value = null
+}
+
+function clearQuestionQueue(): void {
+  questionQueue.value = []
+  respondingQuestion.value = null
+}
+
+/** 任意 Task 的 Turn 终态都要撤掉对应问答，避免后台卡片残留并阻塞下一题。 */
+function clearQuestionsForTurn(taskId: string, turnId: string): void {
+  questionQueue.value = questionQueue.value.filter(
+    (item) => item.taskId !== taskId || item.turnId !== turnId
+  )
+  if (
+    respondingQuestion.value &&
+    !questionQueue.value.some((item) => item.questionId === respondingQuestion.value)
+  ) {
+    respondingQuestion.value = null
+  }
+}
+
 /** 审批按 arrival 顺序展示并按三元组身份去重，防止并发请求互相覆盖。 */
 function enqueuePermission(request: AgentPermissionRequest): void {
   permissionQueue.value = enqueuePermissionRequest(permissionQueue.value, request)
@@ -1650,7 +1748,23 @@ function onWorkbenchKeydown(event: KeyboardEvent): void {
 function handleAgentEvent(event: PublicAgentEvent): void {
   if (!acceptAgentEvent(event)) return
   taskTimeline.acceptLiveEvent(event)
+  if (event.kind === 'turn-complete') clearQuestionsForTurn(event.taskId, event.turnId)
   if (event.taskId !== activeTaskId.value) return
+
+  const currentExecution = executionSnapshot.value.execution
+  const isSilentControlTurn =
+    silentControlTurnKeys.has(`${event.taskId}:${event.turnId}`) ||
+    (currentExecution?.taskId === event.taskId &&
+      currentExecution.turnId === event.turnId &&
+      currentExecution.turnKind === TAKEOVER_CONTROL_TURN_KIND)
+  if (isSilentControlTurn) {
+    // 控制命令仍要收束计时与刷新 Task 状态，但绝不进入聊天气泡、计划或工具面板。
+    if (event.kind === 'turn-complete' || event.kind === 'error') {
+      completeCurrentTurn(event.taskId)
+      void taskHistory.refreshTasks()
+    }
+    return
+  }
 
   if (event.kind === 'agent-message' && event.text) {
     appendStreamChunk('assistant', event.text, createAgentMessageKey(event))
@@ -1984,6 +2098,14 @@ function scrollMessagesToBottom(): void {
             @retry-load="retryWorkbenchLoad"
           />
 
+          <MacosFolderAccessBanner
+            :message="macosFolderAccess.message.value"
+            :probing="macosFolderAccess.probing.value"
+            :opening-settings="macosFolderAccess.openingSettings.value"
+            @open-settings="macosFolderAccess.openSettings"
+            @retry="macosFolderAccess.probe(activeProjectId || null)"
+          />
+
           <TaskConversation
             :conversation-key="activeTaskId"
             :model="taskTimeline.activeTimeline.value"
@@ -2000,6 +2122,8 @@ function scrollMessagesToBottom(): void {
             :permission="permission"
             :permission-pending="permissionResponsePending"
             :permission-task-title="permissionTaskTitle"
+            :question="question"
+            :question-pending="questionResponsePending"
             :change-card="changeCard"
             :restore-busy="restoreBusy"
             :plan-mode="composerPlanMode"
@@ -2007,6 +2131,7 @@ function scrollMessagesToBottom(): void {
             @load-more-events="loadMoreHistoryEvents"
             @retry-connect="retryRuntimeConnect"
             @respond-permission="respondPermission"
+            @respond-question="respondQuestion"
             @cancel-turn="cancelTurn"
             @review-changes="openChangeReview()"
             @restore-changes="startChangeRestore"
@@ -2034,6 +2159,7 @@ function scrollMessagesToBottom(): void {
             :takeover-hud="composerTakeoverHud"
             :set-permission-mode="setTaskPermissionMode"
             :plan-mode="composerPlanMode"
+            :plan-available="status.runtimeId === 'grok'"
             :set-plan-mode="setTaskPlanMode"
             :context-usage="composerContextUsage"
             :runtime-commands="runtimeSlashCommands"

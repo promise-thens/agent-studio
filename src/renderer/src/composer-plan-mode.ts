@@ -9,6 +9,8 @@ export const PLAN_NEXT_TURN_STATUS = '下一轮按 Plan 发送'
 
 export interface ComposerPlanSwitchInput {
   advertisedCommands: readonly { name: string }[]
+  /** 仅由已确认支持 Grok Plan 的 Runtime 传入，不能对普通 Runtime 默认开启。 */
+  allowUnadvertisedPlan?: boolean
   mode: ComposerPlanMode
   modelBusy: boolean
   composerAction: 'send' | 'stop'
@@ -28,7 +30,8 @@ export interface ComposerPlanSwitchState {
  * modelBusy、停止按钮、活动执行仍锁住双向切换，避免执行中改下一轮策略。
  */
 export function resolveComposerPlanSwitch(input: ComposerPlanSwitchInput): ComposerPlanSwitchState {
-  const advertised = isPlanCommandAdvertised(input.advertisedCommands)
+  const advertised =
+    isPlanCommandAdvertised(input.advertisedCommands) || input.allowUnadvertisedPlan === true
   const executing = input.modelBusy || input.composerAction === 'stop' || input.hasActiveExecution
   const leavingPlan = input.mode === 'plan'
   const canToggle = !executing && (leavingPlan || advertised)
@@ -55,8 +58,13 @@ export function resolveComposerPlanStatusCopy(input: {
   mode: ComposerPlanMode
   idle: boolean
   hasPlanCommand: boolean
+  allowUnadvertisedPlan?: boolean
 }): string | null {
-  if (input.mode === 'plan' && input.idle && input.hasPlanCommand) {
+  if (
+    input.mode === 'plan' &&
+    input.idle &&
+    (input.hasPlanCommand || input.allowUnadvertisedPlan === true)
+  ) {
     return PLAN_NEXT_TURN_STATUS
   }
   return null

@@ -18,6 +18,7 @@ import { AgentEventNormalizer, type AgentEventDraft } from '../../agent/event-no
 import {
   AgentRuntimeAdapterError,
   type AgentRuntimeAdapterSink,
+  type AgentRuntimeQuestionRequest,
   type AgentRuntimePermissionRequest,
   type AgentRuntimeSessionRef,
   type AgentRuntimeTurnContext
@@ -1109,6 +1110,98 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
   })
 
+  it('ACP 没有 usage_update 时从当前 session signals 补发 context usage', async () => {
+    const signalsRoot = await mkdtemp(join(tmpdir(), 'grok-session-signals-adapter-'))
+    const signalsDirectory = join(
+      signalsRoot,
+      'sessions',
+      encodeURIComponent(WORKSPACE),
+      'runtime-session-1'
+    )
+    await mkdir(signalsDirectory, { recursive: true })
+    await writeFile(
+      join(signalsDirectory, 'signals.json'),
+      JSON.stringify({
+        contextTokensUsed: 18941,
+        contextWindowTokens: 32768,
+        contextWindowUsage: 57
+      })
+    )
+    const prompt = vi.fn().mockResolvedValue({ stopReason: 'end_turn' as const })
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, {
+      grokSessionSignalsRoot: signalsRoot
+    })
+
+    await expect(
+      harness.adapter.startTurn(turnContext('task-usage', 'turn-usage'))
+    ).resolves.toEqual({ outcome: 'completed' })
+
+    expect(harness.events.map((event) => event.kind)).toEqual(['usage', 'turn-complete'])
+    expect(harness.events[0]).toMatchObject({
+      kind: 'usage',
+      taskId: 'task-usage',
+      turnId: 'turn-usage',
+      capabilityState: 'experimental',
+      usage: { scope: 'context', usedTokens: 18941, limitTokens: 32768 }
+    })
+    await rm(signalsRoot, { recursive: true, force: true })
+  })
+
+  it('原生 usage_update 与 signals 同值时只发布一条 context usage', async () => {
+    const signalsRoot = await mkdtemp(join(tmpdir(), 'grok-session-signals-dedupe-'))
+    const signalsDirectory = join(
+      signalsRoot,
+      'sessions',
+      encodeURIComponent(WORKSPACE),
+      'runtime-session-1'
+    )
+    await mkdir(signalsDirectory, { recursive: true })
+    await writeFile(
+      join(signalsDirectory, 'signals.json'),
+      JSON.stringify({ contextTokensUsed: 10, contextWindowTokens: 20, contextWindowUsage: 50 })
+    )
+    const prompt = vi.fn()
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, {
+      grokSessionSignalsRoot: signalsRoot
+    })
+    prompt.mockImplementation(async () => {
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'usage_update',
+          used: 10,
+          size: 20,
+          cost: { amount: 0, currency: 'USD' }
+        } as acp.SessionUpdate),
+        connection
+      )
+      return { stopReason: 'end_turn' as const }
+    })
+
+    await expect(
+      harness.adapter.startTurn(turnContext('task-usage', 'turn-dedupe'))
+    ).resolves.toEqual({ outcome: 'completed' })
+    expect(harness.events.filter((event) => event.kind === 'usage')).toHaveLength(1)
+    expect(harness.events.at(-1)).toMatchObject({ kind: 'turn-complete', outcome: 'completed' })
+    await rm(signalsRoot, { recursive: true, force: true })
+  })
+
+  it('signals 缺失或损坏不阻断 Turn，也不产生伪造 usage 事件', async () => {
+    const signalsRoot = await mkdtemp(join(tmpdir(), 'grok-session-signals-missing-'))
+    const prompt = vi.fn().mockResolvedValue({ stopReason: 'end_turn' as const })
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, {
+      grokSessionSignalsRoot: signalsRoot
+    })
+
+    await expect(
+      harness.adapter.startTurn(turnContext('task-usage', 'turn-missing'))
+    ).resolves.toEqual({ outcome: 'completed' })
+    expect(harness.events.map((event) => event.kind)).toEqual(['turn-complete'])
+    await rm(signalsRoot, { recursive: true, force: true })
+  })
+
   it('Runtime 图片落盘后按 text → attachment → text → terminal 顺序发布', async () => {
     const prompt = vi.fn()
     const stored = deferred<{
@@ -1363,6 +1456,131 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
       turnId: 'turn-current',
       text: '当前事件'
     })
+  })
+
+  it('接住 Grok x.ai/ask_user_question，并把回答映射回 accepted outcome', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'x.ai/ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        toolCallId: 'tool-question',
+        mode: 'plan',
+        questions: [
+          {
+            id: 'scope',
+            question: '选择范围',
+            options: [{ id: 'frontend', label: '前端', description: '只改界面' }]
+          }
+        ]
+      },
+      connection
+    )
+
+    expect(harness.questions[0]).toMatchObject({
+      taskId: 'task-current',
+      turnId: 'turn-current',
+      questions: [{ id: 'scope', kind: 'single', options: [{ value: 'frontend' }] }]
+    })
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { scope: 'frontend' }
+    })
+    await expect(responsePromise).resolves.toEqual({
+      outcome: 'accepted',
+      answers: { 选择范围: ['前端'] }
+    })
+  })
+
+  it('兼容 Grok ACP 的 `_x.ai/ask_user_question` 扩展方法前缀，并返回 outcome', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      '_x.ai/ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [
+          {
+            question: '选择范围',
+            options: [{ label: '前端', description: '只改界面' }]
+          }
+        ]
+      },
+      connection
+    )
+
+    expect(harness.questions).toHaveLength(1)
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '前端' }
+    })
+    await expect(responsePromise).resolves.toMatchObject({
+      outcome: 'accepted',
+      answers: { 选择范围: ['前端'] }
+    })
+  })
+
+  it('兼容 Grok 真实版本使用的裸 `ask_user_question` 扩展方法名', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [{ question: '选择范围', options: [{ label: '前端' }] }]
+      },
+      connection
+    )
+
+    expect(harness.questions).toHaveLength(1)
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '前端' }
+    })
+    await expect(responsePromise).resolves.toMatchObject({
+      outcome: 'accepted',
+      answers: { 选择范围: ['前端'] }
+    })
+  })
+
+  it('接住 Grok x.ai/exit_plan_mode，并把批准/放弃映射为计划终态', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'x.ai/exit_plan_mode',
+      { sessionId: 'runtime-session-1', toolCallId: 'tool-exit', planContent: '1. 修改设置页' },
+      connection
+    )
+    expect(harness.questions[0]).toMatchObject({
+      kind: 'plan-approval',
+      planContent: '1. 修改设置页'
+    })
+    harness.adapter.respondQuestion(harness.questions[0].requestId, { action: 'approve-plan' })
+    await expect(responsePromise).resolves.toEqual({ outcome: 'approved' })
+  })
+
+  it('兼容 Grok 真实版本使用的裸 `exit_plan_mode` 扩展方法名', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'exit_plan_mode',
+      { sessionId: 'runtime-session-1', planContent: '1. 修改设置页' },
+      connection
+    )
+    expect(harness.questions[0]).toMatchObject({ kind: 'plan-approval' })
+    harness.adapter.respondQuestion(harness.questions[0].requestId, { action: 'approve-plan' })
+    await expect(responsePromise).resolves.toEqual({ outcome: 'approved' })
   })
 
   it('Prompt 失败先脱敏，再形成唯一 failed 终态并向 Service 返回 failed', async () => {
@@ -3064,6 +3282,7 @@ interface TestActiveTurn {
   sessionUpdateQueueActive: boolean
   runtimeAttachmentErrorReported: boolean
   ingestedRuntimeMediaKeys: Set<string>
+  lastContextUsageFingerprint?: string
 }
 
 interface TestPendingPermission {
@@ -3085,6 +3304,7 @@ interface GrokAcpAdapterTestAccess {
   boundTaskId: string | null
   activeTurn: TestActiveTurn | null
   pendingPermissions: Map<string, TestPendingPermission>
+  pendingQuestions: Map<string, unknown>
   supportsCloseSession: boolean
   capabilitySnapshot: AgentRuntimeCapabilitySnapshot
   status: AgentRuntimeStatus
@@ -3105,6 +3325,11 @@ interface GrokAcpAdapterTestAccess {
     params: acp.RequestPermissionRequest,
     sourceConnection: acp.ClientSideConnection
   ) => Promise<acp.RequestPermissionResponse>
+  handleExtensionMethod: (
+    method: string,
+    params: Record<string, unknown>,
+    sourceConnection: acp.ClientSideConnection
+  ) => Promise<Record<string, unknown>>
   handleSessionUpdate: (
     params: acp.SessionNotification,
     sourceConnection: acp.ClientSideConnection
@@ -3324,6 +3549,7 @@ function createAdapterHarness(
       bytes: Buffer
     }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
     grokSessionMediaRoot?: string
+    grokSessionSignalsRoot?: string
   } = {}
 ): {
   adapter: GrokAcpAdapter
@@ -3333,6 +3559,7 @@ function createAdapterHarness(
   statuses: AgentRuntimeStatus[]
   permissionCancellations: import('../../agent/agent-runtime-adapter').AgentRuntimePermissionCancellation[]
   availableCommands: AgentAvailableCommandSnapshot[]
+  questions: AgentRuntimeQuestionRequest[]
 } {
   const events: AgentEvent[] = []
   const permissions: AgentRuntimePermissionRequest[] = []
@@ -3340,12 +3567,14 @@ function createAdapterHarness(
   const permissionCancellations: import('../../agent/agent-runtime-adapter').AgentRuntimePermissionCancellation[] =
     []
   const availableCommands: AgentAvailableCommandSnapshot[] = []
+  const questions: AgentRuntimeQuestionRequest[] = []
   const adapter = new GrokAcpAdapter(
     {
       onStatus: (status) => statuses.push(status),
       onEvent: (event) => events.push(event),
       onPermission: (request) => permissions.push(request),
       onPermissionCancelled: (request) => permissionCancellations.push(request),
+      onQuestion: (request) => questions.push(request),
       onAvailableCommands: (snapshot) => availableCommands.push(snapshot)
     },
     {
@@ -3378,7 +3607,8 @@ function createAdapterHarness(
     permissions,
     statuses,
     permissionCancellations,
-    availableCommands
+    availableCommands,
+    questions
   }
 }
 

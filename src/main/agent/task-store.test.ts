@@ -3,6 +3,10 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent, AgentRuntimeCapabilitySnapshot } from '../../shared/agent'
+import {
+  GROK_TAKEOVER_CONTROL_PROMPT,
+  TAKEOVER_CONTROL_TURN_KIND
+} from '../../shared/task-takeover'
 import { ProjectRegistry } from '../project/project-registry'
 import { AtomicJsonWriter } from '../storage/atomic-json-file'
 import { TaskStore, projectPersistedAgentEvent } from './task-store'
@@ -207,6 +211,46 @@ describe('TaskStore', () => {
       'utf8'
     )
     expect(disk).not.toContain('fake-secret')
+  })
+
+  it('持久化接管控制 Turn 但从普通 Turn 列表隐藏', async () => {
+    const { store, registry, project } = await createStore()
+    const environmentId = store.getTaskRecord('task-1').environment.environmentId
+    const admitted = await store.admitExecutionTurn({
+      taskId: 'task-1',
+      turnId: 'turn-control',
+      executionId: 'execution-control',
+      environmentId,
+      promptDisplayText: GROK_TAKEOVER_CONTROL_PROMPT,
+      model: { modelId: 'model-1' },
+      turnKind: TAKEOVER_CONTROL_TURN_KIND
+    })
+    expect(admitted.turnKind).toBe(TAKEOVER_CONTROL_TURN_KIND)
+    await store.finishTurn('task-1', 'turn-control', 'completed')
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-user',
+      promptDisplayText: '用户任务',
+      model: { modelId: 'model-1' }
+    })
+
+    const page = await store.listTurns('task-1')
+    expect(page.items).toHaveLength(1)
+    expect(page.items[0]).toMatchObject({ turnId: 'turn-user', promptDisplayText: '用户任务' })
+
+    const controlDisk = JSON.parse(
+      await readFile(
+        join(
+          registry.getProjectDirectory(project.projectId),
+          'tasks/task-1/turns/turn-control/turn.json'
+        ),
+        'utf8'
+      )
+    ) as Record<string, unknown>
+    expect(controlDisk).toMatchObject({
+      promptDisplayText: GROK_TAKEOVER_CONTROL_PROMPT,
+      turnKind: TAKEOVER_CONTROL_TURN_KIND
+    })
   })
 
   it('附件事件持久化后仍只保存 inbox 引用', async () => {

@@ -2408,18 +2408,227 @@ button:disabled {
   gap: 8px;
 }
 
-.composer-usage {
+.composer-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.composer-add-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.composer-add-trigger {
+  display: inline-flex;
+  width: 25px;
+  height: 25px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+  transition:
+    border-color 160ms ease,
+    color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.composer-add-trigger:hover:not(:disabled),
+.composer-add-trigger[aria-expanded='true'] {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+}
+
+.composer-add-trigger.is-plan {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--border));
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface-2));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.composer-add-trigger:active:not(:disabled) {
+  transform: translateY(1px) scale(0.98);
+}
+
+.composer-add-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.composer-add-panel {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: grid;
+  width: min(280px, calc(100vw - 32px));
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-3);
+  box-shadow: 0 16px 36px rgb(0 0 0 / 28%);
+}
+
+.composer-add-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--text-2);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.composer-add-item:hover:not(:disabled),
+.composer-add-item:focus-visible {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+
+.composer-add-item.is-plan {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.composer-add-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.composer-add-item > span:not(.composer-add-check) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.composer-add-item strong {
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.composer-add-item small {
   overflow: hidden;
   color: var(--text-3);
   font-size: 10px;
-  font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer-add-check {
+  color: var(--accent);
+  font-size: 9px;
+}
+
+.composer-usage {
+  position: relative;
+  display: inline-flex;
+  width: 25px;
+  height: 25px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  cursor: help;
+  outline: none;
+}
+
+.composer-usage:focus-visible {
+  border-radius: 999px;
+  outline: 2px solid color-mix(in srgb, var(--accent) 72%, transparent);
+  outline-offset: 2px;
+}
+
+.composer-usage-ring {
+  display: block;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  transform: rotate(-90deg);
+}
+
+.composer-usage-ring-track,
+.composer-usage-ring-value {
+  fill: none;
+  stroke-width: 3;
+}
+
+.composer-usage-ring-track {
+  stroke: color-mix(in srgb, var(--border-strong) 70%, transparent);
+}
+
+.composer-usage-ring-value {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dasharray 180ms ease;
+}
+
+.composer-usage-tooltip {
+  position: absolute;
+  z-index: 5;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  width: max-content;
+  max-width: min(280px, 70vw);
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text-1);
+  background: var(--surface-3);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  visibility: hidden;
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease,
+    visibility 140ms ease;
+}
+
+.composer-usage-tooltip::after {
+  position: absolute;
+  bottom: -4px;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface-3);
+  content: '';
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.composer-usage:hover .composer-usage-tooltip,
+.composer-usage:focus-visible .composer-usage-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  visibility: visible;
 }
 
 .composer-footer .model-selector,
 .composer-footer .permission-mode-menu,
 .composer-footer .composer-plan-switch,
+.composer-footer .composer-usage,
+.composer-footer .composer-actions,
+.composer-footer .composer-add-menu,
 .composer-footer .send-button,
 .composer-footer .stop-button,
 .composer-footer .attach-button {
@@ -3865,7 +4074,7 @@ button:disabled {
   }
 }
 
-/* 980 保底：模型、批准模式、Plan 和发送/停止必须仍在输入框内；优先藏 usage。 */
+/* 980 保底：模型、批准模式、Plan 和发送/停止必须仍在输入框内；上下文圆环保留。 */
 @media (max-width: 980px) {
   .composer-footer .model-selector,
   .composer-footer .permission-mode-menu,
@@ -3877,8 +4086,7 @@ button:disabled {
   }
 
   .composer-plan-switch > span,
-  .composer-plan-status,
-  .composer-usage {
+  .composer-plan-status {
     display: none;
   }
 }

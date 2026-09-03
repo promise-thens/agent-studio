@@ -21,6 +21,10 @@ nsis:
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   notarize: false
+  extendInfo:
+    NSDocumentsFolderUsageDescription: Agent Studio 需要访问你选择的文稿目录，以便 Grok Runtime 在该工作区读写项目文件。
+    NSDesktopFolderUsageDescription: Agent Studio 需要访问你选择的桌面目录，以便 Grok Runtime 在该工作区读写项目文件。
+    NSDownloadsFolderUsageDescription: Agent Studio 需要访问你选择的下载目录，以便 Grok Runtime 在该工作区读写项目文件。
 dmg:
   artifactName: ${name}-${version}.${ext}
 linux:

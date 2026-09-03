@@ -7,6 +7,9 @@ describe('Grok 配置提示目录', () => {
     expect(matchGrokConfigHint('memory', 'unknown')?.title).toBe('表 memory')
     expect(matchGrokConfigHint('mcp_servers.github')?.table).toBe('mcp_servers')
     expect(matchGrokConfigHint('model.agent-studio-default')?.studioNote).toContain('供应商页')
+    expect(
+      matchGrokConfigHint('model.agent-studio-default', 'context_window')?.studioNote
+    ).toContain('不会被供应商绑定覆盖')
     expect(matchGrokConfigHint('nope')).toBeNull()
   })
 

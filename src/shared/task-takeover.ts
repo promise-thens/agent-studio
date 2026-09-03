@@ -89,6 +89,21 @@ export function readTakeoverSnapshot(value: unknown): {
 /** 发给 Grok 的接管斜杠命令全文；展示与审计都只用这一字面量，不带用户 prompt。 */
 export const GROK_TAKEOVER_CONTROL_PROMPT = `/${GROK_TAKEOVER_SLASH_COMMAND}` as const
 
+/** 内部控制 Turn 的类型；它仍会发送给 Runtime，但不应伪装成用户消息。 */
+export const TAKEOVER_CONTROL_TURN_KIND = 'takeover-control' as const
+export type InternalTurnKind = typeof TAKEOVER_CONTROL_TURN_KIND
+
+/** 识别当前和历史版本的接管控制 Turn；旧数据没有标记时兼容精确命令字面量。 */
+export function isTakeoverControlTurn(input: {
+  turnKind?: string
+  promptDisplayText?: string
+}): boolean {
+  return (
+    input.turnKind === TAKEOVER_CONTROL_TURN_KIND ||
+    input.promptDisplayText === GROK_TAKEOVER_CONTROL_PROMPT
+  )
+}
+
 /** 公开 agent:start-turn 拒绝该字面量时的提示；内部控制 turn 不走这条闸门。 */
 export const PUBLIC_TAKEOVER_CONTROL_PROMPT_BLOCKED_MESSAGE =
   '请改用批准模式菜单切换完全接管，不要直接发送 /always-approve。'

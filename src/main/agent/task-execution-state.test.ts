@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { QueuedTaskExecution, TaskExecutionState } from '../../shared/task-execution'
+import { TAKEOVER_CONTROL_TURN_KIND } from '../../shared/task-takeover'
 import {
   canTransitionTaskExecution,
   isTaskExecutionTerminal,
@@ -72,6 +73,27 @@ describe('Task execution 状态机', () => {
         dispatchedAt: '2026-08-17T10:00:01.000Z',
         stateChangedAt: '2026-08-17T10:00:01.000Z'
       }
+    })
+  })
+
+  it('状态迁移持续保留接管控制 Turn 标记，供 Renderer 静默识别', () => {
+    const controlQueued: QueuedTaskExecution = {
+      ...QUEUED,
+      turnKind: TAKEOVER_CONTROL_TURN_KIND
+    }
+    const running = transition(controlQueued, {
+      state: 'running',
+      dispatchedAt: '2026-08-17T10:00:01.000Z'
+    })
+    const completed = transitionTaskExecution(running, {
+      state: 'completed',
+      endedAt: '2026-08-17T10:00:02.000Z'
+    })
+
+    expect(running.turnKind).toBe(TAKEOVER_CONTROL_TURN_KIND)
+    expect(completed).toMatchObject({
+      kind: 'transitioned',
+      execution: { state: 'completed', turnKind: TAKEOVER_CONTROL_TURN_KIND }
     })
   })
 

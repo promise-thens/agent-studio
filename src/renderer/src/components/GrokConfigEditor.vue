@@ -54,7 +54,7 @@ async function saveConfig(): Promise<void> {
   try {
     unwrapDesktopIpcResult(await window.app.saveGrokConfig(text.value))
     savedText.value = text.value
-    saveMessage.value = '已写入 Grok 配置，新对话或重新进入后生效。'
+    saveMessage.value = '已保存。空闲时会重载 Grok，使 context_window 等原生配置立即生效。'
   } catch (error) {
     parseError.value = error instanceof Error ? error.message : String(error)
   } finally {

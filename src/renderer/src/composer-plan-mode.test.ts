@@ -269,11 +269,13 @@ describe('Plan 与接管互斥', () => {
 describe('Composer / App 接线', () => {
   it('footer 在模型选择器旁提供 Plan 开关，有 title 和 aria-label', () => {
     expect(composerSource).toContain('TaskPermissionModeMenu')
-    expect(composerSource).toContain('composer-plan-switch')
+    expect(composerSource).toContain('composer-add-trigger')
+    expect(composerSource).toContain('composer-add-panel')
+    expect(composerSource).toContain('添加能力')
     expect(composerSource).toContain('resolveComposerPlanSwitch')
     expect(composerSource).toContain('resolveComposerPlanStatusCopy')
     expect(composerSource).toMatch(/:title="planSwitch\.title"/)
-    expect(composerSource).toMatch(/:aria-label="planSwitch\.title"/)
+    expect(composerSource).toMatch(/:aria-pressed="planSwitch\.pressed"/)
     expect(composerSource).toContain('setPlanMode')
     expect(composerSource).toContain('planStatusCopy')
     expect(composerSource).not.toContain("name: 'plan'")

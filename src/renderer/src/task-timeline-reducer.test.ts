@@ -4,6 +4,10 @@ import type { CommandExecutionEvidence } from '../../shared/command'
 import type { TaskExecutionSnapshot } from '../../shared/task-execution'
 import type { PermissionAuditRecord, TurnHistoryRecord } from '../../shared/task-history'
 import {
+  GROK_TAKEOVER_CONTROL_PROMPT,
+  TAKEOVER_CONTROL_TURN_KIND
+} from '../../shared/task-takeover'
+import {
   createTaskTimelineFacts,
   reduceTaskTimelineFacts,
   selectTaskTimeline,
@@ -214,6 +218,52 @@ describe('Task Timeline reducer', () => {
       statusConflict: true,
       statusProvisional: false
     })
+  })
+
+  it('普通 Timeline 混合历史中隐藏接管控制 Turn', () => {
+    const controlTurn: TurnHistoryRecord = {
+      ...TURN,
+      turnId: 'turn-control',
+      promptDisplayText: GROK_TAKEOVER_CONTROL_PROMPT,
+      turnKind: TAKEOVER_CONTROL_TURN_KIND
+    }
+    const state = reduceTaskTimelineFacts(
+      reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+        type: 'turns/upsert',
+        turns: [controlTurn, TURN]
+      }),
+      {
+        type: 'events/ingest-public',
+        events: [...EVENTS.map((event) => ({ ...event, turnId: 'turn-control' })), ...EVENTS]
+      }
+    )
+
+    const view = selectTaskTimeline(state, { executionSnapshot: snapshot() })
+    expect(view.turns.map((item) => item.turnId)).toEqual(['turn-1'])
+    expect(JSON.stringify(view)).not.toContain(GROK_TAKEOVER_CONTROL_PROMPT)
+  })
+
+  it('实时 execution snapshot 标记为接管控制时也不生成普通 Turn', () => {
+    const state = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+      type: 'turn/admitted',
+      admission: {
+        taskId: 'task-1',
+        turnId: 'turn-live-control',
+        executionId: 'execution-1',
+        promptDisplayText: '后台控制命令',
+        model: { modelId: 'model-1' },
+        acceptedAt: '2026-08-18T00:00:00.000Z'
+      }
+    })
+    const liveSnapshot = snapshot('running')
+    if (!liveSnapshot.execution) throw new Error('缺少 execution。')
+    liveSnapshot.execution = {
+      ...liveSnapshot.execution,
+      turnId: 'turn-live-control',
+      turnKind: TAKEOVER_CONTROL_TURN_KIND
+    }
+
+    expect(selectTaskTimeline(state, { executionSnapshot: liveSnapshot }).turns).toEqual([])
   })
 
   it('权限审计按 auditId 幂等归并，不产生可操作审批', () => {

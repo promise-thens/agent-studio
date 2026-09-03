@@ -17,6 +17,7 @@ import type {
   TurnHistoryRecord,
   TurnModelSnapshot
 } from '../../shared/task-history'
+import { isTakeoverControlTurn, type InternalTurnKind } from '../../shared/task-takeover'
 import {
   toCommandEvidenceView,
   type TimelineCommandEvidenceView
@@ -30,6 +31,8 @@ export interface AdmittedTurnFact {
   turnId: string
   executionId: string
   promptDisplayText: string
+  /** 内部控制 admission 只用于状态关联，不生成用户节点。 */
+  turnKind?: InternalTurnKind
   model: TurnModelSnapshot
   acceptedAt: string
   attachmentIds?: string[]
@@ -395,6 +398,7 @@ export function selectTaskTimeline(
   context: TimelineSelectorContext
 ): TaskTimelineViewModel {
   const turns = Object.values(facts.turnsById)
+    .filter((turn) => !isHiddenControlTurn(turn, context.executionSnapshot))
     .map((turn) => selectTurnTimeline(turn, context, facts))
     .sort(
       (left, right) =>
@@ -408,6 +412,29 @@ export function selectTaskTimeline(
     resultReview: selectTaskResultReview(facts, context, latest),
     integrityIssues: Object.values(facts.integrityIssuesByKey)
   }
+}
+
+/** 过滤历史标记和实时执行快照中的内部控制 Turn，避免它们生成普通 Timeline 卡片。 */
+function isHiddenControlTurn(
+  turn: TimelineTurnFacts,
+  executionSnapshot: TimelineSelectorContext['executionSnapshot']
+): boolean {
+  const record = turn.record.kind === 'accepted' ? turn.record.value : undefined
+  if (
+    isTakeoverControlTurn({
+      turnKind: record?.turnKind,
+      promptDisplayText: record?.promptDisplayText ?? turn.admission?.promptDisplayText
+    })
+  ) {
+    return true
+  }
+  const execution = executionSnapshot.execution
+  return Boolean(
+    execution &&
+    execution.taskId === turn.taskId &&
+    execution.turnId === turn.turnId &&
+    execution.turnKind === 'takeover-control'
+  )
 }
 
 function selectTurnTimeline(
@@ -487,6 +514,15 @@ function projectNodes(
   commands: CommandExecutionEvidence[]
 ): TaskTimelineNode[] {
   const nodes: TaskTimelineNode[] = []
+  // 调用方通常已在 selector 层过滤；这里再守一层，防止未来复用时泄露内部 Turn。
+  if (
+    isTakeoverControlTurn({
+      turnKind: record?.turnKind,
+      promptDisplayText: record?.promptDisplayText ?? turn.admission?.promptDisplayText
+    })
+  ) {
+    return nodes
+  }
   const prompt = record?.promptDisplayText ?? turn.admission?.promptDisplayText
   const promptAttachmentIds = record?.attachmentIds ?? turn.admission?.attachmentIds
   if (prompt || promptAttachmentIds?.length)

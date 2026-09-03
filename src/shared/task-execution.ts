@@ -1,5 +1,6 @@
 import type { AgentRuntimeId } from './agent'
 import type { TurnModelSnapshot } from './task-history'
+import type { InternalTurnKind } from './task-takeover'
 
 /** P0-08 单执行槽的产品执行状态；不复用旧 Task/Session 的宽泛状态联合。 */
 export type TaskExecutionState =
@@ -46,6 +47,8 @@ interface TaskExecutionBase {
   environment: TaskExecutionEnvironment
   acceptedAt: string
   stateChangedAt: string
+  /** 内部控制执行仍占用执行槽，但 Renderer 不应把它当成用户 Turn。 */
+  turnKind?: InternalTurnKind
 }
 
 export interface QueuedTaskExecution extends TaskExecutionBase {

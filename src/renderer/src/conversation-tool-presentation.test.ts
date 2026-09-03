@@ -92,4 +92,8 @@ describe('工具行折叠皮肤', () => {
     expect(conversationTurnSource).toContain(':warning="block.warning"')
     expect(subagentCardSource).toContain(':detail="tool.detail"')
   })
+
+  it('当前 Turn 事件默认完整展示，不再提供手动加载按钮', () => {
+    expect(conversationTurnSource).not.toContain('加载本轮更多事件')
+  })
 })

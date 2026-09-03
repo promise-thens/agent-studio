@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentPermissionDecision, AgentPermissionRequest } from '../../../shared/agent'
+import type { AgentQuestionRequest, AgentQuestionResponse } from '../../../shared/agent-question'
 import type { ComposerPlanMode } from '../../../shared/session-plan-mode'
 import {
   resolveConversationPlanEmptyClass,
@@ -25,6 +26,7 @@ import {
 import type { ChangeCardView } from '../task-changes-presentation'
 import ConversationTurn from './ConversationTurn.vue'
 import PermissionPrompt from './PermissionPrompt.vue'
+import QuestionPrompt from './QuestionPrompt.vue'
 import TaskChangeCard from './TaskChangeCard.vue'
 
 const props = withDefaults(
@@ -41,6 +43,8 @@ const props = withDefaults(
     permission?: AgentPermissionRequest | null
     permissionPending?: boolean
     permissionTaskTitle?: string
+    question?: AgentQuestionRequest | null
+    questionPending?: boolean
     changeCard?: ChangeCardView | null
     restoreBusy?: boolean
     planMode?: ComposerPlanMode
@@ -56,6 +60,8 @@ const props = withDefaults(
     permission: null,
     permissionPending: false,
     permissionTaskTitle: '',
+    question: null,
+    questionPending: false,
     changeCard: null,
     restoreBusy: false,
     planMode: 'normal',
@@ -68,6 +74,7 @@ defineEmits<{
   loadMoreEvents: [turnId: string]
   retryConnect: []
   respondPermission: [decision: AgentPermissionDecision]
+  respondQuestion: [response: AgentQuestionResponse]
   cancelTurn: []
   reviewChanges: []
   restoreChanges: []
@@ -97,9 +104,27 @@ function permissionForTurn(
   return request.taskId === turn.taskId && request.turnId === turn.turnId ? request : null
 }
 
+/** 只把当前队首问答卡挂到对应 Turn，避免后台 Task 的问题串到当前对话。 */
+function questionForTurn(
+  turn: Pick<TurnTimelineViewModel, 'taskId' | 'turnId'>
+): AgentQuestionRequest | null {
+  const request = props.question
+  if (!request) return null
+  return request.taskId === turn.taskId && request.turnId === turn.turnId ? request : null
+}
+
 /** 审批 Turn 还不在当前流里时，仍把卡挂在底部，并标「来自」以免当成当前对话的请求。 */
 const unmatchedPermission = computed(() => {
   const request = props.permission
+  if (!request) return null
+  const matched = (props.model?.turns ?? []).some(
+    (turn) => turn.taskId === request.taskId && turn.turnId === request.turnId
+  )
+  return matched ? null : request
+})
+
+const unmatchedQuestion = computed(() => {
+  const request = props.question
   if (!request) return null
   const matched = (props.model?.turns ?? []).some(
     (turn) => turn.taskId === request.taskId && turn.turnId === request.turnId
@@ -220,7 +245,7 @@ watch(
 
 watch(
   () =>
-    `${conversationFollowSignature(props.model, props.localErrors)}:${props.permission?.approvalId ?? ''}`,
+    `${conversationFollowSignature(props.model, props.localErrors)}:${props.permission?.approvalId ?? ''}:${props.question?.questionId ?? ''}`,
   () => {
     void nextTick(scrollToLatestIfPinned)
   }
@@ -270,10 +295,13 @@ watch(
         :permission="permissionForTurn(turn)"
         :permission-pending="permissionPending"
         :permission-task-title="permissionTaskTitle"
+        :question="questionForTurn(turn)"
+        :question-pending="questionPending"
         :has-more-events="eventAfterSequenceByTurn?.[turn.turnId] != null"
         :loading-more-events="loadingEventTurnIds?.includes(turn.turnId) ?? false"
         :clock-tick="clockTick"
         @respond-permission="$emit('respondPermission', $event)"
+        @respond-question="$emit('respondQuestion', $event)"
         @cancel-turn="$emit('cancelTurn')"
         @load-more-events="$emit('loadMoreEvents', $event)"
         @open-plan="$emit('openPlan', $event)"
@@ -299,6 +327,15 @@ watch(
         :attached-to-viewed-turn="false"
         @respond="$emit('respondPermission', $event)"
         @cancel-turn="$emit('cancelTurn')"
+      />
+    </div>
+
+    <div v-if="unmatchedQuestion" class="conversation-turn">
+      <QuestionPrompt
+        :key="unmatchedQuestion.questionId"
+        :request="unmatchedQuestion"
+        :pending="questionPending"
+        @respond="$emit('respondQuestion', $event)"
       />
     </div>
 

@@ -8,6 +8,7 @@ import type {
 } from '../../shared/task-execution'
 import type { TurnModelSnapshot } from '../../shared/task-history'
 import type { TaskAttachmentDescriptor } from '../../shared/task-attachment'
+import type { InternalTurnKind } from '../../shared/task-takeover'
 import type {
   AgentRuntimeAdapter,
   AgentRuntimeSessionRef,
@@ -33,6 +34,8 @@ export interface TaskExecutorStartInput {
   resolvedExecutionRoot: string
   prompt: string
   promptDisplayText: string
+  /** 控制 Turn 仍走统一执行槽，但要在产品投影中保持不可见。 */
+  turnKind?: InternalTurnKind
   attachmentIds?: string[]
   model: TurnModelSnapshot
   capabilitySnapshot: AgentRuntimeCapabilitySnapshot
@@ -278,6 +281,7 @@ export class TaskExecutor {
         runtimeId: input.runtimeId,
         model: structuredClone(input.model),
         environment: { environmentId: input.environmentId, kind: 'local', version: 1 },
+        ...(input.turnKind ? { turnKind: input.turnKind } : {}),
         state: 'queued',
         acceptedAt,
         stateChangedAt: acceptedAt
@@ -287,6 +291,7 @@ export class TaskExecutor {
         environmentId: input.environmentId,
         promptDisplayText,
         model: input.model,
+        ...(input.turnKind ? { turnKind: input.turnKind } : {}),
         ...(boundAttachments.length
           ? { attachmentIds: boundAttachments.map((item) => item.attachmentId) }
           : {})

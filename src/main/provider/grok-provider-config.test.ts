@@ -51,6 +51,12 @@ describe('buildGrokProviderConfig', () => {
     expect(result).toContain(`"${AGENT_STUDIO_MODEL_API_KEY_ENV}"`)
     expect(result).toContain('ignore_default_excludes = false')
   })
+
+  it('不写死 context_window，窗口交给 Grok 原生配置', () => {
+    const result = buildGrokProviderConfig(baseConfig)
+
+    expect(result).not.toContain('context_window')
+  })
 })
 
 describe('writeGrokProviderConfig', () => {
@@ -75,7 +81,60 @@ describe('writeGrokProviderConfig', () => {
     expect(appToml).toContain('[model.agent-studio-default]')
     expect(appToml).toContain('[memory]')
     expect(appToml).not.toContain('test-secret-key')
+    expect(appToml).not.toContain('context_window')
     expect(await readFile(userConfig, 'utf8')).toBe('[ui]\nvim_mode = true\n')
+  })
+
+  it('重写供应商绑定时保留用户在 Grok 配置里写的 context_window', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'grok-provider-preserve-window-'))
+    dirs.push(root)
+    const userMemoryDir = join(root, '.grok', 'memory')
+    const grokHome = await writeGrokProviderConfig(root, baseConfig, { userMemoryDir })
+    const appConfig = join(grokHome, 'config.toml')
+    const seeded = await readFile(appConfig, 'utf8')
+    await writeFile(
+      appConfig,
+      seeded.replace(
+        'api_backend = "chat_completions"',
+        'api_backend = "chat_completions"\ncontext_window = 500000'
+      ),
+      'utf8'
+    )
+
+    await writeGrokProviderConfig(
+      root,
+      { ...baseConfig, modelId: 'model-2', modelDisplayName: 'Model Two' },
+      { userMemoryDir }
+    )
+
+    const next = await readFile(appConfig, 'utf8')
+    expect(next).toContain('model = "model-2"')
+    expect(next).toContain('name = "Model Two"')
+    expect(next).toContain('context_window = 500000')
+    expect(next).not.toContain('context_window = 32768')
+  })
+
+  it('重写模型表时丢掉明文 api_key，不把密钥写回 Grok 配置', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'grok-provider-drop-key-'))
+    dirs.push(root)
+    const userMemoryDir = join(root, '.grok', 'memory')
+    const grokHome = await writeGrokProviderConfig(root, baseConfig, { userMemoryDir })
+    const appConfig = join(grokHome, 'config.toml')
+    const seeded = await readFile(appConfig, 'utf8')
+    await writeFile(
+      appConfig,
+      seeded.replace(
+        'api_backend = "chat_completions"',
+        'api_backend = "chat_completions"\napi_key = "sk-test-not-real"'
+      ),
+      'utf8'
+    )
+
+    await writeGrokProviderConfig(root, baseConfig, { userMemoryDir })
+
+    const next = await readFile(appConfig, 'utf8')
+    expect(next).not.toContain('api_key')
+    expect(next).not.toContain('sk-test-not-real')
   })
 })
 

@@ -2,6 +2,7 @@ import { computed, onBeforeUnmount, ref, toRaw, type ComputedRef, type Ref } fro
 import type { PublicAgentEvent } from '../../../shared/agent-event'
 import type { CommandExecutionEvidence } from '../../../shared/command'
 import type { TaskExecutionSnapshot } from '../../../shared/task-execution'
+import type { PublicAgentEventPage } from '../../../shared/task-ipc'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import { createTaskExecutionConsumer } from '../task-execution-consumer'
 import {
@@ -62,6 +63,26 @@ export interface TaskTimelineController {
 /** 将响应式历史输入转为纯可序列化数据，避免 Vue Proxy 进入 Timeline reducer。 */
 function cloneTimelineInput<T>(value: T): T {
   return structuredClone(toRaw(value))
+}
+
+/** 打开 Timeline 时自动读完当前 Turn 事件，沿用 IPC 单页上限并防止游标不前进死循环。 */
+async function readAllEventPages(taskId: string, turnId: string): Promise<PublicAgentEventPage> {
+  let afterSequence = 0
+  let watermark = 0
+  const items: PublicAgentEvent[] = []
+
+  while (true) {
+    const page = unwrapDesktopIpcResult(
+      await window.task.listEvents(taskId, turnId, afterSequence, 200)
+    )
+    items.push(...page.items)
+    watermark = Math.max(watermark, page.watermark)
+    const nextAfterSequence = page.nextAfterSequence
+    if (nextAfterSequence == null || nextAfterSequence <= afterSequence) {
+      return { items, watermark }
+    }
+    afterSequence = nextAfterSequence
+  }
 }
 
 function shouldRefreshCommandEvidence(event: PublicAgentEvent): boolean {
@@ -235,13 +256,7 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
       ])
       const eventPages = await Promise.all(
         turns.items.map(
-          async (turn) =>
-            [
-              turn,
-              unwrapDesktopIpcResult(
-                await window.task.listEvents(taskId, turn.turnId, undefined, 200)
-              )
-            ] as const
+          async (turn) => [turn, await readAllEventPages(taskId, turn.turnId)] as const
         )
       )
       const current = coordinators.value[taskId]

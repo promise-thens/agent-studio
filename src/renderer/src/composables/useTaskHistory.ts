@@ -8,6 +8,7 @@ import type {
   TurnHistoryRecord
 } from '../../../shared/task-history'
 import type { PublicAgentEvent } from '../../../shared/agent-event'
+import type { PublicAgentEventPage } from '../../../shared/task-ipc'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 
 export interface TaskHistoryState {
@@ -312,9 +313,7 @@ export function useTaskHistory(options: UseTaskHistoryOptions = {}): TaskHistory
   }> {
     const entries = await Promise.all(
       turns.map(async (turn) => {
-        const page = unwrapDesktopIpcResult(
-          await window.task.listEvents(taskId, turn.turnId, 0, 200)
-        )
+        const page = await readAllEventPages(taskId, turn.turnId)
         return [turn.turnId, page] as const
       })
     )
@@ -326,6 +325,29 @@ export function useTaskHistory(options: UseTaskHistoryOptions = {}): TaskHistory
         entries.map(([turnId, page]) => [turnId, page.nextAfterSequence ?? null])
       ),
       watermarks: Object.fromEntries(entries.map(([turnId, page]) => [turnId, page.watermark]))
+    }
+  }
+
+  /** 打开历史时自动读完当前 Turn 的事件，保留 IPC 单页 200 条上限并防止游标不前进死循环。 */
+  async function readAllEventPages(taskId: string, turnId: string): Promise<PublicAgentEventPage> {
+    let afterSequence = 0
+    let watermark = 0
+    const items: PublicAgentEvent[] = []
+
+    while (true) {
+      const page = unwrapDesktopIpcResult(
+        await window.task.listEvents(taskId, turnId, afterSequence, 200)
+      )
+      items.push(...page.items)
+      watermark = Math.max(watermark, page.watermark)
+      const nextAfterSequence = page.nextAfterSequence
+      if (nextAfterSequence == null || nextAfterSequence <= afterSequence) {
+        return {
+          items: mergeEventsBySequence([], items),
+          watermark
+        }
+      }
+      afterSequence = nextAfterSequence
     }
   }
 

@@ -9,6 +9,10 @@ import type {
   AgentTurnOutcome
 } from '../../shared/agent'
 import type { AgentAvailableCommandSnapshot } from '../../shared/agent-available-command'
+import type {
+  AgentQuestionRequest,
+  AgentQuestionResponse
+} from '../../shared/agent-question'
 
 /** Adapter 只向服务层暴露有限错误码，禁止夹带协议对象、stderr 或原始异常。 */
 export type AgentRuntimeAdapterErrorCode =
@@ -116,6 +120,21 @@ export interface AgentRuntimePermissionCancellation {
   toolCallId: string
 }
 
+/** Runtime 问答请求只在主进程保存原始 requestId 与 session 身份。 */
+export interface AgentRuntimeQuestionRequest extends Omit<AgentQuestionRequest, 'questionId'> {
+  requestId: string
+  runtimeSessionId: string
+}
+
+/** Runtime 问答取消通知只携带主进程可核验的身份。 */
+export interface AgentRuntimeQuestionCancellation {
+  requestId: string
+  runtimeId: AgentRuntimeId
+  taskId: string
+  turnId: string
+  runtimeSessionId: string
+}
+
 export type AgentRuntimePermissionResolution = 'allow-once' | 'deny-once' | 'cancelled'
 
 /**
@@ -127,6 +146,9 @@ export interface AgentRuntimeAdapterSink {
   onEvent: (event: AgentEvent) => void
   onPermission: (request: AgentRuntimePermissionRequest) => void
   onPermissionCancelled: (request: AgentRuntimePermissionCancellation) => void
+  /** Grok ask_user_question / ACP elicitation 的阻塞式结构化问答。 */
+  onQuestion?: (request: AgentRuntimeQuestionRequest) => void
+  onQuestionCancelled?: (request: AgentRuntimeQuestionCancellation) => void
   /**
    * Session 级斜杠命令快照。无 activeTurn 也会到达；
    * 切 session / disconnect 时 commands 为空列表。不进 Timeline。
@@ -160,4 +182,6 @@ export interface AgentRuntimeAdapter {
   startTurn(context: AgentRuntimeTurnContext): Promise<AgentRuntimeTurnResult>
   cancelTurn(turn: AgentRuntimeTurnRef): Promise<void>
   respondPermission(requestId: string, resolution: AgentRuntimePermissionResolution): void
+  /** 旧 Runtime 测试夹具可能不支持问答；生产 Adapter 会实现该方法。 */
+  respondQuestion?: (requestId: string, response: AgentQuestionResponse) => void
 }

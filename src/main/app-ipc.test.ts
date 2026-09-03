@@ -59,6 +59,8 @@ function createFixture(): {
   installPlugin: ReturnType<typeof vi.fn>
   uninstallPlugin: ReturnType<typeof vi.fn>
   addMarketplaceSource: ReturnType<typeof vi.fn>
+  probeMacosFolderAccess: ReturnType<typeof vi.fn>
+  openMacosFilesPrivacySettings: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<DesktopIpcResult<T>>
 } {
   const handlers = new Map<string, DesktopIpcHandler>()
@@ -125,6 +127,12 @@ function createFixture(): {
   const installPlugin = vi.fn(async () => null)
   const uninstallPlugin = vi.fn(async () => null)
   const addMarketplaceSource = vi.fn(async () => null)
+  const probeMacosFolderAccess = vi.fn(async () => ({
+    status: 'ok' as const,
+    folderKind: 'documents' as const,
+    settingsAppLabel: 'Electron' as const
+  }))
+  const openMacosFilesPrivacySettings = vi.fn(async () => undefined)
   registerAppIpcHandlers({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     assertTrustedSender,
@@ -154,6 +162,8 @@ function createFixture(): {
     installPlugin,
     uninstallPlugin,
     addMarketplaceSource,
+    probeMacosFolderAccess,
+    openMacosFilesPrivacySettings,
     sanitizeError: (error) => (error instanceof Error ? error.message : String(error))
   })
   const invoke = async <T>(channel: string, ...args: unknown[]): Promise<DesktopIpcResult<T>> => {
@@ -173,6 +183,8 @@ function createFixture(): {
     installPlugin,
     uninstallPlugin,
     addMarketplaceSource,
+    probeMacosFolderAccess,
+    openMacosFilesPrivacySettings,
     invoke
   }
 }
@@ -492,5 +504,37 @@ describe('App IPC Handler', () => {
       })
     ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
     expect(fixture.addMarketplaceSource).toHaveBeenCalledTimes(1)
+  })
+
+  it('文件夹权限探测只接受 projectId，设置页无参且不接受路径', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.probeMacosFolderAccess, { projectId: 'project-1' })
+    ).toEqual({
+      ok: true,
+      value: {
+        status: 'ok',
+        folderKind: 'documents',
+        settingsAppLabel: 'Electron'
+      }
+    })
+    expect(fixture.probeMacosFolderAccess).toHaveBeenCalledWith('project-1')
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.probeMacosFolderAccess, {
+        projectId: 'project-1',
+        path: '/Users/huyaohang/Documents/app'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.probeMacosFolderAccess).toHaveBeenCalledTimes(1)
+
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.openMacosFilesPrivacySettings)).toEqual({
+      ok: true,
+      value: null
+    })
+    expect(fixture.openMacosFilesPrivacySettings).toHaveBeenCalledTimes(1)
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.openMacosFilesPrivacySettings, { extra: true })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.openMacosFilesPrivacySettings).toHaveBeenCalledTimes(1)
   })
 })

@@ -9,6 +9,7 @@ import {
   type AgentEnterTaskRequest,
   type AgentGetTaskRuntimeStateRequest,
   type AgentRespondPermissionRequest,
+  type AgentRespondQuestionRequest,
   type AgentSetPermissionModeRequest,
   type AgentSetPermissionModeResult,
   type AgentStartTurnRequest
@@ -20,6 +21,7 @@ import {
 } from '../../shared/task-takeover'
 import { ATTACHMENT_LIMITS } from '../../shared/task-attachment'
 import type { DesktopIpcResult } from '../../shared/ipc-result'
+import { parseAgentQuestionResponse } from '../../shared/agent-question'
 import type {
   AgentStartTurnAdmissionResult,
   TaskExecutionSnapshot
@@ -56,6 +58,7 @@ export interface AgentIpcRuntime {
   getTaskRuntimeState: (taskId: string) => AgentTaskRuntimeState
   getAvailableCommands: (taskId: string) => AgentAvailableCommandSnapshot
   respondPermission: (request: AgentRespondPermissionRequest) => Promise<void>
+  respondQuestion?: (request: AgentRespondQuestionRequest) => void
   setPermissionMode: (
     request: AgentSetPermissionModeRequest
   ) => Promise<AgentSetPermissionModeResult>
@@ -246,6 +249,19 @@ function readPermissionRequest(args: unknown[]): AgentRespondPermissionRequest {
   }
 }
 
+/** 读取问答卡回答，并在 IPC 边界拒绝未知字段、非法答案值和过大载荷。 */
+function readQuestionRequest(args: unknown[]): AgentRespondQuestionRequest {
+  const request = readRequest(args, ['questionId', 'taskId', 'turnId', 'response'])
+  const response = parseAgentQuestionResponse(request.response)
+  if (!response) throw new DesktopIpcFailure('invalid-input', '问答回答无效。')
+  return {
+    questionId: readRequiredString(request, 'questionId', MAX_REQUEST_ID_BYTES),
+    taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES),
+    turnId: readRequiredString(request, 'turnId', MAX_TASK_ID_BYTES),
+    response
+  }
+}
+
 function assertConnectState(status: AgentRuntimeStatus): void {
   if (status.state === 'connecting' || status.state === 'busy') {
     throw new DesktopIpcFailure('invalid-state', 'Runtime 当前状态不允许连接。')
@@ -347,6 +363,12 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.respondPermission, async (args) => {
     const request = readPermissionRequest(args)
     await requireAgent(dependencies.getAgent).respondPermission(request)
+    return null
+  })
+
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.respondQuestion, (args) => {
+    const request = readQuestionRequest(args)
+    requireAgent(dependencies.getAgent).respondQuestion?.(request)
     return null
   })
 

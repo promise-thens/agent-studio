@@ -14,6 +14,7 @@ import type {
 } from './task-execution'
 import type { ConversationEntryState } from './task-history'
 import type { DesktopIpcResult } from './ipc-result'
+import type { AgentQuestionRequest, AgentQuestionResponse } from './agent-question'
 
 export const AGENT_INVOKE_CHANNELS = {
   getStatus: 'agent:get-status',
@@ -26,6 +27,7 @@ export const AGENT_INVOKE_CHANNELS = {
   cancelTurn: 'agent:cancel-turn',
   getTaskRuntimeState: 'agent:get-task-runtime-state',
   respondPermission: 'agent:respond-permission',
+  respondQuestion: 'agent:respond-question',
   getAvailableCommands: 'agent:get-available-commands',
   setPermissionMode: 'agent:set-permission-mode'
 } as const
@@ -36,6 +38,8 @@ export const AGENT_PUSH_CHANNELS = {
   event: 'agent:event',
   permission: 'agent:permission',
   permissionCancelled: 'agent:permission-cancelled',
+  question: 'agent:question',
+  questionCancelled: 'agent:question-cancelled',
   availableCommands: 'agent:available-commands',
   taskRuntimeState: 'agent:task-runtime-state'
 } as const
@@ -74,6 +78,14 @@ export interface AgentRespondPermissionRequest {
   taskId: string
   turnId: string
   decision: AgentPermissionDecision
+}
+
+/** Renderer 回传问答答案；questionId 由主进程生成，不能伪造 Runtime requestId。 */
+export interface AgentRespondQuestionRequest {
+  questionId: string
+  taskId: string
+  turnId: string
+  response: AgentQuestionResponse
 }
 
 /**
@@ -121,6 +133,7 @@ export interface AgentDesktopApi {
    */
   getAvailableCommands: (taskId: string) => Promise<DesktopIpcResult<AgentAvailableCommandSnapshot>>
   respondPermission: (request: AgentRespondPermissionRequest) => Promise<DesktopIpcResult<null>>
+  respondQuestion: (request: AgentRespondQuestionRequest) => Promise<DesktopIpcResult<null>>
   /**
    * 空闲时切换 ask / assist / takeover。Renderer 不得自己写 _meta；
    * takeover 必须先确认再带 confirmed: true。
@@ -133,6 +146,8 @@ export interface AgentDesktopApi {
   onEvent: (listener: (event: PublicAgentEvent) => void) => () => void
   onPermission: (listener: (request: AgentPermissionRequest) => void) => () => void
   onPermissionCancelled: (listener: (request: AgentPermissionCancellation) => void) => () => void
+  onQuestion: (listener: (request: AgentQuestionRequest) => void) => () => void
+  onQuestionCancelled: (listener: (request: Pick<AgentQuestionRequest, 'questionId' | 'taskId' | 'turnId'>) => void) => () => void
   /** Session 级命令快照推送；Preload 侧 parse 失败则丢弃，不进 Timeline。 */
   onAvailableCommands: (listener: (snapshot: AgentAvailableCommandSnapshot) => void) => () => void
   /**

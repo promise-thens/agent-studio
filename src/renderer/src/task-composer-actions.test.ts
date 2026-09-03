@@ -10,6 +10,7 @@ import {
   resolveComposerAction,
   resolveComposerChrome,
   resolveComposerContextUsage,
+  resolveComposerContextUsagePresentation,
   resolveProviderModelLabel,
   resolveStopButtonAriaLabel,
   resolveStopButtonTitle,
@@ -209,6 +210,29 @@ describe('发送与停止身份', () => {
         })
       )
     ).toBeNull()
+  })
+
+  it('上下文用量展示同时提供占比、title 和无障碍文案', () => {
+    expect(
+      resolveComposerContextUsagePresentation({
+        scope: 'context',
+        usedTokens: 120,
+        limitTokens: 4096
+      })
+    ).toEqual({
+      label: '120/4096',
+      percentage: 2.9,
+      title: '上下文用量：120/4096 tokens（2.9%）',
+      ariaLabel: '上下文已使用 120 / 4096 tokens，占 2.9%'
+    })
+    expect(
+      resolveComposerContextUsagePresentation({
+        scope: 'context',
+        usedTokens: 5000,
+        limitTokens: 4096
+      })?.percentage
+    ).toBe(100)
+    expect(resolveComposerContextUsagePresentation(null)).toBeNull()
   })
 })
 

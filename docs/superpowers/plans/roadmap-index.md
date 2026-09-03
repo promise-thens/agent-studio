@@ -96,6 +96,7 @@
 | 6 | [P0-19d](p0-19d-hooks-surface.md) | 3 | Hooks 只读库存，桌面不执行 | 待开始 | grok-home 扫描模式 |
 | 7 | [P0-19e](p0-19e-background-command-monitor.md) | 3 | 后台命令 Timeline 监视 | 待开始 | 先观察 ACP 字段 |
 | 8 | [P0-19f](p0-19f-browser-computer-use-surface.md) | 4 | 浏览器/电脑插件：L3、截图 Artifact、可见停止 | 待开始 | P0-10E、GACP-03、P0-13 |
+| 9 | [P0-19h](p0-19h-context-usage-signals-bridge.md) | 3 | Grok signals 上下文用量桥接 | 代码已落地；开发版 GUI 待走查 | 现有 Usage 事件链；不改 Renderer |
 | 后 | P3-05～07 | 3 | 桌面受管浏览器 / Chrome 桥 / macOS Helper | 后置 | 仅当 19f 仍缺共享页面 |
 
 P0-14 Worktree 仍是 P0-B，可与 GACP-06 并行，不挡本表。

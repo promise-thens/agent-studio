@@ -18,4 +18,9 @@ describe('Grok 配置页布局', () => {
     expect(editorSource).toContain('class="config-footer"')
     expect(editorSource).toMatch(/\.config-footer\s*\{[^}]*flex:\s*0\s+0\s+auto/)
   })
+
+  it('保存成功文案说明会重载 Grok 使原生配置生效', () => {
+    expect(editorSource).toContain('空闲时会重载 Grok')
+    expect(editorSource).toContain('context_window')
+  })
 })

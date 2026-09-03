@@ -210,7 +210,8 @@ function baseFields(
     model: current.model,
     environment: current.environment,
     acceptedAt: current.acceptedAt,
-    stateChangedAt
+    stateChangedAt,
+    ...(current.turnKind ? { turnKind: current.turnKind } : {})
   }
 }
 

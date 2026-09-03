@@ -33,6 +33,8 @@ import {
   type AgentRuntimeMcpServer,
   type AgentRuntimePermissionCancellation,
   type AgentRuntimePermissionRequest,
+  type AgentRuntimeQuestionCancellation,
+  type AgentRuntimeQuestionRequest,
   type AgentRuntimeSessionRef,
   type AgentRuntimeTurnAttachment,
   type AgentRuntimeTurnRef
@@ -49,9 +51,12 @@ import {
 } from './task-store'
 import type {
   AgentRespondPermissionRequest,
+  AgentRespondQuestionRequest,
   AgentSetPermissionModeRequest,
   AgentSetPermissionModeResult
 } from '../../shared/agent-ipc'
+import type { AgentQuestionRequest } from '../../shared/agent-question'
+import { parseAgentQuestionResponse } from '../../shared/agent-question'
 import type { AgentAvailableCommandSnapshot } from '../../shared/agent-available-command'
 import type { PermissionBroker } from '../security/permission-broker'
 import { createLocalEnvironmentId } from '../security/permission-policy'
@@ -105,6 +110,9 @@ export interface AgentServiceOptions {
    * 不得只改内存让 Renderer 继续写「正在完全接管」。
    */
   onTaskRuntimeState?: (task: AgentTaskRuntimeState) => void
+  /** 公开问答卡 DTO；主进程生成 questionId 后才允许进入 Renderer。 */
+  onQuestion?: (request: AgentQuestionRequest) => void
+  onQuestionCancelled?: (request: Pick<AgentQuestionRequest, 'questionId' | 'taskId' | 'turnId'>) => void
   /** 创建 / 恢复 session 时注入已校验的 MCP 描述；缺省为空。 */
   getSessionMcpServers?: () => Promise<AgentRuntimeMcpServer[]> | AgentRuntimeMcpServer[]
   /** 共享记忆树等 Runtime 笔记根；缺省为空，写入会被当成项目外逃逸。 */
@@ -211,6 +219,12 @@ export class AgentService {
   private readonly attachmentInbox?: TaskAttachmentInbox
   private readonly historyWrites = new Map<string, Promise<void>>()
   private readonly runtimePermissionRequests = new Map<string, AgentRuntimePermissionRequest>()
+  private readonly runtimeQuestionRequests = new Map<
+    string,
+    { publicRequest: AgentQuestionRequest; runtimeRequest: AgentRuntimeQuestionRequest }
+  >()
+  private readonly onQuestion?: AgentServiceOptions['onQuestion']
+  private readonly onQuestionCancelled?: AgentServiceOptions['onQuestionCancelled']
 
   constructor(
     private readonly adapter: AgentRuntimeAdapter,
@@ -228,6 +242,8 @@ export class AgentService {
     this.operationGate = options.operationGate
     this.onEvent = options.onEvent ?? (() => undefined)
     this.onTaskRuntimeState = options.onTaskRuntimeState
+    this.onQuestion = options.onQuestion
+    this.onQuestionCancelled = options.onQuestionCancelled
     this.getSessionMcpServers = options.getSessionMcpServers
     this.getTrustedExternalRoots = options.getTrustedExternalRoots
     this.ensureChangeBaseline = options.ensureChangeBaseline
@@ -736,6 +752,107 @@ export class AgentService {
     )
   }
 
+  /**
+   * Runtime 提问必须独立于权限 Broker；这里生成 Renderer 可见 questionId，
+   * 并把原始 requestId 留在主进程映射表中，避免跨 IPC 暴露协议身份。
+   */
+  handleQuestionRequest(request: AgentRuntimeQuestionRequest): void {
+    if (
+      !this.isRuntimeQuestionCurrent(request) ||
+      this.runtimeQuestionRequests.size >= MAX_RUNTIME_PERMISSION_REQUESTS
+    ) {
+      this.adapter.respondQuestion?.(request.requestId, { action: 'cancel' })
+      return
+    }
+    const questionId = this.createId()
+    const publicRequest: AgentQuestionRequest = {
+      questionId,
+      runtimeId: request.runtimeId,
+      taskId: request.taskId,
+      turnId: request.turnId,
+      title: request.title,
+      message: request.message,
+      ...(request.kind ? { kind: request.kind } : {}),
+      ...(request.mode ? { mode: request.mode } : {}),
+      ...(request.planContent ? { planContent: request.planContent } : {}),
+      questions: request.questions,
+      canSkip: request.canSkip
+    }
+    this.runtimeQuestionRequests.set(questionId, { publicRequest, runtimeRequest: request })
+    try {
+      this.onQuestion?.(publicRequest)
+    } catch {
+      this.runtimeQuestionRequests.delete(questionId)
+      this.adapter.respondQuestion?.(request.requestId, { action: 'cancel' })
+    }
+  }
+
+  /**
+   * 问答请求既可能来自旧 Controller，也可能来自新的 TaskExecutor；
+   * 执行器存在活动 Turn 时必须优先使用执行器身份，不能读取 Service 的旧内存快照。
+   */
+  private isRuntimeQuestionCurrent(request: AgentRuntimeQuestionRequest): boolean {
+    const task = this.tasks.get(request.taskId)
+    if (
+      !task ||
+      request.runtimeId !== task.runtimeId ||
+      request.runtimeSessionId !== task.runtimeSessionId
+    ) {
+      return false
+    }
+
+    const executorTurn = this.taskExecutor?.getActiveRuntimeTurn()
+    if (executorTurn) {
+      return (
+        executorTurn.taskId === request.taskId &&
+        executorTurn.turnId === request.turnId &&
+        executorTurn.runtimeSessionId === request.runtimeSessionId
+      )
+    }
+
+    const activeTurn = this.executionController.getActiveTurn()
+    return Boolean(
+      activeTurn &&
+        activeTurn.taskId === request.taskId &&
+        activeTurn.turnId === request.turnId &&
+        activeTurn.runtimeSessionId === request.runtimeSessionId &&
+        task.activeTurnId === request.turnId
+    )
+  }
+
+  /** Runtime 取消或 Turn 终态时撤掉对应问答卡，并让 ACP Promise 安全收束。 */
+  handleQuestionCancellation(cancellation: AgentRuntimeQuestionCancellation): void {
+    for (const [questionId, pending] of this.runtimeQuestionRequests) {
+      if (
+        pending.runtimeRequest.requestId !== cancellation.requestId ||
+        pending.runtimeRequest.taskId !== cancellation.taskId ||
+        pending.runtimeRequest.turnId !== cancellation.turnId ||
+        pending.runtimeRequest.runtimeSessionId !== cancellation.runtimeSessionId
+      ) {
+        continue
+      }
+      this.runtimeQuestionRequests.delete(questionId)
+      this.onQuestionCancelled?.({ questionId, taskId: cancellation.taskId, turnId: cancellation.turnId })
+      return
+    }
+  }
+
+  /** Renderer 回答只接受主进程曾经发出的 questionId，并重新校验 Task/Turn 身份。 */
+  respondQuestion(request: AgentRespondQuestionRequest): void {
+    const pending = this.runtimeQuestionRequests.get(request.questionId)
+    const response = parseAgentQuestionResponse(request.response)
+    if (
+      !pending ||
+      !response ||
+      pending.publicRequest.taskId !== request.taskId ||
+      pending.publicRequest.turnId !== request.turnId
+    ) {
+      throw new AgentServiceError('invalid-input', '问答请求已失效。')
+    }
+    this.runtimeQuestionRequests.delete(request.questionId)
+    this.adapter.respondQuestion?.(pending.runtimeRequest.requestId, response)
+  }
+
   /** Renderer 只提交产品级决策，Broker 负责身份、过期、重复和允许范围校验。 */
   async respondPermission(request: AgentRespondPermissionRequest): Promise<void> {
     await this.permissionBroker?.respond(request)
@@ -764,6 +881,12 @@ export class AgentService {
       }
     })
     if (event.kind !== 'turn-complete') return
+
+    for (const [questionId, pending] of this.runtimeQuestionRequests) {
+      if (pending.publicRequest.taskId !== event.taskId || pending.publicRequest.turnId !== event.turnId) continue
+      this.runtimeQuestionRequests.delete(questionId)
+      this.onQuestionCancelled?.({ questionId, taskId: event.taskId, turnId: event.turnId })
+    }
 
     this.finishTurn(event.taskId, event.turnId, event.outcome)
     this.executionController.release({

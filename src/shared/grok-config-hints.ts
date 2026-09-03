@@ -134,9 +134,19 @@ export const GROK_CONFIG_HINTS: readonly GrokConfigHint[] = [
   },
   {
     table: 'model.agent-studio-default',
+    key: 'context_window',
+    title: 'model.agent-studio-default.context_window',
+    meaning: 'Grok 用来做 auto-compact 的上下文窗口（token）。省略时自定义模型默认 200000。',
+    values: '正整数，例如 200000、500000',
+    studioNote: '这是 Grok 原生字段，可在本页修改；连接 Runtime 时不会被供应商绑定覆盖。'
+  },
+  {
+    table: 'model.agent-studio-default',
     title: '表 model.agent-studio-default',
-    meaning: 'Agent Studio 写入的模型绑定：model / base_url / env_key，不含明文 Key。',
-    studioNote: '由供应商页管理。请勿改成明文 Key；删掉该表会拒绝保存。'
+    meaning:
+      '供应商页写入绑定：model / base_url / env_key / api_backend。context_window 等其它键是 Grok 原生配置。',
+    studioNote:
+      '由供应商页管理绑定字段。请勿改成明文 Key；删掉该表会拒绝保存。context_window 可在本页改，保存后会保留。'
   },
   {
     table: 'ui',

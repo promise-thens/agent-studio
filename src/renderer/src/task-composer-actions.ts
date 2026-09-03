@@ -175,6 +175,35 @@ export function resolveComposerContextUsage(
   return `${usage.usedTokens}/${usage.limitTokens}`
 }
 
+export interface ComposerContextUsagePresentation {
+  /** 面向 Composer 的紧凑数字，完整数值仍放在 title 与无障碍文案中。 */
+  label: string
+  percentage: number
+  title: string
+  ariaLabel: string
+}
+
+/** 将 Runtime 真实上下文用量转换成圆环、文案和无障碍标签，不做本地 Token 估算。 */
+export function resolveComposerContextUsagePresentation(
+  usage: AgentContextUsage | null | undefined
+): ComposerContextUsagePresentation | null {
+  if (!usage) return null
+  const label = resolveComposerContextUsage(usage)
+  if (!label) return null
+
+  const percentage =
+    usage.limitTokens > 0
+      ? Math.min(100, Math.max(0, Math.round((usage.usedTokens / usage.limitTokens) * 1000) / 10))
+      : 0
+  const percentageLabel = `${percentage}%`
+  return {
+    label,
+    percentage,
+    title: `上下文用量：${usage.usedTokens}/${usage.limitTokens} tokens（${percentageLabel}）`,
+    ariaLabel: `上下文已使用 ${usage.usedTokens} / ${usage.limitTokens} tokens，占 ${percentageLabel}`
+  }
+}
+
 /** 从最近一轮往前找最后一条可展示的上下文用量。 */
 export function pickLatestContextUsage(
   timeline:

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   PhListChecks as ListChecks,
   PhPaperclip as Paperclip,
@@ -29,6 +29,7 @@ import {
 import type { TaskPermissionMode } from '../../../shared/task-takeover'
 import { isPlanCommandAdvertised, type ComposerPlanMode } from '../../../shared/session-plan-mode'
 import { resolveComposerPlanStatusCopy, resolveComposerPlanSwitch } from '../composer-plan-mode'
+import type { ComposerContextUsagePresentation } from '../task-composer-actions'
 import ModelSelector from './ModelSelector.vue'
 import SlashCommandPalette from './SlashCommandPalette.vue'
 import TaskPermissionModeMenu from './TaskPermissionModeMenu.vue'
@@ -56,9 +57,11 @@ const props = defineProps<{
   setPermissionMode: (mode: TaskPermissionMode) => Promise<void>
   /** Plan 是独立轴，不是第四个批准档；无广告时按钮保持 disabled。 */
   planMode?: ComposerPlanMode
+  /** 仅 Grok Runtime 可在未广告命令时启用受控 Plan 路径。 */
+  planAvailable?: boolean
   setPlanMode: (mode: ComposerPlanMode) => Promise<void>
-  /** 上下文 used/limit；没数据时不传或传空，模板藏起来。 */
-  contextUsage?: string | null
+  /** Runtime 上报的上下文用量；没数据时不传或传空，模板藏起来。 */
+  contextUsage?: ComposerContextUsagePresentation | null
   runtimeCommands?: AgentAvailableCommand[]
   attachments?: Array<{
     attachmentId: string
@@ -90,10 +93,12 @@ const emit = defineEmits<{
 const pendingTakeover = ref(false)
 const takeoverConfirmBusy = ref(false)
 const takeoverConfirmError = ref('')
+const showAddMenu = ref(false)
 
 const planSwitch = computed(() =>
   resolveComposerPlanSwitch({
     advertisedCommands: props.runtimeCommands ?? [],
+    allowUnadvertisedPlan: props.planAvailable === true,
     mode: props.planMode ?? 'normal',
     modelBusy: Boolean(props.modelBusy),
     composerAction: props.action,
@@ -104,9 +109,11 @@ const planStatusCopy = computed(() =>
   resolveComposerPlanStatusCopy({
     mode: props.planMode ?? 'normal',
     idle: !props.modelBusy && props.action === 'send',
-    hasPlanCommand: isPlanCommandAdvertised(props.runtimeCommands ?? [])
+    hasPlanCommand: isPlanCommandAdvertised(props.runtimeCommands ?? []),
+    allowUnadvertisedPlan: props.planAvailable === true
   })
 )
+const addMenuDisabled = computed(() => Boolean(props.textareaDisabled) || props.action === 'stop')
 
 /** 只改下一轮发送策略，不得 cancel 当前 turn。进入 Plan 仍需广告；退出只要空闲。 */
 async function togglePlanMode(): Promise<void> {
@@ -114,10 +121,29 @@ async function togglePlanMode(): Promise<void> {
   const next: ComposerPlanMode = (props.planMode ?? 'normal') === 'plan' ? 'normal' : 'plan'
   try {
     await props.setPlanMode(next)
+    showAddMenu.value = false
   } catch {
     // App 已写入错误；本地不得乐观拨开关。
   }
 }
+
+function toggleAddMenu(): void {
+  if (addMenuDisabled.value) return
+  showAddMenu.value = !showAddMenu.value
+}
+
+function closeAddMenu(): void {
+  showAddMenu.value = false
+}
+
+function handleDocumentPointerdown(event: PointerEvent): void {
+  const target = event.target
+  if (!(target instanceof Node)) return
+  if (!(target as Element).closest('.composer-add-menu')) closeAddMenu()
+}
+
+onMounted(() => document.addEventListener('pointerdown', handleDocumentPointerdown))
+onBeforeUnmount(() => document.removeEventListener('pointerdown', handleDocumentPointerdown))
 
 async function handlePermissionModeSelect(mode: TaskPermissionMode): Promise<void> {
   if (props.modelBusy || props.modelDisabled) return
@@ -273,6 +299,11 @@ function handleComposerKeydown(event: KeyboardEvent): void {
     paletteDismissed.value = true
     return
   }
+  if (event.key === 'Escape' && showAddMenu.value) {
+    event.preventDefault()
+    closeAddMenu()
+    return
+  }
 
   if (showPalette.value && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
     event.preventDefault()
@@ -412,50 +443,95 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
             :takeover-may-still-be-active="takeoverMayStillBeActive === true"
             @select="handlePermissionModeSelect"
           />
-          <button
-            type="button"
-            class="composer-plan-switch"
-            :class="{ 'is-plan': planSwitch.pressed }"
-            :title="planSwitch.title"
-            :aria-label="planSwitch.title"
-            :aria-pressed="planSwitch.pressed"
-            :disabled="planSwitch.disabled"
-            @click="togglePlanMode"
-          >
-            <ListChecks :size="13" weight="fill" />
-            <span>Plan</span>
-          </button>
+          <div class="composer-add-menu">
+            <button
+              type="button"
+              class="composer-add-trigger"
+              :class="{ 'is-plan': planSwitch.pressed }"
+              title="添加能力"
+              aria-label="添加能力"
+              :aria-expanded="showAddMenu"
+              aria-controls="composer-add-panel"
+              aria-haspopup="menu"
+              :aria-pressed="planSwitch.pressed"
+              :disabled="addMenuDisabled"
+              @click="toggleAddMenu"
+            >
+              <span aria-hidden="true">＋</span>
+            </button>
+            <div v-if="showAddMenu" id="composer-add-panel" class="composer-add-panel" role="menu">
+              <button
+                type="button"
+                class="composer-add-item"
+                role="menuitem"
+                :class="{ 'is-plan': planSwitch.pressed }"
+                :disabled="planSwitch.disabled"
+                :aria-pressed="planSwitch.pressed"
+                :title="planSwitch.title"
+                @click="togglePlanMode"
+              >
+                <ListChecks :size="15" weight="fill" />
+                <span>
+                  <strong>{{ planSwitch.pressed ? '关闭计划模式' : '计划模式' }}</strong>
+                  <small>{{ planSwitch.pressed ? '下一轮继续使用普通模式' : '让 Grok 先拆解并确认计划' }}</small>
+                </span>
+                <span v-if="planSwitch.pressed" class="composer-add-check" aria-hidden="true">●</span>
+              </button>
+              <button
+                type="button"
+                class="composer-add-item"
+                role="menuitem"
+                :disabled="addMenuDisabled"
+                @click="closeAddMenu(); emit('pick-attachments')"
+              >
+                <Paperclip :size="15" />
+                <span>
+                  <strong>上传附件</strong>
+                  <small>图片、文档或其他文件</small>
+                </span>
+              </button>
+            </div>
+          </div>
           <span v-if="planStatusCopy" class="composer-plan-status" role="status">{{
             planStatusCopy
           }}</span>
-          <span v-if="contextUsage" class="composer-usage" title="上下文用量">{{
-            contextUsage
-          }}</span>
         </div>
-        <button
-          v-if="action === 'stop'"
-          ref="stopButton"
-          class="stop-button"
-          type="button"
-          data-composer-stop
-          :title="stopTitle"
-          :aria-label="stopAriaLabel || stopTitle"
-          @click="emit('stop')"
-        >
-          <Stop :size="15" weight="fill" />停止
-        </button>
-        <template v-else>
-          <button
-            class="attach-button"
-            type="button"
-            title="添加图片或文件"
-            aria-label="添加图片或文件"
-            :disabled="textareaDisabled"
-            @click="emit('pick-attachments')"
+        <div class="composer-actions">
+          <span
+            v-if="contextUsage"
+            class="composer-usage"
+            role="img"
+            tabindex="0"
+            :aria-label="contextUsage.ariaLabel"
           >
-            <Paperclip :size="16" />
+            <!-- 用 SVG 圆环表达当前上下文占比，详细数值只在悬停或聚焦时展示。 -->
+            <svg class="composer-usage-ring" viewBox="0 0 24 24" aria-hidden="true">
+              <circle class="composer-usage-ring-track" cx="12" cy="12" r="9" pathLength="100" />
+              <circle
+                class="composer-usage-ring-value"
+                cx="12"
+                cy="12"
+                r="9"
+                pathLength="100"
+                :stroke-dasharray="`${contextUsage.percentage} 100`"
+              />
+            </svg>
+            <span class="composer-usage-tooltip" role="tooltip">{{ contextUsage.title }}</span>
+          </span>
+          <button
+            v-if="action === 'stop'"
+            ref="stopButton"
+            class="stop-button"
+            type="button"
+            data-composer-stop
+            :title="stopTitle"
+            :aria-label="stopAriaLabel || stopTitle"
+            @click="emit('stop')"
+          >
+            <Stop :size="15" weight="fill" />停止
           </button>
           <button
+            v-else
             class="send-button"
             type="button"
             :disabled="!canSend"
@@ -466,7 +542,7 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
           >
             <PaperPlaneTilt :size="17" weight="fill" />
           </button>
-        </template>
+        </div>
       </div>
     </div>
     <div v-if="selectedImage" class="attachment-image-backdrop" @click.self="closeImagePreview">

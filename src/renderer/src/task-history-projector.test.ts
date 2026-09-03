@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { PublicAgentEvent } from '../../shared/agent-event'
 import type { TurnHistoryRecord } from '../../shared/task-history'
+import {
+  GROK_TAKEOVER_CONTROL_PROMPT,
+  TAKEOVER_CONTROL_TURN_KIND
+} from '../../shared/task-takeover'
 import { projectTaskHistory } from './task-history-projector'
 
 const turn: TurnHistoryRecord = {
@@ -56,5 +60,31 @@ describe('Task 历史投影', () => {
     ])
     expect(projection.planEntries[0]?.content).toBe('运行测试')
     expect(projection.toolActivities[0]).toMatchObject({ title: 'Vitest', status: 'completed' })
+  })
+
+  it('混合历史中跳过接管控制 Turn，不生成用户气泡或普通消息', () => {
+    const controlTurn: TurnHistoryRecord = {
+      ...turn,
+      turnId: 'turn-control',
+      promptDisplayText: GROK_TAKEOVER_CONTROL_PROMPT,
+      turnKind: TAKEOVER_CONTROL_TURN_KIND,
+      createdAt: '2026-08-12T00:00:00.000Z'
+    }
+    const projection = projectTaskHistory([controlTurn, turn], {
+      'turn-control': [
+        { ...base(1), turnId: 'turn-control', kind: 'agent-message', text: '内部回执' }
+      ],
+      'turn-1': []
+    })
+
+    expect(projection.messages).toEqual([
+      expect.objectContaining({
+        id: 'task-1:turn-1:user',
+        role: 'user',
+        text: turn.promptDisplayText
+      })
+    ])
+    expect(JSON.stringify(projection)).not.toContain(GROK_TAKEOVER_CONTROL_PROMPT)
+    expect(JSON.stringify(projection)).not.toContain('内部回执')
   })
 })

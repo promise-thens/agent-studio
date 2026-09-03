@@ -8,6 +8,7 @@ import * as acp from '@agentclientprotocol/sdk'
 import type {
   AgentCapabilityId,
   AgentCapabilityMaturity,
+  AgentContextUsage,
   AgentEvent,
   AgentRuntimeCapabilitySnapshot,
   AgentRuntimeStatus,
@@ -22,6 +23,7 @@ import {
   type AgentRuntimeMcpServer,
   type AgentRuntimePermissionCancellation,
   type AgentRuntimePermissionResolution,
+  type AgentRuntimeQuestionRequest,
   type AgentRuntimeSessionContext,
   type AgentRuntimeSessionRef,
   type AgentRuntimeTurnContext,
@@ -53,6 +55,10 @@ import {
   resolveGrokAcpFailure
 } from './grok-acp-dialect'
 import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
+import type {
+  AgentQuestionItem,
+  AgentQuestionResponse
+} from '../../../shared/agent-question'
 import type { CommandEvidenceStore } from '../../command/command-evidence-store'
 import {
   GROK_RUNTIME_ID,
@@ -76,6 +82,7 @@ import {
   readGrokSessionMediaFile,
   toolCallHasGrokRuntimeMedia
 } from './grok-runtime-media'
+import { readGrokSessionContextUsage } from './grok-session-signals'
 import {
   accumulateGrokCommandToolFacts,
   isGrokCommandEvidenceCandidate,
@@ -108,6 +115,12 @@ interface PendingPermission {
   resolve: (response: acp.RequestPermissionResponse) => void
 }
 
+interface PendingQuestion {
+  request: AgentRuntimeQuestionRequest
+  activeTurn: ActiveTurn
+  resolve: (response: AgentQuestionResponse) => void
+}
+
 interface ActiveTurn {
   taskId: string
   turnId: string
@@ -129,6 +142,8 @@ interface ActiveTurn {
   runtimeAttachmentErrorReported: boolean
   /** 同一 Turn 已入库的 session 媒体路径，避免 tool_call 与 update 重复落盘。 */
   ingestedRuntimeMediaKeys: Set<string>
+  /** signals.json 已发布的最后一份上下文用量；同值快照只允许进入事件链一次。 */
+  lastContextUsageFingerprint?: string
   /** 当前 Turn 内命令证据累积；测试夹具可能缺省，读取时必须惰性创建。 */
   commandEvidenceByToolCallId?: Map<string, GrokCommandToolFacts>
 }
@@ -147,6 +162,265 @@ interface GrokSetModelRequest {
 const MAX_PERMISSION_OPTION_ID_BYTES = 4 * 1024
 const MAX_TOOL_CALL_AUTHORIZATION_SNAPSHOTS = 2_000
 const MAX_TERMINAL_TOOL_CALL_IDS = 2_000
+
+/** 只用 token 数量生成去重键，不把 Runtime 原始快照带入事件或日志。 */
+function contextUsageFingerprint(usage: AgentContextUsage): string {
+  return `${usage.usedTokens}:${usage.limitTokens}`
+}
+
+const GROK_QUESTION_METHODS = new Set([
+  // Grok 1.0.13 的真实 ACP 请求使用裸方法名；保留命名空间写法兼容其它版本。
+  'ask_user_question',
+  'x.ai/ask_user_question',
+  // Grok ACP 会把扩展请求加上 `_` 命名空间前缀；保留两种写法兼容不同版本。
+  '_x.ai/ask_user_question',
+  'x.ai/session/askUserQuestion',
+  '_x.ai/session/askUserQuestion',
+  'x.ai/session/ask_user_question',
+  '_x.ai/session/ask_user_question',
+  'session/askUserQuestion',
+  '_session/askUserQuestion',
+  'session/ask_user_question',
+  '_session/ask_user_question'
+])
+// 计划退出同样可能以裸扩展方法名到达，不能把它当成未知方法返回空对象。
+const GROK_PLAN_APPROVAL_METHODS = new Set([
+  'exit_plan_mode',
+  'x.ai/exit_plan_mode',
+  '_x.ai/exit_plan_mode'
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function boundedText(value: unknown, fallback = ''): string {
+  if (typeof value !== 'string' || value.length > 4096 || value.includes('\0')) return fallback
+  const trimmed = value.trim()
+  return trimmed || fallback
+}
+
+/** 把 Grok 私有 AskUserQuestion 的有限字段投影成中性问答 DTO。 */
+function mapGrokQuestionRequest(
+  params: Record<string, unknown>,
+  activeTurn: ActiveTurn,
+  requestId: string
+): AgentRuntimeQuestionRequest | null {
+  const rawQuestions = Array.isArray(params.questions)
+    ? params.questions
+    : isRecord(params.request) && Array.isArray(params.request.questions)
+      ? params.request.questions
+      : []
+  if (rawQuestions.length === 0 || rawQuestions.length > 20) return null
+
+  const questions: AgentQuestionItem[] = []
+  const questionIds = new Set<string>()
+  for (let index = 0; index < rawQuestions.length; index += 1) {
+    const raw = rawQuestions[index]
+    if (!isRecord(raw)) return null
+    const question = boundedText(raw.question ?? raw.prompt)
+    if (!question) return null
+    const rawOptions = Array.isArray(raw.options) ? raw.options : []
+    if (rawOptions.length > 50) return null
+    const options = rawOptions.flatMap((option, optionIndex) => {
+      if (!isRecord(option)) return []
+      const label = boundedText(option.label ?? option.title)
+      if (!label) return []
+      const value = boundedText(option.value ?? option.id, label || `option-${optionIndex + 1}`)
+      return [{
+        value,
+        label,
+        ...(boundedText(option.description) ? { description: boundedText(option.description) } : {}),
+        ...(boundedText(option.preview) ? { preview: boundedText(option.preview) } : {})
+      }]
+    })
+    if (rawOptions.length > 0 && options.length !== rawOptions.length) return null
+    const multiSelect =
+      raw.multiSelect === true || raw.multi_select === true || raw.multiple === true
+    const kind: AgentQuestionItem['kind'] = options.length > 0
+      ? multiSelect ? 'multi' : 'single'
+      : 'text'
+    const id = boundedText(raw.id ?? raw.questionId, `question-${index + 1}`)
+    if (!id || questionIds.has(id)) return null
+    questionIds.add(id)
+    questions.push({
+      id,
+      question,
+      kind,
+      ...(options.length > 0 ? { options } : {}),
+      required: raw.required !== false,
+      // Grok 工具会在有选项的问题中提供 Other；Renderer 负责收集 notes。
+      allowOther: true,
+      ...(boundedText(raw.description) ? { description: boundedText(raw.description) } : {})
+    })
+  }
+
+  const title = boundedText(params.title, 'Grok Build 需要你的回答')
+  const message = boundedText(params.message ?? params.prompt, '请确认下面的问题后继续。')
+  return {
+    requestId,
+    runtimeId: GROK_RUNTIME_ID,
+    taskId: activeTurn.taskId,
+    turnId: activeTurn.turnId,
+    runtimeSessionId: activeTurn.runtimeSessionId,
+    title,
+    message,
+    mode: params.mode === 'plan' ? 'plan' : 'default',
+    questions,
+    canSkip: params.mode === 'plan'
+  }
+}
+
+/** 将 Renderer 使用的安全 question id/option value 投影回 Grok 原始键值。 */
+function projectGrokQuestionAnswers(
+  request: AgentRuntimeQuestionRequest,
+  answers: Record<string, unknown>,
+  sourceAnnotations?: Record<string, { preview?: string; notes?: string }>
+): {
+  answers: Record<string, string[]>
+  annotations?: Record<string, { preview?: string; notes?: string }>
+} {
+  const projected: Record<string, string[]> = {}
+  const annotations: Record<string, { preview?: string; notes?: string }> = {}
+  for (const [questionId, rawAnswer] of Object.entries(answers)) {
+    const question = request.questions.find((item) => item.id === questionId)
+    if (!question) continue
+    const values = Array.isArray(rawAnswer) ? rawAnswer : [rawAnswer]
+    const labels = values
+      .filter((value): value is string | number | boolean =>
+        typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+      )
+      .map((value) => String(value))
+      .map((value) => question.options?.find((option) => option.value === value)?.label ?? value)
+    if (labels.length > 0) projected[question.question] = labels
+    const annotation = sourceAnnotations?.[questionId]
+    if (annotation && (annotation.preview || annotation.notes)) {
+      annotations[question.question] = annotation
+    }
+  }
+  return Object.keys(annotations).length > 0
+    ? { answers: projected, annotations }
+    : { answers: projected }
+}
+
+/** 将 Plan 采访的局部回答从安全 question id 映射为 Grok 的问题文本键。 */
+function projectGrokPartialAnswers(
+  request: AgentRuntimeQuestionRequest,
+  partialAnswers: Record<string, string> | undefined
+): Record<string, string> {
+  if (!partialAnswers) return {}
+  const projected: Record<string, string> = {}
+  for (const [questionId, answer] of Object.entries(partialAnswers)) {
+    const question = request.questions.find((item) => item.id === questionId)
+    if (!question) continue
+    const values = answer.split(',').map((value) => value.trim()).filter(Boolean)
+    projected[question.question] = values
+      .map((value) => question.options?.find((option) => option.value === value)?.label ?? value)
+      .join(', ')
+  }
+  return projected
+}
+
+/** 将 Grok x.ai/exit_plan_mode 映射为计划审阅卡，避免误走普通权限链而被自动取消。 */
+function mapGrokPlanApprovalRequest(
+  params: Record<string, unknown>,
+  activeTurn: ActiveTurn,
+  requestId: string
+): AgentRuntimeQuestionRequest | null {
+  const planContent = boundedText(params.planContent)
+  return {
+    requestId,
+    runtimeId: GROK_RUNTIME_ID,
+    taskId: activeTurn.taskId,
+    turnId: activeTurn.turnId,
+    runtimeSessionId: activeTurn.runtimeSessionId,
+    title: 'Grok Build 提交了计划',
+    message: '请审阅计划后决定是否继续执行。',
+    kind: 'plan-approval',
+    ...(planContent ? { planContent } : {}),
+    // 共享 DTO 要求至少有一道问题；计划审阅卡由专用按钮承载实际动作。
+    questions: [
+      {
+        id: 'plan-review',
+        question: '是否批准这份计划？',
+        kind: 'single',
+        options: [
+          { value: 'approve', label: '批准并继续' },
+          { value: 'abandon', label: '放弃计划' }
+        ],
+        required: true
+      }
+    ],
+    canSkip: false
+  }
+}
+
+/** 将标准 ACP form schema 投影成同一张问答卡，避免 Renderer 维护两套表单。 */
+function mapElicitationRequest(
+  params: acp.CreateElicitationRequest,
+  activeTurn: ActiveTurn,
+  requestId: string
+): AgentRuntimeQuestionRequest | null {
+  if (params.mode !== 'form' || !isRecord(params)) return null
+  const schema = isRecord(params.requestedSchema) ? params.requestedSchema : null
+  const properties = schema && isRecord(schema.properties) ? schema.properties : null
+  if (!properties) return null
+  const required = schema?.required
+  const questions: AgentQuestionItem[] = []
+  const questionIds = new Set<string>()
+  for (const [id, rawSchema] of Object.entries(properties)) {
+    if (!isRecord(rawSchema)) return null
+    const safeId = boundedText(id)
+    if (!safeId || questionIds.has(safeId)) return null
+    questionIds.add(safeId)
+    const type = rawSchema.type
+    const options = (() => {
+      if (type !== 'string' && type !== 'array') return undefined
+      const items = type === 'array' && isRecord(rawSchema.items) ? rawSchema.items : rawSchema
+      const enumValues = Array.isArray(items.enum) ? items.enum : []
+      const oneOf = Array.isArray(items.oneOf) ? items.oneOf : []
+      if (oneOf.length > 0) {
+        return oneOf.flatMap((item) => {
+          if (!isRecord(item)) return []
+          const value = boundedText(item.const)
+          const label = boundedText(item.title, value)
+          return value && label ? [{ value, label, ...(boundedText(item.description) ? { description: boundedText(item.description) } : {}) }] : []
+        })
+      }
+      return enumValues.flatMap((value) => {
+        const text = boundedText(value)
+        return text ? [{ value: text, label: text }] : []
+      })
+    })()
+    const kind: AgentQuestionItem['kind'] = type === 'boolean'
+      ? 'boolean'
+      : type === 'number' || type === 'integer'
+        ? 'number'
+        : type === 'array'
+          ? 'multi'
+          : options && options.length > 0 ? 'single' : 'text'
+    questions.push({
+      id: safeId,
+      question: boundedText(rawSchema.title, safeId),
+      kind,
+      ...(options && options.length > 0 ? { options } : {}),
+      required: Array.isArray(required) && required.includes(safeId),
+      ...(boundedText(rawSchema.description) ? { description: boundedText(rawSchema.description) } : {})
+    })
+  }
+  if (questions.length === 0 || questions.length > 20) return null
+  return {
+    requestId,
+    runtimeId: GROK_RUNTIME_ID,
+    taskId: activeTurn.taskId,
+    turnId: activeTurn.turnId,
+    runtimeSessionId: activeTurn.runtimeSessionId,
+    title: boundedText(schema?.title, 'Grok Build 需要你的回答'),
+    message: boundedText(params.message, '请填写下面的信息后继续。'),
+    questions,
+    canSkip: true
+  }
+}
 
 export interface GrokAcpAdapterOptions {
   userDataPath: string
@@ -186,6 +460,8 @@ export interface GrokAcpAdapterOptions {
   }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
   /** 仅测试注入 Grok session 媒体根；生产固定 /tmp/sessions。 */
   grokSessionMediaRoot?: string
+  /** 仅测试注入 signals 根；生产固定为 App 专属 Managed GROK_HOME。 */
+  grokSessionSignalsRoot?: string
   /**
    * 仅测试注入生产 spawn；缺省为 node:child_process.spawn。
    * 禁止 Renderer / IPC / 普通环境变量传入。
@@ -230,6 +506,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   private availableCommandsRevision = 0
   private activeTurn: ActiveTurn | null = null
   private pendingPermissions = new Map<string, PendingPermission>()
+  private pendingQuestions = new Map<string, PendingQuestion>()
   private controlledTraceWrite: Promise<void> = Promise.resolve()
   private supportsCloseSession = false
   private capabilitySnapshot: AgentRuntimeCapabilitySnapshot
@@ -343,7 +620,9 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     const connection = new acp.ClientSideConnection(
       () => ({
         requestPermission: (params) => this.requestPermission(params, connection),
-        sessionUpdate: (params) => this.handleSessionUpdate(params, connection)
+        sessionUpdate: (params) => this.handleSessionUpdate(params, connection),
+        unstable_createElicitation: (params) => this.requestElicitation(params, connection),
+        extMethod: (method, params) => this.handleExtensionMethod(method, params, connection)
       }),
       stream
     )
@@ -628,6 +907,12 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     })
 
     try {
+      // 先显示上一刻已知的窗口用量，让 Composer 在长 Turn 期间也有可见上下文基线。
+      await this.publishSessionContextUsage(activeTurn, context.workspace)
+      if (!this.isActiveTurnCurrent(activeTurn)) {
+        return { outcome: activeTurn.outcome ?? 'cancelled' }
+      }
+
       const response = await connection.prompt({
         sessionId: context.runtimeSessionId,
         prompt: buildGrokPromptContentBlocks({
@@ -638,6 +923,12 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         })
       })
       await this.waitForSessionUpdateQueue(activeTurn)
+      if (!this.isActiveTurnCurrent(activeTurn)) {
+        return { outcome: activeTurn.outcome ?? 'cancelled' }
+      }
+
+      // Grok 当前版本不一定发 ACP usage_update；在 Turn 终态前补读同一 session 的内部快照。
+      await this.publishSessionContextUsage(activeTurn, context.workspace)
       if (!this.isActiveTurnCurrent(activeTurn)) {
         return { outcome: activeTurn.outcome ?? 'cancelled' }
       }
@@ -680,6 +971,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
     activeTurn.cancelRequested = true
     this.cancelPendingPermissions(activeTurn)
+    this.cancelPendingQuestions(activeTurn)
     try {
       await activeTurn.connection.cancel({ sessionId: activeTurn.runtimeSessionId })
       if (this.isActiveTurnCurrent(activeTurn)) {
@@ -713,6 +1005,135 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         ? { outcome: { outcome: 'selected', optionId } }
         : { outcome: { outcome: 'cancelled' } }
     )
+  }
+
+  /** Renderer 回答后恢复挂起的 Grok 私有问答或 ACP elicitation Promise。 */
+  respondQuestion(requestId: string, response: AgentQuestionResponse): void {
+    const pending = this.pendingQuestions.get(requestId)
+    if (!pending) return
+    this.pendingQuestions.delete(requestId)
+    if (!this.isActiveTurnCurrent(pending.activeTurn)) {
+      pending.resolve({ action: 'cancel' })
+      return
+    }
+    pending.resolve(response)
+  }
+
+  /** ACP 标准 elicitation 请求和 Grok 私有问答共用一张阻塞式问答卡。 */
+  private requestElicitation(
+    params: acp.CreateElicitationRequest,
+    sourceConnection: acp.ClientSideConnection
+  ): Promise<acp.CreateElicitationResponse> {
+    const activeTurn = this.activeTurn
+    if (
+      !activeTurn ||
+      activeTurn.cancelRequested ||
+      activeTurn.connection !== sourceConnection ||
+      !this.isActiveTurnCurrent(activeTurn) ||
+      ('sessionId' in params && params.sessionId !== activeTurn.runtimeSessionId)
+    ) {
+      return Promise.resolve({ action: 'decline' })
+    }
+    const requestId = randomUUID()
+    const request = mapElicitationRequest(params, activeTurn, requestId)
+    if (!request) return Promise.resolve({ action: 'decline' })
+    return this.waitForQuestionResponse(request, activeTurn, (response) => {
+      if (response.action === 'accept') {
+        return { action: 'accept', content: response.answers as Record<string, unknown> }
+      }
+      return response.action === 'skip' ? { action: 'decline' } : { action: 'cancel' }
+    })
+  }
+
+  /** Grok 私有扩展方法的问答入口；未知扩展保持空响应，不能把原始 payload 泄漏给上层。 */
+  private handleExtensionMethod(
+    method: string,
+    params: Record<string, unknown>,
+    sourceConnection: acp.ClientSideConnection
+  ): Promise<Record<string, unknown>> {
+    const isPlanApproval = GROK_PLAN_APPROVAL_METHODS.has(method)
+    if (!GROK_QUESTION_METHODS.has(method) && !isPlanApproval) {
+      return Promise.resolve({})
+    }
+    const activeTurn = this.activeTurn
+    if (
+      !activeTurn ||
+      activeTurn.cancelRequested ||
+      activeTurn.connection !== sourceConnection ||
+      !this.isActiveTurnCurrent(activeTurn) ||
+      (typeof params.sessionId === 'string' && params.sessionId !== activeTurn.runtimeSessionId)
+    ) {
+      return Promise.resolve({ outcome: 'cancelled' })
+    }
+    const requestId = randomUUID()
+    const request =
+      isPlanApproval
+        ? mapGrokPlanApprovalRequest(params, activeTurn, requestId)
+        : mapGrokQuestionRequest(params, activeTurn, requestId)
+    if (!request) {
+      return Promise.resolve({ outcome: 'cancelled' })
+    }
+    return this.waitForQuestionResponse(request, activeTurn, (response) => {
+      if (isPlanApproval) {
+        if (response.action === 'approve-plan') return { outcome: 'approved' }
+        if (response.action === 'abandon-plan') {
+          return {
+            outcome: 'abandoned',
+            ...(response.feedback ? { feedback: response.feedback } : {})
+          }
+        }
+        return {
+          outcome: 'cancelled',
+          ...(response.action === 'cancel' ? {} : { feedback: '用户未批准计划。' })
+        }
+      }
+      if (response.action === 'accept') {
+        const projected = projectGrokQuestionAnswers(request, response.answers, response.annotations)
+        return {
+          outcome: 'accepted',
+          answers: projected.answers,
+          ...(projected.annotations ? { annotations: projected.annotations } : {})
+        }
+      }
+      if (response.action === 'chat-about-this') {
+        return {
+          outcome: 'chat_about_this',
+          ...(response.partialAnswers
+            ? { partialAnswers: projectGrokPartialAnswers(request, response.partialAnswers) }
+            : {})
+        }
+      }
+      if (response.action === 'skip') {
+        return {
+          outcome: 'skip_interview',
+          ...(response.partialAnswers
+            ? { partialAnswers: projectGrokPartialAnswers(request, response.partialAnswers) }
+            : {})
+        }
+      }
+      return { outcome: 'cancelled' }
+    })
+  }
+
+  private waitForQuestionResponse<T>(
+    request: AgentRuntimeQuestionRequest,
+    activeTurn: ActiveTurn,
+    projectResponse: (response: AgentQuestionResponse) => T
+  ): Promise<T> {
+    if (this.pendingQuestions.size >= 20) return Promise.resolve(projectResponse({ action: 'cancel' }))
+    return new Promise<T>((resolve) => {
+      this.pendingQuestions.set(request.requestId, {
+        request,
+        activeTurn,
+        resolve: (response) => resolve(projectResponse(response))
+      })
+      try {
+        this.sink.onQuestion?.(request)
+      } catch {
+        this.pendingQuestions.delete(request.requestId)
+        resolve(projectResponse({ action: 'cancel' }))
+      }
+    })
   }
 
   /** ACP 握手只更新当前连接的能力快照，旧连接的晚到结果必须丢弃。 */
@@ -1000,7 +1421,18 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     }
 
     for (const draft of mapGrokSessionUpdate(params, (text) => this.safeRedact(text))) {
-      this.emitDraft(activeTurn, draft)
+      if (
+        draft.kind === 'usage' &&
+        draft.usage.scope === 'context' &&
+        activeTurn.lastContextUsageFingerprint === contextUsageFingerprint(draft.usage)
+      ) {
+        // signals 基线已先到时，丢弃同值 ACP 快照；避免一条事实在 Timeline 出现两次。
+        continue
+      }
+      const event = this.emitDraft(activeTurn, draft)
+      if (event?.kind === 'usage' && event.usage.scope === 'context') {
+        activeTurn.lastContextUsageFingerprint = contextUsageFingerprint(event.usage)
+      }
     }
 
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
@@ -1037,6 +1469,37 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         continue
       }
       await this.persistRuntimeImage(activeTurn, image)
+    }
+  }
+
+  /**
+   * 将当前 Task 绑定的 signals.json 快照补进既有 Usage 事件链。
+   * 读取失败、session 失效或快照未变化都静默跳过，不阻塞 Turn 终态。
+   */
+  private async publishSessionContextUsage(
+    activeTurn: ActiveTurn,
+    workspace: string
+  ): Promise<void> {
+    if (!this.isActiveTurnCurrent(activeTurn)) return
+
+    const usage = await readGrokSessionContextUsage({
+      grokHome:
+        this.options.grokSessionSignalsRoot ?? getManagedGrokHome(this.options.userDataPath),
+      workspace,
+      runtimeSessionId: activeTurn.runtimeSessionId
+    })
+    if (!usage || !this.isActiveTurnCurrent(activeTurn)) return
+
+    const fingerprint = contextUsageFingerprint(usage)
+    if (activeTurn.lastContextUsageFingerprint === fingerprint) return
+
+    const event = this.emitDraft(activeTurn, {
+      ...createGrokEventBase(activeTurn.runtimeSessionId, 'experimental'),
+      kind: 'usage',
+      usage
+    })
+    if (event?.kind === 'usage' && event.usage.scope === 'context') {
+      activeTurn.lastContextUsageFingerprint = contextUsageFingerprint(event.usage)
     }
   }
 
@@ -1213,6 +1676,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
     if (event.kind === 'turn-complete') {
       this.cancelPendingPermissions(activeTurn)
+      this.cancelPendingQuestions(activeTurn)
       activeTurn.outcome = event.outcome
       this.activeTurn = null
     }
@@ -1244,6 +1708,24 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     for (const [requestId, pending] of this.pendingPermissions) {
       if (activeTurn && pending.activeTurn !== activeTurn) continue
       this.cancelPendingPermission(requestId, pending)
+    }
+  }
+
+  /** Turn 终态、取消或 Runtime 断开时收束所有问答 Promise，并撤销 Renderer 卡片。 */
+  private cancelPendingQuestions(activeTurn?: ActiveTurn): void {
+    for (const [requestId, pending] of this.pendingQuestions) {
+      if (activeTurn && pending.activeTurn !== activeTurn) continue
+      this.cancelPendingQuestion(requestId, pending)
+    }
+  }
+
+  private cancelPendingQuestion(requestId: string, pending: PendingQuestion): void {
+    this.pendingQuestions.delete(requestId)
+    pending.resolve({ action: 'cancel' })
+    try {
+      this.sink.onQuestionCancelled?.(pending.request)
+    } catch {
+      // Renderer 通知失败不影响协议 Promise 已安全收束。
     }
   }
 
@@ -1509,6 +1991,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       })
     }
     this.cancelPendingPermissions()
+    this.cancelPendingQuestions()
     this.clearAvailableCommandSnapshot()
 
     const process = this.process

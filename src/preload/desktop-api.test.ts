@@ -79,6 +79,8 @@ describe('窄 Preload API', () => {
     await app.installPlugin('chrome-devtools', false)
     await app.uninstallPlugin('chrome-devtools-mcp')
     await app.addMarketplaceSource('https://github.com/xai-org/plugin-marketplace.git')
+    await app.probeMacosFolderAccess('project-1')
+    await app.openMacosFilesPrivacySettings()
     await task.list('project-1')
     await task.listEvents('task-1', 'turn-1', 42, 200)
     await task.listPermissionAudits('task-1')
@@ -120,6 +122,8 @@ describe('窄 Preload API', () => {
         APP_INVOKE_CHANNELS.addMarketplaceSource,
         { gitUrl: 'https://github.com/xai-org/plugin-marketplace.git' }
       ],
+      [APP_INVOKE_CHANNELS.probeMacosFolderAccess, { projectId: 'project-1' }],
+      [APP_INVOKE_CHANNELS.openMacosFilesPrivacySettings],
       [TASK_INVOKE_CHANNELS.list, { projectId: 'project-1' }],
       [
         TASK_INVOKE_CHANNELS.listEvents,

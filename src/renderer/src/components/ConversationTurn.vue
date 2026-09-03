@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentPermissionDecision, AgentPermissionRequest } from '../../../shared/agent'
+import type { AgentQuestionRequest, AgentQuestionResponse } from '../../../shared/agent-question'
 import { shouldMountSubagentCard } from '../conversation-subagent-view'
 import {
   formatToolVerbPhrase,
@@ -20,6 +21,7 @@ import {
 import AssistantMarkdown from './AssistantMarkdown.vue'
 import ConversationMedia from './ConversationMedia.vue'
 import PermissionPrompt from './PermissionPrompt.vue'
+import QuestionPrompt from './QuestionPrompt.vue'
 import PlanChecklist from './PlanChecklist.vue'
 import SubagentCard from './SubagentCard.vue'
 import ToolRow from './ToolRow.vue'
@@ -31,6 +33,8 @@ const props = withDefaults(
     permission?: AgentPermissionRequest | null
     permissionPending?: boolean
     permissionTaskTitle?: string
+    question?: AgentQuestionRequest | null
+    questionPending?: boolean
     active?: boolean
     hasMoreEvents?: boolean
     loadingMoreEvents?: boolean
@@ -42,6 +46,8 @@ const props = withDefaults(
     permission: null,
     permissionPending: false,
     permissionTaskTitle: '',
+    question: null,
+    questionPending: false,
     active: false,
     hasMoreEvents: false,
     loadingMoreEvents: false,
@@ -51,6 +57,7 @@ const props = withDefaults(
 
 defineEmits<{
   respondPermission: [decision: AgentPermissionDecision]
+  respondQuestion: [response: AgentQuestionResponse]
   cancelTurn: []
   loadMoreEvents: [turnId: string]
   openPlan: [turnId: string]
@@ -58,9 +65,13 @@ defineEmits<{
 
 /** 主列走完整对话块；检查器只留过程缩略，避免再当主界面。 */
 const blocks = computed(() => {
-  const projected = projectConversationTurn(props.turn, {
+  let projected = projectConversationTurn(props.turn, {
     pendingPermission: props.variant === 'conversation' ? props.permission : null
   })
+  if (props.variant === 'conversation') {
+    // 对话主列不重复展示上下文用量，完整详情由 Composer 圆环按需提供。
+    projected = projected.filter((block) => block.kind !== 'usage')
+  }
   if (props.variant !== 'inspector') return projected
   return projected.filter(
     (block) =>
@@ -283,16 +294,11 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
         {{ block.message }}
       </p>
     </template>
-
-    <button
-      v-if="hasMoreEvents"
-      class="history-load-more"
-      type="button"
-      :disabled="loadingMoreEvents"
-      :aria-busy="loadingMoreEvents"
-      @click="$emit('loadMoreEvents', turn.turnId)"
-    >
-      {{ loadingMoreEvents ? '正在加载…' : '加载本轮更多事件' }}
-    </button>
+    <QuestionPrompt
+      v-if="variant === 'conversation' && question"
+      :request="question"
+      :pending="questionPending"
+      @respond="$emit('respondQuestion', $event)"
+    />
   </div>
 </template>

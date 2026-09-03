@@ -16,6 +16,7 @@ import type {
   AgentUsage
 } from './agent'
 import type { TaskExecutionState } from './task-execution'
+import type { InternalTurnKind } from './task-takeover'
 
 /** Project 当前目录可用性；历史查看不依赖目录仍然存在。 */
 export type ProjectAvailability =
@@ -101,6 +102,8 @@ export interface TurnHistoryRecord {
   turnId: string
   taskId: string
   promptDisplayText: string
+  /** 接管控制 Turn 只供审计与 Runtime，不进入普通对话投影。 */
+  turnKind?: InternalTurnKind
   model: TurnModelSnapshot
   state: HistoryExecutionState
   createdAt: string
