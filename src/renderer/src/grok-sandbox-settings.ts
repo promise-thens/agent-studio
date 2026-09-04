@@ -14,6 +14,8 @@ export const GROK_SANDBOX_INTRO =
 
 export const GROK_SANDBOX_BUSY_TITLE = '任务执行中，结束后才能改 Grok 沙箱'
 
+export const GROK_SANDBOX_DIRTY_TITLE = '请先保存或放弃未保存的配置，再改 Grok 沙箱'
+
 export const GROK_SANDBOX_SAVING_TITLE = '正在应用 Grok 沙箱…'
 
 export const GROK_SANDBOX_APPLIED_MESSAGE = 'Grok 沙箱已应用。'
@@ -64,4 +66,18 @@ export function resolveConfirmedSandboxProfile(
  */
 export function resolveSandboxSelectValue(value: unknown): GrokSandboxProfile | null {
   return isGrokSandboxProfile(value) ? value : null
+}
+
+/**
+ * 选择器 title：未保存 toml 优先于执行中，避免用户以为改档会保住编辑器内容。
+ */
+export function resolveSandboxPickerTitle(input: {
+  dirty: boolean
+  runtimeBusy: boolean
+  saving: boolean
+}): string {
+  if (input.dirty) return GROK_SANDBOX_DIRTY_TITLE
+  if (input.runtimeBusy) return GROK_SANDBOX_BUSY_TITLE
+  if (input.saving) return GROK_SANDBOX_SAVING_TITLE
+  return GROK_SANDBOX_TITLE
 }

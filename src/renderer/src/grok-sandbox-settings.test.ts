@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { GROK_SANDBOX_PROFILES } from '../../shared/grok-sandbox-profile'
 import {
   GROK_SANDBOX_BUSY_TITLE,
+  GROK_SANDBOX_DIRTY_TITLE,
   GROK_SANDBOX_INTRO,
   GROK_SANDBOX_OPTIONS,
+  GROK_SANDBOX_SAVING_TITLE,
   GROK_SANDBOX_TITLE,
   resolveConfirmedSandboxProfile,
+  resolveSandboxPickerTitle,
   resolveSandboxSelectValue
 } from './grok-sandbox-settings'
 
@@ -54,6 +57,31 @@ describe('Grok 沙箱设置文案', () => {
       expect(option.description).toContain('Broker 仍然审批')
     }
     expect(GROK_SANDBOX_BUSY_TITLE).toContain('任务执行中')
+  })
+})
+
+describe('resolveSandboxPickerTitle', () => {
+  it('toml 未保存时优先提示先保存，不得暗示可以改档', () => {
+    expect(resolveSandboxPickerTitle({ dirty: true, runtimeBusy: false, saving: false })).toBe(
+      GROK_SANDBOX_DIRTY_TITLE
+    )
+    expect(resolveSandboxPickerTitle({ dirty: true, runtimeBusy: true, saving: true })).toBe(
+      GROK_SANDBOX_DIRTY_TITLE
+    )
+    expect(GROK_SANDBOX_DIRTY_TITLE).toContain('保存')
+    expect(GROK_SANDBOX_DIRTY_TITLE).toContain('放弃')
+  })
+
+  it('空闲时用沙箱标题，执行中和保存中用对应原因', () => {
+    expect(resolveSandboxPickerTitle({ dirty: false, runtimeBusy: false, saving: false })).toBe(
+      GROK_SANDBOX_TITLE
+    )
+    expect(resolveSandboxPickerTitle({ dirty: false, runtimeBusy: true, saving: false })).toBe(
+      GROK_SANDBOX_BUSY_TITLE
+    )
+    expect(resolveSandboxPickerTitle({ dirty: false, runtimeBusy: false, saving: true })).toBe(
+      GROK_SANDBOX_SAVING_TITLE
+    )
   })
 })
 

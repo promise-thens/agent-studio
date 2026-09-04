@@ -5,11 +5,12 @@ import { useGrokSandboxSettings } from '../composables/useGrokSandboxSettings'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import { parseTomlCursor } from '../grok-config-cursor'
 import {
-  GROK_SANDBOX_BUSY_TITLE,
+  GROK_SANDBOX_DIRTY_TITLE,
   GROK_SANDBOX_INTRO,
   GROK_SANDBOX_OPTIONS,
   GROK_SANDBOX_SAVING_TITLE,
   GROK_SANDBOX_TITLE,
+  resolveSandboxPickerTitle,
   resolveSandboxSelectValue
 } from '../grok-sandbox-settings'
 
@@ -36,10 +37,27 @@ const textarea = ref<HTMLTextAreaElement | null>(null)
 const sandbox = useGrokSandboxSettings()
 
 const dirty = computed(() => text.value !== savedText.value)
-const sandboxDisabled = computed(() => props.runtimeBusy || sandbox.saving.value || saving.value)
-const sandboxDescribedBy = computed(() =>
-  sandbox.errorMessage.value ? 'grok-sandbox-intro grok-sandbox-error' : 'grok-sandbox-intro'
+const sandboxDisabled = computed(
+  () => dirty.value || props.runtimeBusy || sandbox.saving.value || saving.value
 )
+const sandboxSelectTitle = computed(() =>
+  dirty.value
+    ? GROK_SANDBOX_DIRTY_TITLE
+    : resolveSandboxPickerTitle({
+        dirty: false,
+        runtimeBusy: props.runtimeBusy,
+        saving: sandbox.saving.value
+      })
+)
+const selectedSandboxCopy = computed(
+  () => GROK_SANDBOX_OPTIONS.find((option) => option.profile === sandbox.confirmed.value) ?? null
+)
+const sandboxDescribedBy = computed(() => {
+  const ids = ['grok-sandbox-intro']
+  if (selectedSandboxCopy.value) ids.push('grok-sandbox-help')
+  if (sandbox.errorMessage.value) ids.push('grok-sandbox-error')
+  return ids.join(' ')
+})
 const cursorHint = computed((): GrokConfigHint | null => {
   const cursor = parseTomlCursor(text.value, cursorOffset.value)
   return matchGrokConfigHint(cursor.table, cursor.key)
@@ -108,10 +126,10 @@ async function refreshTomlFromDisk(): Promise<void> {
   }
 }
 
-function sandboxOptionTitle(label: string): string {
-  if (props.runtimeBusy) return GROK_SANDBOX_BUSY_TITLE
-  if (sandbox.saving.value) return GROK_SANDBOX_SAVING_TITLE
-  return `${GROK_SANDBOX_TITLE}：${label}`
+function onSandboxChange(event: Event): void {
+  const target = event.target
+  if (!(target instanceof HTMLSelectElement)) return
+  void chooseSandbox(target.value)
 }
 
 function discardChanges(): void {
@@ -158,31 +176,32 @@ onMounted(() => {
       <fieldset class="sandbox-field" :disabled="sandboxDisabled">
         <legend id="grok-sandbox-title">{{ GROK_SANDBOX_TITLE }}</legend>
         <p id="grok-sandbox-intro">{{ GROK_SANDBOX_INTRO }}</p>
-        <div
-          class="sandbox-options"
-          role="radiogroup"
-          aria-labelledby="grok-sandbox-title"
-          :aria-describedby="sandboxDescribedBy"
-          :aria-invalid="sandbox.errorMessage.value ? 'true' : undefined"
-          :aria-busy="sandbox.saving.value ? 'true' : undefined"
-        >
-          <button
-            v-for="option in GROK_SANDBOX_OPTIONS"
-            :key="option.profile"
-            class="sandbox-option"
-            type="button"
-            role="radio"
-            :aria-checked="sandbox.confirmed.value === option.profile"
-            :aria-label="`${GROK_SANDBOX_TITLE}：${option.label}`"
-            :title="sandboxOptionTitle(option.label)"
+        <label class="sandbox-select-row" for="grok-sandbox-select">
+          <span class="sandbox-select-label">档位</span>
+          <select
+            id="grok-sandbox-select"
+            class="sandbox-select"
+            :value="sandbox.confirmed.value ?? ''"
             :disabled="sandboxDisabled"
-            :class="{ selected: sandbox.confirmed.value === option.profile }"
-            @click="chooseSandbox(option.profile)"
+            :title="sandboxSelectTitle"
+            :aria-label="GROK_SANDBOX_TITLE"
+            :aria-describedby="sandboxDescribedBy"
+            :aria-invalid="sandbox.errorMessage.value ? 'true' : undefined"
+            :aria-busy="sandbox.saving.value ? 'true' : undefined"
+            @change="onSandboxChange"
           >
-            <strong>{{ option.label }}</strong>
-            <small>{{ option.description }}</small>
-          </button>
-        </div>
+            <option
+              v-for="option in GROK_SANDBOX_OPTIONS"
+              :key="option.profile"
+              :value="option.profile"
+            >
+              {{ option.label }}
+            </option>
+          </select>
+        </label>
+        <p v-if="selectedSandboxCopy" id="grok-sandbox-help" class="sandbox-help">
+          {{ selectedSandboxCopy.label }}：{{ selectedSandboxCopy.description }}
+        </p>
         <p v-if="sandbox.saving.value" class="sandbox-status" role="status">
           {{ GROK_SANDBOX_SAVING_TITLE }}
         </p>
@@ -267,6 +286,7 @@ onMounted(() => {
   gap: 12px;
   min-height: 0;
   height: 100%;
+  overflow: auto;
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -316,52 +336,51 @@ header p,
   margin: 0;
 }
 
-.sandbox-options {
-  display: grid;
+.sandbox-select-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
-.sandbox-option {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
+.sandbox-select-label {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.sandbox-select {
+  min-width: 0;
+  flex: 1 1 12rem;
+  max-width: 16rem;
+  padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
-  color: inherit;
+  color: var(--text-1);
   background: var(--surface-2);
-  text-align: left;
-  cursor: pointer;
 }
 
-.sandbox-option.selected {
-  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
-}
-
-.sandbox-option:disabled {
+.sandbox-select:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
 
-.sandbox-option strong {
-  font-size: 13px;
+.sandbox-select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 76%, white);
+  outline-offset: 2px;
 }
 
-.sandbox-option small {
+.sandbox-help,
+.sandbox-status {
+  margin: 0;
   color: var(--text-3);
   font-size: 12px;
   line-height: 1.45;
 }
 
-.sandbox-status {
-  margin: 0;
-  color: var(--text-2);
-  font-size: 12px;
-}
-
 .config-body {
   display: grid;
-  min-height: 0;
+  min-height: 12rem;
   overflow: hidden;
   grid-template-columns: minmax(0, 1fr) 228px;
   border: 1px solid var(--border);
@@ -370,7 +389,7 @@ header p,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sandbox-option {
+  .sandbox-select {
     transition: none;
   }
 }

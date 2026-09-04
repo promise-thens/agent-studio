@@ -64,4 +64,17 @@ describe('Grok 配置页沙箱选择器', () => {
     expect(sandboxComposableSource).toContain('setGrokSandbox')
     expect(sandboxComposableSource).toContain('getGrokSandbox')
   })
+
+  it('沙箱选择器紧凑，不把四档做成纵向大卡片挤掉 toml', () => {
+    expect(editorSource).toMatch(/<select[\s\S]*id="grok-sandbox-select"/)
+    expect(editorSource).not.toContain('role="radiogroup"')
+    expect(editorSource).not.toContain('class="sandbox-option"')
+    expect(editorSource).toMatch(/\.config-body\s*\{[^}]*min-height:\s*12rem/)
+  })
+
+  it('toml 未保存时禁用沙箱选择器，避免应用成功冲掉编辑器', () => {
+    expect(editorSource).toMatch(/sandboxDisabled[\s\S]*dirty\.value/)
+    expect(editorSource).toContain('GROK_SANDBOX_DIRTY_TITLE')
+    expect(editorSource).toContain('if (applied) await refreshTomlFromDisk()')
+  })
 })
