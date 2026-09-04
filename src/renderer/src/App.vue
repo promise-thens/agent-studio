@@ -2225,6 +2225,7 @@ function scrollMessagesToBottom(): void {
         Boolean(activeTaskId) && status.state === 'ready' && !activeExecution
       "
       :project-hint="workbench.selectedProject.value?.displayName"
+      :runtime-busy="isBusy"
       @close="closeSettingsDialog"
       @update:section="settingsSection = $event"
       @change-appearance="changeAppearance"

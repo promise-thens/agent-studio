@@ -186,6 +186,22 @@ export const GROK_CONFIG_HINTS: readonly GrokConfigHint[] = [
     table: 'cli',
     title: '表 cli',
     meaning: 'Grok CLI 行为。'
+  },
+  {
+    table: 'sandbox',
+    key: 'profile',
+    title: 'sandbox.profile',
+    meaning:
+      'Grok 进程的内核沙箱档位（grok --sandbox）。不是 Electron webPreferences.sandbox，也不是 Permission Broker。',
+    values: 'off / workspace / read-only / strict',
+    studioNote:
+      '请用本页上方「Grok 沙箱」选择器改，不要手写非法值。Permission Broker 仍然审批。只读/严格按 Grok 档位，不承诺挡住记忆 junction 写入 ~/.grok/memory。改档会重启 Runtime；已有会话若以不同档位创建，恢复可能失败。'
+  },
+  {
+    table: 'sandbox',
+    title: '表 sandbox',
+    meaning: 'Grok 内核沙箱。缺表即 off，无 Grok 内核限制。不是 Electron sandbox。',
+    studioNote: '桌面不会把 Renderer 字符串拼进 spawn argv。'
   }
 ]
 

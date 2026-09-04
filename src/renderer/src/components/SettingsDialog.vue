@@ -30,6 +30,7 @@ const props = defineProps<{
   selectedTaskId?: string
   grokActionsAvailable?: boolean
   projectHint?: string
+  runtimeBusy?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -160,7 +161,11 @@ function sectionIcon(id: SettingsSection): typeof Palette {
             @dirty="paneDirty = $event"
             @start-turn="emit('start-turn', $event)"
           />
-          <GrokConfigEditor v-else-if="section === 'grok-config'" @dirty="paneDirty = $event" />
+          <GrokConfigEditor
+            v-else-if="section === 'grok-config'"
+            :runtime-busy="runtimeBusy"
+            @dirty="paneDirty = $event"
+          />
         </div>
       </div>
     </section>
