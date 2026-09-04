@@ -13,7 +13,6 @@ import type {
   AgentTaskRuntimeState
 } from '../../shared/agent'
 import {
-  resolveTakeoverHudCopy,
   taskPermissionModeFromSnapshot,
   TAKEOVER_CONTROL_TURN_KIND,
   type PermissionPromptStyle,
@@ -39,7 +38,12 @@ import type {
 } from '../../shared/provider'
 import type { ConversationEntryState, DeletionPreview } from '../../shared/task-history'
 import type { TaskAttachmentDescriptor } from '../../shared/task-attachment'
-import type { AgentQuestionRequest, AgentQuestionResponse } from '../../shared/agent-question'
+import type { AgentQuestionRequest } from '../../shared/agent-question'
+import type { AgentRespondQuestionRequest } from '../../shared/agent-ipc'
+import {
+  buildQuestionRespondIpcPayload,
+  gateQuestionRespond
+} from './question-respond'
 import {
   createAgentEventGuard,
   createAgentMessageKey,
@@ -564,16 +568,6 @@ const composerPermissionMode = computed<TaskPermissionMode>(
 const composerPlanMode = computed<ComposerPlanMode>(
   () => composerPlanModeByTask.value[activeTaskId.value] ?? 'normal'
 )
-const composerTakeoverHud = computed(() => {
-  const state = activePermissionState.value
-  if (!state) return null
-  return resolveTakeoverHudCopy({
-    takeoverEnabled: state.takeoverEnabled,
-    takeoverApplied: state.takeoverApplied,
-    takeoverMayStillBeActive: state.takeoverMayStillBeActive,
-    executing: Boolean(activeExecution.value)
-  })
-})
 
 function applyPermissionRuntime(task: AgentTaskRuntimeState): void {
   const permissionPromptStyle: PermissionPromptStyle =
@@ -1600,36 +1594,50 @@ async function respondPermission(decision: AgentPermissionDecision): Promise<voi
 }
 
 /** 问答按 arrival 顺序展示；每张卡只允许对应的 questionId 在途，避免重复提交。 */
-async function respondQuestion(response: AgentQuestionResponse): Promise<void> {
-  const request = question.value
-  if (!request || respondingQuestion.value) return
-  respondingQuestion.value = request.questionId
+async function respondQuestion(event: AgentRespondQuestionRequest): Promise<void> {
+  // 卡片自带公开身份。队列 miss 也必须转发——吞掉 submit 会造成无 ext-out。
+  const queued =
+    questionQueue.value.find((item) => item.questionId === event.questionId) ?? null
+  const gate = gateQuestionRespond({
+    event,
+    queued,
+    respondingQuestionId: respondingQuestion.value
+  })
+  if (!gate.ok) {
+    appendMessage('error', gate.error)
+    return
+  }
+  if (gate.warnQueueMiss) {
+    console.warn('[ask] questionQueue miss; forwarding card event', {
+      questionId: event.questionId,
+      taskId: event.taskId,
+      turnId: event.turnId,
+      action: event.response.action
+    })
+    appendMessage('error', '问答队列未命中，已按卡片身份直接提交。')
+  }
+  respondingQuestion.value = event.questionId
   try {
     unwrapDesktopIpcResult(
-      await window.agent.respondQuestion({
-        questionId: request.questionId,
-        taskId: request.taskId,
-        turnId: request.turnId,
-        response
-      })
+      await window.agent.respondQuestion(buildQuestionRespondIpcPayload(event))
     )
     if (
-      request.kind === 'plan-approval' &&
-      (response.action === 'approve-plan' || response.action === 'abandon-plan')
+      queued?.kind === 'plan-approval' &&
+      (event.response.action === 'approve-plan' || event.response.action === 'abandon-plan')
     ) {
       // Grok 已确认退出/放弃当前 Plan；同步 Composer，避免下一轮被错误包装成 /plan。
       composerPlanModeByTask.value = {
         ...composerPlanModeByTask.value,
-        [request.taskId]: 'normal'
+        [event.taskId]: 'normal'
       }
     }
     questionQueue.value = questionQueue.value.filter(
-      (item) => item.questionId !== request.questionId
+      (item) => item.questionId !== event.questionId
     )
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   } finally {
-    if (respondingQuestion.value === request.questionId) respondingQuestion.value = null
+    if (respondingQuestion.value === event.questionId) respondingQuestion.value = null
   }
 }
 
@@ -2082,7 +2090,6 @@ function scrollMessagesToBottom(): void {
             v-if="executionSurfaceBanner.kind !== 'none'"
             :primary-view="workbench.primaryView.value"
             :active-execution="activeExecution"
-            :takeover-hud="composerTakeoverHud"
             @return-to-conversation="workbench.returnToConversation"
           />
           <PluginsPage
@@ -2156,7 +2163,6 @@ function scrollMessagesToBottom(): void {
             :permission-mode="composerPermissionMode"
             :takeover-applied="activePermissionState?.takeoverApplied === true"
             :takeover-may-still-be-active="activePermissionState?.takeoverMayStillBeActive === true"
-            :takeover-hud="composerTakeoverHud"
             :set-permission-mode="setTaskPermissionMode"
             :plan-mode="composerPlanMode"
             :plan-available="status.runtimeId === 'grok'"

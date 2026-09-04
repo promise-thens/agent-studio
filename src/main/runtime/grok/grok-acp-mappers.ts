@@ -222,7 +222,8 @@ export function mapGrokSessionUpdate(
         kind: 'tool-call',
         toolCallId: update.toolCallId,
         title: redactText(update.title),
-        ...(update.status != null ? { status: update.status } : {})
+        // Ask 等阻塞工具经常省略 status；缺省 pending，避免主列显示“状态未知”。
+        status: update.status ?? 'pending'
       }
       return appendMappedDiffEvent(toolEvent, update.toolCallId, update.content, base, redactText)
     }

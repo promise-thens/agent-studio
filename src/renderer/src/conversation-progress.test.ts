@@ -3,7 +3,9 @@ import {
   conversationTurnDurationMs,
   formatConversationActivityAge,
   formatConversationDuration,
+  isAskUserToolTitle,
   isConversationWaitingForEvent,
+  resolveConversationActivityHint,
   resolveConversationStep
 } from './conversation-progress'
 
@@ -69,5 +71,32 @@ describe('conversation progress', () => {
         }
       ])
     ).toBe('列目录')
+  })
+
+  it('Ask 工具静默时提示等待回答，而不是等待 Runtime 事件', () => {
+    expect(isAskUserToolTitle('Ask: 你现在最想先解决哪一件事?')).toBe(true)
+    expect(isAskUserToolTitle('Ask 3 questions')).toBe(true)
+    expect(isAskUserToolTitle('列目录')).toBe(false)
+    expect(
+      resolveConversationActivityHint({
+        waitingForEvent: true,
+        hasPendingQuestion: false,
+        currentStepLabel: 'Ask: 你现在最想先解决哪一件事?'
+      })
+    ).toBe('等待你的回答')
+    expect(
+      resolveConversationActivityHint({
+        waitingForEvent: true,
+        hasPendingQuestion: true,
+        currentStepLabel: '思考中'
+      })
+    ).toBe('等待你的回答')
+    expect(
+      resolveConversationActivityHint({
+        waitingForEvent: true,
+        hasPendingQuestion: false,
+        currentStepLabel: '列目录'
+      })
+    ).toBe('等待 Runtime 新事件')
   })
 })

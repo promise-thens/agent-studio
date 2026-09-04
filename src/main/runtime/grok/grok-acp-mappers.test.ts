@@ -300,6 +300,27 @@ describe('mapGrokPermissionRequest 读/写映射', () => {
 })
 
 describe('mapGrokSessionUpdate 子 Agent parentId', () => {
+  it('Ask 工具缺 status 时按 pending 投影，避免主列显示状态未知', () => {
+    const events = mapGrokSessionUpdate(
+      {
+        sessionId: SESSION_ID,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'call-ask-1',
+          title: 'Ask: 你现在最想先解决哪一件事?'
+        } as unknown as acp.SessionUpdate
+      },
+      redactFakeText
+    )
+
+    expect(events[0]).toMatchObject({
+      kind: 'tool-call',
+      toolCallId: 'call-ask-1',
+      title: 'Ask: 你现在最想先解决哪一件事?',
+      status: 'pending'
+    })
+  })
+
   it('标题含 subagent / 子 Agent 时不发明 parentId', () => {
     for (const title of ['subagent 探查测试结构', '子 Agent 改登录逻辑']) {
       const events = mapGrokSessionUpdate(

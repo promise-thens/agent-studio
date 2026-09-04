@@ -61,7 +61,7 @@ describe('运行态动效', () => {
       /\.conversation-process-step\[data-status='in_progress'\]::after[\s\S]*process-node-pulse/
     )
     expect(conversationTurnSource).toContain('conversation-turn-meta')
-    expect(conversationTurnSource).toContain('等待 Runtime 新事件')
+    expect(conversationTurnSource).toContain('resolveConversationActivityHint')
     expect(conversationTurnSource).toContain('conversation-turn-meta-duration')
     expect(conversationTurnSource).toContain('aria-live="polite"')
   })

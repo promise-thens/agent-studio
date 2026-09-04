@@ -58,7 +58,8 @@ export interface AgentIpcRuntime {
   getTaskRuntimeState: (taskId: string) => AgentTaskRuntimeState
   getAvailableCommands: (taskId: string) => AgentAvailableCommandSnapshot
   respondPermission: (request: AgentRespondPermissionRequest) => Promise<void>
-  respondQuestion?: (request: AgentRespondQuestionRequest) => void
+  /** 问答提交必须存在；缺省会让 Renderer 以为成功，Grok 却一直 Waiting。 */
+  respondQuestion: (request: AgentRespondQuestionRequest) => void
   setPermissionMode: (
     request: AgentSetPermissionModeRequest
   ) => Promise<AgentSetPermissionModeResult>
@@ -368,7 +369,11 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
 
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.respondQuestion, (args) => {
     const request = readQuestionRequest(args)
-    requireAgent(dependencies.getAgent).respondQuestion?.(request)
+    const agent = requireAgent(dependencies.getAgent)
+    if (typeof agent.respondQuestion !== 'function') {
+      throw new DesktopIpcFailure('operation-failed', '当前 Runtime 不支持问答提交。')
+    }
+    agent.respondQuestion(request)
     return null
   })
 

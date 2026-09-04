@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import type {
   AgentQuestionAnnotation,
   AgentQuestionItem,
@@ -7,6 +7,8 @@ import type {
   AgentQuestionResponse,
   AgentQuestionValue
 } from '../../../shared/agent-question'
+import { cloneAgentQuestionResponse } from '../../../shared/agent-question'
+import type { AgentRespondQuestionRequest } from '../../../shared/agent-ipc'
 import {
   serializeQuestionPartialAnswers,
   shouldAdvanceQuestionOnKeydown
@@ -21,7 +23,7 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  respond: [response: AgentQuestionResponse]
+  respond: [request: AgentRespondQuestionRequest]
 }>()
 
 const currentIndex = ref(0)
@@ -30,6 +32,7 @@ const otherAnswers = ref<Record<string, string>>({})
 const noteAnswers = ref<Record<string, string>>({})
 const errorMessage = ref('')
 const activeField = ref<HTMLElement | null>(null)
+const cardRoot = ref<HTMLElement | null>(null)
 
 const currentQuestion = computed<AgentQuestionItem | null>(
   () => props.request.questions[currentIndex.value] ?? null
@@ -112,8 +115,10 @@ function setNoteAnswer(rawValue: string): void {
 
 function buildAcceptResponse(): AgentQuestionResponse {
   const annotations: Record<string, AgentQuestionAnnotation> = {}
+  // 先拍平成普通对象，避免 ref 深代理数组进入 IPC structured clone。
+  const plainAnswers: Record<string, AgentQuestionValue> = JSON.parse(JSON.stringify(answers.value))
   for (const question of props.request.questions) {
-    const answer = answers.value[question.id]
+    const answer = plainAnswers[question.id]
     const selected = Array.isArray(answer) ? answer : answer === undefined ? [] : [answer]
     const preview = selected
       .map((value) => question.options?.find((option) => option.value === String(value))?.preview)
@@ -123,9 +128,28 @@ function buildAcceptResponse(): AgentQuestionResponse {
   }
   return {
     action: 'accept',
-    answers: { ...answers.value },
+    answers: plainAnswers,
     ...(Object.keys(annotations).length > 0 ? { annotations } : {})
   }
+}
+
+/** 卡片自己带上公开 questionId；不能依赖 App 队首，避免错卡/旧卡吞掉 accept。 */
+function emitRespond(response: AgentQuestionResponse): void {
+  const cloned = cloneAgentQuestionResponse(response)
+  if (!cloned) {
+    console.warn('[ask] cloneAgentQuestionResponse failed; submit blocked', {
+      questionId: props.request.questionId,
+      action: response?.action
+    })
+    errorMessage.value = '回答内容无法提交，请重试。'
+    return
+  }
+  emit('respond', {
+    questionId: props.request.questionId,
+    taskId: props.request.taskId,
+    turnId: props.request.turnId,
+    response: cloned
+  })
 }
 
 /** 文本题遵循 Grok 问答卡快捷键，把已填写的答案交给“聊聊/跳过”分支继续使用。 */
@@ -163,7 +187,7 @@ function goNext(): void {
     void focusCurrentField()
     return
   }
-  emit('respond', buildAcceptResponse())
+  emitRespond(buildAcceptResponse())
 }
 
 /** 普通 Enter 进入下一题；Shift+Enter、输入法组合和 keyCode=229 继续编辑。 */
@@ -185,27 +209,38 @@ function handleQuestionKeydown(event: KeyboardEvent): void {
 function respond(action: 'chat-about-this' | 'skip' | 'cancel'): void {
   if (props.pending) return
   if (action === 'cancel') {
-    emit('respond', { action })
+    emitRespond({ action })
     return
   }
   const partialAnswers = buildPartialAnswers()
-  emit('respond', { action, ...(partialAnswers ? { partialAnswers } : {}) })
+  emitRespond({ action, ...(partialAnswers ? { partialAnswers } : {}) })
 }
 
 /** 计划审阅使用 Grok 原生的 approved/abandoned/cancelled 三态，不伪装成权限审批。 */
 function respondPlan(action: 'approve-plan' | 'abandon-plan' | 'cancel'): void {
   if (props.pending) return
-  emit('respond', { action })
+  emitRespond({ action })
+}
+
+/** 问答卡不是 Timeline 事件；贴底跟随可能停在 Ask 工具行，这里自己滚进可视区。 */
+function scrollCardIntoView(): void {
+  cardRoot.value?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
 }
 
 async function focusCurrentField(): Promise<void> {
   await nextTick()
+  scrollCardIntoView()
   activeField.value?.focus()
 }
+
+onMounted(() => {
+  void focusCurrentField()
+})
 </script>
 
 <template>
   <section
+    ref="cardRoot"
     class="question-inline-card"
     role="region"
     :aria-labelledby="`${questionId}-title`"
@@ -213,10 +248,9 @@ async function focusCurrentField(): Promise<void> {
     tabindex="0"
   >
     <header class="question-inline-header">
-      <div>
+      <div class="question-inline-heading">
         <p :id="`${questionId}-title`" class="question-inline-title">{{ request.title }}</p>
         <p class="question-inline-message">{{ request.message }}</p>
-        <p class="question-inline-source">来自 Task {{ request.taskId }}</p>
       </div>
       <span class="question-inline-progress" aria-label="问题进度">{{ progressLabel }}</span>
     </header>
@@ -245,8 +279,10 @@ async function focusCurrentField(): Promise<void> {
           />
           <span>
             <strong>{{ option.label }}</strong>
-        <small v-if="option.description">{{ option.description }}</small>
-        <small v-if="option.preview" class="question-inline-preview">{{ option.preview }}</small>
+            <small v-if="option.description" class="question-inline-option-description">
+              {{ option.description }}
+            </small>
+            <small v-if="option.preview" class="question-inline-preview">{{ option.preview }}</small>
           </span>
         </label>
       </div>
@@ -374,12 +410,15 @@ async function focusCurrentField(): Promise<void> {
 
 <style scoped>
 .question-inline-card {
-  margin: 12px 0;
-  padding: 16px;
-  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16));
-  border-radius: 14px;
-  background: var(--surface-raised, rgba(255, 255, 255, 0.045));
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.16);
+  /* 问题卡使用现有工作台色板，避免浅色主题下出现白字白底。 */
+  display: grid;
+  gap: 0;
+  margin: 16px 0;
+  padding: 18px 20px 16px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 76%, transparent);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--surface-2) 94%, var(--surface-1));
+  box-shadow: 0 18px 44px color-mix(in srgb, var(--surface-0) 42%, transparent);
 }
 
 .question-inline-header,
@@ -389,97 +428,185 @@ async function focusCurrentField(): Promise<void> {
   gap: 10px;
 }
 
+.question-inline-header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.question-inline-heading {
+  min-width: 0;
+}
+
 .question-inline-actions > button {
   width: auto;
   min-width: 72px;
 }
 
-.question-inline-header {
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-
 .question-inline-title,
 .question-inline-message,
 .question-inline-label,
-.question-inline-description,
-.question-inline-source {
+.question-inline-description {
   margin: 0;
 }
 
 .question-inline-title {
+  color: var(--text-1);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+
+.question-inline-message {
+  margin-top: 5px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.question-inline-progress {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-radius: var(--radius-chip);
+  color: var(--text-2);
+  background: var(--surface-1);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
   font-weight: 650;
 }
 
-.question-inline-message,
-.question-inline-description,
-.question-inline-progress {
-  color: var(--text-muted, rgba(255, 255, 255, 0.62));
-  font-size: 12px;
-}
-
-.question-inline-source {
-  max-width: 42ch;
-  margin-top: 4px;
-  overflow: hidden;
-  color: var(--text-muted, rgba(255, 255, 255, 0.48));
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.question-inline-body {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
 }
 
 .question-inline-label {
-  margin-bottom: 6px;
-  font-weight: 600;
+  color: var(--text-1);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
 }
 
 .question-inline-description {
-  margin-bottom: 10px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .question-inline-options {
   display: grid;
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 9px;
 }
 
 .question-inline-options label,
 .question-inline-toggle {
   display: flex;
   align-items: flex-start;
-  gap: 9px;
-  padding: 9px 10px;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
-  border-radius: 10px;
+  gap: 10px;
+  min-width: 0;
+  min-height: 76px;
+  padding: 14px 15px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--surface-0) 18%, transparent);
   cursor: pointer;
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    transform 140ms ease;
+}
+
+.question-inline-options label:hover,
+.question-inline-toggle:hover {
+  border-color: var(--border-strong);
+  background: var(--hover-fill);
+}
+
+.question-inline-options label:active,
+.question-inline-toggle:active {
+  transform: translateY(1px);
 }
 
 .question-inline-options label:has(input:checked),
 .question-inline-toggle:has(input:checked) {
-  border-color: var(--accent, #d6ff5f);
-  background: color-mix(in srgb, var(--accent, #d6ff5f) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 76%, var(--border-strong));
+  background: color-mix(in srgb, var(--accent) 10%, var(--selected-fill));
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    0 2px 8px color-mix(in srgb, var(--surface-0) 18%, transparent);
+}
+
+.question-inline-options input,
+.question-inline-toggle input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
 }
 
 .question-inline-options span {
   display: grid;
-  gap: 2px;
+  min-width: 0;
+  gap: 5px;
+}
+
+.question-inline-options strong {
+  color: var(--text-1);
+  font-size: 14px;
+  line-height: 1.35;
 }
 
 .question-inline-options small {
-  color: var(--text-muted, rgba(255, 255, 255, 0.62));
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.question-inline-preview {
+  color: var(--text-3) !important;
 }
 
 .question-inline-input {
   width: 100%;
+  min-height: 40px;
   box-sizing: border-box;
-  padding: 9px 10px;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
-  border-radius: 9px;
-  color: inherit;
-  background: var(--surface-input, rgba(0, 0, 0, 0.2));
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  color: var(--text-1);
+  background: var(--surface-1);
+  transition:
+    border-color 140ms ease,
+    background-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.question-inline-input::placeholder {
+  color: var(--text-3);
+}
+
+.question-inline-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 72%, var(--border-strong));
+  background: var(--surface-2);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .question-inline-textarea {
   resize: vertical;
+}
+
+.question-inline-extra {
+  display: grid;
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  gap: 9px;
 }
 
 .question-inline-plan {
@@ -487,10 +614,10 @@ async function focusCurrentField(): Promise<void> {
   margin: 0;
   overflow: auto;
   padding: 12px;
-  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.1));
+  border: 1px solid var(--border);
   border-radius: 10px;
-  color: var(--text-1, rgba(255, 255, 255, 0.9));
-  background: var(--surface-input, rgba(0, 0, 0, 0.2));
+  color: var(--text-1);
+  background: var(--surface-1);
   font: inherit;
   font-size: 12px;
   line-height: 1.5;
@@ -505,6 +632,36 @@ async function focusCurrentField(): Promise<void> {
 
 .question-inline-spacer {
   flex: 1;
+}
+
+.question-inline-actions {
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.question-inline-actions > button {
+  min-height: 34px;
+  padding: 0 13px;
+}
+
+.question-inline-actions > button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+@media (max-width: 640px) {
+  .question-inline-card {
+    padding: 16px;
+  }
+
+  .question-inline-extra {
+    grid-template-columns: 1fr;
+  }
+
+  .question-inline-spacer {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,3 +1,4 @@
+import type { AgentQuestionRequest } from '../../shared/agent-question'
 import type {
   TaskTimelineViewModel,
   TimelineErrorNode,
@@ -143,6 +144,19 @@ export function conversationFollowSignature(
 /** 实时 Agent error 已进入 Timeline，不得再镜像到 Composer 本地条。 */
 export function shouldMirrorLiveAgentErrorLocally(): boolean {
   return false
+}
+
+/**
+ * 问答卡必须贴在当前对话底部，不能只挂在历史 Turn 里。
+ * turnId 对不上时仍要显示，否则 Ask 工具会空转、用户看不见选项。
+ */
+export function resolveConversationStickyQuestion(input: {
+  question: AgentQuestionRequest | null
+  taskId?: string | null
+}): AgentQuestionRequest | null {
+  if (!input.question) return null
+  // Ask 工具空转时必须看得见选项卡；task 对不上也先贴底展示，避免只有「等待中」。
+  return input.question
 }
 
 /** 空状态只给一句短提示；输入框仍在底，不要插画墙。 */

@@ -72,6 +72,32 @@ export function isConversationWaitingForEvent(
   return lastActivity != null && nowMs - lastActivity >= silenceMs
 }
 
+/** Grok ask_user_question 出现在 Timeline 时，标题是 Ask: 原文或 Ask N questions。 */
+export function isAskUserToolTitle(title: string): boolean {
+  return /^(?:Ask(?:UserQuestion)?(?:\s+\d+\s+questions?)?|ask_user_question)(?:\s*[:：]|$)/i.test(
+    title.trim()
+  )
+}
+
+/**
+ * 问答卡或未完成的 Ask 工具都是在等用户，不能再写成“等待 Runtime”。
+ * 否则 Grok 阻塞在 ext_method 时，主列会误报卡住。
+ */
+export function resolveConversationActivityHint(input: {
+  waitingForEvent: boolean
+  hasPendingQuestion: boolean
+  currentStepLabel: string
+}): string {
+  if (
+    input.hasPendingQuestion ||
+    (input.waitingForEvent && isAskUserToolTitle(input.currentStepLabel))
+  ) {
+    return '等待你的回答'
+  }
+  if (input.waitingForEvent) return '等待 Runtime 新事件'
+  return input.currentStepLabel
+}
+
 export function conversationStatusLabel(status: TurnTimelineViewModel['status']): string {
   switch (status) {
     case 'queued':

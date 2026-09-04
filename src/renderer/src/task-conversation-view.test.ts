@@ -15,6 +15,7 @@ import {
   resolveConversationConnectFailure,
   resolveConversationEmptyCopy,
   resolveConversationScrollSource,
+  resolveConversationStickyQuestion,
   shouldHoldPinnedFollow,
   shouldMirrorLiveAgentErrorLocally,
   turnHasCollapsibleProcess
@@ -353,6 +354,29 @@ describe('对话滚动与折叠', () => {
     const before = conversationFollowSignature(model)
     running.nodes[0] = { ...running.nodes[0], kind: 'message', text: '已经改好登录' }
     expect(conversationFollowSignature(model)).not.toBe(before)
+  })
+
+  it('问答卡贴在当前 Task 对话底部，即使 turnId 对上的是更早一轮', () => {
+    const question = {
+      questionId: 'question-1',
+      runtimeId: 'grok' as const,
+      taskId: 'task-1',
+      turnId: 'turn-old',
+      title: 'Grok Build 需要你的回答',
+      message: '请确认下面的问题后继续。',
+      questions: [
+        {
+          id: 'question-1',
+          question: '你现在最想先解决哪一件事?',
+          kind: 'single' as const,
+          options: [{ value: '改代码', label: '改代码' }]
+        }
+      ],
+      canSkip: false
+    }
+    expect(resolveConversationStickyQuestion({ question, taskId: 'task-1' })).toEqual(question)
+    expect(resolveConversationStickyQuestion({ question, taskId: 'task-other' })).toEqual(question)
+    expect(resolveConversationStickyQuestion({ question: null, taskId: 'task-1' })).toBeNull()
   })
 
   it('Agent 时间线错误不进本地条，Composer/IPC 失败才保留', () => {

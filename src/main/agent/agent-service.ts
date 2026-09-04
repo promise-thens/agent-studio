@@ -757,11 +757,20 @@ export class AgentService {
    * 并把原始 requestId 留在主进程映射表中，避免跨 IPC 暴露协议身份。
    */
   handleQuestionRequest(request: AgentRuntimeQuestionRequest): void {
-    if (
-      !this.isRuntimeQuestionCurrent(request) ||
-      this.runtimeQuestionRequests.size >= MAX_RUNTIME_PERMISSION_REQUESTS
-    ) {
-      this.adapter.respondQuestion?.(request.requestId, { action: 'cancel' })
+    if (!this.isRuntimeQuestionCurrent(request)) {
+      this.adapter.respondQuestion?.(
+        request.requestId,
+        { action: 'cancel' },
+        { cancelReason: 'service-not-current' }
+      )
+      return
+    }
+    if (this.runtimeQuestionRequests.size >= MAX_RUNTIME_PERMISSION_REQUESTS) {
+      this.adapter.respondQuestion?.(
+        request.requestId,
+        { action: 'cancel' },
+        { cancelReason: 'queue-full' }
+      )
       return
     }
     const questionId = this.createId()
@@ -783,7 +792,11 @@ export class AgentService {
       this.onQuestion?.(publicRequest)
     } catch {
       this.runtimeQuestionRequests.delete(questionId)
-      this.adapter.respondQuestion?.(request.requestId, { action: 'cancel' })
+      this.adapter.respondQuestion?.(
+        request.requestId,
+        { action: 'cancel' },
+        { cancelReason: 'onQuestion-throw' }
+      )
     }
   }
 
@@ -885,6 +898,8 @@ export class AgentService {
     for (const [questionId, pending] of this.runtimeQuestionRequests) {
       if (pending.publicRequest.taskId !== event.taskId || pending.publicRequest.turnId !== event.turnId) continue
       this.runtimeQuestionRequests.delete(questionId)
+      // 必须先解开 Adapter Promise；只撤 Renderer 卡会留下无 ext-out 的悬挂 Ask。
+      this.adapter.respondQuestion?.(pending.runtimeRequest.requestId, { action: 'cancel' })
       this.onQuestionCancelled?.({ questionId, taskId: event.taskId, turnId: event.turnId })
     }
 

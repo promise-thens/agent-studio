@@ -1581,6 +1581,68 @@ describe('AgentService Task / Turn 编排', () => {
     }
   })
 
+  it('旧路径 turn-complete 清问答映射时必须调用 Adapter.respondQuestion(cancel)', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const turnResult = deferred<AgentRuntimeTurnResult>()
+    adapter.startTurn.mockImplementationOnce(() => turnResult.promise)
+    const respondQuestion = vi.fn()
+    ;(adapter as unknown as { respondQuestion: typeof respondQuestion }).respondQuestion =
+      respondQuestion
+    const cancelled: Array<Pick<AgentQuestionRequest, 'questionId' | 'taskId' | 'turnId'>> = []
+    const questions: AgentQuestionRequest[] = []
+    let idIndex = 0
+    const service = new AgentService(adapter, new TaskExecutionController(), {
+      createId: () => ['task-a', 'turn-a1', 'question-public-1'][idIndex++]!,
+      onQuestion: (request) => questions.push(request),
+      onQuestionCancelled: (request) => cancelled.push(request)
+    })
+    const task = await service.createTask(WORKSPACE)
+    const execution = service.startTurn(task.taskId, '等待回答')
+    await vi.waitFor(() => expect(adapter.startTurn).toHaveBeenCalledOnce())
+
+    service.handleQuestionRequest({
+      requestId: 'runtime-question-1',
+      runtimeId: 'grok',
+      taskId: task.taskId,
+      turnId: 'turn-a1',
+      runtimeSessionId: 'runtime-session-1',
+      title: '需要你的选择',
+      message: '请选择一项。',
+      questions: [
+        {
+          id: 'choice',
+          question: '选哪一个？',
+          kind: 'single',
+          options: [{ value: 'a', label: '选项 A' }],
+          required: true
+        }
+      ],
+      canSkip: false
+    })
+    expect(questions).toHaveLength(1)
+    expect(respondQuestion).not.toHaveBeenCalled()
+
+    service.handleRuntimeEvent({
+      runtimeId: 'grok',
+      runtimeSessionId: 'runtime-session-1',
+      capabilityState: 'native',
+      taskId: task.taskId,
+      turnId: 'turn-a1',
+      sequence: 1,
+      observedAt: '2026-09-04T01:00:00.000Z',
+      kind: 'turn-complete',
+      outcome: 'completed'
+    })
+
+    expect(respondQuestion).toHaveBeenCalledWith('runtime-question-1', { action: 'cancel' })
+    expect(cancelled).toEqual([
+      { questionId: 'question-public-1', taskId: task.taskId, turnId: 'turn-a1' }
+    ])
+
+    turnResult.resolve({ outcome: 'completed' })
+    await execution
+  })
+
   it('TaskExecutor 活动 Turn 的问答不会被旧 Service 快照自动取消', async () => {
     const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
     const questions: AgentQuestionRequest[] = []

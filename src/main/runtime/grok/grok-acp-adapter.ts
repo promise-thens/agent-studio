@@ -115,10 +115,28 @@ interface PendingPermission {
   resolve: (response: acp.RequestPermissionResponse) => void
 }
 
+/** ask-debug 取消归因；只写枚举值，不写答案正文。 */
+type AskCancelReason =
+  | 'user-cancel'
+  | 'stale-turn'
+  | 'pending-clear'
+  | 'cancel-turn'
+  | 'disconnect'
+  | 'service-not-current'
+  | 'onQuestion-throw'
+  | 'queue-full'
+
+type PendingClearSource = 'turn-complete' | 'cancel-turn' | 'disconnect'
+
+interface QuestionResolveMeta {
+  cancelReason?: AskCancelReason
+  honoredDespiteStaleGeneration?: boolean
+}
+
 interface PendingQuestion {
   request: AgentRuntimeQuestionRequest
   activeTurn: ActiveTurn
-  resolve: (response: AgentQuestionResponse) => void
+  resolve: (response: AgentQuestionResponse, meta?: QuestionResolveMeta) => void
 }
 
 interface ActiveTurn {
@@ -134,6 +152,8 @@ interface ActiveTurn {
   rejectAllToolPermissions: boolean
   cancelRequested: boolean
   outcome?: AgentTurnOutcome
+  /** prompt 已终态但 ask 仍挂起时暂存的 turn-complete draft；答完后再发布。 */
+  deferredTurnComplete?: AgentEventDraft
   /** Session update 串行队列，确保图片落盘与文本、工具、终态保持 ACP 到达顺序。 */
   sessionUpdateQueue: Promise<void>
   /** 仅在图片异步入库期间开启；普通文本与工具更新继续同步处理。 */
@@ -144,9 +164,14 @@ interface ActiveTurn {
   ingestedRuntimeMediaKeys: Set<string>
   /** signals.json 已发布的最后一份上下文用量；同值快照只允许进入事件链一次。 */
   lastContextUsageFingerprint?: string
+  /** Turn 进行中轮询 signals.json 的定时器；终态必须清掉。 */
+  contextUsagePollTimer?: ReturnType<typeof setInterval>
   /** 当前 Turn 内命令证据累积；测试夹具可能缺省，读取时必须惰性创建。 */
   commandEvidenceByToolCallId?: Map<string, GrokCommandToolFacts>
 }
+
+/** Grok 多数不发 ACP usage_update；Turn 进行中按这个间隔补读 signals.json。 */
+export const GROK_CONTEXT_USAGE_POLL_MS = 1000
 
 interface CurrentConnection {
   connection: acp.ClientSideConnection
@@ -171,9 +196,14 @@ function contextUsageFingerprint(usage: AgentContextUsage): string {
 const GROK_QUESTION_METHODS = new Set([
   // Grok 1.0.13 的真实 ACP 请求使用裸方法名；保留命名空间写法兼容其它版本。
   'ask_user_question',
+  'askUserQuestion',
+  '_ask_user_question',
+  '_askUserQuestion',
   'x.ai/ask_user_question',
+  'x.ai/askUserQuestion',
   // Grok ACP 会把扩展请求加上 `_` 命名空间前缀；保留两种写法兼容不同版本。
   '_x.ai/ask_user_question',
+  '_x.ai/askUserQuestion',
   'x.ai/session/askUserQuestion',
   '_x.ai/session/askUserQuestion',
   'x.ai/session/ask_user_question',
@@ -192,6 +222,54 @@ const GROK_PLAN_APPROVAL_METHODS = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** ACP SDK 把 extMethod params 标成 Record，运行时仍可能是 RawValue 字符串。 */
+function coerceGrokExtMethodParams(params: unknown): Record<string, unknown> {
+  const record = (() => {
+    if (typeof params === 'string') {
+      try {
+        const parsed: unknown = JSON.parse(params)
+        return isRecord(parsed) ? parsed : {}
+      } catch {
+        return {}
+      }
+    }
+    return isRecord(params) ? params : {}
+  })()
+  // 部分版本把问卷放在 request/params 里；顶层已有 questions 时不要覆盖。
+  if (
+    !Array.isArray(record.questions) &&
+    isRecord(record.request) &&
+    Array.isArray(record.request.questions)
+  ) {
+    return { ...record, ...record.request }
+  }
+  if (
+    !Array.isArray(record.questions) &&
+    isRecord(record.params) &&
+    Array.isArray(record.params.questions)
+  ) {
+    return { ...record, ...record.params }
+  }
+  return record
+}
+
+const GROK_EXT_METHOD_ENVELOPES = new Set(['ext_method', '_ext_method'])
+
+/** Grok xai-acp-lib 把扩展请求打成 JSON-RPC `ext_method`，内部 method 才是 x.ai/ask_user_question。 */
+function unwrapGrokExtMethodEnvelope(
+  method: string,
+  params: unknown
+): { method: string; params: Record<string, unknown> } {
+  const payload = coerceGrokExtMethodParams(params)
+  if (!GROK_EXT_METHOD_ENVELOPES.has(method) || typeof payload.method !== 'string') {
+    return { method, params: payload }
+  }
+  return {
+    method: payload.method,
+    params: coerceGrokExtMethodParams(payload.params ?? payload.request ?? payload)
+  }
 }
 
 function boundedText(value: unknown, fallback = ''): string {
@@ -234,7 +312,7 @@ function mapGrokQuestionRequest(
         ...(boundedText(option.preview) ? { preview: boundedText(option.preview) } : {})
       }]
     })
-    if (rawOptions.length > 0 && options.length !== rawOptions.length) return null
+    // 个别坏选项丢弃即可；全部失败时降成文本题，避免整张采访卡被取消。
     const multiSelect =
       raw.multiSelect === true || raw.multi_select === true || raw.multiple === true
     const kind: AgentQuestionItem['kind'] = options.length > 0
@@ -278,7 +356,7 @@ function projectGrokQuestionAnswers(
   sourceAnnotations?: Record<string, { preview?: string; notes?: string }>
 ): {
   answers: Record<string, string[]>
-  annotations?: Record<string, { preview?: string; notes?: string }>
+  annotations: Record<string, { preview?: string; notes?: string }>
 } {
   const projected: Record<string, string[]> = {}
   const annotations: Record<string, { preview?: string; notes?: string }> = {}
@@ -298,9 +376,34 @@ function projectGrokQuestionAnswers(
       annotations[question.question] = annotation
     }
   }
-  return Object.keys(annotations).length > 0
-    ? { answers: projected, annotations }
-    : { answers: projected }
+  // Grok Accepted 变体固定 answers + annotations 两个字段；缺 annotations 会被当成非法回包并继续等待。
+  return { answers: projected, annotations }
+}
+
+/**
+ * Grok 1.0.13 AskUserQuestionExtResponse 只有 Accepted / SkipInterview / ChatAboutThis。
+ * 没有 cancelled；取消或无法处理时必须回 skip_interview，否则反序列化失败、Ask 一直 Waiting。
+ */
+function grokAskSkipInterviewResponse(
+  request: AgentRuntimeQuestionRequest | null,
+  partialAnswers?: Record<string, string>
+): Record<string, unknown> {
+  return {
+    outcome: 'skip_interview',
+    partial_answers: request
+      ? projectGrokPartialAnswers(request, partialAnswers)
+      : {}
+  }
+}
+
+function grokAskChatAboutThisResponse(
+  request: AgentRuntimeQuestionRequest,
+  partialAnswers?: Record<string, string>
+): Record<string, unknown> {
+  return {
+    outcome: 'chat_about_this',
+    partial_answers: projectGrokPartialAnswers(request, partialAnswers)
+  }
 }
 
 /** 将 Plan 采访的局部回答从安全 question id 映射为 Grok 的问题文本键。 */
@@ -327,7 +430,7 @@ function mapGrokPlanApprovalRequest(
   activeTurn: ActiveTurn,
   requestId: string
 ): AgentRuntimeQuestionRequest | null {
-  const planContent = boundedText(params.planContent)
+  const planContent = boundedText(params.planContent ?? params.plan_content)
   return {
     requestId,
     runtimeId: GROK_RUNTIME_ID,
@@ -361,7 +464,16 @@ function mapElicitationRequest(
   activeTurn: ActiveTurn,
   requestId: string
 ): AgentRuntimeQuestionRequest | null {
-  if (params.mode !== 'form' || !isRecord(params)) return null
+  if (!isRecord(params)) return null
+  // Grok 1.0.13 提问可能走自定义 elicitation_dialog，问卷仍是 questions 数组。
+  if (params.mode !== 'form') {
+    const grokRequest = mapGrokQuestionRequest(
+      coerceGrokExtMethodParams(params),
+      activeTurn,
+      requestId
+    )
+    return grokRequest
+  }
   const schema = isRecord(params.requestedSchema) ? params.requestedSchema : null
   const properties = schema && isRecord(schema.properties) ? schema.properties : null
   if (!properties) return null
@@ -912,6 +1024,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       if (!this.isActiveTurnCurrent(activeTurn)) {
         return { outcome: activeTurn.outcome ?? 'cancelled' }
       }
+      this.startContextUsagePolling(activeTurn, context.workspace)
 
       const response = await connection.prompt({
         sessionId: context.runtimeSessionId,
@@ -937,12 +1050,23 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       if (typeof response.stopReason === 'string') {
         this.observe({ kind: 'prompt-stop', stopReason: response.stopReason })
       }
+      // prompt 已返回但 ask 仍挂起时，先等用户作答，避免 turn-complete 触发 pending-clear。
+      await this.waitForPendingQuestions(activeTurn)
+      if (!this.isActiveTurnCurrent(activeTurn)) {
+        return { outcome: activeTurn.outcome ?? 'cancelled' }
+      }
       const terminal = mapGrokPromptResponse(response, context.runtimeSessionId)
       this.emitDraft(activeTurn, terminal)
       this.restoreReadyStatus(activeTurn)
       return { outcome: terminal.outcome }
     } catch (error) {
       await this.waitForSessionUpdateQueue(activeTurn)
+      if (!this.isActiveTurnCurrent(activeTurn)) {
+        return { outcome: activeTurn.outcome ?? 'cancelled' }
+      }
+
+      // 失败路径同样可能与 ask 竞态；先等用户作答或 Stop，避免 pending-clear 吞卡。
+      await this.waitForPendingQuestions(activeTurn)
       if (!this.isActiveTurnCurrent(activeTurn)) {
         return { outcome: activeTurn.outcome ?? 'cancelled' }
       }
@@ -961,6 +1085,8 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       })
       this.restoreReadyStatus(activeTurn)
       return { outcome: 'failed' }
+    } finally {
+      this.stopContextUsagePolling(activeTurn)
     }
   }
 
@@ -970,8 +1096,10 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     if (!activeTurn || !this.matchesTurn(activeTurn, turn) || activeTurn.cancelRequested) return
 
     activeTurn.cancelRequested = true
+    activeTurn.deferredTurnComplete = undefined
+    this.stopContextUsagePolling(activeTurn)
     this.cancelPendingPermissions(activeTurn)
-    this.cancelPendingQuestions(activeTurn)
+    this.cancelPendingQuestions(activeTurn, 'cancel-turn')
     try {
       await activeTurn.connection.cancel({ sessionId: activeTurn.runtimeSessionId })
       if (this.isActiveTurnCurrent(activeTurn)) {
@@ -1007,16 +1135,99 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     )
   }
 
-  /** Renderer 回答后恢复挂起的 Grok 私有问答或 ACP elicitation Promise。 */
-  respondQuestion(requestId: string, response: AgentQuestionResponse): void {
+  /**
+   * Renderer 回答后恢复挂起的 Grok 私有问答或 ACP elicitation Promise。
+   * sessionGeneration 漂移时：同一 logical Turn（pending.request 的 task/turn/session）仍在、
+   * 未 cancelRequested、连接仍是同一对象或选中同 runtimeSessionId，且动作为
+   * accept|skip|chat-about-this|approve-plan|abandon-plan 时仍兑现；否则 stale-turn cancel。
+   */
+  respondQuestion(
+    requestId: string,
+    response: AgentQuestionResponse,
+    options?: { cancelReason?: AskCancelReason }
+  ): void {
     const pending = this.pendingQuestions.get(requestId)
-    if (!pending) return
-    this.pendingQuestions.delete(requestId)
-    if (!this.isActiveTurnCurrent(pending.activeTurn)) {
-      pending.resolve({ action: 'cancel' })
+    if (!pending) {
+      this.traceAskProtocol({ stage: 'respond-miss', requestIdPrefix: requestId.slice(0, 8) })
       return
     }
-    pending.resolve(response)
+    this.pendingQuestions.delete(requestId)
+    const pendingTurn = pending.activeTurn
+    const turnCurrent = this.isActiveTurnCurrent(pendingTurn)
+    this.traceAskProtocol({
+      stage: 'respond-in',
+      requestIdPrefix: requestId.slice(0, 8),
+      action: response.action,
+      turnCurrent
+    })
+
+    if (turnCurrent) {
+      // Turn 仍 current 但已请求取消：不能再兑现 accept。
+      if (pendingTurn.cancelRequested) {
+        this.traceAskProtocol({
+          stage: 'ext-out',
+          action: 'cancel',
+          cancelReason: options?.cancelReason ?? 'stale-turn',
+          sessionGeneration: this.sessionGeneration,
+          pendingSessionGeneration: pendingTurn.sessionGeneration,
+          activeTurnNull: false
+        })
+        pending.resolve(
+          { action: 'cancel' },
+          { cancelReason: options?.cancelReason ?? 'stale-turn' }
+        )
+        return
+      }
+      this.traceAskProtocol({ stage: 'ext-out', action: response.action })
+      if (response.action === 'cancel') {
+        pending.resolve(response, {
+          cancelReason: options?.cancelReason ?? 'user-cancel'
+        })
+        this.flushDeferredTurnComplete(pendingTurn)
+        return
+      }
+      pending.resolve(response)
+      this.flushDeferredTurnComplete(pendingTurn)
+      return
+    }
+
+    const current = this.activeTurn
+    const sameLogicalTurn = Boolean(
+      current &&
+        !current.cancelRequested &&
+        current.taskId === pending.request.taskId &&
+        current.turnId === pending.request.turnId &&
+        current.runtimeSessionId === pending.request.runtimeSessionId &&
+        (current.connection === pendingTurn.connection ||
+          this.selectedSession?.runtimeSessionId === pending.request.runtimeSessionId)
+    )
+    const honorable =
+      response.action === 'accept' ||
+      response.action === 'skip' ||
+      response.action === 'chat-about-this' ||
+      response.action === 'approve-plan' ||
+      response.action === 'abandon-plan'
+    if (sameLogicalTurn && honorable) {
+      this.traceAskProtocol({
+        stage: 'ext-out',
+        action: response.action,
+        note: 'honored-despite-generation-drift'
+      })
+      pending.resolve(response, { honoredDespiteStaleGeneration: true })
+      this.flushDeferredTurnComplete(pendingTurn)
+      return
+    }
+
+    const cancelReason = options?.cancelReason ?? 'stale-turn'
+    this.traceAskProtocol({
+      stage: 'ext-out',
+      action: 'cancel',
+      cancelReason,
+      sessionGeneration: this.sessionGeneration,
+      pendingSessionGeneration: pendingTurn.sessionGeneration,
+      activeTurnNull: current == null
+    })
+    pending.resolve({ action: 'cancel' }, { cancelReason })
   }
 
   /** ACP 标准 elicitation 请求和 Grok 私有问答共用一张阻塞式问答卡。 */
@@ -1024,6 +1235,11 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     params: acp.CreateElicitationRequest,
     sourceConnection: acp.ClientSideConnection
   ): Promise<acp.CreateElicitationResponse> {
+    this.traceAskProtocol({
+      stage: 'elicit-in',
+      mode: params.mode,
+      paramKeys: isRecord(params) ? Object.keys(params) : []
+    })
     const activeTurn = this.activeTurn
     if (
       !activeTurn ||
@@ -1037,23 +1253,56 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     const requestId = randomUUID()
     const request = mapElicitationRequest(params, activeTurn, requestId)
     if (!request) return Promise.resolve({ action: 'decline' })
-    return this.waitForQuestionResponse(request, activeTurn, (response) => {
-      if (response.action === 'accept') {
-        return { action: 'accept', content: response.answers as Record<string, unknown> }
-      }
-      return response.action === 'skip' ? { action: 'decline' } : { action: 'cancel' }
+    return this.waitForQuestionResponse(request, activeTurn, (response, meta) => {
+      const result =
+        response.action === 'accept'
+          ? { action: 'accept' as const, content: response.answers as Record<string, unknown> }
+          : response.action === 'skip'
+            ? { action: 'decline' as const }
+            : { action: 'cancel' as const }
+      this.traceAskProtocol({
+        stage: 'elicit-out',
+        action: response.action,
+        resultAction: result.action,
+        ...(meta?.cancelReason ? { cancelReason: meta.cancelReason } : {}),
+        ...(meta?.honoredDespiteStaleGeneration
+          ? { note: 'honored-despite-generation-drift' }
+          : {})
+      })
+      return result
     })
   }
 
   /** Grok 私有扩展方法的问答入口；未知扩展保持空响应，不能把原始 payload 泄漏给上层。 */
   private handleExtensionMethod(
     method: string,
-    params: Record<string, unknown>,
+    params: unknown,
     sourceConnection: acp.ClientSideConnection
   ): Promise<Record<string, unknown>> {
-    const isPlanApproval = GROK_PLAN_APPROVAL_METHODS.has(method)
-    if (!GROK_QUESTION_METHODS.has(method) && !isPlanApproval) {
-      return Promise.resolve({})
+    const envelopeMethod = method
+    const unwrapped = unwrapGrokExtMethodEnvelope(method, params)
+    method = unwrapped.method
+    this.traceAskProtocol({
+      stage: 'ext-in',
+      envelopeMethod,
+      method,
+      paramKeys: Object.keys(unwrapped.params)
+    })
+    const payload = unwrapped.params
+    // 方法名未知但 payload 已是问卷/计划审阅时，绝不能回 {}——Grok 反序列化缺 outcome 会一直 Waiting。
+    let isPlanApproval = GROK_PLAN_APPROVAL_METHODS.has(method)
+    let isQuestion = GROK_QUESTION_METHODS.has(method)
+    if (!isQuestion && !isPlanApproval) {
+      if (Array.isArray(payload.questions)) {
+        isQuestion = true
+      } else if (
+        typeof payload.planContent === 'string' ||
+        typeof payload.plan_content === 'string'
+      ) {
+        isPlanApproval = true
+      } else {
+        return Promise.resolve({})
+      }
     }
     const activeTurn = this.activeTurn
     if (
@@ -1061,77 +1310,96 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       activeTurn.cancelRequested ||
       activeTurn.connection !== sourceConnection ||
       !this.isActiveTurnCurrent(activeTurn) ||
-      (typeof params.sessionId === 'string' && params.sessionId !== activeTurn.runtimeSessionId)
+      (typeof payload.sessionId === 'string' && payload.sessionId !== activeTurn.runtimeSessionId)
     ) {
-      return Promise.resolve({ outcome: 'cancelled' })
+      // 计划审阅仍用 cancelled；问卷没有该变体，只能 skip_interview。
+      return Promise.resolve(
+        isPlanApproval ? { outcome: 'cancelled' } : grokAskSkipInterviewResponse(null)
+      )
     }
     const requestId = randomUUID()
-    const request =
-      isPlanApproval
-        ? mapGrokPlanApprovalRequest(params, activeTurn, requestId)
-        : mapGrokQuestionRequest(params, activeTurn, requestId)
+    const request = isPlanApproval
+      ? mapGrokPlanApprovalRequest(payload, activeTurn, requestId)
+      : mapGrokQuestionRequest(payload, activeTurn, requestId)
     if (!request) {
-      return Promise.resolve({ outcome: 'cancelled' })
+      return Promise.resolve(
+        isPlanApproval ? { outcome: 'cancelled' } : grokAskSkipInterviewResponse(null)
+      )
     }
-    return this.waitForQuestionResponse(request, activeTurn, (response) => {
-      if (isPlanApproval) {
-        if (response.action === 'approve-plan') return { outcome: 'approved' }
-        if (response.action === 'abandon-plan') {
-          return {
-            outcome: 'abandoned',
-            ...(response.feedback ? { feedback: response.feedback } : {})
-          }
-        }
-        return {
-          outcome: 'cancelled',
-          ...(response.action === 'cancel' ? {} : { feedback: '用户未批准计划。' })
-        }
-      }
-      if (response.action === 'accept') {
-        const projected = projectGrokQuestionAnswers(request, response.answers, response.annotations)
-        return {
-          outcome: 'accepted',
-          answers: projected.answers,
-          ...(projected.annotations ? { annotations: projected.annotations } : {})
-        }
-      }
-      if (response.action === 'chat-about-this') {
-        return {
-          outcome: 'chat_about_this',
-          ...(response.partialAnswers
-            ? { partialAnswers: projectGrokPartialAnswers(request, response.partialAnswers) }
-            : {})
-        }
-      }
-      if (response.action === 'skip') {
-        return {
-          outcome: 'skip_interview',
-          ...(response.partialAnswers
-            ? { partialAnswers: projectGrokPartialAnswers(request, response.partialAnswers) }
-            : {})
-        }
-      }
-      return { outcome: 'cancelled' }
+    return this.waitForQuestionResponse(request, activeTurn, (response, meta) => {
+      const result = this.projectExtensionQuestionResponse(request, isPlanApproval, response)
+      this.traceAskProtocol({
+        stage: 'ext-out',
+        envelopeMethod,
+        method,
+        action: response.action,
+        resultKeys: Object.keys(result),
+        ...(meta?.cancelReason ? { cancelReason: meta.cancelReason } : {}),
+        ...(meta?.honoredDespiteStaleGeneration
+          ? { note: 'honored-despite-generation-drift' }
+          : {})
+      })
+      return result
     })
+  }
+
+  /** 把 Renderer 回答投影成 Grok 可反序列化的 AskUserQuestionExtResponse / 计划审阅结果。 */
+  private projectExtensionQuestionResponse(
+    request: AgentRuntimeQuestionRequest,
+    isPlanApproval: boolean,
+    response: AgentQuestionResponse
+  ): Record<string, unknown> {
+    if (isPlanApproval) {
+      if (response.action === 'approve-plan') return { outcome: 'approved' }
+      if (response.action === 'abandon-plan') {
+        return {
+          outcome: 'abandoned',
+          ...(response.feedback ? { feedback: response.feedback } : {})
+        }
+      }
+      return {
+        outcome: 'cancelled',
+        ...(response.action === 'cancel' ? {} : { feedback: '用户未批准计划。' })
+      }
+    }
+    if (response.action === 'accept') {
+      const projected = projectGrokQuestionAnswers(request, response.answers, response.annotations)
+      return {
+        outcome: 'accepted',
+        answers: projected.answers,
+        annotations: projected.annotations
+      }
+    }
+    if (response.action === 'chat-about-this') {
+      return grokAskChatAboutThisResponse(request, response.partialAnswers)
+    }
+    if (response.action === 'skip') {
+      return grokAskSkipInterviewResponse(request, response.partialAnswers)
+    }
+    // cancel / 未知动作：Grok 无 cancelled 变体。
+    return grokAskSkipInterviewResponse(request)
   }
 
   private waitForQuestionResponse<T>(
     request: AgentRuntimeQuestionRequest,
     activeTurn: ActiveTurn,
-    projectResponse: (response: AgentQuestionResponse) => T
+    projectResponse: (response: AgentQuestionResponse, meta?: QuestionResolveMeta) => T
   ): Promise<T> {
-    if (this.pendingQuestions.size >= 20) return Promise.resolve(projectResponse({ action: 'cancel' }))
+    if (this.pendingQuestions.size >= 20) {
+      return Promise.resolve(projectResponse({ action: 'cancel' }, { cancelReason: 'queue-full' }))
+    }
     return new Promise<T>((resolve) => {
       this.pendingQuestions.set(request.requestId, {
         request,
         activeTurn,
-        resolve: (response) => resolve(projectResponse(response))
+        resolve: (response, meta) => resolve(projectResponse(response, meta))
       })
       try {
         this.sink.onQuestion?.(request)
       } catch {
-        this.pendingQuestions.delete(request.requestId)
-        resolve(projectResponse({ action: 'cancel' }))
+        // sink 同步抛错时可能已通过 respondQuestion 收束；仅在仍挂起时强制 cancel。
+        if (!this.pendingQuestions.delete(request.requestId)) return
+        resolve(projectResponse({ action: 'cancel' }, { cancelReason: 'onQuestion-throw' }))
       }
     })
   }
@@ -1472,6 +1740,20 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     }
   }
 
+  /** Turn 进行中按固定间隔补读 signals.json；同值快照会在 publish 内去重。 */
+  private startContextUsagePolling(activeTurn: ActiveTurn, workspace: string): void {
+    this.stopContextUsagePolling(activeTurn)
+    activeTurn.contextUsagePollTimer = setInterval(() => {
+      void this.publishSessionContextUsage(activeTurn, workspace)
+    }, GROK_CONTEXT_USAGE_POLL_MS)
+  }
+
+  private stopContextUsagePolling(activeTurn?: ActiveTurn | null): void {
+    if (!activeTurn?.contextUsagePollTimer) return
+    clearInterval(activeTurn.contextUsagePollTimer)
+    activeTurn.contextUsagePollTimer = undefined
+  }
+
   /**
    * 将当前 Task 绑定的 signals.json 快照补进既有 Usage 事件链。
    * 读取失败、session 失效或快照未变化都静默跳过，不阻塞 Turn 终态。
@@ -1670,13 +1952,26 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   private emitDraft(activeTurn: ActiveTurn, draft: AgentEventDraft): AgentEvent | null {
     if (!this.isActiveTurnCurrent(activeTurn)) return null
 
+    // 必须在 normalize 之前 defer：否则 normalizer 会占掉唯一 turn-complete 槽，答完无法补发。
+    if (draft.kind === 'turn-complete' && this.countPendingQuestions(activeTurn) > 0) {
+      this.cancelPendingPermissions(activeTurn)
+      activeTurn.deferredTurnComplete = draft
+      this.traceAskProtocol({
+        stage: 'turn-complete-deferred',
+        pendingCount: this.countPendingQuestions(activeTurn),
+        outcome: draft.outcome
+      })
+      return null
+    }
+
     const event = activeTurn.normalizer.normalize(draft)
     if (!event) return null
     this.verifyEventCapability(event)
 
     if (event.kind === 'turn-complete') {
       this.cancelPendingPermissions(activeTurn)
-      this.cancelPendingQuestions(activeTurn)
+      activeTurn.deferredTurnComplete = undefined
+      this.cancelPendingQuestions(activeTurn, 'turn-complete')
       activeTurn.outcome = event.outcome
       this.activeTurn = null
     }
@@ -1689,6 +1984,10 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     const activeTurn = this.activeTurn
     if (!activeTurn) return
 
+    // 进程崩溃/退出等同 disconnect：必须强制收束，不能把 UI 卡在已死连接的 ask 上。
+    activeTurn.deferredTurnComplete = undefined
+    this.stopContextUsagePolling(activeTurn)
+    this.cancelPendingQuestions(activeTurn, 'disconnect')
     this.emitDraft(activeTurn, {
       ...createGrokEventBase(activeTurn.runtimeSessionId, 'native'),
       kind: 'error',
@@ -1711,17 +2010,80 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     }
   }
 
+  /**
+   * Grok 可能在 ask 仍挂起时就返回 prompt 终态；此时不能立刻 turn-complete/pending-clear，
+   * 否则用户来不及提交，日志只剩 pending-clear，且没有 respond-in。
+   */
+  private async waitForPendingQuestions(activeTurn: ActiveTurn): Promise<void> {
+    const outstanding = (): number => this.countPendingQuestions(activeTurn)
+    if (outstanding() === 0) return
+    this.traceAskProtocol({
+      stage: 'ask-hold-terminal',
+      pendingCount: outstanding(),
+      outcome: activeTurn.outcome
+    })
+    await new Promise<void>((resolve) => {
+      const timer = setInterval(() => {
+        if (outstanding() === 0 || activeTurn.cancelRequested) {
+          clearInterval(timer)
+          resolve()
+        }
+      }, 50)
+    })
+  }
+
+  private countPendingQuestions(activeTurn: ActiveTurn): number {
+    let count = 0
+    for (const pending of this.pendingQuestions.values()) {
+      if (pending.activeTurn === activeTurn) count += 1
+    }
+    return count
+  }
+
+  /** 用户答完最后一题后，把先前因 ask 挂起而推迟的 turn-complete 补发出去。 */
+  private flushDeferredTurnComplete(activeTurn: ActiveTurn): void {
+    const draft = activeTurn.deferredTurnComplete
+    if (!draft || this.countPendingQuestions(activeTurn) > 0) return
+    if (!this.isActiveTurnCurrent(activeTurn) && this.activeTurn !== activeTurn) return
+    activeTurn.deferredTurnComplete = undefined
+    this.emitDraft(activeTurn, draft)
+  }
+
   /** Turn 终态、取消或 Runtime 断开时收束所有问答 Promise，并撤销 Renderer 卡片。 */
-  private cancelPendingQuestions(activeTurn?: ActiveTurn): void {
+  private cancelPendingQuestions(
+    activeTurn?: ActiveTurn,
+    source: PendingClearSource = 'turn-complete'
+  ): void {
     for (const [requestId, pending] of this.pendingQuestions) {
       if (activeTurn && pending.activeTurn !== activeTurn) continue
-      this.cancelPendingQuestion(requestId, pending)
+      this.cancelPendingQuestion(requestId, pending, source)
     }
   }
 
-  private cancelPendingQuestion(requestId: string, pending: PendingQuestion): void {
+  private cancelPendingQuestion(
+    requestId: string,
+    pending: PendingQuestion,
+    source: PendingClearSource = 'turn-complete'
+  ): void {
     this.pendingQuestions.delete(requestId)
-    pending.resolve({ action: 'cancel' })
+    const cancelReason: AskCancelReason =
+      source === 'cancel-turn'
+        ? 'cancel-turn'
+        : source === 'disconnect'
+          ? 'disconnect'
+          : 'pending-clear'
+    this.traceAskProtocol({
+      stage: 'ext-out',
+      action: 'cancel',
+      cancelReason,
+      clearSource: source,
+      ...(pending.activeTurn.outcome ? { outcome: pending.activeTurn.outcome } : {}),
+      ...(pending.activeTurn.deferredTurnComplete &&
+      pending.activeTurn.deferredTurnComplete.kind === 'turn-complete'
+        ? { deferredOutcome: pending.activeTurn.deferredTurnComplete.outcome }
+        : {})
+    })
+    pending.resolve({ action: 'cancel' }, { cancelReason })
     try {
       this.sink.onQuestionCancelled?.(pending.request)
     } catch {
@@ -1983,15 +2345,18 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
   private async disconnectInternal(updateStatus: boolean): Promise<AgentRuntimeStatus> {
     const activeTurn = this.activeTurn
-    if (activeTurn) {
+    // 先按 disconnect 收束 ask，再发 turn-complete；避免 emitDraft 因挂起问答而 defer。
+    this.stopContextUsagePolling(activeTurn)
+    this.cancelPendingPermissions()
+    this.cancelPendingQuestions(undefined, 'disconnect')
+    if (activeTurn && this.activeTurn === activeTurn) {
+      activeTurn.deferredTurnComplete = undefined
       this.emitDraft(activeTurn, {
         ...createGrokEventBase(activeTurn.runtimeSessionId, 'native'),
         kind: 'turn-complete',
         outcome: 'cancelled'
       })
     }
-    this.cancelPendingPermissions()
-    this.cancelPendingQuestions()
     this.clearAvailableCommandSnapshot()
 
     const process = this.process
@@ -2229,6 +2594,17 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   /** 观察记录缺省为空操作，避免生产路径多写协议字段。 */
   private observe(record: GrokAcpObservationRecord): void {
     this.options.protocolObserver?.record(record)
+  }
+
+  /**
+   * 提问回包诊断只写方法名和字段名，不写答案正文。
+   * 用来核对 Grok 实际打来的是 ext_method 还是 elicitation/create。
+   */
+  private traceAskProtocol(event: Record<string, unknown>): void {
+    const line = `${JSON.stringify({ ts: new Date().toISOString(), ...event })}\n`
+    void fs
+      .appendFile(join(getManagedGrokHome(this.options.userDataPath), 'ask-debug.jsonl'), line)
+      .catch(() => undefined)
   }
 
   /** 受控 E2E 辅助 trace 按 Adapter 调用顺序串行写入，生产路径不会触及该文件。 */

@@ -176,14 +176,32 @@ export function resolveComposerContextUsage(
 }
 
 export interface ComposerContextUsagePresentation {
-  /** 面向 Composer 的紧凑数字，完整数值仍放在 title 与无障碍文案中。 */
+  /** 原始 used/limit，供 title 与测试对照。 */
   label: string
+  /** Composer 常驻展示的紧凑用量，例如 24.3k / 500k。 */
+  compactLabel: string
   percentage: number
+  percentLabel: string
   title: string
   ariaLabel: string
 }
 
-/** 将 Runtime 真实上下文用量转换成圆环、文案和无障碍标签，不做本地 Token 估算。 */
+/** 把 token 数收成 Composer 能放下的短标签，不改真实 used/limit。 */
+export function formatContextUsageCount(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return '0'
+  const amount = Math.round(value)
+  if (amount < 1000) return String(amount)
+  if (amount < 1_000_000) {
+    const thousands = amount / 1000
+    if (thousands >= 100) return `${Math.round(thousands)}k`
+    return `${thousands.toFixed(1).replace(/\.0$/, '')}k`
+  }
+  const millions = amount / 1_000_000
+  if (millions >= 10) return `${Math.round(millions)}M`
+  return `${millions.toFixed(1).replace(/\.0$/, '')}M`
+}
+
+/** 将 Runtime 真实上下文用量转换成常驻花片，不做本地 Token 估算。 */
 export function resolveComposerContextUsagePresentation(
   usage: AgentContextUsage | null | undefined
 ): ComposerContextUsagePresentation | null {
@@ -195,12 +213,14 @@ export function resolveComposerContextUsagePresentation(
     usage.limitTokens > 0
       ? Math.min(100, Math.max(0, Math.round((usage.usedTokens / usage.limitTokens) * 1000) / 10))
       : 0
-  const percentageLabel = `${percentage}%`
+  const percentLabel = `${percentage}%`
   return {
     label,
+    compactLabel: `${formatContextUsageCount(usage.usedTokens)} / ${formatContextUsageCount(usage.limitTokens)}`,
     percentage,
-    title: `上下文用量：${usage.usedTokens}/${usage.limitTokens} tokens（${percentageLabel}）`,
-    ariaLabel: `上下文已使用 ${usage.usedTokens} / ${usage.limitTokens} tokens，占 ${percentageLabel}`
+    percentLabel,
+    title: `上下文用量：${usage.usedTokens}/${usage.limitTokens} tokens（${percentLabel}）`,
+    ariaLabel: `上下文已使用 ${usage.usedTokens} / ${usage.limitTokens} tokens，占 ${percentLabel}`
   }
 }
 

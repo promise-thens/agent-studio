@@ -53,7 +53,6 @@ const props = defineProps<{
   permissionMode?: TaskPermissionMode
   takeoverApplied?: boolean
   takeoverMayStillBeActive?: boolean
-  takeoverHud?: string | null
   setPermissionMode: (mode: TaskPermissionMode) => Promise<void>
   /** Plan 是独立轴，不是第四个批准档；无广告时按钮保持 disabled。 */
   planMode?: ComposerPlanMode
@@ -359,7 +358,6 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
 
 <template>
   <footer class="composer-wrap">
-    <p v-if="takeoverHud" class="composer-takeover-hud" role="status">{{ takeoverHud }}</p>
     <div
       class="composer"
       :class="{ dragging }"
@@ -500,23 +498,16 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
           <span
             v-if="contextUsage"
             class="composer-usage"
-            role="img"
-            tabindex="0"
+            :title="contextUsage.title"
             :aria-label="contextUsage.ariaLabel"
           >
-            <!-- 用 SVG 圆环表达当前上下文占比，详细数值只在悬停或聚焦时展示。 -->
-            <svg class="composer-usage-ring" viewBox="0 0 24 24" aria-hidden="true">
-              <circle class="composer-usage-ring-track" cx="12" cy="12" r="9" pathLength="100" />
-              <circle
-                class="composer-usage-ring-value"
-                cx="12"
-                cy="12"
-                r="9"
-                pathLength="100"
-                :stroke-dasharray="`${contextUsage.percentage} 100`"
+            <span class="composer-usage-meter" aria-hidden="true">
+              <span
+                class="composer-usage-meter-fill"
+                :style="{ width: `${contextUsage.percentage}%` }"
               />
-            </svg>
-            <span class="composer-usage-tooltip" role="tooltip">{{ contextUsage.title }}</span>
+            </span>
+            <span class="composer-usage-copy">{{ contextUsage.compactLabel }}</span>
           </span>
           <button
             v-if="action === 'stop'"

@@ -221,7 +221,9 @@ describe('发送与停止身份', () => {
       })
     ).toEqual({
       label: '120/4096',
+      compactLabel: '120 / 4.1k',
       percentage: 2.9,
+      percentLabel: '2.9%',
       title: '上下文用量：120/4096 tokens（2.9%）',
       ariaLabel: '上下文已使用 120 / 4096 tokens，占 2.9%'
     })
@@ -233,6 +235,16 @@ describe('发送与停止身份', () => {
       })?.percentage
     ).toBe(100)
     expect(resolveComposerContextUsagePresentation(null)).toBeNull()
+    expect(
+      resolveComposerContextUsagePresentation({
+        scope: 'context',
+        usedTokens: 24280,
+        limitTokens: 500000
+      })
+    ).toMatchObject({
+      compactLabel: '24.3k / 500k',
+      percentLabel: '4.9%'
+    })
   })
 })
 

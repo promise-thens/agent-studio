@@ -46,7 +46,11 @@ import {
   CONTROLLED_ACP_E2E_FIXTURE_FILE,
   type ControlledAcpFixtureLaunch
 } from './controlled-acp-fixture'
-import { GrokAcpAdapter, buildGrokRuntimeEnvironment } from './grok-acp-adapter'
+import {
+  GrokAcpAdapter,
+  GROK_CONTEXT_USAGE_POLL_MS,
+  buildGrokRuntimeEnvironment
+} from './grok-acp-adapter'
 import { deriveGrokRuntimeCommandId } from './grok-command-evidence-mapper'
 import {
   createGrokCapabilitySnapshot,
@@ -1148,6 +1152,77 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     await rm(signalsRoot, { recursive: true, force: true })
   })
 
+  it('Turn 进行中会轮询 signals.json，用量变化必须在 prompt 返回前发出', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const signalsRoot = await mkdtemp(join(tmpdir(), 'grok-session-signals-poll-'))
+    const signalsDirectory = join(
+      signalsRoot,
+      'sessions',
+      encodeURIComponent(WORKSPACE),
+      'runtime-session-1'
+    )
+    await mkdir(signalsDirectory, { recursive: true })
+    const signalsPath = join(signalsDirectory, 'signals.json')
+    await writeFile(
+      signalsPath,
+      JSON.stringify({
+        contextTokensUsed: 100,
+        contextWindowTokens: 1000,
+        contextWindowUsage: 10
+      })
+    )
+    let releasePrompt: (() => void) | undefined
+    const prompt = vi.fn().mockImplementation(
+      () =>
+        new Promise<{ stopReason: 'end_turn' }>((resolve) => {
+          releasePrompt = () => resolve({ stopReason: 'end_turn' })
+        })
+    )
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, {
+      grokSessionSignalsRoot: signalsRoot
+    })
+
+    try {
+      const turnPromise = harness.adapter.startTurn(
+        turnContext('task-usage-poll', 'turn-usage-poll')
+      )
+      await vi.waitFor(() => {
+        expect(harness.events.some((event) => event.kind === 'usage')).toBe(true)
+      })
+      expect(harness.events[0]).toMatchObject({
+        kind: 'usage',
+        usage: { scope: 'context', usedTokens: 100, limitTokens: 1000 }
+      })
+
+      await writeFile(
+        signalsPath,
+        JSON.stringify({
+          contextTokensUsed: 420,
+          contextWindowTokens: 1000,
+          contextWindowUsage: 42
+        })
+      )
+      await vi.advanceTimersByTimeAsync(GROK_CONTEXT_USAGE_POLL_MS)
+      await vi.waitFor(() => {
+        expect(
+          harness.events.filter(
+            (event) =>
+              event.kind === 'usage' &&
+              event.usage.scope === 'context' &&
+              event.usage.usedTokens === 420
+          )
+        ).toHaveLength(1)
+      })
+
+      releasePrompt?.()
+      await expect(turnPromise).resolves.toEqual({ outcome: 'completed' })
+    } finally {
+      vi.useRealTimers()
+      await rm(signalsRoot, { recursive: true, force: true })
+    }
+  })
+
   it('原生 usage_update 与 signals 同值时只发布一条 context usage', async () => {
     const signalsRoot = await mkdtemp(join(tmpdir(), 'grok-session-signals-dedupe-'))
     const signalsDirectory = join(
@@ -1491,7 +1566,8 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
     await expect(responsePromise).resolves.toEqual({
       outcome: 'accepted',
-      answers: { 选择范围: ['前端'] }
+      answers: { 选择范围: ['前端'] },
+      annotations: {}
     })
   })
 
@@ -1525,6 +1601,125 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
   })
 
+  it('ACP JSON-RPC 方法 ext_method 要拆出内部 x.ai/ask_user_question 再弹出问答卡', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'ext_method',
+      {
+        method: 'x.ai/ask_user_question',
+        params: {
+          sessionId: 'runtime-session-1',
+          toolCallId: 'call-ask-1',
+          mode: 'default',
+          questions: [
+            {
+              question: '你现在最想先解决哪一件事?',
+              options: [{ label: '改代码', description: '修改现有实现' }]
+            }
+          ]
+        }
+      },
+      connection
+    )
+
+    expect(harness.questions).toHaveLength(1)
+    expect(harness.questions[0].questions[0]).toMatchObject({
+      question: '你现在最想先解决哪一件事?',
+      kind: 'single'
+    })
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '改代码' }
+    })
+    // Grok 把 JSON-RPC result 直接当成 AskUserQuestionExtResponse；Accepted 必须带 answers + annotations。
+    await expect(responsePromise).resolves.toEqual({
+      outcome: 'accepted',
+      answers: { '你现在最想先解决哪一件事?': ['改代码'] },
+      annotations: {}
+    })
+  })
+
+  it('ACP 把 Grok AskUserQuestion 参数当成 JSON 字符串时仍弹出问答卡', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+
+    const payload = {
+      sessionId: 'runtime-session-1',
+      toolCallId: 'call-ask-1',
+      mode: 'default',
+      questions: [
+        {
+          question: '你现在最想先解决哪一件事?',
+          options: [
+            { label: '改代码', description: '修改现有实现' },
+            { label: '查 bug', description: '定位失败原因' }
+          ]
+        }
+      ]
+    }
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'x.ai/ask_user_question',
+      JSON.stringify(payload) as unknown as Record<string, unknown>,
+      connection
+    )
+
+    expect(harness.questions).toHaveLength(1)
+    expect(harness.questions[0].questions[0]).toMatchObject({
+      question: '你现在最想先解决哪一件事?',
+      kind: 'single'
+    })
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '改代码' }
+    })
+    await expect(responsePromise).resolves.toMatchObject({
+      outcome: 'accepted',
+      answers: { '你现在最想先解决哪一件事?': ['改代码'] }
+    })
+  })
+
+  it('兼容 Grok 1.0.13 的 askUserQuestion 方法名，缺 label 的选项不能整卡取消', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'askUserQuestion',
+      {
+        sessionId: 'runtime-session-1',
+        toolCallId: 'call-ask-2',
+        mode: 'default',
+        questions: [
+          {
+            question: '你现在最想先解决哪一件事?',
+            options: [
+              { description: '没有 label 的坏选项' },
+              { label: '改代码', description: '修改现有实现' }
+            ]
+          }
+        ]
+      },
+      connection
+    )
+
+    expect(harness.questions).toHaveLength(1)
+    expect(harness.questions[0].questions[0].options).toEqual([
+      expect.objectContaining({ label: '改代码', value: '改代码' })
+    ])
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '改代码' }
+    })
+    await expect(responsePromise).resolves.toMatchObject({
+      outcome: 'accepted',
+      answers: { '你现在最想先解决哪一件事?': ['改代码'] }
+    })
+  })
+
   it('兼容 Grok 真实版本使用的裸 `ask_user_question` 扩展方法名', async () => {
     const connection = {} as acp.ClientSideConnection
     const harness = createAdapterHarness(connection)
@@ -1550,7 +1745,395 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     })
   })
 
-  it('接住 Grok x.ai/exit_plan_mode，并把批准/放弃映射为计划终态', async () => {
+  it('代次漂移但仍是同一 logical Turn 时，accept 不能被强制改写成 cancel', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    const activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+    harness.internal.activeTurn = activeTurn
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      '_x.ai/ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [
+          {
+            question: '选择范围',
+            options: [{ label: '前端' }, { label: '后端' }]
+          }
+        ]
+      },
+      connection
+    )
+    expect(harness.questions).toHaveLength(1)
+
+    // 模拟 sessionGeneration 漂移：activeTurn 对象仍在，但 isActiveTurnCurrent 会失败。
+    ;(harness.internal as { sessionGeneration: number }).sessionGeneration += 1
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '前端' },
+      annotations: { 'question-1': { notes: '仍要前端优先' } }
+    })
+    // 必须仍是 accepted+annotations；绝不能被映射成 cancel→skip_interview。
+    await expect(responsePromise).resolves.toEqual({
+      outcome: 'accepted',
+      answers: { 选择范围: ['前端'] },
+      annotations: { 选择范围: { notes: '仍要前端优先' } }
+    })
+  })
+
+  it('chat-about-this / skip / cancel 只使用 AskUserQuestionExtResponse 合法变体', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+
+    const chatPromise = harness.internal.handleExtensionMethod(
+      'x.ai/ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [{ question: '选择范围', options: [{ label: '前端' }, { label: '后端' }] }]
+      },
+      connection
+    )
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'chat-about-this',
+      partialAnswers: { 'question-1': '前端' }
+    })
+    await expect(chatPromise).resolves.toEqual({
+      outcome: 'chat_about_this',
+      partial_answers: { 选择范围: '前端' }
+    })
+
+    const skipPromise = harness.internal.handleExtensionMethod(
+      'ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [{ question: '下一步?', options: [{ label: '继续' }] }]
+      },
+      connection
+    )
+    const skipRequest = harness.questions.at(-1)
+    expect(skipRequest).toBeTruthy()
+    harness.adapter.respondQuestion(skipRequest!.requestId, {
+      action: 'skip',
+      partialAnswers: { 'question-1': '继续' }
+    })
+    await expect(skipPromise).resolves.toEqual({
+      outcome: 'skip_interview',
+      partial_answers: { '下一步?': '继续' }
+    })
+
+    // Grok 二进制无 cancelled 变体；用户取消必须投影成 skip_interview。
+    const cancelPromise = harness.internal.handleExtensionMethod(
+      '_x.ai/ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [{ question: '还要继续吗?', options: [{ label: '是' }, { label: '否' }] }]
+      },
+      connection
+    )
+    const cancelRequest = harness.questions.at(-1)
+    expect(cancelRequest).toBeTruthy()
+    harness.adapter.respondQuestion(cancelRequest!.requestId, { action: 'cancel' })
+    await expect(cancelPromise).resolves.toEqual({
+      outcome: 'skip_interview',
+      partial_answers: {}
+    })
+  })
+
+  it('方法名未知但 params 带 questions 时仍弹出问答卡，绝不能回裸 {}', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'ext_method',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [
+          {
+            question: '你现在最想先解决哪一件事?',
+            options: [{ label: '改代码', description: '修改现有实现' }]
+          }
+        ]
+      },
+      connection
+    )
+
+    expect(harness.questions).toHaveLength(1)
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '改代码' },
+      annotations: { 'question-1': { notes: '优先修卡死' } }
+    })
+    await expect(responsePromise).resolves.toEqual({
+      outcome: 'accepted',
+      answers: { '你现在最想先解决哪一件事?': ['改代码'] },
+      annotations: { '你现在最想先解决哪一件事?': { notes: '优先修卡死' } }
+    })
+  })
+
+  it('sessionGeneration 漂移但同一 Turn 仍活动时，accept 不得被改写成 cancel', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    const activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+    harness.internal.activeTurn = activeTurn
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [{ question: '选择范围', options: [{ label: '前端' }] }]
+      },
+      connection
+    )
+    expect(harness.questions).toHaveLength(1)
+
+    // 模拟 activateSession / HMR 代次漂移；Turn 对象与身份仍在。
+    harness.internal.sessionGeneration = 99
+
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '前端' }
+    })
+    await expect(responsePromise).resolves.toMatchObject({
+      outcome: 'accepted',
+      answers: { 选择范围: ['前端'] }
+    })
+  })
+
+  it('Turn 对象已消失时，accept 强制 skip_interview，并标记 cancelReason=stale-turn', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+    const traces: Record<string, unknown>[] = []
+    vi.spyOn(
+      harness.adapter as unknown as { traceAskProtocol: (event: Record<string, unknown>) => void },
+      'traceAskProtocol'
+    ).mockImplementation((event) => {
+      traces.push(event)
+    })
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [{ question: '选择范围', options: [{ label: '前端' }] }]
+      },
+      connection
+    )
+    expect(harness.questions).toHaveLength(1)
+    harness.internal.activeTurn = null
+
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '前端' }
+    })
+    await expect(responsePromise).resolves.toEqual({
+      outcome: 'skip_interview',
+      partial_answers: {}
+    })
+    expect(
+      traces.some(
+        (event) => event.stage === 'ext-out' && event.cancelReason === 'stale-turn'
+      )
+    ).toBe(true)
+  })
+
+  it('提问挂起后 cancelRequested + 代次漂移时，accept 强制 stale-turn cancel', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    const activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+    harness.internal.activeTurn = activeTurn
+    const traces: Record<string, unknown>[] = []
+    vi.spyOn(
+      harness.adapter as unknown as { traceAskProtocol: (event: Record<string, unknown>) => void },
+      'traceAskProtocol'
+    ).mockImplementation((event) => {
+      traces.push(event)
+    })
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [{ question: '选择范围', options: [{ label: '前端' }] }]
+      },
+      connection
+    )
+    expect(harness.questions).toHaveLength(1)
+
+    activeTurn.cancelRequested = true
+    harness.internal.sessionGeneration = 42
+
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '前端' }
+    })
+    await expect(responsePromise).resolves.toEqual({
+      outcome: 'skip_interview',
+      partial_answers: {}
+    })
+    expect(
+      traces.some(
+        (event) => event.stage === 'ext-out' && event.cancelReason === 'stale-turn'
+      )
+    ).toBe(true)
+  })
+
+  it('ask 挂起时 emit turn-complete 不得 pending-clear，accept 仍可兑现', async () => {
+    const connection = {} as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    const activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+    harness.internal.activeTurn = activeTurn
+    const traces: Record<string, unknown>[] = []
+    vi.spyOn(
+      harness.adapter as unknown as { traceAskProtocol: (event: Record<string, unknown>) => void },
+      'traceAskProtocol'
+    ).mockImplementation((event) => {
+      traces.push(event)
+    })
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [{ question: '选择范围', options: [{ label: '前端' }] }]
+      },
+      connection
+    )
+    expect(harness.questions).toHaveLength(1)
+    expect(harness.internal.pendingQuestions.size).toBe(1)
+
+    const emitted = harness.internal.emitDraft(activeTurn, {
+      ...createGrokEventBase('runtime-session-1', 'native'),
+      kind: 'turn-complete',
+      outcome: 'completed'
+    })
+    expect(emitted).toBeNull()
+    expect(harness.events.filter((event) => event.kind === 'turn-complete')).toHaveLength(0)
+    expect(harness.internal.pendingQuestions.size).toBe(1)
+    expect(harness.internal.activeTurn).toBe(activeTurn)
+    expect(
+      traces.some(
+        (event) => event.stage === 'turn-complete-deferred' && event.outcome === 'completed'
+      )
+    ).toBe(true)
+    expect(traces.some((event) => event.cancelReason === 'pending-clear')).toBe(false)
+
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '前端' }
+    })
+    await expect(responsePromise).resolves.toEqual({
+      outcome: 'accepted',
+      answers: { 选择范围: ['前端'] },
+      annotations: {}
+    })
+    expect(harness.events.some((event) => event.kind === 'turn-complete')).toBe(true)
+    expect(harness.events.at(-1)).toMatchObject({
+      kind: 'turn-complete',
+      outcome: 'completed'
+    })
+    expect(harness.internal.activeTurn).toBeNull()
+    expect(traces.some((event) => event.cancelReason === 'pending-clear')).toBe(false)
+  })
+
+  it('cancelTurn 仍以 cancelReason=cancel-turn 收束挂起问答', async () => {
+    const cancel = vi.fn().mockResolvedValue(undefined)
+    const connection = { cancel } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    const activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
+    harness.internal.activeTurn = activeTurn
+    const traces: Record<string, unknown>[] = []
+    vi.spyOn(
+      harness.adapter as unknown as { traceAskProtocol: (event: Record<string, unknown>) => void },
+      'traceAskProtocol'
+    ).mockImplementation((event) => {
+      traces.push(event)
+    })
+
+    const responsePromise = harness.internal.handleExtensionMethod(
+      'ask_user_question',
+      {
+        sessionId: 'runtime-session-1',
+        questions: [{ question: '选择范围', options: [{ label: '前端' }] }]
+      },
+      connection
+    )
+    expect(harness.questions).toHaveLength(1)
+
+    await harness.adapter.cancelTurn({
+      taskId: 'task-current',
+      turnId: 'turn-current',
+      runtimeSessionId: 'runtime-session-1'
+    })
+
+    await expect(responsePromise).resolves.toEqual({
+      outcome: 'skip_interview',
+      partial_answers: {}
+    })
+    expect(harness.internal.pendingQuestions.size).toBe(0)
+    expect(
+      traces.some(
+        (event) =>
+          event.stage === 'ext-out' &&
+          event.cancelReason === 'cancel-turn' &&
+          event.clearSource === 'cancel-turn'
+      )
+    ).toBe(true)
+    expect(cancel).toHaveBeenCalled()
+  })
+
+  it('prompt 先返回但 ask 仍挂起时，startTurn 等到 accept 后再 turn-complete', async () => {
+    let askPromise: Promise<Record<string, unknown>> | undefined
+    const prompt = vi.fn().mockImplementation(async () => {
+      askPromise = harness.internal.handleExtensionMethod(
+        'ask_user_question',
+        {
+          sessionId: 'runtime-session-1',
+          questions: [{ question: '选择范围', options: [{ label: '前端' }] }]
+        },
+        connection
+      )
+      await Promise.resolve()
+      return { stopReason: 'end_turn' as const }
+    })
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection)
+    const traces: Record<string, unknown>[] = []
+    vi.spyOn(
+      harness.adapter as unknown as { traceAskProtocol: (event: Record<string, unknown>) => void },
+      'traceAskProtocol'
+    ).mockImplementation((event) => {
+      traces.push(event)
+    })
+
+    const turnPromise = harness.adapter.startTurn(turnContext('task-hold', 'turn-hold'))
+    await vi.waitFor(() => {
+      expect(harness.questions.length).toBe(1)
+    })
+    expect(harness.events.some((event) => event.kind === 'turn-complete')).toBe(false)
+    expect(traces.some((event) => event.stage === 'ask-hold-terminal')).toBe(true)
+
+    harness.adapter.respondQuestion(harness.questions[0].requestId, {
+      action: 'accept',
+      answers: { 'question-1': '前端' }
+    })
+    await expect(turnPromise).resolves.toEqual({ outcome: 'completed' })
+    await expect(askPromise!).resolves.toMatchObject({
+      outcome: 'accepted',
+      answers: { 选择范围: ['前端'] }
+    })
+    expect(traces.some((event) => event.cancelReason === 'pending-clear')).toBe(false)
+    expect(harness.events.at(-1)).toMatchObject({
+      kind: 'turn-complete',
+      outcome: 'completed',
+      taskId: 'task-hold',
+      turnId: 'turn-hold'
+    })
+  })
+
+    it('接住 Grok x.ai/exit_plan_mode，并把批准/放弃映射为计划终态', async () => {
     const connection = {} as acp.ClientSideConnection
     const harness = createAdapterHarness(connection)
     harness.internal.activeTurn = createActiveTurn(connection, 'task-current', 'turn-current', 1, 1)
@@ -3327,7 +3910,7 @@ interface GrokAcpAdapterTestAccess {
   ) => Promise<acp.RequestPermissionResponse>
   handleExtensionMethod: (
     method: string,
-    params: Record<string, unknown>,
+    params: unknown,
     sourceConnection: acp.ClientSideConnection
   ) => Promise<Record<string, unknown>>
   handleSessionUpdate: (

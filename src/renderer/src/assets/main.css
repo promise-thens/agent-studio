@@ -2535,92 +2535,45 @@ button:disabled {
 }
 
 .composer-usage {
-  position: relative;
   display: inline-flex;
-  width: 25px;
-  height: 25px;
+  min-height: 25px;
+  max-width: 160px;
   align-items: center;
-  justify-content: center;
-  color: var(--text-3);
-  cursor: help;
-  outline: none;
-}
-
-.composer-usage:focus-visible {
+  gap: 7px;
+  padding: 0 8px 0 7px;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  outline: 2px solid color-mix(in srgb, var(--accent) 72%, transparent);
-  outline-offset: 2px;
-}
-
-.composer-usage-ring {
-  display: block;
-  width: 17px;
-  height: 17px;
-  flex: 0 0 auto;
-  transform: rotate(-90deg);
-}
-
-.composer-usage-ring-track,
-.composer-usage-ring-value {
-  fill: none;
-  stroke-width: 3;
-}
-
-.composer-usage-ring-track {
-  stroke: color-mix(in srgb, var(--border-strong) 70%, transparent);
-}
-
-.composer-usage-ring-value {
-  stroke: var(--accent);
-  stroke-linecap: round;
-  transition: stroke-dasharray 180ms ease;
-}
-
-.composer-usage-tooltip {
-  position: absolute;
-  z-index: 5;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  width: max-content;
-  max-width: min(280px, 70vw);
-  padding: 6px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  color: var(--text-1);
-  background: var(--surface-3);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 28%);
+  color: var(--text-3);
+  background: var(--surface-2);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
-  line-height: 1.35;
+  line-height: 1;
+}
+
+.composer-usage-meter {
+  display: block;
+  width: 34px;
+  height: 4px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border-strong) 78%, transparent);
+}
+
+.composer-usage-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  min-width: 0;
+  transition: width 180ms ease;
+}
+
+.composer-usage-copy {
+  overflow: hidden;
+  font-weight: 620;
+  text-overflow: ellipsis;
   white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transform: translate(-50%, 4px);
-  visibility: hidden;
-  transition:
-    opacity 140ms ease,
-    transform 140ms ease,
-    visibility 140ms ease;
-}
-
-.composer-usage-tooltip::after {
-  position: absolute;
-  bottom: -4px;
-  left: 50%;
-  width: 7px;
-  height: 7px;
-  border-right: 1px solid var(--border-strong);
-  border-bottom: 1px solid var(--border-strong);
-  background: var(--surface-3);
-  content: '';
-  transform: translateX(-50%) rotate(45deg);
-}
-
-.composer-usage:hover .composer-usage-tooltip,
-.composer-usage:focus-visible .composer-usage-tooltip {
-  opacity: 1;
-  transform: translate(-50%, 0);
-  visibility: visible;
 }
 
 .composer-footer .model-selector,
@@ -2689,18 +2642,6 @@ button:disabled {
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.composer-takeover-hud {
-  margin: 0 0 8px;
-  padding: 6px 10px;
-  border: 1px solid color-mix(in srgb, var(--danger) 42%, var(--border));
-  border-radius: var(--radius-chip);
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-  font-size: 11px;
-  font-weight: 650;
-  line-height: 1.4;
 }
 
 .send-button,
@@ -4074,7 +4015,7 @@ button:disabled {
   }
 }
 
-/* 980 保底：模型、批准模式、Plan 和发送/停止必须仍在输入框内；上下文圆环保留。 */
+/* 980 保底：模型、批准模式、Plan 和发送/停止必须仍在输入框内；上下文用量花片保留。 */
 @media (max-width: 980px) {
   .composer-footer .model-selector,
   .composer-footer .permission-mode-menu,
@@ -4093,11 +4034,6 @@ button:disabled {
 
 /* 减少动画：检查器滑入、折叠展开、spinner 都必须 duration 0，不能只写 1ms。 */
 @media (prefers-reduced-motion: reduce) {
-  .composer-takeover-hud {
-    animation: none;
-    opacity: 1;
-  }
-
   *,
   *::before,
   *::after {

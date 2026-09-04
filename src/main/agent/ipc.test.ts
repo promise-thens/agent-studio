@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import type {
   AgentRuntimeStatus,
@@ -82,6 +85,7 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
       commands: []
     })),
     respondPermission: vi.fn(async () => undefined),
+    respondQuestion: vi.fn(),
     setPermissionMode: vi.fn(async () => ({
       task,
       decision: { kind: 'noop' as const }
@@ -463,6 +467,51 @@ describe('Agent IPC Handler', () => {
 
     expect(result).toMatchObject({ ok: false, error: { code: 'payload-too-large' } })
     expect(fixture.runtime.respondPermission).not.toHaveBeenCalled()
+  })
+
+  it('问答提交必须调用 Runtime.respondQuestion，accept 不得静默丢弃', async () => {
+    const fixture = createFixture()
+    const request = {
+      questionId: 'question-1',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      response: { action: 'accept' as const, answers: { q1: '在家休息' } }
+    }
+
+    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.respondQuestion, request)).toEqual({
+      ok: true,
+      value: null
+    })
+    expect(fixture.runtime.respondQuestion).toHaveBeenCalledWith(request)
+  })
+
+  it('Runtime 未实现 respondQuestion 时必须失败，不能假装提交成功', async () => {
+    const fixture = createFixture()
+    ;(fixture.runtime as { respondQuestion?: AgentIpcRuntime['respondQuestion'] }).respondQuestion =
+      undefined
+
+    const result = await fixture.invoke(AGENT_INVOKE_CHANNELS.respondQuestion, {
+      questionId: 'question-1',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      response: { action: 'accept', answers: { q1: '在家休息' } }
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'operation-failed', message: '当前 Runtime 不支持问答提交。' }
+    })
+  })
+
+  it('生产 IPC 门面必须转发 respondQuestion，避免提交成功但 Adapter 无感', () => {
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '../index.ts'),
+      'utf8'
+    )
+    expect(source).toMatch(
+      /respondQuestion:\s*\(request\)\s*=>\s*service\.respondQuestion\(request\)/
+    )
+    expect(source).not.toContain('respondQuestion?.(request)')
   })
 
   it('Runtime 未初始化时返回稳定错误码', async () => {

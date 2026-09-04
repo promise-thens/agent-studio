@@ -183,5 +183,9 @@ export interface AgentRuntimeAdapter {
   cancelTurn(turn: AgentRuntimeTurnRef): Promise<void>
   respondPermission(requestId: string, resolution: AgentRuntimePermissionResolution): void
   /** 旧 Runtime 测试夹具可能不支持问答；生产 Adapter 会实现该方法。 */
-  respondQuestion?: (requestId: string, response: AgentQuestionResponse) => void
+  respondQuestion?: (
+    requestId: string,
+    response: AgentQuestionResponse,
+    options?: { cancelReason?: string }
+  ) => void
 }

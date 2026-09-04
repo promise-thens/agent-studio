@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentPermissionDecision, AgentPermissionRequest } from '../../../shared/agent'
-import type { AgentQuestionRequest, AgentQuestionResponse } from '../../../shared/agent-question'
+import type { AgentQuestionRequest } from '../../../shared/agent-question'
+import type { AgentRespondQuestionRequest } from '../../../shared/agent-ipc'
 import type { ComposerPlanMode } from '../../../shared/session-plan-mode'
 import {
   resolveConversationPlanEmptyClass,
@@ -18,6 +19,7 @@ import {
   nextProgrammaticFollowFlag,
   resolveConversationEmptyCopy,
   resolveConversationScrollSource,
+  resolveConversationStickyQuestion,
   shouldHoldPinnedFollow,
   type ConversationConnectFailure,
   type ConversationScrollIntent,
@@ -74,7 +76,7 @@ defineEmits<{
   loadMoreEvents: [turnId: string]
   retryConnect: []
   respondPermission: [decision: AgentPermissionDecision]
-  respondQuestion: [response: AgentQuestionResponse]
+  respondQuestion: [request: AgentRespondQuestionRequest]
   cancelTurn: []
   reviewChanges: []
   restoreChanges: []
@@ -104,27 +106,17 @@ function permissionForTurn(
   return request.taskId === turn.taskId && request.turnId === turn.turnId ? request : null
 }
 
-/** 只把当前队首问答卡挂到对应 Turn，避免后台 Task 的问题串到当前对话。 */
-function questionForTurn(
-  turn: Pick<TurnTimelineViewModel, 'taskId' | 'turnId'>
-): AgentQuestionRequest | null {
-  const request = props.question
-  if (!request) return null
-  return request.taskId === turn.taskId && request.turnId === turn.turnId ? request : null
-}
+/** 当前对话底部固定展示问答卡，避免只挂在已滚出视野的历史 Turn。 */
+const stickyQuestion = computed(() =>
+  resolveConversationStickyQuestion({
+    question: props.question,
+    taskId: props.model?.taskId
+  })
+)
 
 /** 审批 Turn 还不在当前流里时，仍把卡挂在底部，并标「来自」以免当成当前对话的请求。 */
 const unmatchedPermission = computed(() => {
   const request = props.permission
-  if (!request) return null
-  const matched = (props.model?.turns ?? []).some(
-    (turn) => turn.taskId === request.taskId && turn.turnId === request.turnId
-  )
-  return matched ? null : request
-})
-
-const unmatchedQuestion = computed(() => {
-  const request = props.question
   if (!request) return null
   const matched = (props.model?.turns ?? []).some(
     (turn) => turn.taskId === request.taskId && turn.turnId === request.turnId
@@ -295,8 +287,8 @@ watch(
         :permission="permissionForTurn(turn)"
         :permission-pending="permissionPending"
         :permission-task-title="permissionTaskTitle"
-        :question="questionForTurn(turn)"
         :question-pending="questionPending"
+        :has-pending-question="Boolean(stickyQuestion)"
         :has-more-events="eventAfterSequenceByTurn?.[turn.turnId] != null"
         :loading-more-events="loadingEventTurnIds?.includes(turn.turnId) ?? false"
         :clock-tick="clockTick"
@@ -330,10 +322,10 @@ watch(
       />
     </div>
 
-    <div v-if="unmatchedQuestion" class="conversation-turn">
+    <div v-if="stickyQuestion" class="conversation-turn">
       <QuestionPrompt
-        :key="unmatchedQuestion.questionId"
-        :request="unmatchedQuestion"
+        :key="stickyQuestion.questionId"
+        :request="stickyQuestion"
         :pending="questionPending"
         @respond="$emit('respondQuestion', $event)"
       />

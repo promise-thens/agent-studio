@@ -21,7 +21,11 @@ import {
   type AgentPermissionCancellation,
   type AgentSetPermissionModeResult
 } from '../shared/agent-ipc'
-import { parseAgentQuestionRequest, type AgentQuestionRequest } from '../shared/agent-question'
+import {
+  cloneAgentQuestionResponse,
+  parseAgentQuestionRequest,
+  type AgentQuestionRequest
+} from '../shared/agent-question'
 import { parseAppAppearanceState } from '../shared/app-appearance'
 import {
   APP_INVOKE_CHANNELS,
@@ -715,13 +719,22 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
         turnId: request.turnId,
         decision: request.decision
       }) as Promise<DesktopIpcResult<null>>,
-    respondQuestion: (request) =>
-      ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.respondQuestion, {
+    respondQuestion: (request) => {
+      // accept 常带 answers/annotations；Vue Proxy 不能 structured clone，这里先拍成可 IPC 的纯数据。
+      const response = cloneAgentQuestionResponse(request.response)
+      if (!response) {
+        return Promise.resolve({
+          ok: false,
+          error: { code: 'invalid-input', message: '问答回答无效。' }
+        } satisfies DesktopIpcResult<null>)
+      }
+      return ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.respondQuestion, {
         questionId: request.questionId,
         taskId: request.taskId,
         turnId: request.turnId,
-        response: request.response
-      }) as Promise<DesktopIpcResult<null>>,
+        response
+      }) as Promise<DesktopIpcResult<null>>
+    },
     setPermissionMode: (request) =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, {
         taskId: request.taskId,

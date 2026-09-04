@@ -233,3 +233,12 @@ export function parseAgentQuestionResponse(value: unknown): AgentQuestionRespons
   }
   return { action: 'accept', answers }
 }
+
+/** Renderer → IPC 前去掉 Vue Proxy；结构化克隆遇 Proxy 会抛错，导致 accept 无法抵达 Adapter。 */
+export function cloneAgentQuestionResponse(value: unknown): AgentQuestionResponse | null {
+  try {
+    return parseAgentQuestionResponse(JSON.parse(JSON.stringify(value)))
+  } catch {
+    return null
+  }
+}

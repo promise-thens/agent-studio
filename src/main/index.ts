@@ -445,7 +445,11 @@ async function initializeServices(
       onQuestion: (request) => {
         const service = agentService
         if (!service) {
-          runtimeAdapter?.respondQuestion?.(request.requestId, { action: 'cancel' })
+          runtimeAdapter?.respondQuestion?.(
+            request.requestId,
+            { action: 'cancel' },
+            { cancelReason: 'service-not-current' }
+          )
           return
         }
         service.handleQuestionRequest(request)
@@ -711,6 +715,8 @@ function registerIpcHandlers(): void {
         getTaskRuntimeState: (taskId) => service.getTaskRuntimeState(taskId),
         getAvailableCommands: (taskId) => service.getAvailableCommands(taskId),
         respondPermission: (request) => service.respondPermission(request),
+        // 门面必须转发问答；漏挂时 IPC 会成功返回，Grok 却一直等 skip。
+        respondQuestion: (request) => service.respondQuestion(request),
         setPermissionMode: async (request) => {
           const result = await service.setPermissionMode(request)
           if (result.decision.kind === 'send-command' && result.controlPrompt) {

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentPermissionDecision, AgentPermissionRequest } from '../../../shared/agent'
-import type { AgentQuestionRequest, AgentQuestionResponse } from '../../../shared/agent-question'
+import type { AgentQuestionRequest } from '../../../shared/agent-question'
+import type { AgentRespondQuestionRequest } from '../../../shared/agent-ipc'
 import { shouldMountSubagentCard } from '../conversation-subagent-view'
 import {
   formatToolVerbPhrase,
@@ -15,6 +16,7 @@ import {
   formatConversationActivityAge,
   formatConversationDuration,
   isConversationWaitingForEvent,
+  resolveConversationActivityHint,
   resolveConversationStep,
   turnLastActivityAt
 } from '../conversation-progress'
@@ -35,6 +37,8 @@ const props = withDefaults(
     permissionTaskTitle?: string
     question?: AgentQuestionRequest | null
     questionPending?: boolean
+    /** 问答卡贴底展示时仍要让当前 Turn 元信息显示“等待你的回答”。 */
+    hasPendingQuestion?: boolean
     active?: boolean
     hasMoreEvents?: boolean
     loadingMoreEvents?: boolean
@@ -48,6 +52,7 @@ const props = withDefaults(
     permissionTaskTitle: '',
     question: null,
     questionPending: false,
+    hasPendingQuestion: false,
     active: false,
     hasMoreEvents: false,
     loadingMoreEvents: false,
@@ -57,7 +62,7 @@ const props = withDefaults(
 
 defineEmits<{
   respondPermission: [decision: AgentPermissionDecision]
-  respondQuestion: [response: AgentQuestionResponse]
+  respondQuestion: [request: AgentRespondQuestionRequest]
   cancelTurn: []
   loadMoreEvents: [turnId: string]
   openPlan: [turnId: string]
@@ -129,6 +134,13 @@ const currentStepLabel = computed(() => resolveConversationStep(props.turn.nodes
 const waitingForEvent = computed(() =>
   isConversationWaitingForEvent(props.turn, effectiveClockTick.value)
 )
+const activityHint = computed(() =>
+  resolveConversationActivityHint({
+    waitingForEvent: waitingForEvent.value,
+    hasPendingQuestion: Boolean(props.question) || props.hasPendingQuestion,
+    currentStepLabel: currentStepLabel.value
+  })
+)
 const activeThoughtNodeId = computed(
   () => [...props.turn.nodes].reverse().find((node) => node.kind === 'thought')?.nodeId
 )
@@ -155,7 +167,7 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
         <strong>{{ statusLabel }}</strong>
         <span class="conversation-turn-meta-duration">{{ elapsedLabel }}</span>
         <span class="conversation-turn-meta-step">
-          {{ waitingForEvent ? '等待 Runtime 新事件' : currentStepLabel }}
+          {{ activityHint }}
         </span>
       </div>
       <div class="conversation-turn-meta-subline">
