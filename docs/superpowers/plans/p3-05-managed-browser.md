@@ -5,6 +5,8 @@
 **优先级：** P3 / 权重 3（浏览器能力第一阶段）
 
 > **2026-08-31：** 本计划后置于 [P0-19f](p0-19f-browser-computer-use-surface.md)。Grok 插件浏览器表面未打磨、且产品未确认「仍缺共享页面」前不开工。
+>
+> **2026-09-04：已被 [P0-21](p0-21-host-managed-browser.md) 取代，不开工。** 产品已确认 Codex 式宿主内置浏览器（独立 Profile、WebContentsView、Grok 经窄动作 MCP 操作同一页）。本文件保留作历史计划，执行者不要按本文件建 `capability/browser` 或等 P3-01。Chrome 扩展桥仍见 [P3-06](p3-06-chrome-native-bridge.md)。
 
 **目标：** 提供独立 Profile 的受管浏览器供 Agent 执行网页任务，不读取用户 Chrome Profile 或绕过登录态控制。
 

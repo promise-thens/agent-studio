@@ -232,6 +232,12 @@ const taskComposer = ref<{
 } | null>(null)
 const promptSubmissionPending = ref(false)
 const projectConnectionPending = ref(false)
+/** 最近一次连接调用的失败只在顶部提示，避免把 IPC 错误重复写入当前对话。 */
+const runtimeConnectNotice = ref<{
+  message: string
+  canRetry: boolean
+  retryLabel: string
+} | null>(null)
 const projectSelectionPending = ref(false)
 /** 发送入口共享单飞门禁，并同步投影到 UI busy 状态。 */
 const runPromptSubmission = createAsyncSingleFlight((pending) => {
@@ -717,6 +723,7 @@ const activeProjectId = computed(() => workbench.selectedProjectId.value)
 watch(
   activeProjectId,
   (projectId) => {
+    runtimeConnectNotice.value = null
     void macosFolderAccess.probe(projectId || null)
   },
   { immediate: true }
@@ -779,7 +786,7 @@ const executionSurfaceBanner = computed(() =>
       : null
   })
 )
-/** 连接失败进对话流短错误+重试；页眉只留弱状态，避免两个主按钮。 */
+/** 顶部 Runtime 提示复用连接失败判定，但不再把连接错误塞进对话流。 */
 const conversationConnectFailure = computed(() =>
   resolveConversationConnectFailure({
     runtimeState: status.value.state,
@@ -789,6 +796,28 @@ const conversationConnectFailure = computed(() =>
     localErrors: localErrorMessages.value
   })
 )
+/** 顶部警告条需要始终有可读文案；同文案已被连接判定去重时回退到 Runtime 状态。 */
+const runtimeNotice = computed(() => {
+  if (
+    !providerSummary.value?.configured ||
+    activeExecution.value ||
+    projectConnectionPending.value
+  ) {
+    return null
+  }
+  const failure = conversationConnectFailure.value
+  const connectNotice = runtimeConnectNotice.value
+  if (!failure && !connectNotice) return null
+  return {
+    message:
+      connectNotice?.message ||
+      failure?.message ||
+      status.value.message?.trim() ||
+      'Runtime 连接异常',
+    canRetry: connectNotice?.canRetry ?? failure?.canRetry ?? true,
+    retryLabel: connectNotice?.retryLabel || failure?.retryLabel || '重试'
+  }
+})
 
 // 查看身份变化只切换计时可见性；execution 终态按其真实 taskId 收束，不能误写当前历史 B。
 watch([hasStreamingMessage, isTurnTiming, activeTaskId, () => status.value.state], () => {
@@ -835,6 +864,9 @@ onMounted(async () => {
   cleanupListeners.push(
     window.agent.onStatus((nextStatus) => {
       status.value = nextStatus
+      if (nextStatus.state === 'ready' || nextStatus.state === 'idle') {
+        runtimeConnectNotice.value = null
+      }
       syncWorkspaceDisplay(nextStatus.workspace)
       if (nextStatus.state === 'idle' || nextStatus.state === 'error') {
         clearPermissionQueue()
@@ -1340,6 +1372,7 @@ async function changeAppearance(mode: AppAppearanceMode): Promise<void> {
 }
 
 async function clearProvider(): Promise<void> {
+  runtimeConnectNotice.value = null
   conversationEnterGeneration += 1
   conversationEnterPromise = null
   conversationEntry.value = null
@@ -1380,14 +1413,19 @@ async function ensureProjectConnected(
 
   let connected = false
   await runProjectConnection(async () => {
+    runtimeConnectNotice.value = null
     try {
       const result = await window.agent.connect(projectId)
       if (!isCurrent()) return
       unwrapDesktopIpcResult(result)
+      // 连接成功清掉本次调用产生的顶部提示；Runtime 状态仍由主进程事件统一维护。
+      runtimeConnectNotice.value = null
       connected = true
     } catch (error) {
       if (!isCurrent()) return
-      appendMessage('error', error instanceof Error ? error.message : String(error))
+      const message = error instanceof Error ? error.message : String(error)
+      // 连接失败由 App 顶部 Runtime 提示统一承接，避免同一条错误在对话区重复堆叠。
+      runtimeConnectNotice.value = { message, canRetry: true, retryLabel: '重试' }
     }
   })
   return connected
@@ -2020,6 +2058,23 @@ function scrollMessagesToBottom(): void {
       </button>
     </header>
 
+    <Transition name="runtime-notice">
+      <div v-if="runtimeNotice" class="runtime-notice" role="alert" aria-live="assertive">
+        <WarningCircle :size="18" weight="fill" class="runtime-notice__icon" />
+        <span class="runtime-notice__message">{{ runtimeNotice.message }}</span>
+        <button
+          v-if="runtimeNotice.canRetry"
+          class="runtime-notice__retry"
+          type="button"
+          title="重新连接 Runtime"
+          aria-label="重新连接 Runtime"
+          @click="retryRuntimeConnect"
+        >
+          {{ runtimeNotice.retryLabel }}
+        </button>
+      </div>
+    </Transition>
+
     <section v-if="providerBootState === 'loading'" class="provider-loading" aria-live="polite">
       <CircleNotch :size="22" class="spin" />
       <p>正在读取模型配置</p>
@@ -2083,7 +2138,13 @@ function scrollMessagesToBottom(): void {
         @retry-browse-tasks="workbench.retryBrowseTasks"
       />
 
-      <main class="chat-panel" :class="{ 'is-plugins': workbench.primaryView.value === 'plugins' }">
+      <main
+        class="chat-panel"
+        :class="{
+          'is-plugins': workbench.primaryView.value === 'plugins',
+          'has-runtime-notice': Boolean(runtimeNotice)
+        }"
+      >
         <!-- 插件页只换主列：不卸载 workbench 状态，也不停后台 Turn。 -->
         <template v-if="workbench.primaryView.value === 'plugins'">
           <ExecutionSurfaceBanner
@@ -2125,7 +2186,6 @@ function scrollMessagesToBottom(): void {
             :event-after-sequence-by-turn="taskHistory.eventAfterSequenceByTurn.value"
             :loading-event-turn-ids="taskHistory.loadingEventTurnIds.value"
             :local-errors="localErrorMessages"
-            :connect-failure="conversationConnectFailure"
             :permission="permission"
             :permission-pending="permissionResponsePending"
             :permission-task-title="permissionTaskTitle"
@@ -2136,7 +2196,6 @@ function scrollMessagesToBottom(): void {
             :plan-mode="composerPlanMode"
             @load-more-turns="loadMoreHistoryTurns"
             @load-more-events="loadMoreHistoryEvents"
-            @retry-connect="retryRuntimeConnect"
             @respond-permission="respondPermission"
             @respond-question="respondQuestion"
             @cancel-turn="cancelTurn"

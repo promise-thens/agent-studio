@@ -220,14 +220,21 @@ describe('permissionPromptStyle 与三档映射', () => {
     expect(PUBLIC_TAKEOVER_CONTROL_PROMPT_BLOCKED_MESSAGE).toContain('批准模式菜单')
   })
 
-  it('HUD：执行中才写正在接管；未生效与可能仍在始终可见', () => {
+  it('HUD：执行中只要开了完全访问就写不再询问；未 applied 也不改口', () => {
     expect(
       resolveTakeoverHudCopy({
         takeoverEnabled: true,
         takeoverApplied: true,
         executing: true
       })
-    ).toBe('Grok 正在完全接管')
+    ).toBe('完全访问中，不再询问权限')
+    expect(
+      resolveTakeoverHudCopy({
+        takeoverEnabled: true,
+        takeoverApplied: false,
+        executing: true
+      })
+    ).toBe('完全访问中，不再询问权限')
     expect(
       resolveTakeoverHudCopy({
         takeoverEnabled: true,
@@ -241,7 +248,7 @@ describe('permissionPromptStyle 与三档映射', () => {
         takeoverApplied: false,
         executing: false
       })
-    ).toBe('接管未完全生效')
+    ).toBeNull()
     expect(
       resolveTakeoverHudCopy({
         takeoverEnabled: false,

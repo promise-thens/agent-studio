@@ -15,7 +15,7 @@
 - **新建 session：** `session/new` 增加桌面自己写的 `_meta.yoloMode: true`（见 Grok `15-agent-mode.md`）。不得把 Renderer 任意 `_meta` 透传。
 - **已有 session 中途打开：** 任务 1 先观察 `/always-approve` 是否广告且能切换当前 session。能则空闲时发该命令；不能则提示「下一轮新建 session 后生效」，禁止为了开关丢掉可恢复上下文。
 - **关掉：** 对偶观察 `/always-approve` 再发一次，或 Grok 提供的回到 ask 的命令。失败则保持 HUD 为「接管可能仍在」，不得假装已回到询问。
-- **单条权限 RPC：** Normal 模式仍只回 `allow_once` / `reject_once`。接管生效后预期不再收到普通权限请求；若仍收到，照常走 Broker，HUD 标明「接管未完全生效」。
+- **单条权限 RPC：** Normal 模式仍只回 `allow_once` / `reject_once`。用户确认完全访问后，Grok 即使仍发 `request_permission`，桌面也必须自动 `allow-once`、**零确认卡**。禁止因此把 `takeoverApplied` 打回 false（`/always-approve` 是 toggle，再发一次会把接管关掉）。产品路径仍然不回 `allow_always`。
 
 **Tech Stack：** 现有 `GrokAcpAdapter.createSession` / `newSession`、Task 快照、Composer footer、执行中停止条。不改 Electron `sandbox`。
 
@@ -49,10 +49,10 @@ Composer「完全接管」
   → Task 快照 takeoverEnabled = true
   → 若尚无 session：下次 createSession 带 _meta.yoloMode=true
   → 若已有 session：按任务 1 的策略发 /always-approve 或等下一次可安全的 session
-  → HUD：「Grok 正在完全接管」+ 停止
+  → HUD：「完全访问中，不再询问权限」+ 停止
 Grok 工具
   → 预期无 request_permission
-  → 若仍有：Broker +「接管未完全生效」
+  → 若仍有：Broker 自动 allow-once，不弹卡；HUD「完全访问中，不再询问权限」
 停止 / 关接管
   → cancelTurn（若 busy）
   → 快照 takeoverEnabled = false
@@ -107,7 +107,7 @@ Grok 工具
 
 - [ ] **第 3 步: 走查**
 
-说明：默认写文件仍可能弹卡（或 GACP-03 本任务一次）。打开接管后同一类操作不再弹卡。停止后面板不再写正在接管。重开 Task 若快照为开，resume 后要么真接管要么明确未生效。
+说明：默认写文件仍可能弹卡（或 GACP-03 本任务一次）。打开接管后同一类操作不再弹卡，Grok 仍问也由桌面代批。停止后面板不再写「完全访问中」。重开 Task 若快照为开，resume 后继续零确认卡。
 
 ## 验收标准
 

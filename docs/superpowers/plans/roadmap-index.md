@@ -79,10 +79,11 @@
 |        2 | P0-16 |    4 | [隔离 HTML Preview](p0-16-isolated-html-preview.md)        | 待开始 | P0-13、P0-14               |
 |        3 | P0-17 |    4 | [多任务队列与有界并行调度](p0-17-multi-task-scheduling.md) | 待开始 | P0-08、P0-10、P0-11、P0-14 |
 |        4 | GACP-05 |    3 | [Client 能力广告](grokACP计划/gacp-05-client-capability-advertisement.md) | 待开始 | P0-15 且产品确认；默认不进 P0-A |
+|        5 | P0-21 |    4 | [宿主内置浏览器（Codex 式共享页）](p0-21-host-managed-browser.md) | 计划已写 | P0-10D、P0-13、GACP-03 L3；不挡 19b；取代 P3-05 第一波 |
 
 ## P0-19：Grok 宿主能力打磨（当前主线，2026-08-31）
 
-程序索引：[p0-19-grok-host-capability-polish.md](p0-19-grok-host-capability-polish.md)。桌面仍是 ACP Client；不自建 BrowserView / Helper。完全接管按 [P0-19g](p0-19g-task-takeover-always-approve.md) 做 Task 级显式开关，默认关闭。**2026-08-31：P0-10C 至 P0-13 开发版走查暂时可以通过，不挡本表第 1 项起开工。**
+程序索引：[p0-19-grok-host-capability-polish.md](p0-19-grok-host-capability-polish.md)。桌面仍是 ACP Client。完全接管按 [P0-19g](p0-19g-task-takeover-always-approve.md) 做 Task 级显式开关，默认关闭。**2026-09-04：共享内置浏览器改由 [P0-21](p0-21-host-managed-browser.md)，不挡 19b；P0-19 程序内 19a–e 仍不自建 BrowserView。** **2026-08-31：P0-10C 至 P0-13 开发版走查暂时可以通过，不挡本表第 1 项起开工。**
 
 | 顺序 | 计划 | 权重 | 功能 | 状态 | 前置依赖 |
 | ---: | --- | ---: | --- | --- | --- |
@@ -95,9 +96,10 @@
 | 5 | [P0-19c](p0-19c-turn-rewind.md) | 4 | 对话 /rewind 与文件 latest-turn 恢复分开 | 待开始 | P0-12 |
 | 6 | [P0-19d](p0-19d-hooks-surface.md) | 3 | Hooks 只读库存，桌面不执行 | 待开始 | grok-home 扫描模式 |
 | 7 | [P0-19e](p0-19e-background-command-monitor.md) | 3 | 后台命令 Timeline 监视 | 待开始 | 先观察 ACP 字段 |
-| 8 | [P0-19f](p0-19f-browser-computer-use-surface.md) | 4 | 浏览器/电脑插件：L3、截图 Artifact、可见停止 | 待开始 | P0-10E、GACP-03、P0-13 |
+| 8 | [P0-19f](p0-19f-browser-computer-use-surface.md) | 4 | 插件 browser/screen/clipboard：L3、截图 Artifact、可见停止 | 待开始 | P0-10E、GACP-03、P0-13；不自建 WebContentsView |
 | 9 | [P0-19h](p0-19h-context-usage-signals-bridge.md) | 3 | Grok signals 上下文用量桥接 | 代码已落地；开发版 GUI 待走查 | 现有 Usage 事件链；不改 Renderer |
-| 后 | P3-05～07 | 3 | 桌面受管浏览器 / Chrome 桥 / macOS Helper | 后置 | 仅当 19f 仍缺共享页面 |
+| 后 | [P0-21](p0-21-host-managed-browser.md) | 4 | 宿主内置浏览器（Codex 式共享页） | 计划已写（2026-09-04） | 不挡 19b；取代 P3-05 第一波共享页 |
+| 后 | P3-06～07 | 3 | Chrome 桥 / macOS Helper | 后置 | P0-21 之后仍缺用户 Chrome / 系统 GUI 再评估 |
 
 P0-14 Worktree 仍是 P0-B，可与 GACP-06 并行，不挡本表。
 
@@ -150,7 +152,8 @@ P2-01、P2-02 先完成 account-backed Codex 的独立状态、账号、Thread/T
 
 ## P3：插件能力中心（引擎后置，宿主表面走 P0-19）
 
-> 2026-08-31：浏览器 / Computer Use 的**第一波**是 Grok 插件在桌面里可审批、可看截图、可停止，见 P0-19f。P3-01 起的桌面 Capability Pack、受管浏览器、Chrome 桥、macOS Helper 等 19f 完成且仍缺共享页面后再开工。
+> 2026-08-31：浏览器 / Computer Use 的**插件表面**见 P0-19f。
+> **2026-09-04：** Codex 式宿主内置浏览器（共享页、Agent 操作同一只视图）见 [P0-21](p0-21-host-managed-browser.md)，取代 P3-05 第一波。P3-01 Capability Pack、P3-06 Chrome 桥、P3-07 Helper 仍后置。文件编辑器另开计划，尚未立项。
 
 P3 统一沿用 `Manifest / ActionDescriptor → Registry → Executor → Permission Broker → 核心事实服务`，Capability 不直接调用 Runtime，也不复制 Timeline、Command Evidence、Changes、Validation 或 Artifact。P3-03 只提供项目体检这一首个内置 Capability，不重新定义通用 Action 契约。
 
@@ -160,8 +163,8 @@ P3 统一沿用 `Manifest / ActionDescriptor → Registry → Executor → Permi
 | 02   |    5 | [Capability 执行、权限与审计扩展](p3-02-capability-permission-and-audit.md)      | 待开始 | P0-A、P3-01                |
 | 03   |    3 | [高级项目体检与自动化入口](p3-03-project-health-and-git-review.md)               | 待开始 | P0-A、P3-01、P3-02         |
 | 04   |    4 | [MCP 与 Skills Host](p3-04-mcp-and-skills-host.md)                               | 待开始 | P3-01、P3-02；Grok 的 `mcpServers` 注入已由 P0-10D 负责，本计划不抢 |
-| 05   |    3 | [应用内受管浏览器](p3-05-managed-browser.md)                                     | 待开始 | P3-01、P3-02、P3-04        |
-| 06   |    3 | [Chrome Native Bridge](p3-06-chrome-native-bridge.md)                            | 待开始 | P3-02、P3-05               |
+| 05   |    3 | [应用内受管浏览器](p3-05-managed-browser.md)                                     | 被 P0-21 取代，不开工 | 见 [P0-21](p0-21-host-managed-browser.md) |
+| 06   |    3 | [Chrome Native Bridge](p3-06-chrome-native-bridge.md)                            | 待开始 | P3-02、P0-21 权限模型      |
 | 07   |    3 | [macOS Computer Use Helper](p3-07-macos-computer-use-helper.md)                  | 待开始 | P3-02、产品确认 macOS 范围 |
 
 ## P4：多大脑协作（暂缓，依赖 P2）

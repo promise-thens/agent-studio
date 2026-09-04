@@ -19,7 +19,7 @@
 ## 实施范围
 
 **前置依赖：**
-- 依赖 P3-02、P3-05 的权限模型验证。
+- 依赖 P3-02、[P0-21](p0-21-host-managed-browser.md) 的 browser L3 / origin 权限模型验证。P3-05 已由 P0-21 取代。
 
 **文件范围：**
 - 新增 `chrome-extension/`、`src/main/capability/chrome/native-host.ts`、协议类型和测试；更新 Capability Manifest。
@@ -37,7 +37,7 @@
 - 新增 `chrome-extension/`、`src/main/capability/chrome/native-host.ts`、协议类型和测试；更新 Capability Manifest。
 
 **前置依赖：**
-- 依赖 P3-02、P3-05 的权限模型验证。
+- 依赖 P3-02、[P0-21](p0-21-host-managed-browser.md) 的 browser L3 / origin 权限模型验证。P3-05 已由 P0-21 取代。
 
 - [ ] **第 1 步: 落地本任务**
 说明：定义用户选择、连接、断开、域名变化、权限过期及 runtime/capability 身份绑定。

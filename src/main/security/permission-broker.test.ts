@@ -1061,6 +1061,58 @@ describe('PermissionBroker', () => {
     expect(JSON.stringify(fixture.audits)).not.toContain('allow_always')
   })
 
+  it('完全访问时写文件与未知 L3 都不弹卡，一次性自动放行', async () => {
+    const fixture = createFixture()
+    const write = vi.fn(() => 'written')
+    await expect(
+      fixture.broker.authorizeOperation(createIntent('write-file'), write, {
+        takeoverEnabled: true
+      })
+    ).resolves.toEqual({ ok: true, value: 'written', reason: 'auto-allowed', scope: 'once' })
+    expect(write).toHaveBeenCalledOnce()
+    expect(fixture.approvals).toHaveLength(0)
+
+    const unknown = vi.fn(() => 'unknown-ok')
+    await expect(
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('unknown'),
+          minimumRisk: 'L3',
+          targets: [{ kind: 'unknown', value: 'Runtime 未提供可验证的操作目标。' }]
+        },
+        unknown,
+        { takeoverEnabled: true }
+      )
+    ).resolves.toEqual({ ok: true, value: 'unknown-ok', reason: 'auto-allowed', scope: 'once' })
+    expect(unknown).toHaveBeenCalledOnce()
+    expect(fixture.approvals).toHaveLength(0)
+    expect(fixture.audits.every((audit) => audit.reason === 'auto-allowed')).toBe(true)
+  })
+
+  it('完全访问仍不把 executionSupported=false 或 deny 当成可执行', async () => {
+    const fixture = createFixture()
+    const execute = vi.fn()
+    await expect(
+      fixture.broker.authorizeOperation(createIntent('write-file'), execute, {
+        takeoverEnabled: true,
+        executionSupported: false
+      })
+    ).resolves.toEqual({ ok: false, reason: 'unsupported' })
+    await expect(
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('unknown'),
+          operationType: 'browser',
+          targets: [{ kind: 'unknown', value: 'browser' }]
+        },
+        execute,
+        { takeoverEnabled: true }
+      )
+    ).resolves.toEqual({ ok: false, reason: 'unsupported' })
+    expect(execute).not.toHaveBeenCalled()
+    expect(fixture.approvals).toHaveLength(0)
+  })
+
   it('普通删除本任务授权后同类可复用，但不能捎带 .git、越界或 Computer Use', async () => {
     const fixture = createFixture()
     const first = fixture.broker.authorizeOperation(createIntent('delete-path'), vi.fn())

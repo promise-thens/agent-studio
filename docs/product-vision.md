@@ -298,9 +298,11 @@ Capability Manifest / ActionDescriptor
 
 建议分阶段实现：
 
-1. 使用 Playwright 或 CDP 的应用内受管浏览器，并使用独立 Profile；
-2. 通过 Chrome Extension 和 Native Messaging 连接用户现有 Chrome；
+1. **宿主内置浏览器（2026-09-04 已确认，计划 [P0-21](superpowers/plans/p0-21-host-managed-browser.md)）：** Electron `WebContentsView` + 独立 Project Profile。用户在工作区右栏看见真实页面；Grok 经注入的窄动作 MCP 操作同一只视图。不读用户 Chrome Profile，不把任意 CDP 交给 Agent。
+2. 通过 Chrome Extension 和 Native Messaging 连接用户现有 Chrome（P3-06，后置）；
 3. 由用户主动选择标签页，并按网站或会话授予权限。
+
+Grok 插件自己的 browser / Computer Use（chrome-devtools 等）仍走插件表面与 L3 审批（P0-19f），不得再开第二只无头 Chrome 冒充「内置浏览器」。
 
 不能通过直接读取用户 Chrome Profile 的方式绕过浏览器权限或复用登录状态。
 
@@ -473,10 +475,11 @@ P0-B 完成后，用户才真正拥有“隔离执行 → 审阅 → 带走结�
 #### P0+：非首版阻塞增强
 
 - 用户交互式 Task Terminal；
-- 使用 sandboxed `WebContentsView` 的隔离 HTML Preview；
-- 多任务队列与有界并行调度。
+- 使用 sandboxed `WebContentsView` 的隔离 HTML Preview（禁止外网，不是内置浏览器）；
+- 多任务队列与有界并行调度；
+- 宿主内置浏览器（Codex 式共享页，P0-21）。
 
-P0+ 不共同阻塞 P0-A/P0-B；只有确实需要交互终端、HTML 或并行调度的后续计划才依赖对应能力。
+P0+ 不共同阻塞 P0-A/P0-B；只有确实需要交互终端、HTML、并行调度或内置浏览器的后续计划才依赖对应能力。内置浏览器与 HTML Preview 不得共用 session。
 
 ### P1：开放模型配置（2026-08-31 扩展搁置）
 
@@ -497,16 +500,16 @@ P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService �
 - 先交付单执行槽 Runtime 选择与启动，再把不可变启动快照接入队列和有界并行；
 - 将命令执行、审批、文件变化、Diff 和 Artifact 映射到既有 Permission、Command Evidence、Changes 和 Artifact 服务，不复制第二套工作台。
 
-### P3：插件能力中心（2026-08-31：先走 Grok 插件表面 P0-19f，桌面引擎后置）
+### P3：插件能力中心（2026-08-31：插件表面走 P0-19f；2026-09-04：共享页走 P0-21）
 
 - Capability Manifest、ActionDescriptor 与 Registry；
 - Capability Executor 与核心 Permission Broker 接入；
 - MCP 和 Skills；
 - 插件管理器；
 - Capability 对既有 Timeline、Command Evidence、Changes、Validation 与 Artifact 的结果路由；
-- 受管浏览器；
-- Chrome 控制；
-- macOS Computer Use；
+- 受管浏览器第一波已改由 P0-21，不在 P3-05 重复建设；
+- Chrome 控制（P3-06）；
+- macOS Computer Use（P3-07）；
 - 权限和审计中心。
 
 ### P4：多大脑协作
@@ -584,7 +587,7 @@ P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService �
 
 - 先打磨一个 Runtime：Grok Build。P1-06～08 多 Provider 与 P2 Codex 搁置；现有单 Provider 设置保留。
 - P3 提前指把 Grok 已有能力摊到桌面（Plan、子 Agent、少打断权限、Sandbox、rewind、Hooks、后台命令、浏览器/电脑插件的审批与截图），不是先做桌面自建 Computer Use Helper。
-- 完全接管要写：当前 Task 显式确认后走 Grok always-approve；默认询问；不静默 yolo、不写全局 config。少打断询问模式仍走桌面 Task grant。见 [p0-19g-task-takeover-always-approve.md](superpowers/plans/p0-19g-task-takeover-always-approve.md)。
+- 完全接管要写：当前 Task 显式确认后走 Grok always-approve；默认询问；不静默 yolo、不写全局 config。确认后零确认卡：Grok 再问也由桌面代批 allow-once，午休期间不能卡死。少打断询问模式仍走桌面 Task grant。见 [p0-19g-task-takeover-always-approve.md](superpowers/plans/p0-19g-task-takeover-always-approve.md)。
 - 程序计划见 [p0-19-grok-host-capability-polish.md](superpowers/plans/p0-19-grok-host-capability-polish.md)。
 - P0-10C 至 P0-13 开发版走查暂时可以通过，不挡 P0-19 新能力开工；未走查不得标成 GUI 已过。
 

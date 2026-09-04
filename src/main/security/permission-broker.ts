@@ -66,6 +66,11 @@ export interface AuthorizeOperationOptions {
    * L0 policy.kind === 'allow' 仍自动过。这不是 always-approve 沙箱。
    */
   permissionPromptStyle?: PermissionPromptStyle
+  /**
+   * 当前 Task 已确认完全访问：L1+ 也不弹卡，直接一次性放行。
+   * 这是桌面代批 allow-once，不是 ACP allow_always，也不是 Broker 沙箱。
+   */
+  takeoverEnabled?: boolean
 }
 
 export interface PermissionBrokerOptions {
@@ -242,6 +247,18 @@ export class PermissionBroker {
       }
 
       const grantKey = createOperationGrantKey(resolved)
+      // 用户确认完全访问后，午休期间也不能卡在确认卡上；仍只回一次性允许。
+      if (options.takeoverEnabled === true) {
+        admission.release()
+        return await this.executeAllowed(
+          resolved,
+          execute,
+          policy.risk,
+          'auto-allowed',
+          'once',
+          options.isActive
+        )
+      }
       if (policy.kind === 'allow') {
         admission.release()
         return await this.executeAllowed(

@@ -106,8 +106,7 @@ export interface AgentServiceOptions {
   operationGate?: OperationGate
   onEvent?: (event: AgentEvent) => void
   /**
-   * 接管 HUD 快照推送。request_permission 改 applied / mayStillBeActive 后必须推，
-   * 不得只改内存让 Renderer 继续写「正在完全接管」。
+   * 接管 HUD 快照推送。开关与 lingering 变化必须推；完全访问期间再问权限不得改 applied。
    */
   onTaskRuntimeState?: (task: AgentTaskRuntimeState) => void
   /** 公开问答卡 DTO；主进程生成 questionId 后才允许进入 Renderer。 */
@@ -550,11 +549,9 @@ export class AgentService {
     }
     this.runtimePermissionRequests.set(request.requestId, request)
     if (task.takeoverEnabled === true) {
-      // 接管生效后仍收到 request_permission：Broker 照常走，HUD 标未完全生效。
-      task.takeoverApplied = false
+      // 完全访问由桌面代批，Grok 再问也不弹卡；禁止把 applied 打回 false，
+      // 否则会再发一次 /always-approve 把接管 toggle 关掉。
       delete task.takeoverPendingReason
-      this.publishTaskRuntimeState(task)
-      void this.persistPermissionMode(task)
     } else if (task.takeoverMayStillBeActive) {
       delete task.takeoverMayStillBeActive
       this.publishTaskRuntimeState(task)
@@ -608,7 +605,8 @@ export class AgentService {
           onPendingChange: (count) => this.updatePermissionWaitingState(request, count),
           cancellationId: request.requestId,
           permissionPromptStyle:
-            this.tasks.get(request.taskId)?.permissionPromptStyle === 'ask' ? 'ask' : 'assist'
+            this.tasks.get(request.taskId)?.permissionPromptStyle === 'ask' ? 'ask' : 'assist',
+          takeoverEnabled: this.tasks.get(request.taskId)?.takeoverEnabled === true
         }
       )
       .then((result) => {
@@ -1046,6 +1044,8 @@ export class AgentService {
   beginTakeoverControlPrompt(taskId: string): string | null {
     const task = this.tasks.get(taskId)
     if (!task || task.takeoverEnabled !== true || task.takeoverApplied === true) return null
+    // 本 session 已发出过 toggle，禁止因 applied 被误清而再发一次把接管关掉。
+    if (this.takeoverControlDispatched.has(taskId)) return null
     if (this.takeoverControlInFlight.has(taskId)) return null
     if (this.isPermissionModeLocked() || !this.isTaskSessionActive(task)) {
       this.syncTakeoverApplyState(task)

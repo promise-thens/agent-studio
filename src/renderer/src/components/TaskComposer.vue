@@ -26,7 +26,7 @@ import {
   slashQuery,
   type SlashCommandItem
 } from '../slash-command-palette'
-import type { TaskPermissionMode } from '../../../shared/task-takeover'
+import { resolveTakeoverHudCopy, type TaskPermissionMode } from '../../../shared/task-takeover'
 import { isPlanCommandAdvertised, type ComposerPlanMode } from '../../../shared/session-plan-mode'
 import { resolveComposerPlanStatusCopy, resolveComposerPlanSwitch } from '../composer-plan-mode'
 import type { ComposerContextUsagePresentation } from '../task-composer-actions'
@@ -113,6 +113,15 @@ const planStatusCopy = computed(() =>
   })
 )
 const addMenuDisabled = computed(() => Boolean(props.textareaDisabled) || props.action === 'stop')
+/** 执行中开了完全访问就必须看得见：不再询问，避免用户以为卡死。 */
+const takeoverHudCopy = computed(() =>
+  resolveTakeoverHudCopy({
+    takeoverEnabled: props.permissionMode === 'takeover',
+    takeoverApplied: props.takeoverApplied === true,
+    takeoverMayStillBeActive: props.takeoverMayStillBeActive,
+    executing: props.action === 'stop'
+  })
+)
 
 /** 只改下一轮发送策略，不得 cancel 当前 turn。进入 Plan 仍需广告；退出只要空闲。 */
 async function togglePlanMode(): Promise<void> {
@@ -508,6 +517,14 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
               />
             </span>
             <span class="composer-usage-copy">{{ contextUsage.compactLabel }}</span>
+          </span>
+          <span
+            v-if="takeoverHudCopy"
+            class="composer-takeover-hud"
+            role="status"
+            :title="takeoverHudCopy"
+          >
+            {{ takeoverHudCopy }}
           </span>
           <button
             v-if="action === 'stop'"

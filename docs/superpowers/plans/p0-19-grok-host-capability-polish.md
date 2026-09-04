@@ -10,7 +10,7 @@
 
 **Goal：** 把 Agent Studio 打磨成 Grok Build 的桌面宿主：Grok 已经会做的事，用户在桌面上能看见、能切换、能审批、能停、能审阅；桌面不自己再做一套 Agent、MCP Host 或 Computer Use 引擎。
 
-**Architecture：** 桌面仍是 ACP Client。Plan / Sandbox / Rewind / Hooks / 后台命令 / 浏览器与 Computer Use 都由 **Grok Runtime 执行**。桌面只做：配置写入 App `GROK_HOME`、受限 spawn 参数、Permission Broker、Timeline / Artifact / Changes 投影、可见停止。P3-05/06/07 桌面自建浏览器与 Helper **排在本程序 19f 之后**，本程序不启动。
+**Architecture：** 桌面仍是 ACP Client。Plan / Sandbox / Rewind / Hooks / 后台命令 / 插件 Computer Use 都由 **Grok Runtime 执行**。桌面只做：配置写入 App `GROK_HOME`、受限 spawn 参数、Permission Broker、Timeline / Artifact / Changes 投影、可见停止。本程序 19a–e **不**自建 BrowserView。Codex 式宿主内置浏览器（共享页）已于 2026-09-04 确认，独立计划 [P0-21](p0-21-host-managed-browser.md)，不挡 19b。P3-06/07 Chrome 桥与 Helper 仍后置。
 
 **Tech Stack：** Electron 39、Vue 3、TypeScript、electron-vite、pnpm 10、Node.js 20+、Vitest、现有 `@agentclientprotocol/sdk`、现有 Permission Broker / Task Inspector。不新增 UI 框架，不把桌面做成 MCP Host。
 
@@ -52,7 +52,7 @@
 | `/rewind` 回退一轮 | 只有 latest-turn 文件撤销 | [P0-19c](p0-19c-turn-rewind.md) 分清对话回退与文件恢复 |
 | Hooks | 不展示 | [P0-19d](p0-19d-hooks-surface.md) 只展示，不由桌面执行 |
 | 后台命令 / monitor | 当普通 tool_call | [P0-19e](p0-19e-background-command-monitor.md) |
-| 浏览器、Computer Use | Grok 靠插件；无共享页、无 HUD | [P0-19f](p0-19f-browser-computer-use-surface.md)；自建 BrowserView 仍归 P3-05 |
+| 浏览器、Computer Use | Grok 靠插件；无共享页、无 HUD | 插件表面 [P0-19f](p0-19f-browser-computer-use-surface.md)；Codex 式共享页 [P0-21](p0-21-host-managed-browser.md)（2026-09-04 确认，取代 P3-05） |
 
 已接上但几乎没走查（不算新功能，算 0 号门）：
 
@@ -83,14 +83,14 @@
      ↓
 7. P0-19e 后台命令监视
      ↓
-8. P0-19f 浏览器 / Computer Use 插件表面（截图 Artifact、L3 审批、可见停止）
+8. P0-19f 插件 browser / screen / clipboard 表面（截图 Artifact、L3、可见停止；不自建视图）
      ↓
-9. 若仍缺「和 Agent 看同一页」→ 才启动 P3-05 受管浏览器
+9. 宿主内置浏览器见独立计划 P0-21（不挡 19b；不在本程序 19a–e 里做）
 ```
 
 **可穿插、不挡本程序：** P0-14 Worktree 仍是 P0-B 交付门，可与 GACP-06 并行，但不把 Worktree 当成「Grok 能力摊开」的前置。
 
-**明确后置：** P0-15 用户 PTY、P0-16 HTML Preview、P0-17 并行调度、P1-06～08、P2、P3-01～07、GACP-05 Client 能力广告。
+**明确后置：** P0-15 用户 PTY、P0-16 HTML Preview、P0-17 并行调度、P1-06～08、P2、P3-01/02/04/06/07、GACP-05 Client 能力广告。P3-05 被 P0-21 取代。P0-21 不挡 19b，但不并入 19a–e 的实现清单。
 
 ## 4. 0 号门：已写未验（暂时不挡开工）
 
@@ -112,8 +112,8 @@
 - 不自己实现记忆引擎、MCP 运行时、`/compact` / `/dream` 语义。
 - 不把桌面做成 Marketplace Host 或 MCP Host。
 - 不把 always-approve 做成静默默认或全局 config；接管只按 [P0-19g](p0-19g-task-takeover-always-approve.md) 做当前 Task 显式开关。
-- Inspector 现有顶层标签为 `timeline | plan | changes | terminal | artifacts`；计划详情独立放在 Plan，浏览器证据进 Timeline + Artifacts，终端标签继续留给 P0-15 用户 PTY，**不得**把 Agent 后台命令写进用户 Shell。
-- 不做共享 BrowserView、CDP 任意转发、Chrome Profile 读取、macOS 虚拟光标。
+- Inspector 现有顶层标签为 `timeline | plan | changes | terminal | artifacts`；计划详情独立放在 Plan，插件浏览器证据进 Timeline + Artifacts，终端标签继续留给 P0-15 用户 PTY，**不得**把 Agent 后台命令写进用户 Shell。宿主内置浏览器是工作区右栏，见 P0-21，不新增 Inspector 标签。
+- 本程序 19a–e 不做共享 BrowserView。P0-21 的 WebContentsView 禁止任意 CDP 转发、禁止读用户 Chrome Profile。macOS 虚拟光标仍禁止。
 - 不为 Codex 复制本程序的表面。
 
 ## 6. 安全总则
@@ -135,6 +135,7 @@
 5. 看见本 GROK_HOME 里的 Hooks 是否启用，桌面不替 Grok 跑它们。
 6. 后台命令在 Timeline 标成后台，可停，输出进证据而不是用户终端。
 7. 安装并信任浏览器/电脑插件后，截图进 Artifacts，屏幕/浏览器动作走 L3 + 可见停止。
+8. 宿主内置浏览器（P0-21）不作为本程序 19a–e 的验收项；做完 P0-21 后，用户说一句话应能操作右侧同一只页面。
 
 自动门禁仍是：目标文件 ESLint、相关 Vitest、`pnpm typecheck`、`pnpm build`、`git diff --check`。UI 改动必须有开发版走查记录。
 

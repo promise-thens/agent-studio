@@ -4,7 +4,9 @@
 >
 > **状态：** 待开始。
 >
-> **插入点：** [P0-19](p0-19-grok-host-capability-polish.md) 本程序最后一项。前置：P0-10E 能安装市场插件；GACP-03 不得把 browser/screen/clipboard 放进「本任务写文件」grant。完成后若仍缺共享页面，才允许启动 [P3-05](p3-05-managed-browser.md)。
+> **插入点：** [P0-19](p0-19-grok-host-capability-polish.md) 插件 Computer Use / 外置浏览器表面。前置：P0-10E 能安装市场插件；GACP-03 不得把 browser/screen/clipboard 放进「本任务写文件」grant。
+>
+> **2026-09-04：** Codex 式「和 Agent 看同一页」改由 [P0-21](p0-21-host-managed-browser.md)，本计划 **不** 自建 WebContentsView。P0-21 会先把策略里的 `browser` 从 `unsupported` 改成 L3；本计划仍负责 **Grok 插件自己的** browser / screen / clipboard（chrome-devtools、computer-use 等），避免两只浏览器抢同一套 HUD 时互相覆盖。 [P3-05](p3-05-managed-browser.md) 不再作为本计划的后续。
 
 **优先级：** P0-A 能力层 / 权重 4（Grok 已经能靠插件上网和点 GUI；桌面缺审批、证据和停止）
 
@@ -104,5 +106,5 @@ Grok 申请浏览器/屏幕工具
 - [ ] 写文件授权不能捎带浏览器/屏幕。
 - [ ] 有截图则进 Artifact；无截图有明确降级。
 - [ ] 控制期间停止入口始终可见。
-- [ ] 没有 BrowserView、没有读用户 Chrome。
-- [ ] 自动验证 + 开发版走查。完成后评审是否还需要 P3-05。
+- [ ] 没有 BrowserView、没有读用户 Chrome（共享页走 P0-21，不在本计划做）。
+- [ ] 自动验证 + 开发版走查。

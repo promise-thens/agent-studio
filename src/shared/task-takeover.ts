@@ -120,7 +120,7 @@ export const PERMISSION_PROMPT_STYLES = ['ask', 'assist'] as const
 export type PermissionPromptStyle = (typeof PERMISSION_PROMPT_STYLES)[number]
 
 export const TAKEOVER_HUD_COPY = {
-  active: 'Grok 正在完全接管',
+  active: '完全访问中，不再询问权限',
   pending: '接管未完全生效',
   lingering: '接管可能仍在'
 } as const
@@ -198,7 +198,8 @@ export function permissionSnapshotFromMode(
 }
 
 /**
- * HUD 文案。执行中且已 applied 才写「正在完全接管」；停止后即使快照仍是接管也不再写执行态。
+ * HUD 文案。执行中只要用户开了完全访问就写「不再询问权限」：桌面会代批，
+ * 不依赖 Grok 是否已经 applied。停止后即使快照仍是接管也不再写执行态。
  * prefers-reduced-motion 下仍返回这些可见字符串，不能改成只靠动画。
  */
 export function resolveTakeoverHudCopy(input: {
@@ -207,13 +208,10 @@ export function resolveTakeoverHudCopy(input: {
   takeoverMayStillBeActive?: boolean
   executing?: boolean
 }): string | null {
-  if (input.takeoverEnabled && !input.takeoverApplied) {
-    return TAKEOVER_HUD_COPY.pending
-  }
   if (!input.takeoverEnabled && input.takeoverMayStillBeActive) {
     return TAKEOVER_HUD_COPY.lingering
   }
-  if (input.takeoverEnabled && input.takeoverApplied && input.executing) {
+  if (input.takeoverEnabled && input.executing) {
     return TAKEOVER_HUD_COPY.active
   }
   return null
