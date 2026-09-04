@@ -78,4 +78,61 @@ enabled = true
     const text = await controller.read()
     expect(text).toContain('disabled = ["demo-plugin"]')
   })
+
+  it('apply sandboxProfile 走合并写入，缺省读取为 off', async () => {
+    const controller = await createController()
+    expect(await controller.readSandboxProfile()).toBe('off')
+    await controller.apply({
+      modelBlock,
+      memoryEnabled: true,
+      mcpServers: [
+        {
+          name: 'github',
+          enabled: true,
+          transport: 'stdio',
+          command: '/usr/bin/false',
+          args: ['--help']
+        }
+      ],
+      pluginsEnabled: ['demo-plugin']
+    })
+    await controller.apply({ sandboxProfile: 'read-only' })
+    expect(await controller.readSandboxProfile()).toBe('read-only')
+    const text = await controller.read()
+    expect(text).toContain('[memory]')
+    expect(text).toContain('[mcp_servers.github]')
+    expect(text).toContain('[plugins]')
+    expect(text).toContain('profile = "read-only"')
+  })
+
+  it('非法 sandbox profile 拒绝且文件不变', async () => {
+    const controller = await createController()
+    await controller.apply({ modelBlock, memoryEnabled: true })
+    const before = await controller.read()
+    await expect(controller.apply({ sandboxProfile: 'devbox' as never })).rejects.toThrow(
+      /sandbox profile 无效/
+    )
+    expect(await controller.read()).toBe(before)
+    expect(await controller.readSandboxProfile()).toBe('off')
+  })
+
+  it('磁盘上的非法 sandbox 值读取时抛错，不降成 off', async () => {
+    const controller = await createController()
+    await writeFile(
+      controller.configPath,
+      `${modelBlock}
+[sandbox]
+profile = "devbox"
+`,
+      'utf8'
+    )
+    await expect(controller.readSandboxProfile()).rejects.toThrow(/sandbox profile 无效/)
+  })
+
+  it('损坏 toml 拒绝 sandbox 补丁', async () => {
+    const controller = await createController()
+    await writeFile(controller.configPath, '[[[not toml', 'utf8')
+    await expect(controller.apply({ sandboxProfile: 'workspace' })).rejects.toThrow(/损坏/)
+    expect(await controller.read()).toBe('[[[not toml')
+  })
 })

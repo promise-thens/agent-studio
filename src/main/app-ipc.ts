@@ -2,8 +2,11 @@ import { isAppAppearanceMode, type AppAppearanceState } from '../shared/app-appe
 import {
   APP_INVOKE_CHANNELS,
   type AppGrokConfigDocument,
+  type AppGrokSandboxApplyResult,
+  type AppGrokSandboxState,
   type AppPluginEnabledState
 } from '../shared/app-ipc'
+import { isGrokSandboxProfile, type GrokSandboxProfile } from '../shared/grok-sandbox-profile'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import {
   isGrokMemoryId,
@@ -58,6 +61,8 @@ export interface AppIpcDependencies {
   deleteMemory: (memoryId: string) => Promise<void>
   getMemoryEnabled: () => Promise<GrokMemoryEnabledState>
   setMemoryEnabled: (enabled: boolean) => Promise<GrokMemoryEnabledState>
+  getGrokSandbox: () => Promise<AppGrokSandboxState>
+  setGrokSandbox: (profile: GrokSandboxProfile) => Promise<AppGrokSandboxApplyResult>
   listMcpServers: (projectId?: string) => Promise<McpServerSummary[]>
   upsertMcpServer: (input: McpServerInput) => Promise<McpServerSummary>
   deleteMcpServer: (name: string) => Promise<void>
@@ -254,6 +259,25 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
       throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
     }
     return dependencies.setMemoryEnabled(request.enabled)
+  })
+  /**
+   * 只读已保存的 Grok 内核沙箱档，缺省 off。不回传 toml 或路径。
+   */
+  register(APP_INVOKE_CHANNELS.getGrokSandbox, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.getGrokSandbox()
+  })
+  /**
+   * 改档前用 type guard 重校验；非法值不得写文件、不得进 spawn argv。
+   * 执行中拒绝由依赖层复用 assertGrokConfigCanReload。
+   */
+  register(APP_INVOKE_CHANNELS.setGrokSandbox, (args) => {
+    const request = readRequest(args, ['profile'])
+    const profile = request.profile
+    if (!isGrokSandboxProfile(profile)) {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    return dependencies.setGrokSandbox(profile)
   })
   register(APP_INVOKE_CHANNELS.listMcpServers, (args) => {
     const request = readOptionalRequest(args, ['projectId'])

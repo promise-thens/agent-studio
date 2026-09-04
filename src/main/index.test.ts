@@ -17,6 +17,11 @@ type AppDeletionDependencies = {
   uninstallPlugin(input: { pluginId: string }): Promise<null>
   addMarketplaceSource(input: { gitUrl: string }): Promise<null>
   saveGrokConfig?(text: string): Promise<void>
+  getGrokSandbox?(): Promise<{ profile: 'off' | 'workspace' | 'read-only' | 'strict' }>
+  setGrokSandbox?(profile: 'off' | 'workspace' | 'read-only' | 'strict'): Promise<{
+    profile: 'off' | 'workspace' | 'read-only' | 'strict'
+    applied: boolean
+  }>
 }
 
 type GrokPluginCliInput = {
@@ -98,6 +103,14 @@ const mocks = vi.hoisted(() => {
     ready,
     resolveReady,
     appDeletionDependencies: undefined as AppDeletionDependencies | undefined,
+    grokHomeConfig: {
+      read: vi.fn(async () => ''),
+      apply: vi.fn(async () => ({})),
+      writeText: vi.fn(async () => undefined),
+      readMemoryEnabled: vi.fn(async () => true),
+      readPluginEnablement: vi.fn(async () => ({})),
+      readSandboxProfile: vi.fn(async () => 'off' as const)
+    },
     taskDeletionDependencies: undefined as TaskDeletionDependencies | undefined,
     providerOperations: undefined as ProviderIpcOperations | undefined,
     providerState,
@@ -403,20 +416,8 @@ vi.mock('./provider/provider-connection-tester', () => ({
 }))
 vi.mock('./runtime/grok/grok-home-config-controller', () => ({
   GrokHomeConfigController: class {
-    async read(): Promise<string> {
-      return ''
-    }
-    async apply(): Promise<Record<string, never>> {
-      return {}
-    }
-    async writeText(): Promise<void> {
-      return undefined
-    }
-    async readMemoryEnabled(): Promise<boolean> {
-      return true
-    }
-    async readPluginEnablement(): Promise<Record<string, never>> {
-      return {}
+    constructor() {
+      return mocks.grokHomeConfig
     }
   }
 }))
@@ -569,6 +570,9 @@ describe('Main 删除与权限失效编排', () => {
     mocks.projectRegistry.findActiveProjectIdByRoot.mockImplementation((workspace) =>
       workspace === '/tmp/project-1' ? 'project-1' : null
     )
+    mocks.grokHomeConfig.apply.mockClear()
+    mocks.grokHomeConfig.readSandboxProfile.mockReset()
+    mocks.grokHomeConfig.readSandboxProfile.mockResolvedValue('off')
   })
 
   it('组装层把 GitReviewService 交给 task:* 只读审阅 IPC', () => {
@@ -898,6 +902,70 @@ describe('Main 删除与权限失效编排', () => {
       expect(mocks.agentService.disconnect).not.toHaveBeenCalled()
     }
   )
+
+  it('未连接时设置 sandbox 只写盘并 applied true，不重连', async () => {
+    expect(await mocks.appDeletionDependencies!.getGrokSandbox!()).toEqual({ profile: 'off' })
+    expect(await mocks.appDeletionDependencies!.setGrokSandbox!('workspace')).toEqual({
+      profile: 'workspace',
+      applied: true
+    })
+    expect(mocks.grokHomeConfig.apply).toHaveBeenCalledWith({ sandboxProfile: 'workspace' })
+    expect(mocks.agentService.disconnect).not.toHaveBeenCalled()
+    expect(mocks.agentService.connect).not.toHaveBeenCalled()
+  })
+
+  it('已连接空闲时设置 sandbox 会写盘并按 Project ID 重连', async () => {
+    mocks.agentService.getStatus.mockReturnValue({
+      runtimeId: 'grok',
+      state: 'ready',
+      message: 'ready',
+      workspace: '/tmp/project-1'
+    })
+    mocks.agentService.getSelectedTaskId.mockReturnValue('task-1')
+
+    expect(await mocks.appDeletionDependencies!.setGrokSandbox!('strict')).toEqual({
+      profile: 'strict',
+      applied: true
+    })
+    expect(mocks.grokHomeConfig.apply).toHaveBeenCalledWith({ sandboxProfile: 'strict' })
+    expect(mocks.agentService.disconnect).toHaveBeenCalledOnce()
+    expect(mocks.agentService.connect).toHaveBeenCalledWith('project-1', undefined)
+    expect(mocks.agentService.ensureTaskSessionForTurn).toHaveBeenCalledWith('task-1', undefined)
+  })
+
+  it.each(['busy', 'connecting'] as const)(
+    'Agent status 为 %s 时拒绝改 sandbox，不写文件',
+    async (state) => {
+      mocks.agentService.getStatus.mockReturnValue({
+        runtimeId: 'grok',
+        state,
+        message: state,
+        workspace: '/tmp/project-1'
+      })
+      await expect(mocks.appDeletionDependencies!.setGrokSandbox!('workspace')).rejects.toThrow(
+        '任务执行中，结束后才能保存并重载 Grok 配置。'
+      )
+      expect(mocks.grokHomeConfig.apply).not.toHaveBeenCalled()
+      expect(mocks.agentService.disconnect).not.toHaveBeenCalled()
+    }
+  )
+
+  it('文件已写但重载失败时不得返回 applied true，也不静默改回 off', async () => {
+    mocks.agentService.getStatus.mockReturnValue({
+      runtimeId: 'grok',
+      state: 'ready',
+      message: 'ready',
+      workspace: '/tmp/project-1'
+    })
+    mocks.agentService.connect.mockRejectedValueOnce(new Error('session sandbox 与当前进程不一致'))
+
+    await expect(mocks.appDeletionDependencies!.setGrokSandbox!('read-only')).rejects.toThrow(
+      /sandbox/
+    )
+    expect(mocks.grokHomeConfig.apply).toHaveBeenCalledWith({ sandboxProfile: 'read-only' })
+    expect(mocks.grokHomeConfig.apply).not.toHaveBeenCalledWith({ sandboxProfile: 'off' })
+    expect(mocks.agentService.disconnect).toHaveBeenCalledOnce()
+  })
 
   it.each(['busy', 'connecting'] as const)(
     'Agent status 为 %s 时 save/select 拒绝修改，且不 save、不断开',

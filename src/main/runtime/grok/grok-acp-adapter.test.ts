@@ -29,7 +29,11 @@ import { TaskExecutionController } from '../../agent/task-execution-controller'
 import { TaskStore } from '../../agent/task-store'
 import { ProjectRegistry } from '../../project/project-registry'
 import type { ProviderRuntimeConfig } from '../../provider/provider-config-store'
-import { AGENT_STUDIO_MODEL_API_KEY_ENV } from '../../provider/grok-provider-config'
+import {
+  AGENT_STUDIO_MODEL_API_KEY_ENV,
+  getManagedGrokHome
+} from '../../provider/grok-provider-config'
+import { GrokHomeConfigController } from './grok-home-config-controller'
 import { PermissionAuditStore } from '../../security/permission-audit-store'
 import { PermissionBroker } from '../../security/permission-broker'
 import { parseCommandExecutionEvidence } from '../../../shared/command'
@@ -3562,6 +3566,7 @@ describe('Grok Runtime 受控 E2E fixture spawn', () => {
       expect(captured!.args).toContain('--scenario')
       expect(captured!.args).toContain('--user-data')
       expect(captured!.args).not.toContain('--no-auto-update')
+      expect(captured!.args).not.toContain('--sandbox')
       expect(captured!.args).not.toEqual([...GROK_PRODUCTION_AGENT_ARGV])
       expect(captured!.options.cwd).toBe(workspace)
       expect(captured!.options.env).toMatchObject({
@@ -3570,6 +3575,73 @@ describe('Grok Runtime 受控 E2E fixture spawn', () => {
       })
       expect(captured!.options.env).not.toHaveProperty(AGENT_STUDIO_MODEL_API_KEY_ENV)
       expect(captured!.options.env).not.toHaveProperty('PATH')
+    } finally {
+      await rm(userDataPath, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('Grok Runtime 生产 spawn sandbox argv', () => {
+  it('off 时生产 argv 与 GROK_PRODUCTION_AGENT_ARGV 全等', async () => {
+    const captured = await connectAndCaptureProductionArgv()
+    expect(captured.args).toEqual([...GROK_PRODUCTION_AGENT_ARGV])
+    expect(captured.args).not.toContain('--sandbox')
+    expect(captured.env).not.toHaveProperty('GROK_SANDBOX')
+  })
+
+  it.each(['workspace', 'read-only', 'strict'] as const)(
+    '已保存 %s 时完整 argv 插在 --no-auto-update 之后、agent 之前',
+    async (profile) => {
+      const captured = await connectAndCaptureProductionArgv(profile)
+      expect(captured.args).toEqual([
+        '--no-auto-update',
+        '--sandbox',
+        profile,
+        'agent',
+        '--no-leader',
+        '-m',
+        'agent-studio-default',
+        'stdio'
+      ])
+      expect(captured.env).not.toHaveProperty('GROK_SANDBOX')
+    }
+  )
+
+  it('非法档 connect 失败，spawn 不得带该字符串', async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), 'grok-sandbox-illegal-spawn-'))
+    const workspace = join(userDataPath, 'workspace')
+    await mkdir(workspace)
+    const grokHome = getManagedGrokHome(userDataPath)
+    await mkdir(grokHome, { recursive: true })
+    await writeFile(`${grokHome}/config.toml`, '[sandbox]\nprofile = "devbox"\n', 'utf8')
+
+    const spawnProductionProcess = vi.fn(() => createFakeSpawnChild())
+    try {
+      const adapter = new GrokAcpAdapter(
+        {
+          onStatus: () => undefined,
+          onEvent: () => undefined,
+          onPermission: () => undefined,
+          onPermissionCancelled: () => undefined,
+          onAvailableCommands: () => undefined
+        },
+        {
+          userDataPath,
+          getProviderConfig: () => providerConfig(),
+          getClientVersion: () => '0.1.0-test',
+          redactText: redactFakeText,
+          spawnProductionProcess
+        }
+      )
+      const internal = adapter as unknown as GrokAcpAdapterTestAccess
+      vi.spyOn(internal, 'initializeConnection').mockResolvedValue(true)
+
+      await expect(adapter.connect(workspace)).rejects.toMatchObject({
+        code: 'operation-failed',
+        message: expect.stringMatching(/sandbox profile 无效/)
+      })
+      expect(spawnProductionProcess).not.toHaveBeenCalled()
+      expect(JSON.stringify(spawnProductionProcess.mock.calls)).not.toContain('devbox')
     } finally {
       await rm(userDataPath, { recursive: true, force: true })
     }
@@ -4101,6 +4173,54 @@ function deferred<T>(): Deferred<T> {
     reject = rejectPromise
   })
   return { promise, resolve, reject }
+}
+
+/** 生产 connect 注入 spawn，捕获完整 argv；档位先写入 Managed grok-home。 */
+async function connectAndCaptureProductionArgv(
+  profile?: 'workspace' | 'read-only' | 'strict'
+): Promise<{ args: readonly string[]; env: NodeJS.ProcessEnv | undefined }> {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'grok-sandbox-spawn-'))
+  const workspace = join(userDataPath, 'workspace')
+  await mkdir(workspace)
+  if (profile) {
+    await new GrokHomeConfigController(getManagedGrokHome(userDataPath)).apply({
+      sandboxProfile: profile
+    })
+  }
+
+  const child = createFakeSpawnChild()
+  let captured: { args: readonly string[]; env: NodeJS.ProcessEnv | undefined } | undefined
+  try {
+    const adapter = new GrokAcpAdapter(
+      {
+        onStatus: () => undefined,
+        onEvent: () => undefined,
+        onPermission: () => undefined,
+        onPermissionCancelled: () => undefined,
+        onAvailableCommands: () => undefined
+      },
+      {
+        userDataPath,
+        getProviderConfig: () => providerConfig(),
+        getClientVersion: () => '0.1.0-test',
+        redactText: redactFakeText,
+        spawnProductionProcess: (_command, args, options) => {
+          captured = {
+            args,
+            env: (options as { env?: NodeJS.ProcessEnv }).env
+          }
+          return child
+        }
+      }
+    )
+    const internal = adapter as unknown as GrokAcpAdapterTestAccess
+    vi.spyOn(internal, 'initializeConnection').mockResolvedValue(true)
+    await adapter.connect(workspace)
+    if (!captured) throw new Error('未捕获生产 spawn argv')
+    return captured
+  } finally {
+    await rm(userDataPath, { recursive: true, force: true })
+  }
 }
 
 /** 供 connect 缺 CLI 竞态测试注入的假子进程。 */

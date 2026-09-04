@@ -1,5 +1,6 @@
 import type { AppAppearanceMode, AppAppearanceState } from './app-appearance'
 import type { DesktopIpcResult } from './ipc-result'
+import type { GrokSandboxProfile } from './grok-sandbox-profile'
 import type { GrokMemoryDocument, GrokMemoryEnabledState, GrokMemorySummary } from './grok-memory'
 import type { McpServerInput, McpServerSummary } from './mcp-server-config'
 import type { MarketplacePluginSummary } from './runtime-marketplace-plugin'
@@ -27,6 +28,8 @@ export const APP_INVOKE_CHANNELS = {
   deleteMemory: 'app:delete-memory',
   getMemoryEnabled: 'app:get-memory-enabled',
   setMemoryEnabled: 'app:set-memory-enabled',
+  getGrokSandbox: 'app:get-grok-sandbox',
+  setGrokSandbox: 'app:set-grok-sandbox',
   listMcpServers: 'app:list-mcp-servers',
   upsertMcpServer: 'app:upsert-mcp-server',
   deleteMcpServer: 'app:delete-mcp-server',
@@ -79,6 +82,21 @@ export interface AppSaveMemoryRequest {
 
 export interface AppSetMemoryEnabledRequest {
   enabled: boolean
+}
+
+export interface AppSetGrokSandboxRequest {
+  profile: string
+}
+
+/** 已保存档位；不回传 toml 原文或 grok-home 路径。 */
+export interface AppGrokSandboxState {
+  profile: GrokSandboxProfile
+}
+
+/** 只有写盘且（若已连接）重载成功后 applied 才为 true。 */
+export interface AppGrokSandboxApplyResult {
+  profile: GrokSandboxProfile
+  applied: boolean
 }
 
 export interface AppListMcpServersRequest {
@@ -138,6 +156,10 @@ export interface AppDesktopApi {
   deleteMemory: (memoryId: string) => Promise<DesktopIpcResult<null>>
   getMemoryEnabled: () => Promise<DesktopIpcResult<GrokMemoryEnabledState>>
   setMemoryEnabled: (enabled: boolean) => Promise<DesktopIpcResult<GrokMemoryEnabledState>>
+  getGrokSandbox: () => Promise<DesktopIpcResult<AppGrokSandboxState>>
+  setGrokSandbox: (
+    profile: GrokSandboxProfile
+  ) => Promise<DesktopIpcResult<AppGrokSandboxApplyResult>>
   listMcpServers: (projectId?: string) => Promise<DesktopIpcResult<McpServerSummary[]>>
   upsertMcpServer: (input: McpServerInput) => Promise<DesktopIpcResult<McpServerSummary>>
   deleteMcpServer: (name: string) => Promise<DesktopIpcResult<null>>

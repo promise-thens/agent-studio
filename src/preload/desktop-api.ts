@@ -31,8 +31,11 @@ import {
   APP_INVOKE_CHANNELS,
   APP_PUSH_CHANNELS,
   type AppDesktopApi,
-  type AppGrokConfigDocument
+  type AppGrokConfigDocument,
+  type AppGrokSandboxApplyResult,
+  type AppGrokSandboxState
 } from '../shared/app-ipc'
+import { isGrokSandboxProfile } from '../shared/grok-sandbox-profile'
 import {
   parseGrokMemoryDocument,
   parseGrokMemoryEnabledState,
@@ -951,6 +954,34 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
       }
       return { ok: true, value: state }
     },
+    getGrokSandbox: async () => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.getGrokSandbox
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const state = parseGrokSandboxState(result.value)
+      if (!state) {
+        return {
+          ok: false,
+          error: { code: 'operation-failed', message: 'Grok sandbox 状态无效。' }
+        }
+      }
+      return { ok: true, value: state }
+    },
+    setGrokSandbox: async (profile) => {
+      const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.setGrokSandbox, {
+        profile
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const applied = parseGrokSandboxApplyResult(result.value)
+      if (!applied) {
+        return {
+          ok: false,
+          error: { code: 'operation-failed', message: 'Grok sandbox 状态无效。' }
+        }
+      }
+      return { ok: true, value: applied }
+    },
     listMcpServers: async (projectId) => {
       const result = (await ipcRenderer.invoke(
         APP_INVOKE_CHANNELS.listMcpServers,
@@ -1055,6 +1086,25 @@ function parseGrokConfigDocument(value: unknown): AppGrokConfigDocument | null {
   const document: AppGrokConfigDocument = { text: record.text }
   if (record.seeded === true) document.seeded = true
   return document
+}
+
+/** 只接受四档 profile，丢掉路径/toml 等未知键。 */
+function parseGrokSandboxState(value: unknown): AppGrokSandboxState | null {
+  if (!isPlainRecord(value) || Object.keys(value).some((key) => key !== 'profile')) return null
+  if (!isGrokSandboxProfile(value.profile)) return null
+  return { profile: value.profile }
+}
+
+/** applied 必须是布尔；夹带 configPath 等字段则整份拒绝，避免 UI 误显示已应用。 */
+function parseGrokSandboxApplyResult(value: unknown): AppGrokSandboxApplyResult | null {
+  if (
+    !isPlainRecord(value) ||
+    Object.keys(value).some((key) => key !== 'profile' && key !== 'applied')
+  ) {
+    return null
+  }
+  if (!isGrokSandboxProfile(value.profile) || typeof value.applied !== 'boolean') return null
+  return { profile: value.profile, applied: value.applied }
 }
 
 /**

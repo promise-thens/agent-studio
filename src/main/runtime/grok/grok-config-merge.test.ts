@@ -72,4 +72,58 @@ ${modelBlock}`
     ).toThrow(GrokConfigMergeError)
     expect(existing).toContain('enabled = true')
   })
+
+  it('已有 memory + mcp + plugins 时写入 sandbox，三块都在', () => {
+    const existing = `${modelBlock}
+[memory]
+enabled = true
+
+[mcp_servers.github]
+command = "/usr/bin/false"
+args = ["--help"]
+enabled = true
+
+[plugins]
+enabled = ["demo-plugin"]
+`
+    const next = mergeGrokConfigToml(existing, { sandboxProfile: 'workspace' })
+    expect(next).toContain('[memory]')
+    expect(next).toContain('enabled = true')
+    expect(next).toContain('[mcp_servers.github]')
+    expect(next).toContain('command = "/usr/bin/false"')
+    expect(next).toContain('[plugins]')
+    expect(next).toContain('"demo-plugin"')
+    expect(next).toContain('[sandbox]')
+    expect(next).toContain('profile = "workspace"')
+    expect(next).toContain('[model.agent-studio-default]')
+  })
+
+  it('非法 sandbox profile 拒绝且不改动原 toml 字符串', () => {
+    const existing = `[memory]
+enabled = true
+`
+    expect(() => mergeGrokConfigToml(existing, { sandboxProfile: 'devbox' as never })).toThrow(
+      GrokConfigMergeError
+    )
+    expect(existing).toBe(`[memory]
+enabled = true
+`)
+    expect(existing).not.toContain('[sandbox]')
+    expect(existing).not.toContain('devbox')
+  })
+
+  it('已有 [sandbox] 时只更新 profile，不删其它表', () => {
+    const existing = `[sandbox]
+profile = "off"
+
+[memory]
+enabled = false
+`
+    const next = mergeGrokConfigToml(existing, { sandboxProfile: 'strict' })
+    expect(next).toContain('[sandbox]')
+    expect(next).toContain('profile = "strict"')
+    expect(next).not.toContain('profile = "off"')
+    expect(next).toContain('[memory]')
+    expect(next).toContain('enabled = false')
+  })
 })

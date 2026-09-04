@@ -634,6 +634,41 @@ describe('窄 Preload API', () => {
     expect(ipcRenderer.removeListener).toHaveBeenCalledTimes(1)
   })
 
+  it('Grok sandbox API 走固定 channel，并拒绝非法返回形状', async () => {
+    const ipcRenderer = createIpcRenderer()
+    ipcRenderer.invoke.mockResolvedValueOnce({ ok: true, value: { profile: 'off' } })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { profile: 'workspace', applied: true }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { profile: 'strict', applied: true, configPath: '/tmp/grok-home/config.toml' }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({ ok: true, value: { profile: 'devbox' } })
+    const app = createAppDesktopApi(ipcRenderer)
+
+    expect(await app.getGrokSandbox()).toEqual({ ok: true, value: { profile: 'off' } })
+    expect(await app.setGrokSandbox('workspace')).toEqual({
+      ok: true,
+      value: { profile: 'workspace', applied: true }
+    })
+    expect(await app.setGrokSandbox('strict')).toEqual({
+      ok: false,
+      error: { code: 'operation-failed', message: 'Grok sandbox 状态无效。' }
+    })
+    expect(await app.getGrokSandbox()).toEqual({
+      ok: false,
+      error: { code: 'operation-failed', message: 'Grok sandbox 状态无效。' }
+    })
+    expect(ipcRenderer.invoke.mock.calls).toEqual([
+      [APP_INVOKE_CHANNELS.getGrokSandbox],
+      [APP_INVOKE_CHANNELS.setGrokSandbox, { profile: 'workspace' }],
+      [APP_INVOKE_CHANNELS.setGrokSandbox, { profile: 'strict' }],
+      [APP_INVOKE_CHANNELS.getGrokSandbox]
+    ])
+  })
+
   it('插件 API 解析摘要并丢掉含路径的脏项', async () => {
     const ipcRenderer = createIpcRenderer()
     ipcRenderer.invoke.mockResolvedValueOnce({

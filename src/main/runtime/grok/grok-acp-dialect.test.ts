@@ -14,6 +14,7 @@ import {
   buildGrokAcpClientInfo,
   buildGrokControlledE2ESpawnArgs,
   buildGrokNewSessionRequest,
+  buildGrokProductionAgentArgv,
   classifyGrokConnectError,
   classifyGrokSpawnProcessError,
   isGrokSetModelResponseValid,
@@ -139,6 +140,56 @@ describe('Grok ACP 方言常量冻结', () => {
     expect(e2eArgs).not.toContain('stdio')
     expect(e2eArgs).toContain('--scenario')
     expect(e2eArgs).toContain('--user-data')
+    expect(e2eArgs).not.toContain('--sandbox')
+  })
+})
+
+describe('buildGrokProductionAgentArgv', () => {
+  it('off 与 GROK_PRODUCTION_AGENT_ARGV 数组全等，且不改常量字面量', () => {
+    expect(buildGrokProductionAgentArgv('off')).toEqual([...GROK_PRODUCTION_AGENT_ARGV])
+    expect(buildGrokProductionAgentArgv('off')).toEqual([
+      '--no-auto-update',
+      'agent',
+      '--no-leader',
+      '-m',
+      'agent-studio-default',
+      'stdio'
+    ])
+    expect(GROK_PRODUCTION_AGENT_ARGV).toEqual([
+      '--no-auto-update',
+      'agent',
+      '--no-leader',
+      '-m',
+      'agent-studio-default',
+      'stdio'
+    ])
+    expect(buildGrokProductionAgentArgv('off')).not.toContain('--sandbox')
+  })
+
+  it.each(['workspace', 'read-only', 'strict'] as const)(
+    '%s 插在 --no-auto-update 之后、agent 之前，并保持 --no-leader',
+    (profile) => {
+      expect(buildGrokProductionAgentArgv(profile)).toEqual([
+        '--no-auto-update',
+        '--sandbox',
+        profile,
+        'agent',
+        '--no-leader',
+        '-m',
+        'agent-studio-default',
+        'stdio'
+      ])
+    }
+  )
+
+  it('非法 profile 抛错且不得产出 argv', () => {
+    expect(() => buildGrokProductionAgentArgv('devbox')).toThrow(/sandbox profile 无效/)
+    expect(() => buildGrokProductionAgentArgv('not-a-profile')).toThrow(/sandbox profile 无效/)
+    expect(() => buildGrokProductionAgentArgv('--sandbox')).toThrow(/sandbox profile 无效/)
+    expect(() => buildGrokProductionAgentArgv('')).toThrow(/sandbox profile 无效/)
+    expect(() => buildGrokProductionAgentArgv(undefined)).toThrow(/sandbox profile 无效/)
+    expect(GROK_PRODUCTION_AGENT_ARGV).not.toContain('--sandbox')
+    expect(GROK_PRODUCTION_AGENT_ARGV).not.toContain('devbox')
   })
 })
 

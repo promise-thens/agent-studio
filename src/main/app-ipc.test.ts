@@ -61,6 +61,8 @@ function createFixture(): {
   addMarketplaceSource: ReturnType<typeof vi.fn>
   probeMacosFolderAccess: ReturnType<typeof vi.fn>
   openMacosFilesPrivacySettings: ReturnType<typeof vi.fn>
+  getGrokSandbox: ReturnType<typeof vi.fn>
+  setGrokSandbox: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<DesktopIpcResult<T>>
 } {
   const handlers = new Map<string, DesktopIpcHandler>()
@@ -113,6 +115,11 @@ function createFixture(): {
     enabled,
     shareStatus: 'linked' as const
   }))
+  const getGrokSandbox = vi.fn(async () => ({ profile: 'off' as const }))
+  const setGrokSandbox = vi.fn(async (profile: 'off' | 'workspace' | 'read-only' | 'strict') => ({
+    profile,
+    applied: true
+  }))
   const listMcpServers = vi.fn(async () => [])
   const upsertMcpServer = vi.fn(async () => ({
     name: 'docs',
@@ -155,6 +162,8 @@ function createFixture(): {
     deleteMemory,
     getMemoryEnabled,
     setMemoryEnabled,
+    getGrokSandbox,
+    setGrokSandbox,
     listMcpServers,
     upsertMcpServer,
     deleteMcpServer,
@@ -185,6 +194,8 @@ function createFixture(): {
     addMarketplaceSource,
     probeMacosFolderAccess,
     openMacosFilesPrivacySettings,
+    getGrokSandbox,
+    setGrokSandbox,
     invoke
   }
 }
@@ -536,5 +547,36 @@ describe('App IPC Handler', () => {
       await fixture.invoke(APP_INVOKE_CHANNELS.openMacosFilesPrivacySettings, { extra: true })
     ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
     expect(fixture.openMacosFilesPrivacySettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('读写 Grok sandbox 只接受四档，非法值不写不 spawn', async () => {
+    const fixture = createFixture()
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.getGrokSandbox)).toEqual({
+      ok: true,
+      value: { profile: 'off' }
+    })
+    expect(fixture.getGrokSandbox).toHaveBeenCalledTimes(1)
+
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setGrokSandbox, { profile: 'workspace' })
+    ).toEqual({
+      ok: true,
+      value: { profile: 'workspace', applied: true }
+    })
+    expect(fixture.setGrokSandbox).toHaveBeenCalledWith('workspace')
+
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setGrokSandbox, { profile: 'devbox' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setGrokSandbox, {
+        profile: 'workspace',
+        extra: true
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.getGrokSandbox, { profile: 'off' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.setGrokSandbox).toHaveBeenCalledTimes(1)
   })
 })

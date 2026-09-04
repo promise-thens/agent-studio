@@ -38,15 +38,16 @@ import {
   getManagedGrokHome,
   writeGrokProviderConfig
 } from '../../provider/grok-provider-config'
+import { GrokHomeConfigController } from './grok-home-config-controller'
 import {
   AGENT_STUDIO_MODEL_ALIAS,
   GROK_ACP_CLIENT_CAPABILITIES,
   GROK_ACP_PRODUCT_MESSAGES,
-  GROK_PRODUCTION_AGENT_ARGV,
   GROK_SET_MODEL_METHOD,
   buildGrokAcpClientInfo,
   buildGrokControlledE2ESpawnArgs,
   buildGrokNewSessionRequest,
+  buildGrokProductionAgentArgv,
   classifyGrokConnectError,
   classifyGrokSpawnProcessError,
   isGrokCliMissingSpawnError,
@@ -719,11 +720,24 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         throw adapterError
       }
 
-      // 生产默认启动参数必须保持原样，不能经由通用 command/args 抽象。
+      // 生产 argv 只允许 builder 从已校验档位复制；spawn 前 type guard 是安全边界。
       const memoryEnabled = (await this.options.isMemoryEnabled?.()) ?? true
       const spawnProduction = this.options.spawnProductionProcess ?? spawn
+      let productionArgv: string[]
+      try {
+        const sandboxProfile = await new GrokHomeConfigController(grokHome).readSandboxProfile()
+        productionArgv = buildGrokProductionAgentArgv(sandboxProfile)
+      } catch (error) {
+        const detail = this.redactError(error)
+        const message = detail.includes('sandbox profile 无效')
+          ? 'Grok sandbox profile 无效。'
+          : `无法读取 Grok sandbox 配置：${detail}`
+        const adapterError = this.createError('operation-failed', message)
+        this.updateStatus({ state: 'error', message: adapterError.message, workspace })
+        throw adapterError
+      }
       // 备注：stdio 全 pipe 时运行时一定是 WithoutNullStreams；测试注入必须返回同类形状。
-      child = spawnProduction(this.resolveBinary(), [...GROK_PRODUCTION_AGENT_ARGV], {
+      child = spawnProduction(this.resolveBinary(), productionArgv, {
         cwd: workspace,
         env: buildGrokRuntimeEnvironment(providerConfig, grokHome, process.env, {
           memoryEnabled

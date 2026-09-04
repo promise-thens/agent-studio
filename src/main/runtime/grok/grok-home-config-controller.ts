@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { parse as parseToml } from 'smol-toml'
 import { GROK_CONFIG_MAX_BYTES } from '../../../shared/grok-config-hints'
+import { isGrokSandboxProfile, type GrokSandboxProfile } from '../../../shared/grok-sandbox-profile'
 import { AGENT_STUDIO_MODEL_ALIAS } from './grok-acp-dialect'
 import {
   GrokConfigMergeError,
@@ -59,10 +60,11 @@ export class GrokHomeConfigController {
       patch.mcpServers !== undefined ||
       patch.removeMcpServerNames !== undefined ||
       patch.pluginsEnabled !== undefined ||
-      patch.pluginsDisabled !== undefined
+      patch.pluginsDisabled !== undefined ||
+      patch.sandboxProfile !== undefined
 
     if (parseError && existing.trim() && needsPreserve) {
-      throw new GrokConfigMergeError('Grok 配置已损坏，拒绝合并记忆、MCP 或插件补丁。')
+      throw new GrokConfigMergeError('Grok 配置已损坏，拒绝合并记忆、MCP、插件或沙箱补丁。')
     }
 
     let next: string
@@ -107,6 +109,23 @@ export class GrokHomeConfigController {
         ? { disabled: plugins.disabled.filter((item): item is string => typeof item === 'string') }
         : {})
     }
+  }
+
+  /**
+   * 读取已保存的 Grok 内核沙箱档。缺表/缺键/空文件视为 off；
+   * 非法值（含 devbox）必须抛错，禁止静默当成 off 再拿去 spawn。
+   */
+  async readSandboxProfile(): Promise<GrokSandboxProfile> {
+    const text = await this.read()
+    if (!text.trim()) return 'off'
+    const parsed = tryParseToml(text)
+    if (!parsed) {
+      throw new GrokConfigMergeError('Grok 配置已损坏，无法读取 sandbox profile。')
+    }
+    const sandbox = asRecord(parsed.sandbox)
+    if (!sandbox || sandbox.profile === undefined) return 'off'
+    if (isGrokSandboxProfile(sandbox.profile)) return sandbox.profile
+    throw new GrokConfigMergeError('Grok sandbox profile 无效。')
   }
 
   private async writeAtomic(text: string): Promise<void> {

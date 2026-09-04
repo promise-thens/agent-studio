@@ -1,3 +1,4 @@
+import { isGrokSandboxProfile, type GrokSandboxProfile } from '../../../shared/grok-sandbox-profile'
 import { AGENT_STUDIO_MODEL_ALIAS } from './grok-acp-dialect'
 
 const MODEL_TABLE = `model.${AGENT_STUDIO_MODEL_ALIAS}`
@@ -29,6 +30,8 @@ export interface GrokConfigPatch {
   removeMcpServerNames?: readonly string[]
   pluginsEnabled?: string[]
   pluginsDisabled?: string[]
+  /** 只允许四档字面量；非法值必须在写入前拒绝，避免 toml 变成 CLI 旗标来源。 */
+  sandboxProfile?: GrokSandboxProfile
 }
 
 export interface TomlTableBlock {
@@ -221,6 +224,26 @@ export function mergeGrokConfigToml(existing: string, patch: GrokConfigPatch): s
     const next = { name: 'plugins', raw }
     if (pluginsIndex === -1) parts.blocks.push(next)
     else parts.blocks[pluginsIndex] = next
+  }
+
+  /**
+   * 只 upsert [sandbox].profile；不得整表覆盖，以免丢掉用户其它键。
+   * 非法档位在这里拒绝，避免后续 spawn 把 toml 任意字符串拼进 argv。
+   */
+  if (patch.sandboxProfile !== undefined) {
+    if (!isGrokSandboxProfile(patch.sandboxProfile)) {
+      throw new GrokConfigMergeError('Grok sandbox profile 无效。')
+    }
+    const sandboxIndex = parts.blocks.findIndex((block) => block.name === 'sandbox')
+    const profileLine = `profile = ${tomlString(patch.sandboxProfile)}`
+    if (sandboxIndex === -1) {
+      parts.blocks.push({ name: 'sandbox', raw: `[sandbox]\n${profileLine}\n` })
+    } else {
+      parts.blocks[sandboxIndex] = {
+        name: 'sandbox',
+        raw: upsertBareKey(parts.blocks[sandboxIndex].raw, 'profile', profileLine)
+      }
+    }
   }
 
   return joinTomlTables(parts)

@@ -842,6 +842,25 @@ function registerIpcHandlers(): void {
     deleteMemory: (memoryId) => requireGrokMemoryStore().delete(memoryId),
     getMemoryEnabled: () => requireGrokMemoryStore().getEnabledState(),
     setMemoryEnabled: (enabled) => requireGrokMemoryStore().setEnabled(enabled),
+    /**
+     * 只读已保存档。缺省 off；非法磁盘值由 controller 抛错，不得伪装成 off。
+     */
+    getGrokSandbox: async () => {
+      const profile = await requireGrokHomeConfig().readSandboxProfile()
+      return { profile }
+    },
+    /**
+     * 空闲才写盘；已连接则复用 reloadGrokRuntimeAfterConfigSave。
+     * 执行中先拒绝以免文件已改、旧进程仍按旧沙箱跑。重载失败不得返回 applied: true。
+     */
+    setGrokSandbox: async (profile) => {
+      assertGrokConfigCanReload()
+      await requireGrokHomeConfig().apply({ sandboxProfile: profile })
+      if (agentService?.getStatus().state === 'ready') {
+        await reloadGrokRuntimeAfterConfigSave(agentService)
+      }
+      return { profile, applied: true }
+    },
     listMcpServers: async (projectId) => {
       const projectServers = projectId
         ? await listProjectMcpServers(

@@ -2,6 +2,7 @@
  * Grok ACP 私有方言契约：启动参数、握手允许字段、set_model 守卫。
  * 只服务 runtime/grok；不得泄漏到 shared 或中性 AgentRuntimeAdapter。
  */
+import { isGrokSandboxProfile } from '../../../shared/grok-sandbox-profile'
 
 /** Agent Studio 写入 Grok config.toml / session/set_model 的固定模型别名。 */
 export const AGENT_STUDIO_MODEL_ALIAS = 'agent-studio-default'
@@ -21,6 +22,26 @@ export const GROK_PRODUCTION_AGENT_ARGV = [
   AGENT_STUDIO_MODEL_ALIAS,
   'stdio'
 ] as const
+
+/**
+ * 由已校验的 sandbox profile 复制生产 argv。
+ * off 必须与 GROK_PRODUCTION_AGENT_ARGV 全等；其它档把 `--sandbox <profile>`
+ * 插在 `--no-auto-update` 之后、`agent` 之前。禁止改常量、禁止 GROK_SANDBOX env、
+ * 禁止打开 `--leader`。非法值抛错且不得返回数组，避免 Renderer 字符串进 spawn。
+ */
+export function buildGrokProductionAgentArgv(profile: unknown): string[] {
+  if (!isGrokSandboxProfile(profile)) {
+    throw new Error('Grok sandbox profile 无效。')
+  }
+  const argv = [...GROK_PRODUCTION_AGENT_ARGV]
+  if (profile === 'off') return argv
+  const insertAt = argv.indexOf('--no-auto-update')
+  if (insertAt < 0 || argv[insertAt + 1] !== 'agent') {
+    throw new Error('Grok sandbox profile 无效。')
+  }
+  argv.splice(insertAt + 1, 0, '--sandbox', profile)
+  return argv
+}
 
 /** 受控 E2E fixture argv 的固定 flag；与生产 argv 刻意分离。 */
 export const GROK_CONTROLLED_E2E_SPAWN_ARG_FLAGS = {
