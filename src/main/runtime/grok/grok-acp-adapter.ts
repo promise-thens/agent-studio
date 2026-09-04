@@ -126,6 +126,29 @@ type AskCancelReason =
   | 'onQuestion-throw'
   | 'queue-full'
 
+/**
+ * Adapter 契约的 cancelReason 是 string（参数逆变，实现不能比基类更窄）。
+ * 未知字符串不进归因，避免把任意正文写进 ask-debug。
+ */
+function resolveAskCancelReason(
+  value: string | undefined,
+  fallback: AskCancelReason
+): AskCancelReason {
+  switch (value) {
+    case 'user-cancel':
+    case 'stale-turn':
+    case 'pending-clear':
+    case 'cancel-turn':
+    case 'disconnect':
+    case 'service-not-current':
+    case 'onQuestion-throw':
+    case 'queue-full':
+      return value
+    default:
+      return fallback
+  }
+}
+
 type PendingClearSource = 'turn-complete' | 'cancel-turn' | 'disconnect'
 
 interface QuestionResolveMeta {
@@ -1144,7 +1167,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
   respondQuestion(
     requestId: string,
     response: AgentQuestionResponse,
-    options?: { cancelReason?: AskCancelReason }
+    options?: { cancelReason?: string }
   ): void {
     const pending = this.pendingQuestions.get(requestId)
     if (!pending) {
@@ -1167,21 +1190,21 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
         this.traceAskProtocol({
           stage: 'ext-out',
           action: 'cancel',
-          cancelReason: options?.cancelReason ?? 'stale-turn',
+          cancelReason: resolveAskCancelReason(options?.cancelReason, 'stale-turn'),
           sessionGeneration: this.sessionGeneration,
           pendingSessionGeneration: pendingTurn.sessionGeneration,
           activeTurnNull: false
         })
         pending.resolve(
           { action: 'cancel' },
-          { cancelReason: options?.cancelReason ?? 'stale-turn' }
+          { cancelReason: resolveAskCancelReason(options?.cancelReason, 'stale-turn') }
         )
         return
       }
       this.traceAskProtocol({ stage: 'ext-out', action: response.action })
       if (response.action === 'cancel') {
         pending.resolve(response, {
-          cancelReason: options?.cancelReason ?? 'user-cancel'
+          cancelReason: resolveAskCancelReason(options?.cancelReason, 'user-cancel')
         })
         this.flushDeferredTurnComplete(pendingTurn)
         return
@@ -1218,7 +1241,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       return
     }
 
-    const cancelReason = options?.cancelReason ?? 'stale-turn'
+    const cancelReason = resolveAskCancelReason(options?.cancelReason, 'stale-turn')
     this.traceAskProtocol({
       stage: 'ext-out',
       action: 'cancel',
