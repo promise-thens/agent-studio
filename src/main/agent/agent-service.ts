@@ -945,8 +945,14 @@ export class AgentService {
 
   /**
    * 发送前保证本 Task 已接上绑定 session；resume/load 都失败则同 Task 重建，不换 taskId。
+   * `allowRebuild: false` 用于 sandbox 改档：session 固定沙箱时必须把 Runtime 错误抛出，
+   * 禁止静默 `session/new` 还让调用方当成重载成功。
    */
-  async ensureTaskSessionForTurn(taskId: string, inheritedLease?: OperationLease): Promise<void> {
+  async ensureTaskSessionForTurn(
+    taskId: string,
+    inheritedLease?: OperationLease,
+    options?: { allowRebuild?: boolean }
+  ): Promise<void> {
     await this.waitForEnter(taskId)
     const task = this.requireTask(taskId)
     if (this.isForeignExecutionActive(taskId)) {
@@ -956,7 +962,7 @@ export class AgentService {
       this.syncTakeoverApplyState(task)
       return
     }
-    await this.activateOrRebuildTaskSession(task, inheritedLease)
+    await this.activateOrRebuildTaskSession(task, inheritedLease, options)
     this.syncTakeoverApplyState(this.requireTask(taskId))
   }
 
@@ -1313,7 +1319,8 @@ export class AgentService {
 
   private async activateOrRebuildTaskSession(
     task: AgentTaskRecord,
-    inheritedLease?: OperationLease
+    inheritedLease?: OperationLease,
+    options?: { allowRebuild?: boolean }
   ): Promise<void> {
     await this.runExclusiveSessionOperation(async (lease) => {
       if (task.projectId && this.projectRegistry) {
@@ -1328,6 +1335,9 @@ export class AgentService {
       try {
         await this.activateTaskSession(liveTask, lease)
       } catch (error) {
+        if (options?.allowRebuild === false) {
+          throw normalizeServiceError(error)
+        }
         const status = this.adapter.getStatus()
         const connectionTrusted =
           status.state === 'ready' && status.workspace === liveTask.workspace

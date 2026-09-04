@@ -934,6 +934,49 @@ describe('AgentService Task / Turn 编排', () => {
     }
   })
 
+  it('ensureTaskSessionForTurn 默认在 resume/load 失败且连接可信时同 Task 重建', async () => {
+    const fixture = await createHistoryServiceFixture(['task-a', 'turn-a'])
+    try {
+      const task = await fixture.service.createTask(fixture.project.projectId)
+      await fixture.service.disconnect()
+      fixture.adapter.resumeSession.mockRejectedValue(
+        new AgentRuntimeAdapterError('operation-failed', 'session sandbox 与当前进程不一致')
+      )
+      fixture.adapter.loadSession.mockRejectedValue(
+        new AgentRuntimeAdapterError('operation-failed', 'session sandbox 与当前进程不一致')
+      )
+
+      await fixture.service.ensureTaskSessionForTurn(task.taskId)
+      expect(fixture.adapter.createSession).toHaveBeenCalledTimes(2)
+    } finally {
+      await fixture.dispose()
+    }
+  })
+
+  it('allowRebuild:false 时 resume/load 失败必须抛出，不得静默 session/new', async () => {
+    const fixture = await createHistoryServiceFixture(['task-a', 'turn-a'])
+    try {
+      const task = await fixture.service.createTask(fixture.project.projectId)
+      expect(fixture.adapter.createSession).toHaveBeenCalledTimes(1)
+      await fixture.service.disconnect()
+      fixture.adapter.resumeSession.mockRejectedValue(
+        new AgentRuntimeAdapterError('operation-failed', 'session sandbox 与当前进程不一致')
+      )
+      fixture.adapter.loadSession.mockRejectedValue(
+        new AgentRuntimeAdapterError('operation-failed', 'session sandbox 与当前进程不一致')
+      )
+
+      await expect(
+        fixture.service.ensureTaskSessionForTurn(task.taskId, undefined, { allowRebuild: false })
+      ).rejects.toEqual(
+        new AgentServiceError('operation-failed', 'session sandbox 与当前进程不一致')
+      )
+      expect(fixture.adapter.createSession).toHaveBeenCalledTimes(1)
+    } finally {
+      await fixture.dispose()
+    }
+  })
+
   it('Adapter 进程已死后 enterTask 不会因 selectedTaskId 短路而假成功', async () => {
     const fixture = await createHistoryServiceFixture(['task-a'])
     try {

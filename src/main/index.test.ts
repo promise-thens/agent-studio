@@ -159,7 +159,11 @@ const mocks = vi.hoisted(() => {
       ),
       getSelectedTaskId: vi.fn<() => string | null>(() => null),
       ensureTaskSessionForTurn: vi.fn<
-        (taskId: string, inheritedLease?: OperationLease) => Promise<void>
+        (
+          taskId: string,
+          inheritedLease?: OperationLease,
+          options?: { allowRebuild?: boolean }
+        ) => Promise<void>
       >(async () => undefined)
     },
     runtimeAdapter: {
@@ -930,7 +934,9 @@ describe('Main 删除与权限失效编排', () => {
     expect(mocks.grokHomeConfig.apply).toHaveBeenCalledWith({ sandboxProfile: 'strict' })
     expect(mocks.agentService.disconnect).toHaveBeenCalledOnce()
     expect(mocks.agentService.connect).toHaveBeenCalledWith('project-1', undefined)
-    expect(mocks.agentService.ensureTaskSessionForTurn).toHaveBeenCalledWith('task-1', undefined)
+    expect(mocks.agentService.ensureTaskSessionForTurn).toHaveBeenCalledWith('task-1', undefined, {
+      allowRebuild: false
+    })
   })
 
   it.each(['busy', 'connecting'] as const)(
@@ -965,6 +971,28 @@ describe('Main 删除与权限失效编排', () => {
     expect(mocks.grokHomeConfig.apply).toHaveBeenCalledWith({ sandboxProfile: 'read-only' })
     expect(mocks.grokHomeConfig.apply).not.toHaveBeenCalledWith({ sandboxProfile: 'off' })
     expect(mocks.agentService.disconnect).toHaveBeenCalledOnce()
+  })
+
+  it('改 sandbox 后 resume/load 失败不得返回 applied true，也不静默改回 off', async () => {
+    mocks.agentService.getStatus.mockReturnValue({
+      runtimeId: 'grok',
+      state: 'ready',
+      message: 'ready',
+      workspace: '/tmp/project-1'
+    })
+    mocks.agentService.getSelectedTaskId.mockReturnValue('task-1')
+    mocks.agentService.ensureTaskSessionForTurn.mockRejectedValueOnce(
+      new Error('session sandbox 与当前进程不一致')
+    )
+
+    await expect(mocks.appDeletionDependencies!.setGrokSandbox!('workspace')).rejects.toThrow(
+      /sandbox/
+    )
+    expect(mocks.grokHomeConfig.apply).toHaveBeenCalledWith({ sandboxProfile: 'workspace' })
+    expect(mocks.grokHomeConfig.apply).not.toHaveBeenCalledWith({ sandboxProfile: 'off' })
+    expect(mocks.agentService.ensureTaskSessionForTurn).toHaveBeenCalledWith('task-1', undefined, {
+      allowRebuild: false
+    })
   })
 
   it.each(['busy', 'connecting'] as const)(

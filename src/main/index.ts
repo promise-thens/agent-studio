@@ -850,14 +850,14 @@ function registerIpcHandlers(): void {
       return { profile }
     },
     /**
-     * 空闲才写盘；已连接则复用 reloadGrokRuntimeAfterConfigSave。
-     * 执行中先拒绝以免文件已改、旧进程仍按旧沙箱跑。重载失败不得返回 applied: true。
+     * 空闲才写盘；已连接则复用 reloadGrokRuntimeAfterConfigSave，但禁止静默 session/new。
+     * 执行中先拒绝以免文件已改、旧进程仍按旧沙箱跑。重载或 resume/load 失败不得返回 applied: true。
      */
     setGrokSandbox: async (profile) => {
       assertGrokConfigCanReload()
       await requireGrokHomeConfig().apply({ sandboxProfile: profile })
       if (agentService?.getStatus().state === 'ready') {
-        await reloadGrokRuntimeAfterConfigSave(agentService)
+        await reloadGrokRuntimeAfterConfigSave(agentService, { allowSessionRebuild: false })
       }
       return { profile, applied: true }
     },
@@ -1289,12 +1289,18 @@ async function persistProviderConfig(
 async function restoreProviderRuntime(
   currentAgent: AgentService,
   reconnect: { projectId: string; selectedTaskId: string | null },
-  lease?: OperationLease
+  lease?: OperationLease,
+  options?: { allowSessionRebuild?: boolean }
 ): Promise<void> {
   await currentAgent.connect(reconnect.projectId, lease)
-  if (reconnect.selectedTaskId) {
-    await currentAgent.ensureTaskSessionForTurn(reconnect.selectedTaskId, lease)
+  if (!reconnect.selectedTaskId) return
+  if (options?.allowSessionRebuild === false) {
+    await currentAgent.ensureTaskSessionForTurn(reconnect.selectedTaskId, lease, {
+      allowRebuild: false
+    })
+    return
   }
+  await currentAgent.ensureTaskSessionForTurn(reconnect.selectedTaskId, lease)
 }
 
 /** 任务执行中禁止保存 Grok 配置，避免文件已改但正在跑的进程仍用旧窗口。 */
@@ -1308,15 +1314,20 @@ function assertGrokConfigCanReload(): void {
 /**
  * 把已连接的 Grok 进程拆掉再拉起来，让刚写入的 App config.toml 被 Runtime 重新读取。
  * 找不到 Project 时只断开，避免把目录路径当成身份重连。
+ * sandbox 改档传 `allowSessionRebuild: false`：旧 session 因沙箱固定 resume/load 失败时
+ * 必须抛错，禁止静默 `session/new`。saveGrokConfig 保持默认可重建。
  */
-async function reloadGrokRuntimeAfterConfigSave(currentAgent: AgentService): Promise<void> {
+async function reloadGrokRuntimeAfterConfigSave(
+  currentAgent: AgentService,
+  options?: { allowSessionRebuild?: boolean }
+): Promise<void> {
   const status = currentAgent.getStatus()
   if (status.state !== 'ready') return
   const projectId = requireProjectRegistry().findActiveProjectIdByRoot(status.workspace ?? '')
   const selectedTaskId = currentAgent.getSelectedTaskId()
   await currentAgent.disconnect()
   if (!projectId) return
-  await restoreProviderRuntime(currentAgent, { projectId, selectedTaskId })
+  await restoreProviderRuntime(currentAgent, { projectId, selectedTaskId }, undefined, options)
 }
 
 /** Bearer 表单留空时仅允许复用相同 origin 下已安全保存的 Key。 */
