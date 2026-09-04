@@ -428,7 +428,7 @@ async function initializeServices(
       onStatus: (status) =>
         sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.status, status),
       onEvent: (event) => {
-        // TaskExecutor 负责持久化确认后发布；旧 Service 路径只收束兼容历史，不得绕过提交门。
+        // TaskExecutor 接受后立即直播；落盘失败或截断不得挡住 Renderer。旧 Service 路径只收束兼容历史。
         if (!taskExecutor?.handleRuntimeEvent(event)) agentService?.handleRuntimeEvent(event)
       },
       onPermission: (request) => {

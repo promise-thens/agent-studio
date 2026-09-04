@@ -222,6 +222,37 @@ describe('mapGrokPermissionRequest 读/写映射', () => {
     expect(JSON.stringify(request)).not.toContain('rawInput')
   })
 
+  it('read 没有 locations 时可用标题反引号路径映射为项目内读取', () => {
+    const request = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-read-title-path',
+          kind: 'read',
+          title: 'Read `D:\\金坛\\czgs-report-ui\\src\\views\\pageDemo\\CavernVisualization.vue`'
+        }
+      },
+      'permission-read-title-path',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+
+    expect(request).toMatchObject({
+      operationType: 'read-project',
+      executionSupported: true,
+      targets: [
+        {
+          kind: 'path',
+          value: 'D:\\金坛\\czgs-report-ui\\src\\views\\pageDemo\\CavernVisualization.vue'
+        }
+      ]
+    })
+    expect(request?.minimumRisk).toBeUndefined()
+  })
+
   it('只有 allow_always 时即使是项目内读取也不把 executionSupported 设为 true', () => {
     const request = mapGrokPermissionRequest(
       {
@@ -408,5 +439,93 @@ describe('mapGrokSessionUpdate 子 Agent parentId', () => {
     expect(events[0]).not.toHaveProperty('parentId')
     expect(JSON.stringify(events)).not.toContain('"parentId"')
     expect(JSON.stringify(events)).not.toContain('parentToolCallId')
+  })
+
+  it('plan 整表快照投影为 plan 事件并脱敏条目正文', () => {
+    const events = mapGrokSessionUpdate(
+      {
+        sessionId: SESSION_ID,
+        update: {
+          sessionUpdate: 'plan',
+          entries: [
+            {
+              content: `定位接缝 ${FAKE_KEY}`,
+              priority: 'high',
+              status: 'completed'
+            },
+            {
+              content: '融合两罐交界',
+              priority: 'medium',
+              status: 'in_progress'
+            }
+          ]
+        }
+      },
+      redactFakeText
+    )
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'plan',
+        entries: [
+          { content: '定位接缝 [REDACTED]', priority: 'high', status: 'completed' },
+          { content: '融合两罐交界', priority: 'medium', status: 'in_progress' }
+        ]
+      })
+    ])
+  })
+
+  it('plan_update items 同样投影为整表 plan；file/markdown 忽略', () => {
+    const items = mapGrokSessionUpdate(
+      {
+        sessionId: SESSION_ID,
+        update: {
+          sessionUpdate: 'plan_update',
+          plan: {
+            type: 'items',
+            planId: 'plan-1',
+            entries: [
+              {
+                content: `融合接缝 ${FAKE_KEY}`,
+                priority: 'medium',
+                status: 'completed'
+              }
+            ]
+          }
+        }
+      } as acp.SessionNotification,
+      redactFakeText
+    )
+    expect(items).toEqual([
+      expect.objectContaining({
+        kind: 'plan',
+        entries: [{ content: '融合接缝 [REDACTED]', priority: 'medium', status: 'completed' }]
+      })
+    ])
+
+    expect(
+      mapGrokSessionUpdate(
+        {
+          sessionId: SESSION_ID,
+          update: {
+            sessionUpdate: 'plan_update',
+            plan: { type: 'file', planId: 'plan-1', uri: 'file:///tmp/plan.md' }
+          }
+        } as acp.SessionNotification,
+        redactFakeText
+      )
+    ).toEqual([])
+    expect(
+      mapGrokSessionUpdate(
+        {
+          sessionId: SESSION_ID,
+          update: {
+            sessionUpdate: 'plan_update',
+            plan: { type: 'markdown', planId: 'plan-1', content: '# 计划' }
+          }
+        } as acp.SessionNotification,
+        redactFakeText
+      )
+    ).toEqual([])
   })
 })

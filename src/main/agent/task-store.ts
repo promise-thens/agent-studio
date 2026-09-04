@@ -45,9 +45,8 @@ const LEGACY_TURN_SCHEMA_VERSION = 1
 const EVENT_SCHEMA_VERSION = 1
 const MAX_TASKS = 500
 const MAX_TURNS_PER_TASK = 100
-const MAX_EVENTS_PER_TURN = 2_000
-const MAX_HISTORY_BYTES = 256 * 1024 * 1024
-const MAX_TURN_EVENT_BYTES = 8 * 1024 * 1024
+/** 每个对话（Task）自己的历史预算，不是全库共用。 */
+const MAX_TASK_HISTORY_BYTES = 256 * 1024 * 1024
 const MAX_EVENT_BYTES = 256 * 1024
 const MAX_EVENT_CHUNK_BYTES = 512 * 1024
 const MAX_EVENTS_PER_CHUNK = 50
@@ -126,10 +125,7 @@ export type AppendEventResult =
   | { kind: 'committed' }
   | { kind: 'duplicate' }
   | { kind: 'repaired' }
-  | {
-      kind: 'history-truncated'
-      reason: NonNullable<TurnHistoryRecord['truncationReason']>
-    }
+  | { kind: 'skipped-too-large' }
 
 interface NormalizedEventHistory {
   events: PersistedAgentEvent[]
@@ -191,6 +187,8 @@ export interface TaskStoreOptions {
   writer?: AtomicJsonWriter
   now?: () => string
   createId?: () => string
+  /** 单对话历史上限；缺省 256 MiB。测试可缩小以便验证淘汰。 */
+  maxTaskHistoryBytes?: number
 }
 
 export type ExecutionTerminalCommitResult =
@@ -218,6 +216,7 @@ export class TaskStore {
   private readonly writer: AtomicJsonWriter
   private readonly now: () => string
   private readonly createId: () => string
+  private readonly maxTaskHistoryBytes: number
   private readonly tasks = new Map<string, TaskRecordV1>()
   private readonly unsupportedTasks = new Map<
     string,
@@ -232,12 +231,15 @@ export class TaskStore {
     DeletionReservationId,
     { taskId: string; projectId: string }
   >()
+  /** 长任务 append 热路径避免每次 readdir 事件块目录。 */
+  private readonly lastEventChunkIndexByTurn = new Map<string, number>()
 
   constructor(options: TaskStoreOptions) {
     this.registry = options.projectRegistry
     this.writer = options.writer ?? new AtomicJsonWriter()
     this.now = options.now ?? (() => new Date().toISOString())
     this.createId = options.createId ?? randomUUID
+    this.maxTaskHistoryBytes = options.maxTaskHistoryBytes ?? MAX_TASK_HISTORY_BYTES
   }
 
   async initialize(): Promise<void> {
@@ -599,84 +601,104 @@ export class TaskStore {
       }
       const task = this.requireTask(event.taskId)
       const turn = await this.readTurn(task, event.turnId)
-      const history = await this.readNormalizedEventHistory(task, turn)
-      const existing = history.events.find((candidate) => candidate.sequence === event.sequence)
-      if (existing) {
-        if (!arePersistedEventsEqual(existing, event)) {
-          throw new TaskStoreError('history-corrupt', '同一 Turn 的事件 sequence 对应了不同内容。')
-        }
-        if (turn.eventCount !== history.eventCount || turn.eventBytes !== history.eventBytes) {
-          await this.saveTurn(task, {
-            ...turn,
-            eventCount: history.eventCount,
-            eventBytes: history.eventBytes,
-            revision: turn.revision + 1
-          })
-          return { kind: 'repaired' }
-        }
-        return { kind: 'duplicate' }
-      }
-
       const serializedBytes = serializedEventBytes(event)
       if (serializedBytes > MAX_EVENT_BYTES) {
-        if (!turn.historyTruncated) {
-          await this.saveTurn(task, {
-            ...turn,
-            historyTruncated: true,
-            truncationReason: 'event-bytes',
-            revision: turn.revision + 1
-          })
-        }
-        return { kind: 'history-truncated', reason: 'event-bytes' }
-      }
-      if (
-        history.eventCount >= MAX_EVENTS_PER_TURN ||
-        history.eventBytes + serializedBytes > MAX_TURN_EVENT_BYTES
-      ) {
-        const reason =
-          history.eventCount >= MAX_EVENTS_PER_TURN
-            ? ('event-count' as const)
-            : ('turn-bytes' as const)
-        if (!turn.historyTruncated) {
-          await this.saveTurn(task, {
-            ...turn,
-            eventCount: history.eventCount,
-            eventBytes: history.eventBytes,
-            historyTruncated: true,
-            truncationReason: reason,
-            revision: turn.revision + 1
-          })
-        }
-        return { kind: 'history-truncated', reason }
+        // 单条过大只跳过自己；长任务后半段必须还能落盘。
+        return { kind: 'skipped-too-large' }
       }
 
       const chunkIndex = await this.getLastChunkIndex(task, turn.turnId)
-      let chunk = await this.readEventChunk(task, turn, chunkIndex)
-      if (
-        chunk.events.length >= MAX_EVENTS_PER_CHUNK ||
-        Buffer.byteLength(JSON.stringify([...chunk.events, event]), 'utf8') > MAX_EVENT_CHUNK_BYTES
-      ) {
-        chunk = {
-          schemaVersion: EVENT_SCHEMA_VERSION,
-          taskId: task.taskId,
-          turnId: turn.turnId,
-          chunkIndex: chunkIndex + 1,
-          events: []
-        }
-      }
-      const nextChunk = { ...chunk, events: [...chunk.events, event] }
-      await this.writer.write(
-        this.eventChunkPath(task, turn.turnId, nextChunk.chunkIndex),
-        nextChunk
+      const chunk = await this.readEventChunk(task, turn, chunkIndex)
+      const existingInLastChunk = chunk.events.find(
+        (candidate) => candidate.sequence === event.sequence
       )
-      await this.saveTurn(task, {
-        ...turn,
-        eventCount: history.eventCount + 1,
-        eventBytes: history.eventBytes + serializedBytes,
-        revision: turn.revision + 1
-      })
-      return { kind: 'committed' }
+      const lastSequence = chunk.events.at(-1)?.sequence
+      const mightExistEarlier =
+        existingInLastChunk != null ||
+        (chunkIndex > 1 && lastSequence != null && event.sequence <= lastSequence)
+      if (mightExistEarlier) {
+        return this.appendEventReconcilingHistory(task, turn, event, serializedBytes)
+      }
+      return this.writeNewEvent(task, turn, chunk, event, serializedBytes)
     })
+  }
+
+  /**
+   * 重复 sequence 或可能落在更早事件块时，才重读整轮历史。
+   * 热路径不得走这里，否则长任务每次 append 都是 O(n)。
+   */
+  private async appendEventReconcilingHistory(
+    task: TaskRecordV1,
+    turn: TurnRecordV1,
+    event: PersistedAgentEvent,
+    serializedBytes: number
+  ): Promise<AppendEventResult> {
+    const history = await this.readNormalizedEventHistory(task, turn)
+    const existing = history.events.find((candidate) => candidate.sequence === event.sequence)
+    if (existing) {
+      if (!arePersistedEventsEqual(existing, event)) {
+        throw new TaskStoreError('history-corrupt', '同一 Turn 的事件 sequence 对应了不同内容。')
+      }
+      if (turn.eventCount !== history.eventCount || turn.eventBytes !== history.eventBytes) {
+        await this.saveTurn(task, {
+          ...turn,
+          eventCount: history.eventCount,
+          eventBytes: history.eventBytes,
+          revision: turn.revision + 1
+        })
+        return { kind: 'repaired' }
+      }
+      return { kind: 'duplicate' }
+    }
+    const chunkIndex = await this.getLastChunkIndex(task, turn.turnId)
+    const chunk = await this.readEventChunk(task, turn, chunkIndex)
+    return this.writeNewEvent(
+      task,
+      {
+        ...turn,
+        eventCount: history.eventCount,
+        eventBytes: history.eventBytes
+      },
+      chunk,
+      event,
+      serializedBytes
+    )
+  }
+
+  /** 把新事件写入当前或下一事件块，并按 Turn 计数累加，不再扫描全部历史。 */
+  private async writeNewEvent(
+    task: TaskRecordV1,
+    turn: TurnRecordV1,
+    chunk: EventChunkV1,
+    event: PersistedAgentEvent,
+    serializedBytes: number
+  ): Promise<AppendEventResult> {
+    let target = chunk
+    if (
+      target.events.length >= MAX_EVENTS_PER_CHUNK ||
+      Buffer.byteLength(JSON.stringify([...target.events, event]), 'utf8') > MAX_EVENT_CHUNK_BYTES
+    ) {
+      target = {
+        schemaVersion: EVENT_SCHEMA_VERSION,
+        taskId: task.taskId,
+        turnId: turn.turnId,
+        chunkIndex: chunk.chunkIndex + 1,
+        events: []
+      }
+    }
+    const nextChunk = { ...target, events: [...target.events, event] }
+    await this.writer.write(this.eventChunkPath(task, turn.turnId, nextChunk.chunkIndex), nextChunk)
+    this.lastEventChunkIndexByTurn.set(
+      this.turnChunkKey(task.taskId, turn.turnId),
+      nextChunk.chunkIndex
+    )
+    await this.saveTurn(task, {
+      ...turn,
+      eventCount: turn.eventCount + 1,
+      eventBytes: turn.eventBytes + serializedBytes,
+      revision: turn.revision + 1
+    })
+    return { kind: 'committed' }
   }
 
   async finishTurn(
@@ -975,6 +997,7 @@ export class TaskStore {
               throw new TaskStoreError('invalid-state', 'Task 状态已变化，请重新预览删除影响。')
             }
             await this.moveToDeletingAndRemove(this.taskDirectory(current), `task-${taskId}`)
+            this.forgetEventChunkIndex(taskId)
             this.tasks.delete(taskId)
           },
           { deletionReservationId: reservationId }
@@ -1066,7 +1089,10 @@ export class TaskStore {
             const tasksPath = join(this.registry.getProjectDirectory(projectId), 'tasks')
             await this.moveToDeletingAndRemove(tasksPath, `project-${projectId}`)
             for (const [taskId, task] of this.tasks) {
-              if (task.projectId === projectId) this.tasks.delete(taskId)
+              if (task.projectId === projectId) {
+                this.forgetEventChunkIndex(taskId)
+                this.tasks.delete(taskId)
+              }
             }
           },
           { deletionReservationId: reservationId }
@@ -1089,14 +1115,16 @@ export class TaskStore {
     }
   }
 
-  /** 权限审计等同属历史目录的写入，必须主动复用 256 MiB 全局容量门禁。 */
+  /** 权限审计等增量写入走同一对话 256 MiB 预算，不得拿别的对话来腾地方。 */
   async ensureAdditionalHistoryCapacity(taskId: string, projectedBytes: number): Promise<void> {
     if (!Number.isSafeInteger(projectedBytes) || projectedBytes < 0) {
       throw new TaskStoreError('invalid-state', '历史容量增量无效。')
     }
     const task = this.requireTask(taskId)
     this.assertTaskMutationAllowed(taskId, task.projectId)
-    await this.ensureHistoryCapacity(projectedBytes, taskId)
+    await this.enqueueTask(taskId, async () => {
+      await this.ensureHistoryCapacity(projectedBytes, taskId)
+    })
   }
 
   /**
@@ -1376,12 +1404,33 @@ export class TaskStore {
     }
   }
 
+  private turnChunkKey(taskId: string, turnId: string): string {
+    return `${taskId}:${turnId}`
+  }
+
+  /** Task 或 Turn 被删后丢掉块下标缓存，避免复用 id 时写错块。 */
+  private forgetEventChunkIndex(taskId: string, turnId?: string): void {
+    if (turnId) {
+      this.lastEventChunkIndexByTurn.delete(this.turnChunkKey(taskId, turnId))
+      return
+    }
+    const prefix = `${taskId}:`
+    for (const key of this.lastEventChunkIndexByTurn.keys()) {
+      if (key.startsWith(prefix)) this.lastEventChunkIndexByTurn.delete(key)
+    }
+  }
+
   private async getLastChunkIndex(task: TaskRecordV1, turnId: string): Promise<number> {
+    const key = this.turnChunkKey(task.taskId, turnId)
+    const cached = this.lastEventChunkIndexByTurn.get(key)
+    if (cached != null) return cached
     const files = (await fs.readdir(this.eventsDirectory(task, turnId)).catch(() => []))
       .filter((name) => /^\d{6}\.json$/.test(name))
       .sort()
     const last = files.at(-1)
-    return last ? Number.parseInt(last.slice(0, 6), 10) : 1
+    const index = last ? Number.parseInt(last.slice(0, 6), 10) : 1
+    this.lastEventChunkIndexByTurn.set(key, index)
+    return index
   }
 
   private async ensureTaskCapacity(): Promise<void> {
@@ -1392,18 +1441,63 @@ export class TaskStore {
     }
   }
 
-  private async ensureHistoryCapacity(
-    projectedBytes: number,
-    protectedTaskId?: string
-  ): Promise<void> {
-    let total = await directoryUsage(this.registry.historyRoot)
-    while (total + projectedBytes > MAX_HISTORY_BYTES) {
-      const removed = await this.evictOldestTerminalTask(protectedTaskId)
+  /**
+   * 只扣当前对话目录。超限先丢掉本对话最旧终态 Turn；
+   * 正在跑的 Turn 不淘汰，也不得去删别人的对话。
+   */
+  private async ensureHistoryCapacity(projectedBytes: number, taskId: string): Promise<void> {
+    const task = this.requireTask(taskId)
+    let total = await directoryUsage(this.taskDirectory(task))
+    while (total + projectedBytes > this.maxTaskHistoryBytes) {
+      const removed = await this.evictOldestTerminalTurn(taskId)
       if (!removed) {
-        throw new TaskStoreError('history-capacity-exceeded', '历史容量已达到 256 MiB 上限。')
+        throw new TaskStoreError('history-capacity-exceeded', '当前对话历史已达到 256 MiB 上限。')
       }
-      total = await directoryUsage(this.registry.historyRoot)
+      total = await directoryUsage(this.taskDirectory(this.requireTask(taskId)))
     }
+  }
+
+  private async evictOldestTerminalTurn(taskId: string): Promise<boolean> {
+    const task = this.requireTask(taskId)
+    const turnIds = await fs.readdir(this.turnsDirectory(task)).catch(() => [])
+    const records: TurnRecordV1[] = []
+    for (const turnId of turnIds) {
+      try {
+        records.push(await this.readTurn(task, turnId))
+      } catch {
+        continue
+      }
+    }
+    const victim = records
+      .filter((turn) => turn.turnId !== task.activeTurnId && isTerminalHistoryState(turn.state))
+      .sort((left, right) =>
+        (left.endedAt ?? left.createdAt).localeCompare(right.endedAt ?? right.createdAt)
+      )
+      .at(0)
+    if (!victim) return false
+
+    await this.moveToDeletingAndRemove(
+      this.turnDirectory(task, victim.turnId),
+      `evicted-turn-${taskId}-${victim.turnId}`
+    )
+    this.forgetEventChunkIndex(taskId, victim.turnId)
+
+    const remaining = records.filter((turn) => turn.turnId !== victim.turnId)
+    const latest = remaining
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .at(-1)
+    const observedAt = this.now()
+    const nextTask: TaskRecordV1 = {
+      ...task,
+      turnCount: Math.max(0, remaining.length),
+      updatedAt: observedAt,
+      revision: task.revision + 1
+    }
+    if (latest) nextTask.lastTurnId = latest.turnId
+    else delete nextTask.lastTurnId
+    await this.writer.write(this.taskPath(nextTask), nextTask)
+    this.tasks.set(taskId, nextTask)
+    return true
   }
 
   private async evictOldestTerminalTask(protectedTaskId?: string): Promise<boolean> {
@@ -1442,6 +1536,7 @@ export class TaskStore {
               this.taskDirectory(current),
               `evicted-${current.taskId}`
             )
+            this.forgetEventChunkIndex(current.taskId)
             this.tasks.delete(current.taskId)
             return true
           },
@@ -2106,6 +2201,11 @@ function asTerminalHistoryState(
 
 function serializedEventBytes(event: PersistedAgentEvent): number {
   return Buffer.byteLength(JSON.stringify(event), 'utf8')
+}
+
+/** 单条超过落盘上限时跳过该条 IPC，但后续小事件仍要直播。 */
+export function persistedEventExceedsByteLimit(event: PersistedAgentEvent): boolean {
+  return serializedEventBytes(event) > MAX_EVENT_BYTES
 }
 
 function arePersistedEventsEqual(left: PersistedAgentEvent, right: PersistedAgentEvent): boolean {

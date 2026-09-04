@@ -79,6 +79,7 @@ async function createStore(
   options: {
     writer?: AtomicJsonWriter
     createId?: () => string
+    maxTaskHistoryBytes?: number
   } = {}
 ): Promise<{
   store: TaskStore
@@ -95,7 +96,10 @@ async function createStore(
   const store = new TaskStore({
     projectRegistry: registry,
     writer: options.writer,
-    createId: options.createId ?? (() => 'delete-token')
+    createId: options.createId ?? (() => 'delete-token'),
+    ...(options.maxTaskHistoryBytes != null
+      ? { maxTaskHistoryBytes: options.maxTaskHistoryBytes }
+      : {})
   })
   await store.initialize()
   await store.createTask({
@@ -992,7 +996,7 @@ describe('TaskStore', () => {
     await expect(readdir(join(registry.historyRoot, 'deleting'))).resolves.toEqual([])
   })
 
-  it('容量淘汰跳过持有外部历史 mutation lease 的终态 Task', async () => {
+  it('一个对话要 256 MiB 时不得淘汰其它对话', async () => {
     const { store, registry, project } = await createStore()
     await store.createTurn({
       taskId: 'task-1',
@@ -1014,28 +1018,62 @@ describe('TaskStore', () => {
       capabilitySnapshot: capabilitySnapshot()
     })
 
-    const mutationLease = store.beginTaskHistoryMutation('task-1')
-    // 投影完整 256 MiB，稳定触发淘汰；Task 2 作为当前写入目标不会被淘汰。
-    const oversizedProjection = 256 * 1024 * 1024
     await expect(
-      store.ensureAdditionalHistoryCapacity('task-2', oversizedProjection)
+      store.ensureAdditionalHistoryCapacity('task-2', 256 * 1024 * 1024)
     ).rejects.toMatchObject({ code: 'history-capacity-exceeded' })
     expect(store.getTaskDetail('task-1').state).toBe('completed')
     await expect(
       readdir(join(registry.getProjectDirectory(project.projectId), 'tasks'))
-    ).resolves.toContain('task-1')
-
-    mutationLease.release()
-    await expect(
-      store.ensureAdditionalHistoryCapacity('task-2', oversizedProjection)
-    ).rejects.toMatchObject({ code: 'history-capacity-exceeded' })
-    expect(() => store.getTaskDetail('task-1')).toThrow('未找到指定 Task 历史')
-    await expect(
-      readdir(join(registry.getProjectDirectory(project.projectId), 'tasks'))
-    ).resolves.not.toContain('task-1')
+    ).resolves.toEqual(expect.arrayContaining(['task-1', 'task-2']))
   })
 
-  it('单事件超过 256KiB 时只标记截断，Runtime 历史队列仍可继续', async () => {
+  it('同一对话超出容量时淘汰最旧终态 Turn，其它对话不动', async () => {
+    const { store, registry, project } = await createStore({ maxTaskHistoryBytes: 10 * 1024 })
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-old',
+      promptDisplayText: '旧一轮',
+      model: { modelId: 'model-1' }
+    })
+    await store.appendEvent({
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-old',
+      sequence: 1,
+      observedAt: '2026-08-12T00:00:00.000Z',
+      kind: 'agent-message',
+      text: 'x'.repeat(12 * 1024)
+    })
+    await store.finishTurn('task-1', 'turn-old', 'completed')
+    await store.createTask({
+      taskId: 'task-2',
+      projectId: project.projectId,
+      root: project.canonicalRoot,
+      runtimeId: 'grok',
+      session: {
+        runtimeId: 'grok',
+        runtimeSessionId: 'private-session-2',
+        workspace: project.canonicalRoot
+      },
+      capabilitySnapshot: capabilitySnapshot()
+    })
+
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-new',
+      promptDisplayText: '新一轮',
+      model: { modelId: 'model-1' }
+    })
+
+    const turns = await store.listTurns('task-1')
+    expect(turns.items.map((item) => item.turnId)).toEqual(['turn-new'])
+    await expect(
+      readdir(join(registry.getProjectDirectory(project.projectId), 'tasks'))
+    ).resolves.toEqual(expect.arrayContaining(['task-1', 'task-2']))
+  })
+
+  it('单事件超过 256KiB 时只跳过该条，后续小事件仍落盘，不得把整轮打成历史截断', async () => {
     const { store } = await createStore()
     await store.createTurn({
       taskId: 'task-1',
@@ -1043,24 +1081,67 @@ describe('TaskStore', () => {
       promptDisplayText: '测试',
       model: { modelId: 'model-1' }
     })
+    const base = {
+      runtimeId: 'grok' as const,
+      capabilityState: 'native' as const,
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      observedAt: '2026-08-12T00:00:00.000Z',
+      kind: 'agent-message' as const
+    }
 
     await expect(
       store.appendEvent({
-        runtimeId: 'grok',
-        capabilityState: 'native',
-        taskId: 'task-1',
-        turnId: 'turn-1',
+        ...base,
         sequence: 1,
-        observedAt: '2026-08-12T00:00:00.000Z',
-        kind: 'agent-message',
         text: 'x'.repeat(257 * 1024)
       })
-    ).resolves.toEqual({ kind: 'history-truncated', reason: 'event-bytes' })
-    expect((await store.listTurns('task-1')).items[0]).toMatchObject({
-      historyTruncated: true,
-      truncationReason: 'event-bytes',
-      eventCount: 0
+    ).resolves.toEqual({ kind: 'skipped-too-large' })
+    await expect(
+      store.appendEvent({
+        ...base,
+        sequence: 2,
+        text: '后续仍保存'
+      })
+    ).resolves.toEqual({ kind: 'committed' })
+    const afterSkip = (await store.listTurns('task-1')).items[0]
+    expect(afterSkip?.eventCount).toBe(1)
+    expect(afterSkip?.historyTruncated).toBeUndefined()
+    expect(afterSkip?.truncationReason).toBeUndefined()
+    expect((await store.listEvents('task-1', 'turn-1')).items).toEqual([
+      expect.objectContaining({ sequence: 2, text: '后续仍保存' })
+    ])
+  })
+
+  it('跨事件块连续落盘，不因条数给本轮打截断标记', async () => {
+    const { store } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '长任务',
+      model: { modelId: 'model-1' }
     })
+    const total = 80
+    for (let sequence = 1; sequence <= total; sequence += 1) {
+      await expect(
+        store.appendEvent({
+          runtimeId: 'grok',
+          capabilityState: 'native',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          sequence,
+          observedAt: '2026-08-12T00:00:00.000Z',
+          kind: 'agent-thought',
+          text: `${sequence}`
+        })
+      ).resolves.toEqual({ kind: 'committed' })
+    }
+    const turn = (await store.listTurns('task-1')).items[0]
+    expect(turn?.eventCount).toBe(total)
+    expect(turn?.historyTruncated).toBeUndefined()
+    const firstPage = await store.listEvents('task-1', 'turn-1', 0, 200)
+    expect(firstPage.items).toHaveLength(total)
+    expect(firstPage.items.at(-1)?.sequence).toBe(total)
   })
 
   it('未知事件块原位保留且禁止覆盖，损坏 Task 目录只隔离自身', async () => {

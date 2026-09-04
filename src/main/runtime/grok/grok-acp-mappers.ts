@@ -7,6 +7,7 @@ import type {
   AgentOperationTarget,
   AgentOperationType,
   AgentPermissionRisk,
+  AgentPlanEntry,
   AgentRuntimeCapabilitySnapshot,
   AgentTurnOutcome,
   AgentTurnUsage
@@ -243,13 +244,21 @@ export function mapGrokSessionUpdate(
         {
           ...base,
           kind: 'plan',
-          entries: update.entries.map((entry) => ({
-            content: redactText(entry.content),
-            priority: entry.priority,
-            status: entry.status
-          }))
+          entries: mapGrokPlanEntries(update.entries, redactText)
         }
       ]
+    case 'plan_update': {
+      // 未广告 plan 能力时 Grok 仍可能发 items 整表；按同一张清单覆盖，不叠卡。
+      const content = update.plan
+      if (content.type !== 'items') return []
+      return [
+        {
+          ...base,
+          kind: 'plan',
+          entries: mapGrokPlanEntries(content.entries, redactText)
+        }
+      ]
+    }
     case 'usage_update':
       return [
         {
@@ -269,7 +278,6 @@ export function mapGrokSessionUpdate(
       // 斜杠命令走 mapGrokAvailableCommands 旁路快照，不进 Timeline 事件流
       return []
     case 'user_message_chunk':
-    case 'plan_update':
     case 'plan_removed':
     case 'current_mode_update':
     case 'config_option_update':
@@ -322,6 +330,22 @@ function decodeStrictBase64(value: string): Buffer | null {
   if (bytes.length === 0 || bytes.length > ATTACHMENT_LIMITS.maxBytesPerFile) return null
   const canonical = bytes.toString('base64').replace(/=+$/, '')
   return canonical === value.replace(/=+$/, '') ? bytes : null
+}
+
+/** plan 与 plan_update items 共用整表投影，条目正文脱敏后覆盖同一张清单。 */
+function mapGrokPlanEntries(
+  entries: ReadonlyArray<{
+    content: string
+    priority: AgentPlanEntry['priority']
+    status: AgentPlanEntry['status']
+  }>,
+  redactText: TextRedactor
+): AgentPlanEntry[] {
+  return entries.map((entry) => ({
+    content: redactText(entry.content),
+    priority: entry.priority,
+    status: entry.status
+  }))
 }
 
 /**
@@ -396,7 +420,9 @@ export function mapGrokPermissionRequest(
   const title = limitPermissionDisplayText(
     redactText(params.toolCall.title ?? 'Grok Build 请求执行操作')
   )
-  const mapped = mapGrokOperation(authorizationSnapshot)
+  const mapped = mapGrokOperation(
+    enrichAuthorizationSnapshotWithTitlePath(authorizationSnapshot, title.value)
+  )
   const request: AgentRuntimePermissionRequest = {
     requestId,
     runtimeId: GROK_RUNTIME_ID,
@@ -602,6 +628,33 @@ function mapGrokOperation(snapshot: GrokToolCallAuthorizationSnapshot): {
 function collectGrokPermissionPaths(snapshot: GrokToolCallAuthorizationSnapshot): string[] {
   if (snapshot.integrity === 'invalid') return []
   return uniqueNonEmptyPaths([...snapshot.locationPaths, ...snapshot.diffPaths])
+}
+
+const TITLE_PATH_KINDS = new Set<acp.ToolKind>(['read', 'search', 'edit', 'delete'])
+
+/**
+ * Grok 经常把项目内路径只写在 title 反引号里，locations 为空。
+ * 只从标题取路径，禁止回读 rawInput；没有反引号或没有路径分隔符则保持原快照。
+ */
+function enrichAuthorizationSnapshotWithTitlePath(
+  snapshot: GrokToolCallAuthorizationSnapshot,
+  title: string
+): GrokToolCallAuthorizationSnapshot {
+  if (snapshot.integrity !== 'valid') return snapshot
+  if (!snapshot.kind || !TITLE_PATH_KINDS.has(snapshot.kind)) return snapshot
+  if (collectGrokPermissionPaths(snapshot).length > 0) return snapshot
+  const titledPath = extractPathFromToolTitle(title)
+  if (!titledPath) return snapshot
+  return { ...snapshot, locationPaths: [titledPath] }
+}
+
+function extractPathFromToolTitle(title: string): string | undefined {
+  const tick = /`([^`\0]+)`/.exec(title)
+  if (!tick) return undefined
+  const value = tick[1].trim()
+  if (!value || Buffer.byteLength(value, 'utf8') > MAX_TOOL_CALL_PATH_BYTES) return undefined
+  if (!/[\\/]/.test(value)) return undefined
+  return value
 }
 
 function uniqueNonEmptyPaths(paths: string[]): string[] {

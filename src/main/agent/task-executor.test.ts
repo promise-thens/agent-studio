@@ -199,7 +199,7 @@ describe('TaskExecutor', () => {
     expect(fixture.adapter.startTurn).not.toHaveBeenCalled()
   })
 
-  it('事件持久化完成后才发布，重复和截断事件不会形成正式实时节点', async () => {
+  it('事件接受后立即发布，不必等待落盘；重复 sequence 仍只发布一次', async () => {
     const fixture = await createFixture()
     const runtimeResult = deferred<AgentRuntimeTurnResult>()
     fixture.adapter.startTurn.mockReturnValue(runtimeResult.promise)
@@ -232,24 +232,75 @@ describe('TaskExecutor', () => {
       sequence: 1,
       observedAt: '2026-08-17T10:00:02.000Z',
       kind: 'agent-message' as const,
-      text: '已提交后发布'
+      text: '落盘前已直播'
     }
 
     expect(fixture.executor.handleRuntimeEvent(event)).toBe(true)
+    expect(fixture.onEvent).toHaveBeenCalledWith(event)
     await eventWriteStarted.promise
-    expect(fixture.onEvent).not.toHaveBeenCalled()
+    expect(fixture.onEvent).toHaveBeenCalledTimes(1)
     releaseEventWrite.resolve()
-    await vi.waitFor(() => expect(fixture.onEvent).toHaveBeenCalledWith(event))
 
     fixture.executor.handleRuntimeEvent(event)
-    await vi.waitFor(() => expect(fixture.onEvent).toHaveBeenCalledTimes(1))
-    fixture.executor.handleRuntimeEvent({
-      ...event,
-      sequence: 2,
-      text: 'x'.repeat(257 * 1024)
-    })
-    await new Promise((resolve) => setTimeout(resolve, 10))
     expect(fixture.onEvent).toHaveBeenCalledTimes(1)
+
+    runtimeResult.resolve({ outcome: 'completed' })
+    await fixture.executor.waitForTerminal()
+  })
+
+  it('单条超限不发布该条，后续小事件仍实时发布并继续落盘', async () => {
+    const fixture = await createFixture()
+    const runtimeResult = deferred<AgentRuntimeTurnResult>()
+    fixture.adapter.startTurn.mockReturnValue(runtimeResult.promise)
+    const admitted = await fixture.executor.start(fixture.input)
+    const execution = admitted.execution
+    if (!execution) throw new Error('缺少 execution。')
+    await vi.waitFor(() => expect(fixture.adapter.startTurn).toHaveBeenCalledOnce())
+
+    const event = {
+      runtimeId: 'grok' as const,
+      capabilityState: 'native' as const,
+      runtimeSessionId: SESSION.runtimeSessionId,
+      taskId: execution.taskId,
+      turnId: execution.turnId,
+      sequence: 1,
+      observedAt: '2026-08-17T10:00:02.000Z',
+      kind: 'agent-message' as const,
+      text: '正常片段'
+    }
+
+    expect(fixture.executor.handleRuntimeEvent(event)).toBe(true)
+    expect(
+      fixture.executor.handleRuntimeEvent({
+        ...event,
+        sequence: 2,
+        text: 'x'.repeat(257 * 1024)
+      })
+    ).toBe(true)
+    expect(
+      fixture.executor.handleRuntimeEvent({
+        runtimeId: 'grok',
+        capabilityState: 'native',
+        runtimeSessionId: SESSION.runtimeSessionId,
+        taskId: execution.taskId,
+        turnId: execution.turnId,
+        sequence: 3,
+        observedAt: '2026-08-17T10:00:03.000Z',
+        kind: 'plan',
+        entries: [{ content: '继续融合接缝', priority: 'medium', status: 'in_progress' }]
+      })
+    ).toBe(true)
+
+    await vi.waitFor(() => expect(fixture.onEvent).toHaveBeenCalledTimes(2))
+    expect(fixture.onEvent.mock.calls.map((call) => call[0].sequence)).toEqual([1, 3])
+    await vi.waitFor(async () => {
+      expect(
+        (await fixture.store.listEvents('task-1', execution.turnId, 0, 20)).items.map(
+          (item) => item.sequence
+        )
+      ).toEqual([1, 3])
+    })
+    expect((await fixture.store.listTurns('task-1')).items[0].historyTruncated).toBeUndefined()
 
     runtimeResult.resolve({ outcome: 'completed' })
     await fixture.executor.waitForTerminal()

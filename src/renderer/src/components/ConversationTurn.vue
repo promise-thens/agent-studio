@@ -20,6 +20,7 @@ import {
   resolveConversationStep,
   turnLastActivityAt
 } from '../conversation-progress'
+import { describeHistoryTruncation } from '../../../shared/task-history'
 import AssistantMarkdown from './AssistantMarkdown.vue'
 import ConversationMedia from './ConversationMedia.vue'
 import PermissionPrompt from './PermissionPrompt.vue'
@@ -145,6 +146,7 @@ const activeThoughtNodeId = computed(
   () => [...props.turn.nodes].reverse().find((node) => node.kind === 'thought')?.nodeId
 )
 const statusLabel = computed(() => conversationStatusLabel(props.turn.status))
+const truncationCopy = computed(() => describeHistoryTruncation(props.turn.truncationReason))
 
 function mergedReadFiles(block: ConversationToolBlock): string[] {
   if (!block.mergedReadCount || block.mergedReadCount < 2) return []
@@ -173,7 +175,12 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
       <div class="conversation-turn-meta-subline">
         <span>{{ activityAgeLabel }}</span>
         <span v-if="turn.statusConflict" class="conversation-turn-meta-warning">状态冲突</span>
-        <span v-if="turn.historyTruncated" class="conversation-turn-meta-warning">历史已截断</span>
+        <span
+          v-if="turn.historyTruncated"
+          class="conversation-turn-meta-warning"
+          :title="truncationCopy.detail"
+          >{{ truncationCopy.shortLabel }}</span
+        >
       </div>
     </header>
 

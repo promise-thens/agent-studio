@@ -996,6 +996,30 @@ describe('子 Agent agent-group 分组', () => {
   })
 })
 
+describe('历史截断提示', () => {
+  it('可用性节点写明截断原因，不得只说容量限制', () => {
+    const state = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+      type: 'turns/upsert',
+      turns: [
+        {
+          ...TURN,
+          historyTruncated: true,
+          truncationReason: 'event-count'
+        }
+      ]
+    })
+    const view = selectTaskTimeline(state, { executionSnapshot: snapshot() })
+    const availability = view.turns[0]?.nodes.find((node) => node.kind === 'availability')
+    expect(view.turns[0]?.historyTruncated).toBe(true)
+    expect(view.turns[0]?.truncationReason).toBe('event-count')
+    expect(availability).toMatchObject({
+      kind: 'availability',
+      reason: 'history-truncated',
+      message: '本轮事件条数达到上限，后续过程只实时显示、不写入历史。'
+    })
+  })
+})
+
 function thoughtEvent(sequence: number): PublicAgentEvent {
   return { ...BASE, sequence, kind: 'agent-thought', text: '分析' }
 }

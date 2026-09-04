@@ -20,6 +20,7 @@ import { OperationGate, type OperationLease } from './operation-gate'
 import { transitionTaskExecution, type TaskExecutionTransition } from './task-execution-state'
 import {
   TaskStore,
+  persistedEventExceedsByteLimit,
   projectPersistedAgentEvent,
   type ExecutionIdentity,
   type ExecutionTerminalCommitResult
@@ -103,7 +104,6 @@ interface ActiveExecution {
   firstHistoryError: unknown
   historyTail: Promise<void>
   nextExpectedEventSequence: number
-  eventHistoryTruncated: boolean
   terminalEventUsage?: AgentTurnUsage
   acceptedEvents: AgentEvent[]
   publishedEventSequences: Set<number>
@@ -353,7 +353,6 @@ export class TaskExecutor {
         firstHistoryError: null,
         historyTail: Promise.resolve(),
         nextExpectedEventSequence: 1,
-        eventHistoryTruncated: false,
         acceptedEvents: [],
         publishedEventSequences: new Set(),
         terminalPreparation: Promise.resolve(),
@@ -392,22 +391,17 @@ export class TaskExecutor {
       active.terminalCandidate = toTerminalTransition(event.outcome, this.now())
       active.terminalEventUsage = event.usage
     }
+    const persisted = projectPersistedAgentEvent(event, this.redactText)
+    // 实时 UI 必须先于落盘：历史容量只能少存，不能把正在跑的对话/计划冻住。
+    if (
+      !persistedEventExceedsByteLimit(persisted) &&
+      !active.publishedEventSequences.has(event.sequence)
+    ) {
+      active.publishedEventSequences.add(event.sequence)
+      this.safeNotifyEvent(event)
+    }
     this.queueHistory(active, async () => {
-      if (active.eventHistoryTruncated) return
-      const result = await this.taskStore.appendEvent(
-        projectPersistedAgentEvent(event, this.redactText)
-      )
-      if (result.kind === 'committed') {
-        active.publishedEventSequences.add(event.sequence)
-        this.safeNotifyEvent(event)
-      } else if (result.kind === 'repaired') {
-        if (!active.publishedEventSequences.has(event.sequence)) {
-          active.publishedEventSequences.add(event.sequence)
-          this.safeNotifyEvent(event)
-        }
-      } else if (result.kind === 'history-truncated') {
-        active.eventHistoryTruncated = true
-      }
+      await this.taskStore.appendEvent(persisted)
     })
     if (event.kind === 'turn-complete') {
       const terminalCandidate = active.terminalCandidate

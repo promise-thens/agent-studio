@@ -43,7 +43,7 @@ export class PermissionAuditStoreError extends Error {
 export interface PermissionAuditStoreOptions {
   projectRegistry: ProjectRegistry
   getTaskIdentity: (taskId: string) => PermissionAuditTaskIdentity
-  /** 写入前由 TaskStore 按文件正增长执行全局 256 MiB 容量准入。 */
+  /** 写入前由 TaskStore 按当前对话 256 MiB 预算做容量准入。 */
   ensureHistoryCapacity?: (taskId: string, additionalBytes: number) => Promise<void>
   /** 与 TaskStore 删除 reservation 串联，避免审计写在目录 rename 后重建幽灵目录。 */
   beginTaskHistoryMutation?: (taskId: string) => { release(): void }

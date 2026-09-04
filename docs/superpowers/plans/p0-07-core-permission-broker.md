@@ -36,7 +36,7 @@
 - Broker 只接受主进程内部调用，不向 Renderer 暴露“执行任意操作”接口；Renderer 只能响应主进程已创建的有限审批 ID。
 - 目标路径先解析到 Task execution root，禁止 `..`、符号链接逃逸和跨 Project 静默授权。
 - 审计只保存发起者、操作类别、受限目标摘要、风险、用户决策和时间，不保存 Secret、完整命令环境或外发正文。
-- 审批 TTL 为 2 分钟；每 Task 最多 500 条，字段 4 KiB、单记录 16 KiB、单文件 2 MiB，并接入 P0-06 的 256 MiB 全局历史容量门禁。
+- 审批 TTL 为 2 分钟；每 Task 最多 500 条，字段 4 KiB、单记录 16 KiB、单文件 2 MiB，并接入 P0-06 的每对话 256 MiB 历史容量门禁。
 - Task grant 可跨 Turn，但只驻留当前进程内存；Task/Project 删除、Task 关闭、Runtime workspace/Project 身份变化和 App 重启均使其失效，不从历史恢复。
 - Grok ACP 永远只回传 `allow_once` 或 `reject_once`；Runtime 提供的 `allow_always` 不会变成产品 Task grant。
 - 首期权威执行环境仅支持 Local；Worktree intent 保留给 P0-14，当前解析到非 Local 环境时失败关闭。

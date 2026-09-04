@@ -11,11 +11,12 @@ import type { PublicAgentEvent } from '../../shared/agent-event'
 import type { CommandExecutionEvidence, ValidationOutcome } from '../../shared/command'
 import { deriveValidationResult } from '../../shared/command'
 import type { TaskExecutionSnapshot, TaskExecutionState } from '../../shared/task-execution'
-import type {
-  PermissionAuditRecord,
-  TaskHistoryDetail,
-  TurnHistoryRecord,
-  TurnModelSnapshot
+import {
+  describeHistoryTruncation,
+  type PermissionAuditRecord,
+  type TaskHistoryDetail,
+  type TurnHistoryRecord,
+  type TurnModelSnapshot
 } from '../../shared/task-history'
 import { isTakeoverControlTurn, type InternalTurnKind } from '../../shared/task-takeover'
 import {
@@ -711,7 +712,7 @@ function projectNodes(
       source: 'turn-record',
       kind: 'availability',
       reason: 'history-truncated',
-      message: '部分执行历史因容量限制不可用。'
+      message: describeHistoryTruncation(record.truncationReason).detail
     })
   return groupAgentToolNodes(nodes.sort(compareTimelineNodes))
 }
@@ -984,7 +985,8 @@ function selectTaskResultReview(
   const record = latest ? facts.turnsById[latest.turnId]?.record : undefined
   const turnRecord = record?.kind === 'accepted' ? record.value : undefined
   const warnings: string[] = []
-  if (latest?.historyTruncated) warnings.push('部分执行历史不可用。')
+  if (latest?.historyTruncated)
+    warnings.push(describeHistoryTruncation(latest.truncationReason).detail)
   if (latest?.statusConflict) warnings.push('实时执行状态与持久化状态不一致。')
   const commandViews = (latest?.nodes ?? []).flatMap(collectNodeCommandViews)
   const uniqueCommands = dedupeCommandViews(commandViews)

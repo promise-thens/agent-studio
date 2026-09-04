@@ -121,6 +121,35 @@ export interface TurnHistoryRecord {
   revision: number
 }
 
+/** 给对话顶栏和 Timeline 可用性节点用，避免只写“已截断”却说不清原因。 */
+export function describeHistoryTruncation(reason?: TurnHistoryRecord['truncationReason']): {
+  shortLabel: string
+  detail: string
+} {
+  switch (reason) {
+    case 'event-count':
+      return {
+        shortLabel: '历史已截断 · 本轮事件过多',
+        detail: '本轮事件条数达到上限，后续过程只实时显示、不写入历史。'
+      }
+    case 'event-bytes':
+      return {
+        shortLabel: '历史已截断 · 单条过大',
+        detail: '单条事件过大，本轮后续历史已停止保存。'
+      }
+    case 'turn-bytes':
+      return {
+        shortLabel: '历史已截断 · 本轮体积过大',
+        detail: '本轮历史体积达到上限，后续过程只实时显示、不写入历史。'
+      }
+    default:
+      return {
+        shortLabel: '历史已截断',
+        detail: '部分执行历史因容量限制不可用。'
+      }
+  }
+}
+
 /** 历史事件基座明确排除 runtimeSessionId。 */
 export interface PersistedAgentEventBase {
   runtimeId: AgentRuntimeId
