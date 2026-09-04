@@ -33,7 +33,8 @@ export function buildGrokProductionAgentArgv(profile: unknown): string[] {
   if (!isGrokSandboxProfile(profile)) {
     throw new Error('Grok sandbox profile 无效。')
   }
-  const argv = [...GROK_PRODUCTION_AGENT_ARGV]
+  // 备注：展开后必须是 string[]，否则 as const 元组不允许 splice 进 '--sandbox'。
+  const argv: string[] = [...GROK_PRODUCTION_AGENT_ARGV]
   if (profile === 'off') return argv
   const insertAt = argv.indexOf('--no-auto-update')
   if (insertAt < 0 || argv[insertAt + 1] !== 'agent') {
