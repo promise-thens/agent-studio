@@ -267,7 +267,7 @@ describe('Grok 钩子库存扫描', () => {
     expect(source).not.toContain("from 'node:os'")
   })
 
-  it('hooks 目录 symlink 逃逸时返回空列表，不把外部树当库存', async ({ skip }) => {
+  it('hooks 目录 symlink 逃逸时返回一条 invalid，不读外部树也不当空配置', async ({ skip }) => {
     const userDataPath = await createUserData()
     const grokHome = getManagedGrokHome(userDataPath)
     await mkdir(grokHome, { recursive: true })
@@ -278,8 +278,20 @@ describe('Grok 钩子库存扫描', () => {
     if (!(await symlinkOrSkip(skip, outsideRoot, join(grokHome, 'hooks')))) return
 
     const listed = await listGrokHooks(userDataPath)
-    expect(listed).toEqual([])
-    expectNoLeak(listed, ['sk-dir-secret', 'stolen.json', outsideRoot, userDataPath])
+    expect(listed).toHaveLength(1)
+    expect(listed).toEqual([
+      {
+        id: 'hooks',
+        event: '',
+        enabled: false,
+        targetKind: 'invalid',
+        warning: expect.stringMatching(/[\u4e00-\u9fff]/) as unknown as string
+      }
+    ])
+    expect(listed[0]?.id).not.toMatch(/[/\\]|\.\./)
+    expect(listed[0]?.warning).toMatch(/[\u4e00-\u9fff]/)
+    expect(listed[0]?.warning).not.toMatch(/[/\\]/)
+    expectNoLeak(listed, ['sk-dir-secret', 'stolen.json', outsideRoot, userDataPath, homedir()])
   })
 
   it('不扫描插件 hooks.json、非 json 与子目录，空 matcher 组不产生行', async () => {

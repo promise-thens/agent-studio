@@ -13,8 +13,9 @@ import { isPathInside } from './grok-shared-memory'
 
 const HOOKS_DIR = 'hooks'
 
-/** 跟随 symlink 逃出受管 grok-home 时的安全文案，故意不含绝对路径。 */
+/** 跟随 symlink 逃出受管 grok-home 时的安全文案，故意不含绝对路径与分隔符。 */
 const INVALID_ESCAPE_WARNING = '钩子文件指向了受管 Grok Home 之外的位置。'
+const INVALID_DIR_ESCAPE_WARNING = '钩子目录指向了受管 Grok Home 之外的位置。'
 const INVALID_OVERSIZE_WARNING = '钩子文件过大，已跳过。'
 const INVALID_READ_WARNING = '钩子文件无法读取或解析。'
 const INVALID_TYPE_WARNING = '钩子类型无效。'
@@ -22,6 +23,8 @@ const INVALID_TARGET_WARNING = '钩子目标缺失。'
 const INVALID_URL_WARNING = '钩子地址无效。'
 
 type PathResolve = { kind: 'missing' } | { kind: 'ok'; canonical: string } | { kind: 'invalid' }
+type HooksRootResolve =
+  { kind: 'missing' } | { kind: 'ok'; canonical: string } | { kind: 'escaped' }
 
 /**
  * 只读扫描 App 专属 grok-home/hooks 下一层 *.json。
@@ -33,11 +36,16 @@ export async function listGrokHooks(userDataPath: string): Promise<GrokHookSumma
   if (!grokHome) return []
 
   const hooksRoot = await resolveHooksRoot(grokHome)
-  if (!hooksRoot) return []
+  if (hooksRoot.kind === 'missing') return []
+  if (hooksRoot.kind === 'escaped') {
+    // 目录存在但 realpath 已离开 grok-home：Grok 仍会跟随，UI 必须诚实标 invalid，且不得读外部树。
+    const parsed = parseGrokHookSummary(fileInvalid(HOOKS_DIR, INVALID_DIR_ESCAPE_WARNING))
+    return parsed ? [parsed] : []
+  }
 
   let entries: string[]
   try {
-    entries = await fs.readdir(hooksRoot)
+    entries = await fs.readdir(hooksRoot.canonical)
   } catch {
     return []
   }
@@ -45,7 +53,7 @@ export async function listGrokHooks(userDataPath: string): Promise<GrokHookSumma
   const rows: GrokHookSummary[] = []
   for (const fileName of [...entries].sort(compareAscii)) {
     if (!isHookJsonFileName(fileName)) continue
-    const fileRows = await readHookFile(grokHome, join(hooksRoot, fileName), fileName)
+    const fileRows = await readHookFile(grokHome, join(hooksRoot.canonical, fileName), fileName)
     for (const row of fileRows) {
       const parsed = parseGrokHookSummary(row)
       if (!parsed) continue
@@ -85,18 +93,18 @@ async function resolveManagedGrokHome(userDataPath: string): Promise<string | nu
 }
 
 /**
- * hooks 目录自身必须仍在 grok-home 内。
- * 目录不存在或 symlink 逃逸都返回 null：逃逸时不把外部树广告成库存。
+ * hooks 目录必须仍在 grok-home 内。
+ * 不存在 → missing（真·未配置）；realpath 逃出 → escaped（一条 invalid，不扫描外部树）。
  */
-async function resolveHooksRoot(grokHome: string): Promise<string | null> {
+async function resolveHooksRoot(grokHome: string): Promise<HooksRootResolve> {
   const resolved = await realpathExisting(join(grokHome, HOOKS_DIR))
-  if (resolved.kind !== 'ok') return null
-  if (!isPathInside(grokHome, resolved.canonical)) return null
+  if (resolved.kind !== 'ok') return { kind: 'missing' }
+  if (!isPathInside(grokHome, resolved.canonical)) return { kind: 'escaped' }
   try {
     const stats = await fs.stat(resolved.canonical)
-    return stats.isDirectory() ? resolved.canonical : null
+    return stats.isDirectory() ? { kind: 'ok', canonical: resolved.canonical } : { kind: 'missing' }
   } catch {
-    return null
+    return { kind: 'missing' }
   }
 }
 
