@@ -6,10 +6,10 @@ import {
   type OverlayDesktopApi
 } from '../shared/browser-plugin-overlay'
 import type { DesktopIpcResult } from '../shared/ipc-result'
-import { TASK_PUSH_CHANNELS } from '../shared/task-ipc'
+import { TASK_PUSH_CHANNELS, TASK_SEND_CHANNELS } from '../shared/task-ipc'
 
 /**
- * Overlay 只允许订阅快照和调用现有 agent:cancel-turn。
+ * Overlay 只允许订阅快照、调用现有 agent:cancel-turn，以及芯片 hover 穿透切换。
  * 禁止把完整 window.agent / window.app / window.electron 注入这扇窗口。
  */
 function exposeOverlayApi(
@@ -51,6 +51,9 @@ function exposeOverlayApi(
         taskId: snapshot.taskId,
         turnId: snapshot.turnId
       })) as DesktopIpcResult<void>
+    },
+    setChipHover(hovered) {
+      ipcRenderer.send(TASK_SEND_CHANNELS.browserPluginOverlayChipHover, hovered === true)
     }
   }
 

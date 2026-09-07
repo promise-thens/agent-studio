@@ -4,7 +4,12 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { AGENT_INVOKE_CHANNELS, AGENT_PUSH_CHANNELS } from './agent-ipc'
 import { APP_INVOKE_CHANNELS, APP_PUSH_CHANNELS } from './app-ipc'
-import { TASK_INVOKE_CHANNELS, TASK_PUSH_CHANNELS, parseSubagentActivityPage } from './task-ipc'
+import {
+  TASK_INVOKE_CHANNELS,
+  TASK_PUSH_CHANNELS,
+  TASK_SEND_CHANNELS,
+  parseSubagentActivityPage
+} from './task-ipc'
 
 const sharedDir = dirname(fileURLToPath(import.meta.url))
 
@@ -15,7 +20,8 @@ function allDesktopChannels(): string[] {
     ...Object.values(APP_INVOKE_CHANNELS),
     ...Object.values(APP_PUSH_CHANNELS),
     ...Object.values(TASK_INVOKE_CHANNELS),
-    ...Object.values(TASK_PUSH_CHANNELS)
+    ...Object.values(TASK_PUSH_CHANNELS),
+    ...Object.values(TASK_SEND_CHANNELS)
   ]
 }
 
@@ -27,7 +33,8 @@ describe('桌面 IPC 静态契约', () => {
       ...Object.values(APP_INVOKE_CHANNELS),
       ...Object.values(APP_PUSH_CHANNELS),
       ...Object.values(TASK_INVOKE_CHANNELS),
-      ...Object.values(TASK_PUSH_CHANNELS)
+      ...Object.values(TASK_PUSH_CHANNELS),
+      ...Object.values(TASK_SEND_CHANNELS)
     ]
 
     expect(new Set(channels).size).toBe(channels.length)
@@ -115,7 +122,8 @@ describe('桌面 IPC 静态契约', () => {
       'task:get-attachment-image',
       'task:get-change-media-preview',
       'task:get-subagent-activity',
-      'task:browser-plugin-overlay'
+      'task:browser-plugin-overlay',
+      'task:browser-plugin-overlay-chip-hover'
     ])
   })
 
@@ -126,11 +134,15 @@ describe('桌面 IPC 静态契约', () => {
       ...Object.values(APP_INVOKE_CHANNELS),
       ...Object.values(APP_PUSH_CHANNELS),
       ...Object.values(TASK_INVOKE_CHANNELS),
-      ...Object.values(TASK_PUSH_CHANNELS)
+      ...Object.values(TASK_PUSH_CHANNELS),
+      ...Object.values(TASK_SEND_CHANNELS)
     ]
 
     expect(channels.every((channel) => !channel.startsWith('grok:'))).toBe(true)
     expect(TASK_PUSH_CHANNELS.browserPluginOverlay).toBe('task:browser-plugin-overlay')
+    expect(TASK_SEND_CHANNELS.browserPluginOverlayChipHover).toBe(
+      'task:browser-plugin-overlay-chip-hover'
+    )
     expect(channels).not.toContain('agent:send-prompt')
     expect(channels).not.toContain('agent:cancel')
     expect(channels).not.toContain('app:choose-workspace')

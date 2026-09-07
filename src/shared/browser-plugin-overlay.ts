@@ -11,10 +11,12 @@ export const BROWSER_PLUGIN_HUD_COPY = 'Grok 正在使用浏览器插件'
 
 export const BROWSER_PLUGIN_OVERLAY_STOP_LABEL = '停止浏览器控制'
 
-/** Overlay 独立 preload 只暴露快照订阅和停止；禁止注入完整 window.agent。 */
+/** Overlay 独立 preload 只暴露快照、停止和芯片 hover；禁止注入完整 window.agent。 */
 export interface OverlayDesktopApi {
   onSnapshot: (listener: (snapshot: BrowserPluginOverlaySnapshot) => void) => () => void
   cancelTurn: () => Promise<DesktopIpcResult<void>>
+  /** 芯片悬停时主进程暂时接收点击；离开后恢复穿透。 */
+  setChipHover: (hovered: boolean) => void
 }
 
 export interface BrowserPluginOverlayPointer {

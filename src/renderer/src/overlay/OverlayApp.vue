@@ -14,10 +14,17 @@ function overlayApi(): OverlayDesktopApi | undefined {
   return window.overlay
 }
 
+function setChipHover(hovered: boolean): void {
+  overlayApi()?.setChipHover(hovered)
+}
+
 onMounted(() => {
   stopListening = overlayApi()?.onSnapshot((next) => {
     snapshot.value = next
-    if (!next.visible) cancelError.value = ''
+    if (!next.visible) {
+      cancelError.value = ''
+      setChipHover(false)
+    }
   })
 })
 
@@ -39,6 +46,8 @@ async function cancelTurn(): Promise<void> {
       type="button"
       class="overlay-stop-chip"
       aria-label="停止浏览器控制"
+      @mouseenter="setChipHover(true)"
+      @mouseleave="setChipHover(false)"
       @click="cancelTurn"
     >
       <span>{{ BROWSER_PLUGIN_HUD_COPY }}</span>
@@ -102,6 +111,7 @@ body,
   border-radius: var(--radius-chip);
   color: #f0b2b2;
   background: color-mix(in srgb, var(--danger) 18%, var(--surface-2));
+  -webkit-app-region: no-drag;
   font:
     600 12px/1.4 -apple-system,
     BlinkMacSystemFont,

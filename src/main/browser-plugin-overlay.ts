@@ -3,7 +3,7 @@
  * 当前冻结键不能映射到屏幕 DIP，因此不得移动系统指针，也不得发明虚拟光标。
  */
 
-import { BrowserWindow, screen, type BrowserWindowConstructorOptions } from 'electron'
+import { BrowserWindow, ipcMain, screen, type BrowserWindowConstructorOptions } from 'electron'
 import { pathToFileURL } from 'node:url'
 import type {
   AgentPermissionDecision,
@@ -18,7 +18,7 @@ import {
   type BrowserPluginOverlaySnapshot,
   type BrowserPluginToolActivity
 } from '../shared/browser-plugin-overlay'
-import { TASK_PUSH_CHANNELS } from '../shared/task-ipc'
+import { TASK_PUSH_CHANNELS, TASK_SEND_CHANNELS } from '../shared/task-ipc'
 import type { TaskExecutionDto, TaskExecutionSnapshot } from '../shared/task-execution'
 import type { RendererTrustOptions } from './security/ipc-sender-validation'
 
@@ -51,8 +51,19 @@ export function shouldRenderMovingOverlayCursor(snapshot: BrowserPluginOverlaySn
 }
 
 /**
+ * 芯片悬停时必须关闭 ignore，否则 forward 只转发 mousemove、芯片收不到 click。
+ * 离开后再 `ignore: true, forward: true` 把空白区域点回去给下层桌面。
+ */
+export function resolveBrowserPluginOverlayIgnoreMouseEvents(
+  chipHovered: boolean
+): { ignore: false } | { ignore: true; forward: true } {
+  if (chipHovered) return { ignore: false }
+  return { ignore: true, forward: true }
+}
+
+/**
  * 构造透明置顶 overlay 窗口选项。click-through 不能写进 constructor，
- * 必须在窗口创建后 `setIgnoreMouseEvents(true, { forward: true })`，才能让停止芯片仍可点。
+ * 创建后默认 ignore+forward；芯片 hover 再临时 setIgnoreMouseEvents(false)。
  */
 export function createBrowserPluginOverlayWindowOptions(input: {
   bounds: BrowserPluginOverlayWindowBounds
@@ -121,7 +132,9 @@ export class BrowserPluginOverlaySession {
     approvalId: string
     decision: AgentPermissionDecision
   }): void {
-    if (request.decision === 'deny') this.pendingBrowserApprovals.delete(request.approvalId)
+    // pending 只表示未决 L3；allow/deny/cancel 都清掉，避免允许后写文件仍显示浏览器 HUD。
+    void request.decision
+    this.pendingBrowserApprovals.delete(request.approvalId)
   }
 
   acceptBrowserTool(activity: BrowserPluginToolActivity): void {
@@ -160,8 +173,11 @@ export class BrowserPluginOverlaySession {
 export class BrowserPluginOverlayHost {
   readonly session = new BrowserPluginOverlaySession()
   private window: BrowserWindow | null = null
+  private chipHovered = false
 
-  constructor(private readonly options: BrowserPluginOverlayHostOptions) {}
+  constructor(private readonly options: BrowserPluginOverlayHostOptions) {
+    ipcMain.on(TASK_SEND_CHANNELS.browserPluginOverlayChipHover, this.onChipHoverIpc)
+  }
 
   acceptExecutionSnapshot(snapshot: TaskExecutionSnapshot): void {
     this.session.acceptExecutionSnapshot(snapshot)
@@ -191,6 +207,14 @@ export class BrowserPluginOverlayHost {
     this.publish()
   }
 
+  /**
+   * 停止芯片 hover 时让窗口接收 click；离开后恢复整窗穿透。
+   */
+  setChipHover(hovered: boolean): void {
+    this.chipHovered = hovered === true
+    this.applyIgnoreMouseEvents()
+  }
+
   getRendererTrustOptions(): RendererTrustOptions | null {
     const window = this.window
     if (!window || window.isDestroyed()) return null
@@ -204,6 +228,8 @@ export class BrowserPluginOverlayHost {
   }
 
   destroy(): void {
+    ipcMain.removeListener(TASK_SEND_CHANNELS.browserPluginOverlayChipHover, this.onChipHoverIpc)
+    this.chipHovered = false
     const hidden = createBrowserPluginOverlaySnapshot({ visible: false })
     this.options.publishToMain(hidden)
     this.sendToOverlay(hidden)
@@ -223,13 +249,14 @@ export class BrowserPluginOverlayHost {
     this.session.setDisplayBounds({ width: bounds.width, height: bounds.height })
     const window = this.ensureWindow(bounds)
     window.setBounds(bounds)
-    // 除停止芯片外点击穿透到下层桌面；forward 让不透明芯片仍能收到鼠标。
-    window.setIgnoreMouseEvents(true, { forward: true })
+    this.applyIgnoreMouseEvents()
     this.sendToOverlay(snapshot)
     if (!window.isVisible()) window.showInactive()
   }
 
   private hide(snapshot: BrowserPluginOverlaySnapshot): void {
+    this.chipHovered = false
+    this.applyIgnoreMouseEvents()
     this.sendToOverlay(snapshot)
     if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
       this.window.hide()
@@ -248,7 +275,8 @@ export class BrowserPluginOverlayHost {
     if (this.options.platform === 'darwin') {
       window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
     }
-    window.setIgnoreMouseEvents(true, { forward: true })
+    this.window = window
+    this.applyIgnoreMouseEvents()
     window.webContents.once('did-finish-load', () => {
       this.sendToOverlay(this.session.getSnapshot())
     })
@@ -260,8 +288,25 @@ export class BrowserPluginOverlayHost {
     window.on('closed', () => {
       if (this.window === window) this.window = null
     })
-    this.window = window
     return window
+  }
+
+  private readonly onChipHoverIpc = (
+    event: { sender: Electron.WebContents },
+    hovered: unknown
+  ): void => {
+    if (!this.window || this.window.isDestroyed() || event.sender !== this.window.webContents) {
+      return
+    }
+    this.setChipHover(hovered === true)
+  }
+
+  private applyIgnoreMouseEvents(): void {
+    const window = this.window
+    if (!window || window.isDestroyed()) return
+    const next = resolveBrowserPluginOverlayIgnoreMouseEvents(this.chipHovered)
+    if (next.ignore) window.setIgnoreMouseEvents(true, { forward: true })
+    else window.setIgnoreMouseEvents(false)
   }
 
   private sendToOverlay(snapshot: BrowserPluginOverlaySnapshot): void {

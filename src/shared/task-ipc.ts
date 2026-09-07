@@ -62,6 +62,13 @@ export const TASK_PUSH_CHANNELS = {
   browserPluginOverlay: 'task:browser-plugin-overlay'
 } as const
 
+/**
+ * Overlay 窗口控件 IPC。只让停止芯片临时关闭 click-through，不是业务 channel。
+ */
+export const TASK_SEND_CHANNELS = {
+  browserPluginOverlayChipHover: 'task:browser-plugin-overlay-chip-hover'
+} as const
+
 /** 子代理工具来自 Grok 子 session 落盘；missing 表示父时间线没有孩子工具。 */
 export type SubagentActivitySource = 'grok-session' | 'missing'
 

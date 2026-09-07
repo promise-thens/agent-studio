@@ -343,7 +343,7 @@ vi.mock('electron', () => {
       showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })),
       showErrorBox: vi.fn()
     },
-    ipcMain: { handle: vi.fn() },
+    ipcMain: { handle: vi.fn(), on: vi.fn(), removeListener: vi.fn() },
     nativeTheme: {
       shouldUseDarkColors: true,
       themeSource: 'system',

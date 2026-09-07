@@ -3,11 +3,17 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('electron', () => ({
-  BrowserWindow: class {
-    webContents = { send: vi.fn(), once: vi.fn() }
-    constructor(_options: unknown) {}
-    setIgnoreMouseEvents(): void {}
+const overlayWindowMocks = vi.hoisted(() => ({
+  windows: [] as Array<{ setIgnoreMouseEvents: ReturnType<typeof vi.fn> }>
+}))
+
+vi.mock('electron', () => {
+  class BrowserWindow {
+    webContents = { send: vi.fn(), once: vi.fn(), on: vi.fn() }
+    setIgnoreMouseEvents = vi.fn()
+    constructor(_options: unknown) {
+      overlayWindowMocks.windows.push(this)
+    }
     setAlwaysOnTop(): void {}
     setVisibleOnAllWorkspaces(): void {}
     showInactive(): void {}
@@ -17,7 +23,7 @@ vi.mock('electron', () => ({
       return false
     }
     isVisible(): boolean {
-      return false
+      return true
     }
     setBounds(): void {}
     loadURL(): Promise<void> {
@@ -27,11 +33,15 @@ vi.mock('electron', () => ({
       return Promise.resolve()
     }
     on(): void {}
-  },
-  screen: {
-    getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1440, height: 900 } })
   }
-}))
+  return {
+    BrowserWindow,
+    ipcMain: { on: vi.fn(), removeListener: vi.fn() },
+    screen: {
+      getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1440, height: 900 } })
+    }
+  }
+})
 import type { AgentPermissionRequest } from '../shared/agent'
 import {
   createBrowserPluginOverlaySnapshot,
@@ -39,8 +49,10 @@ import {
 } from '../shared/browser-plugin-overlay'
 import type { TaskExecutionSnapshot } from '../shared/task-execution'
 import {
+  BrowserPluginOverlayHost,
   BrowserPluginOverlaySession,
   createBrowserPluginOverlayWindowOptions,
+  resolveBrowserPluginOverlayIgnoreMouseEvents,
   shouldRenderMovingOverlayCursor
 } from './browser-plugin-overlay'
 
@@ -118,6 +130,10 @@ describe('overlay 源码纪律', () => {
     expect(overlayPreload).not.toContain("exposeInMainWorld('electron'")
     expect(overlayApp).toContain('停止浏览器控制')
     expect(overlayApp).toContain('v-if="snapshot.pointer"')
+    expect(overlayApp).toContain('-webkit-app-region: no-drag')
+    expect(overlayApp).toContain('@mouseenter')
+    expect(overlayApp).toContain('@mouseleave')
+    expect(overlayApp).toContain('setChipHover')
     expect(indexSource).toContain('createBrowserPluginOverlayHostInstance')
     expect(indexSource).toContain('onBrowserPluginTool')
     expect(indexSource).toContain('TASK_PUSH_CHANNELS.browserPluginOverlay')
@@ -149,6 +165,41 @@ describe('BrowserPluginOverlaySession', () => {
     expect(shouldRenderMovingOverlayCursor(snapshot)).toBe(false)
   })
 
+  it('allow-once 或 deny 都清掉未决 L3；完成后写文件不得继续显示 overlay', () => {
+    const session = new BrowserPluginOverlaySession()
+    session.acceptExecutionSnapshot(runningExecution)
+    session.acceptPermission(createBrowserPermission())
+    expect(session.getSnapshot().visible).toBe(true)
+
+    session.acceptPermissionResponse({ approvalId: 'approval-1', decision: 'allow-once' })
+    expect(session.getSnapshot().visible).toBe(false)
+
+    session.acceptBrowserTool({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      toolCallId: 'tool-1',
+      status: 'in_progress'
+    })
+    expect(session.getSnapshot().visible).toBe(true)
+    session.acceptBrowserTool({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      toolCallId: 'tool-1',
+      status: 'completed'
+    })
+    expect(session.getSnapshot().visible).toBe(false)
+
+    session.acceptPermission(createBrowserPermission({ approvalId: 'approval-2' }))
+    expect(session.getSnapshot().visible).toBe(true)
+    session.acceptPermissionResponse({ approvalId: 'approval-2', decision: 'allow-task' })
+    expect(session.getSnapshot().visible).toBe(false)
+
+    session.acceptPermission(createBrowserPermission({ approvalId: 'approval-3' }))
+    expect(session.getSnapshot().visible).toBe(true)
+    session.acceptPermissionResponse({ approvalId: 'approval-3', decision: 'deny' })
+    expect(session.getSnapshot().visible).toBe(false)
+  })
+
   it('cancel 或 Turn 结束后 visible 必须为 false', () => {
     const session = new BrowserPluginOverlaySession()
     session.acceptExecutionSnapshot(runningExecution)
@@ -176,6 +227,34 @@ describe('BrowserPluginOverlaySession', () => {
     })
     expect(session.getSnapshot().visible).toBe(false)
     expect(session.getSnapshot().pointer).toBeUndefined()
+  })
+})
+
+describe('overlay 芯片可点', () => {
+  it('芯片 hover 时关闭 click-through，离开后恢复穿透', () => {
+    expect(resolveBrowserPluginOverlayIgnoreMouseEvents(true)).toEqual({ ignore: false })
+    expect(resolveBrowserPluginOverlayIgnoreMouseEvents(false)).toEqual({
+      ignore: true,
+      forward: true
+    })
+
+    overlayWindowMocks.windows.length = 0
+    const host = new BrowserPluginOverlayHost({
+      isDev: false,
+      preloadPath: '/tmp/overlay.js',
+      productionHtmlPath: '/tmp/overlay.html',
+      platform: 'darwin',
+      publishToMain: vi.fn()
+    })
+    host.acceptExecutionSnapshot(runningExecution)
+    host.acceptPermission(createBrowserPermission())
+    const window = overlayWindowMocks.windows.at(-1)
+    expect(window?.setIgnoreMouseEvents).toHaveBeenCalledWith(true, { forward: true })
+
+    host.setChipHover(true)
+    expect(window?.setIgnoreMouseEvents).toHaveBeenLastCalledWith(false)
+    host.setChipHover(false)
+    expect(window?.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true, { forward: true })
   })
 })
 
