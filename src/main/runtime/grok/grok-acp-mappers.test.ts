@@ -4,7 +4,8 @@ import {
   mapGrokAvailableCommands,
   mapGrokPermissionRequest,
   mapGrokRuntimeImageContent,
-  mapGrokSessionUpdate
+  mapGrokSessionUpdate,
+  mergeGrokToolCallAuthorizationPatch
 } from './grok-acp-mappers'
 import {
   GROK_COMMAND_EVIDENCE_FIELD_FREEZE,
@@ -722,5 +723,249 @@ describe('mapGrokSessionUpdate 后台 execution', () => {
     expect(serialized).not.toContain(FAKE_KEY)
     expect(serialized).not.toContain('task_id')
     expect(serialized).not.toContain('grok-internal-task')
+  })
+})
+
+describe('mapGrokPermissionRequest 浏览器插件映射', () => {
+  it('chrome-devtools 导航工具映射为 browser origin，不泄露 rawInput', () => {
+    const request = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-nav',
+          title: '打开内部页',
+          kind: 'other',
+          name: 'navigate_page',
+          rawInput: { url: 'https://example.com/secret?token=fake-key', apiKey: FAKE_KEY }
+        }
+      },
+      'permission-nav',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    expect(request).toMatchObject({
+      operationType: 'browser',
+      minimumRisk: 'L3',
+      targets: [{ kind: 'origin', value: 'https://example.com' }]
+    })
+    expect(request).not.toHaveProperty('browserToolName')
+    expect(request).not.toHaveProperty('browserOrigin')
+    expect(request).not.toHaveProperty('rawInput')
+    const serialized = JSON.stringify(request)
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain(FAKE_KEY)
+    expect(serialized).not.toContain('token=')
+    expect(serialized).not.toContain('navigate_page')
+  })
+
+  it('未冻结的工具名即使 title 像网址也不得标 browser', () => {
+    const request = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-edit',
+          title: 'https://evil.example 看起来像浏览器',
+          kind: 'edit',
+          locations: [{ path: '/tmp/fixture/src/a.ts' }]
+        }
+      },
+      'permission-not-browser',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    expect(request?.operationType).toBe('write-file')
+  })
+
+  it('带 userinfo 的 URL 降为 unknown 目标，不得投影 origin', () => {
+    const request = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-userinfo',
+          kind: 'other',
+          name: 'navigate_page',
+          rawInput: { url: 'https://user:pass@example.com/' }
+        }
+      },
+      'permission-userinfo',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    expect(request).toMatchObject({
+      operationType: 'browser',
+      targets: [{ kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }]
+    })
+    expect(JSON.stringify(request)).not.toContain('user:pass')
+  })
+
+  it('合格名、use_tool 与未进表的调试工具不得标 browser', () => {
+    for (const name of [
+      'chrome-devtools__navigate_page',
+      'use_tool',
+      'search_tool',
+      'list_network_requests',
+      'search',
+      'fetch_content'
+    ]) {
+      const request = mapGrokPermissionRequest(
+        {
+          sessionId: SESSION_ID,
+          options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+          toolCall: {
+            toolCallId: `tool-${name}`,
+            kind: 'other',
+            name,
+            title: 'https://evil.example/from-title',
+            rawInput: { url: 'https://evil.example/from-raw' }
+          }
+        },
+        `permission-${name}`,
+        'task-mapper',
+        'turn-mapper',
+        redactFakeText,
+        true
+      )
+      expect(request?.operationType).not.toBe('browser')
+      expect(request?.operationType).toBe('unknown')
+    }
+  })
+
+  it('kind=fetch 且无白名单 name 时仍是 network-egress，不因 URL 改成 browser', () => {
+    const request = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-fetch-url',
+          kind: 'fetch',
+          title: '拉取资源',
+          rawInput: {
+            url: 'https://example.com/api',
+            tool_input: { url: 'https://nested.example/' }
+          }
+        }
+      },
+      'permission-fetch-url',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    expect(request).toMatchObject({
+      operationType: 'network-egress',
+      minimumRisk: 'L3',
+      targets: [{ kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }]
+    })
+    expect(JSON.stringify(request)).not.toContain('example.com')
+  })
+
+  it('只读 rawInput.url；嵌套 tool_input.url、_meta 与 title 不得投影 origin', () => {
+    const request = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-nested-url',
+          kind: 'other',
+          name: 'navigate_page',
+          title: 'https://title.example/from-title',
+          rawInput: { tool_input: { url: 'https://nested.example/secret' } },
+          _meta: { url: 'https://meta.example/' }
+        }
+      },
+      'permission-nested-url',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    expect(request).toMatchObject({
+      operationType: 'browser',
+      targets: [{ kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }]
+    })
+    const serialized = JSON.stringify(request)
+    expect(serialized).not.toContain('nested.example')
+    expect(serialized).not.toContain('meta.example')
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain('_meta')
+  })
+
+  it('browser-use / tinyfish 冻结名同样标 browser；无 URL 时目标为 unknown', () => {
+    for (const name of ['browser_exec', 'browser_screenshot', 'run_web_automation', 'click']) {
+      const request = mapGrokPermissionRequest(
+        {
+          sessionId: SESSION_ID,
+          options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+          toolCall: {
+            toolCallId: `tool-${name}`,
+            kind: 'other',
+            name
+          }
+        },
+        `permission-${name}`,
+        'task-mapper',
+        'turn-mapper',
+        redactFakeText,
+        true
+      )
+      expect(request).toMatchObject({
+        operationType: 'browser',
+        minimumRisk: 'L3',
+        targets: [{ kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }]
+      })
+    }
+  })
+
+  it('白名单 name 优先于 kind=fetch；授权快照不保留 rawInput', () => {
+    const request = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-fetch-nav',
+          kind: 'fetch',
+          name: 'new_page',
+          rawInput: { url: 'http://localhost:5173/app?token=fake-key', apiKey: FAKE_KEY }
+        }
+      },
+      'permission-fetch-nav',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    expect(request).toMatchObject({
+      operationType: 'browser',
+      minimumRisk: 'L3',
+      targets: [{ kind: 'origin', value: 'http://localhost:5173' }]
+    })
+    expect(JSON.stringify(request)).not.toContain(FAKE_KEY)
+    expect(JSON.stringify(request)).not.toContain('token=')
+
+    const snapshot = mergeGrokToolCallAuthorizationPatch(undefined, {
+      toolCallId: 'tool-fetch-nav',
+      kind: 'fetch',
+      name: 'new_page',
+      rawInput: { url: 'http://localhost:5173/app?token=fake-key', apiKey: FAKE_KEY }
+    })
+    expect(snapshot).toMatchObject({
+      integrity: 'valid',
+      browserToolName: 'new_page',
+      browserOrigin: 'http://localhost:5173'
+    })
+    const snapshotJson = JSON.stringify(snapshot)
+    expect(snapshotJson).not.toContain('rawInput')
+    expect(snapshotJson).not.toContain(FAKE_KEY)
+    expect(snapshotJson).not.toContain('token=')
+    expect(snapshotJson).not.toContain('apiKey')
   })
 })
