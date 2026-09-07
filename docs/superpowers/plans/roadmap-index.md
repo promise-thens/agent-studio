@@ -93,8 +93,8 @@
 | 2 | [P0-19a](p0-19a-session-plan-mode.md) | 4 | Plan mode 开关与主列清单 | 代码已落地；1.0.13 为 disabled-path；开发版 GUI 未过 | 与接管互斥 |
 | 3 | [GACP-06](grokACP计划/gacp-06-subagent-timeline.md) | 3 | 子 Agent 嵌套时间线；无父子字段保持扁平 | 代码已落地；无父子字段保持扁平；GUI 未走查 | 先观察字段；皮肤跟 P0-10A |
 | 4 | [P0-19b](p0-19b-grok-sandbox-profile.md) | 4 | Grok Sandbox 档位与空闲重启 | 代码已落地；开发版 GUI 未走查 | 空闲重启纪律 |
-| 5 | [P0-19c](p0-19c-turn-rewind.md) | 4 | 对话 /rewind 与文件 latest-turn 恢复分开 | 待开始 | P0-12 |
-| 6 | [P0-19d](p0-19d-hooks-surface.md) | 3 | Hooks 只读库存，桌面不执行 | 待开始 | grok-home 扫描模式 |
+| 5 | [P0-19c](p0-19c-turn-rewind.md) | 4 | 对话 /rewind 与文件 latest-turn 恢复分开 | 代码已落地；开发版 GUI 未走查 | P0-12 |
+| 6 | [P0-19d](p0-19d-hooks-surface.md) | 3 | Hooks 只读库存，桌面不执行 | 代码已落地；开发版 GUI 未走查 | grok-home 扫描模式 |
 | 7 | [P0-19e](p0-19e-background-command-monitor.md) | 3 | 后台命令 Timeline 监视 | 待开始 | 先观察 ACP 字段 |
 | 8 | [P0-19f](p0-19f-browser-computer-use-surface.md) | 4 | 插件 browser/screen/clipboard：L3、截图 Artifact、可见停止 | 待开始 | P0-10E、GACP-03、P0-13；不自建 WebContentsView |
 | 9 | [P0-19h](p0-19h-context-usage-signals-bridge.md) | 3 | Grok signals 上下文用量桥接 | 代码已落地；开发版 GUI 待走查 | 现有 Usage 事件链；不改 Renderer |

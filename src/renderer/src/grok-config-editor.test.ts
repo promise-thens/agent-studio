@@ -78,3 +78,35 @@ describe('Grok 配置页沙箱选择器', () => {
     expect(editorSource).toContain('if (applied) await refreshTomlFromDisk()')
   })
 })
+
+describe('Grok 配置页 Hooks 只读列表', () => {
+  it('沙箱下方、toml 上方放只读 Hooks 段，走 listHooks 而不是读盘', () => {
+    expect(editorSource).toMatch(
+      /class="sandbox-field"[\s\S]*class="hooks-field"[\s\S]*class="config-body"/
+    )
+    expect(editorSource).toContain('window.app.listHooks()')
+    expect(editorSource).toContain('mapGrokHookSummariesToRowViews')
+    expect(editorSource).toContain('GROK_HOOKS_EMPTY_COPY')
+    expect(editorSource).toContain('GROK_HOOKS_INTRO')
+    expect(editorSource).not.toContain('child_process')
+    expect(editorSource).not.toContain('os.homedir')
+    expect(editorSource).not.toContain('executeHook')
+    expect(editorSource).not.toContain('test-hook')
+  })
+
+  it('Hooks 段没有启用开关或执行按钮，重试同时有 title 与 aria-label', () => {
+    const hooksBlock = editorSource.slice(
+      editorSource.indexOf('class="hooks-field"'),
+      editorSource.indexOf('class="config-body"')
+    )
+    expect(hooksBlock.length).toBeGreaterThan(80)
+    expect(hooksBlock).not.toContain('type="checkbox"')
+    expect(hooksBlock).not.toContain('role="switch"')
+    expect(hooksBlock).not.toContain('<input')
+    expect(hooksBlock).toContain(':title="GROK_HOOKS_RETRY_LABEL"')
+    expect(hooksBlock).toContain(':aria-label="GROK_HOOKS_RETRY_LABEL"')
+    expect(hooksBlock).toContain('row.enabledLabel')
+    expect(hooksBlock).toContain('row.targetLabel')
+    expect(hooksBlock).toContain('row.warning')
+  })
+})
