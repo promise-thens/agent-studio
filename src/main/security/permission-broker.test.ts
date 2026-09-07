@@ -202,6 +202,47 @@ describe('PermissionBroker', () => {
     await expect(computerUse).resolves.toEqual({ ok: false, reason: 'cancelled' })
   })
 
+  it('写文件 task grant 不能捎带 browser，必须再弹卡', async () => {
+    const fixture = createFixture()
+    const first = fixture.broker.authorizeOperation(createIntent('write-file'), vi.fn())
+    const firstApproval = await waitForApproval(fixture.approvals, 0)
+    await fixture.broker.respond({
+      approvalId: firstApproval.approvalId,
+      taskId: firstApproval.taskId,
+      turnId: firstApproval.turnId,
+      decision: 'allow-task'
+    })
+    await expect(first).resolves.toMatchObject({ ok: true, reason: 'user-allowed', scope: 'task' })
+
+    const browser = fixture.broker.authorizeOperation(
+      {
+        ...createIntent('write-file'),
+        operationType: 'browser',
+        turnId: 'turn-2',
+        targets: [{ kind: 'origin', value: 'https://example.com' }],
+        parameterFingerprint: 'browser:v1'
+      },
+      vi.fn(() => 'browser-ok')
+    )
+    const browserApproval = await waitForApproval(fixture.approvals, 1)
+    expect(browserApproval).toMatchObject({
+      operationType: 'browser',
+      risk: 'L3',
+      allowedScopes: ['once', 'task']
+    })
+    await fixture.broker.respond({
+      approvalId: browserApproval.approvalId,
+      taskId: browserApproval.taskId,
+      turnId: browserApproval.turnId,
+      decision: 'allow-once'
+    })
+    await expect(browser).resolves.toMatchObject({
+      ok: true,
+      value: 'browser-ok',
+      reason: 'user-allowed'
+    })
+  })
+
   it('受控执行只接收 canonical intent，执行失败不会留下 Task grant', async () => {
     const fixture = createFixture()
     const execute = vi.fn(() => {
@@ -1098,18 +1139,35 @@ describe('PermissionBroker', () => {
         executionSupported: false
       })
     ).resolves.toEqual({ ok: false, reason: 'unsupported' })
+
+    const browser = vi.fn(() => 'browser-ok')
     await expect(
       fixture.broker.authorizeOperation(
         {
           ...createIntent('unknown'),
           operationType: 'browser',
-          targets: [{ kind: 'unknown', value: 'browser' }]
+          targets: [{ kind: 'origin', value: 'https://example.com' }]
         },
-        execute,
+        browser,
+        { takeoverEnabled: true }
+      )
+    ).resolves.toEqual({ ok: true, value: 'browser-ok', reason: 'auto-allowed', scope: 'once' })
+    expect(browser).toHaveBeenCalledOnce()
+
+    const screen = vi.fn()
+    await expect(
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('unknown'),
+          operationType: 'screen',
+          targets: [{ kind: 'unknown', value: 'screen' }]
+        },
+        screen,
         { takeoverEnabled: true }
       )
     ).resolves.toEqual({ ok: false, reason: 'unsupported' })
     expect(execute).not.toHaveBeenCalled()
+    expect(screen).not.toHaveBeenCalled()
     expect(fixture.approvals).toHaveLength(0)
   })
 
