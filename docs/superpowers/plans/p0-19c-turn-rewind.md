@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。
 >
-> **状态：** 待开始。
+> **状态：** 进行中。任务 1 文案与真机观察已落地；Grok 1.0.13 未广告 `rewind` / `undo`，产品冻结 `not-advertised`。
 >
 > **插入点：** [P0-19](p0-19-grok-host-capability-polish.md) 在 Sandbox 之后。文件侧复用 P0-12 已有 `task:preview-latest-turn-restore` / `task:restore-latest-turn`，禁止 `git reset` / `checkout`。
 
@@ -64,11 +64,11 @@
 
 ### 任务 1: 分清两个动词
 
-- [ ] **第 1 步: 盘点现有 UI**
+- [x] **第 1 步: 盘点现有 UI**
 
 说明：找到 P0-12 的撤销按钮/文案，列出它今天承诺了什么。若文案是笼统「撤销」，本任务必须改成「恢复上一轮文件」之类。
 
-- [ ] **第 2 步: 真机 /rewind**
+- [x] **第 2 步: 真机 /rewind**
 
 说明：看命令快照 name 是 `rewind` 还是 `undo`。发一次，观察是否只改会话、是否触发写文件权限。写入 observations 短记。
 
