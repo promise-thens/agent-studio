@@ -4,7 +4,11 @@ import {
   GROK_REWIND_SLASH_COMMAND,
   GROK_UNDO_SLASH_COMMAND,
   TURN_REWIND_COMMAND_MISSING_COPY,
+  TURN_REWIND_CONFIRM_BOTH,
+  TURN_REWIND_CONFIRM_CONVERSATION,
+  TURN_REWIND_CONFIRM_FILES,
   TURN_REWIND_CONVERSATION_DESCRIPTION,
+  TURN_REWIND_PREVIEW_FILES_ACTION,
   buildTurnRewindPreview,
   clampTurnRewindSelection,
   defaultTurnRewindSelection,
@@ -331,6 +335,66 @@ describe('presentTurnRewindCard 禁用态', () => {
     expect(view.filesButtonDisabled).toBe(false)
     expect(view.filesChecked).toBe(true)
     expect(view.filesReason).toBeNull()
+  })
+
+  it('对话可勾且文件 blocked 时确认按钮仍可用，文案是确认对话回退', () => {
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: nonePreview('执行环境已漂移，不能自动恢复上一轮文件。')
+    })
+    const view = presentTurnRewindCard(preview)
+    expect(view.filesCheckboxDisabled).toBe(true)
+    expect(view.filesButtonDisabled).toBe(true)
+    expect(view.conversationCheckboxDisabled).toBe(false)
+    expect(view.conversationChecked).toBe(true)
+    expect(view.confirmDisabled).toBe(false)
+    expect(view.confirmLabel).toBe(TURN_REWIND_CONFIRM_CONVERSATION)
+    expect(view.confirmLabel).not.toContain('撤销')
+    expect(view.needsFilePreview).toBe(false)
+  })
+
+  it('文件未预览且勾了文件时确认文案是预览动作，needsFilePreview', () => {
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: null,
+      changeSetRevertible: latestTurnRevertible()
+    })
+    const view = presentTurnRewindCard(preview)
+    expect(view.filesChecked).toBe(true)
+    expect(view.needsFilePreview).toBe(true)
+    expect(view.confirmDisabled).toBe(false)
+    expect(view.confirmLabel).toBe(TURN_REWIND_PREVIEW_FILES_ACTION)
+  })
+
+  it('两行都勾且已有 latest-turn 预览时确认文案是确认回退', () => {
+    const view = presentTurnRewindCard(
+      buildTurnRewindPreview({
+        advertisedCommands: [{ name: 'rewind' }],
+        busy: false,
+        restorePreview: latestTurnPreview()
+      })
+    )
+    expect(view.confirmDisabled).toBe(false)
+    expect(view.needsFilePreview).toBe(false)
+    expect(view.confirmLabel).toBe(TURN_REWIND_CONFIRM_BOTH)
+  })
+
+  it('只勾文件时确认文案是确认恢复文件；两行都取消则确认禁用', () => {
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: latestTurnPreview()
+    })
+    const filesOnly = presentTurnRewindCard(preview, { conversation: false, files: true })
+    expect(filesOnly.confirmDisabled).toBe(false)
+    expect(filesOnly.confirmLabel).toBe(TURN_REWIND_CONFIRM_FILES)
+    expect(filesOnly.confirmLabel).not.toContain('撤销')
+
+    const none = presentTurnRewindCard(preview, { conversation: false, files: false })
+    expect(none.confirmDisabled).toBe(true)
+    expect(none.confirmLabel).toBe(TURN_REWIND_CONFIRM_BOTH)
   })
 
   it('available 但用户取消对话时不得暴露可发送的 /rewind prompt', () => {

@@ -11,7 +11,7 @@ import { restoreActionLabel, restorePreviewSummary } from '../task-changes-prese
 
 /**
  * 回退上一轮两行卡：对话回退与文件恢复分开展示。
- * 本组件不 startTurn；文件确认仍走已有 restore IPC。
+ * 本组件不 startTurn；确认只 emit clamp 后的勾选，由执行函数按顺序 restore / 发对话。
  */
 
 const props = withDefaults(
@@ -26,7 +26,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   previewFiles: []
-  confirmFiles: []
+  confirm: [selection: TurnRewindSelection]
   cancelFiles: []
 }>()
 
@@ -60,7 +60,11 @@ const restorePlan = computed(() =>
     ? filePreview.value.revertible.restorePlan
     : []
 )
-const filesButtonDisabled = computed(() => view.value.filesButtonDisabled || props.restoreBusy)
+const confirmDisabled = computed(() => view.value.confirmDisabled || props.restoreBusy)
+const confirmTitle = computed(() => {
+  if (!confirmDisabled.value) return view.value.confirmLabel
+  return view.value.filesReason ?? view.value.conversationStatusCopy ?? view.value.confirmLabel
+})
 
 function onConversationChange(event: Event): void {
   const target = event.target
@@ -80,10 +84,13 @@ function onFilesChange(event: Event): void {
   })
 }
 
-function onFilesAction(): void {
-  if (filesButtonDisabled.value) return
-  if (filePreview.value) emit('confirmFiles')
-  else emit('previewFiles')
+function onConfirm(): void {
+  if (confirmDisabled.value) return
+  if (view.value.needsFilePreview) {
+    emit('previewFiles')
+    return
+  }
+  emit('confirm', clampTurnRewindSelection(props.preview, selection.value))
 }
 </script>
 
@@ -143,43 +150,30 @@ function onFilesAction(): void {
           {{ item.path }} · {{ restoreActionLabel(item) }}
         </li>
       </ul>
-      <div class="changes-restore-actions">
-        <button
-          class="secondary-button"
-          type="button"
-          title="确认恢复上一轮文件"
-          aria-label="确认恢复上一轮文件"
-          :disabled="filesButtonDisabled"
-          @click="onFilesAction"
-        >
-          确认恢复上一轮文件
-        </button>
-        <button
-          class="secondary-button"
-          type="button"
-          title="取消恢复"
-          aria-label="取消恢复"
-          :disabled="restoreBusy"
-          @click="emit('cancelFiles')"
-        >
-          取消
-        </button>
-      </div>
     </div>
-    <button
-      v-else
-      class="secondary-button"
-      type="button"
-      :title="
-        filesButtonDisabled ? (view.filesReason ?? '当前不能一键恢复上一轮文件') : '恢复上一轮文件'
-      "
-      :aria-label="
-        filesButtonDisabled ? (view.filesReason ?? '当前不能一键恢复上一轮文件') : '恢复上一轮文件'
-      "
-      :disabled="filesButtonDisabled"
-      @click="onFilesAction"
-    >
-      恢复上一轮文件
-    </button>
+
+    <div class="changes-restore-actions">
+      <button
+        class="secondary-button"
+        type="button"
+        :title="confirmTitle"
+        :aria-label="confirmTitle"
+        :disabled="confirmDisabled"
+        @click="onConfirm"
+      >
+        {{ view.confirmLabel }}
+      </button>
+      <button
+        v-if="filePreview"
+        class="secondary-button"
+        type="button"
+        title="取消恢复"
+        aria-label="取消恢复"
+        :disabled="restoreBusy"
+        @click="emit('cancelFiles')"
+      >
+        取消
+      </button>
+    </div>
   </section>
 </template>

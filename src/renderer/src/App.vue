@@ -23,7 +23,9 @@ import {
   resolvePlanSubmit,
   type ComposerPlanMode
 } from '../../shared/session-plan-mode'
-import { isTurnRewindBusy } from '../../shared/turn-rewind-preview'
+import type { DesktopIpcResult } from '../../shared/ipc-result'
+import type { AgentStartTurnAdmissionResult } from '../../shared/task-execution'
+import { isTurnRewindBusy, TURN_REWIND_BUSY_COPY } from '../../shared/turn-rewind-preview'
 import type {
   AgentAvailableCommand,
   AgentAvailableCommandSnapshot
@@ -65,7 +67,7 @@ import TaskHeader from './components/TaskHeader.vue'
 import TaskInspector from './components/TaskInspector.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
 import { useTaskArtifacts } from './composables/useTaskArtifacts'
-import { useTaskChanges } from './composables/useTaskChanges'
+import { createTaskChangesQueryApi, useTaskChanges } from './composables/useTaskChanges'
 import { useTaskTimeline } from './composables/useTaskTimeline'
 import { createAttachmentPreviewUrl } from './attachment-preview-url'
 import { useMacosFolderAccess } from './composables/useMacosFolderAccess'
@@ -277,7 +279,68 @@ const inspectorPlanTurnId = ref<string | null>(null)
 /** 检查器默认悬浮；吸附后工作区切成三列，聊天列由 CSS Grid 自适应。 */
 const inspectorDocked = ref(false)
 const inspectorToggleTitle = computed(() => inspectorToggleLabel(showInspector.value))
-const taskChanges = useTaskChanges(() => activeTaskId.value)
+
+/**
+ * 对话回退发送：prompt 已由 executeTurnRewind 经 resolve 得到，这里不得写死命令名。
+ * IPC 成功后再写用户气泡和 Timeline admission，禁止乐观显示成功。
+ */
+async function startResolvedRewindTurn(
+  taskId: string,
+  prompt: string
+): Promise<DesktopIpcResult<AgentStartTurnAdmissionResult>> {
+  if (!taskId || !prompt.trim()) {
+    return { ok: false, error: { code: 'invalid-input', message: '当前不能发送对话回退。' } }
+  }
+  if (isForeignExecutionBlockingSend(activeExecution.value, taskId)) {
+    return { ok: false, error: { code: 'invalid-state', message: '先停掉当前任务。' } }
+  }
+
+  let admission: DesktopIpcResult<AgentStartTurnAdmissionResult> | null = null
+  const ran = await runPromptSubmission(async () => {
+    beginCurrentTurn(taskId)
+    try {
+      const result = await window.agent.startTurn(taskId, prompt)
+      admission = result
+      if (!result.ok) {
+        completeCurrentTurn(taskId)
+        return
+      }
+      appendMessage('user', prompt)
+      workbench.acceptExecutionSnapshot(result.value)
+      const execution = result.value.execution
+      if (execution) {
+        taskTimeline.acceptAdmission({
+          taskId: execution.taskId,
+          turnId: execution.turnId,
+          executionId: execution.executionId,
+          promptDisplayText: prompt,
+          model: execution.model,
+          acceptedAt: execution.acceptedAt
+        })
+      }
+      await taskHistory.refreshTasks()
+    } catch (error) {
+      completeCurrentTurn(taskId)
+      throw error
+    }
+  })
+  if (!ran) {
+    return { ok: false, error: { code: 'invalid-state', message: TURN_REWIND_BUSY_COPY } }
+  }
+  return (
+    admission ?? {
+      ok: false,
+      error: { code: 'operation-failed', message: '当前不能发送对话回退。' }
+    }
+  )
+}
+
+const taskChanges = useTaskChanges(
+  () => activeTaskId.value,
+  createTaskChangesQueryApi({
+    startTurn: startResolvedRewindTurn
+  })
+)
 const taskArtifacts = useTaskArtifacts(() => activeTaskId.value)
 const changeCard = computed(() => presentChangeCard(taskChanges.changeSet.value))
 const restoreBusy = taskChanges.restoreBusy

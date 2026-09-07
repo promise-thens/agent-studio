@@ -1,7 +1,15 @@
 import { nextTick, ref } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 import type { CommandExecutionEvidence } from '../../../shared/command'
-import type { FileDiffResult, TaskChangeSetQueryResult } from '../../../shared/git-review'
+import type {
+  FileDiffResult,
+  LatestTurnRestorePreview,
+  TaskChangeSetQueryResult
+} from '../../../shared/git-review'
+import {
+  buildTurnRewindPreview,
+  resolveTurnRewindConversationPrompt
+} from '../../../shared/turn-rewind-preview'
 import type { DesktopIpcResult } from '../../../shared/ipc-result'
 import { changeSetReadiness } from '../task-changes-presentation'
 import { useTaskChanges, type TaskChangesQueryApi } from './useTaskChanges'
@@ -273,5 +281,223 @@ describe('useTaskChanges', () => {
     expect(restoreLatestTurn).not.toHaveBeenCalled()
     expect(controller.restoreError.value).toMatch(/不能自动恢复上一轮文件/)
     expect(controller.restoreError.value).not.toContain('撤销')
+  })
+})
+
+function latestTurnRestorePreview(): LatestTurnRestorePreview {
+  return {
+    taskId: 'task-1',
+    revertible: {
+      kind: 'latest-turn',
+      turnId: 'turn-1',
+      paths: ['README.md'],
+      restorePlan: [{ path: 'README.md', action: 'write' as const, from: 'head' as const }]
+    },
+    willLosePaths: ['README.md']
+  }
+}
+
+describe('useTaskChanges confirmTurnRewind', () => {
+  it('只勾文件时 restore，不 startTurn', async () => {
+    const restoreLatestTurn = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        ok: true,
+        message: '已恢复上一轮文件，历史检查点仍保留。',
+        appliedPaths: ['README.md']
+      })
+    )
+    const startTurn = vi.fn(async () =>
+      ok({ executorEpoch: 'e1', executionRevision: 1, execution: null })
+    )
+    const api = createApi({ restoreLatestTurn, startTurn })
+    const controller = useTaskChanges(ref('task-1'), api)
+    await waitUntilIdle(controller.loading)
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: latestTurnRestorePreview()
+    })
+    await controller.confirmTurnRewind(preview, { conversation: false, files: true })
+    expect(restoreLatestTurn).toHaveBeenCalledWith('task-1')
+    expect(startTurn).not.toHaveBeenCalled()
+    expect(controller.restoreMessage.value).toMatch(/README\.md/)
+    expect(controller.restoreError.value).toBe('')
+  })
+
+  it('只勾对话时不碰磁盘，startTurn 参数等于 resolve 返回值', async () => {
+    const restoreLatestTurn = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        ok: true,
+        message: 'should-not-run'
+      })
+    )
+    const startTurn = vi.fn(async () =>
+      ok({ executorEpoch: 'e1', executionRevision: 1, execution: null })
+    )
+    const api = createApi({ restoreLatestTurn, startTurn })
+    const controller = useTaskChanges(ref('task-1'), api)
+    await waitUntilIdle(controller.loading)
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: latestTurnRestorePreview()
+    })
+    const selection = { conversation: true, files: false }
+    await controller.confirmTurnRewind(preview, selection)
+    expect(restoreLatestTurn).not.toHaveBeenCalled()
+    expect(startTurn).toHaveBeenCalledTimes(1)
+    expect(startTurn).toHaveBeenCalledWith(
+      'task-1',
+      resolveTurnRewindConversationPrompt(preview, selection)
+    )
+    expect(controller.restoreMessage.value).toMatch(/已发送对话回退/)
+    expect(controller.restoreError.value).toBe('')
+  })
+
+  it('文件失败不再发对话，错误不假装对话已回退', async () => {
+    const restoreLatestTurn = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        ok: false,
+        reason: 'drift' as const,
+        message: '待删除路径在写回后已漂移，已停止删除。',
+        appliedPaths: ['README.md']
+      })
+    )
+    const startTurn = vi.fn(async () =>
+      ok({ executorEpoch: 'e1', executionRevision: 1, execution: null })
+    )
+    const api = createApi({ restoreLatestTurn, startTurn })
+    const controller = useTaskChanges(ref('task-1'), api)
+    await waitUntilIdle(controller.loading)
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: latestTurnRestorePreview()
+    })
+    await controller.confirmTurnRewind(preview, { conversation: true, files: true })
+    expect(restoreLatestTurn).toHaveBeenCalledTimes(1)
+    expect(startTurn).not.toHaveBeenCalled()
+    expect(controller.restoreError.value).toMatch(/漂移/)
+    expect(controller.restoreError.value).toMatch(/README\.md/)
+    expect(controller.restoreMessage.value).not.toMatch(/已发送对话回退/)
+  })
+
+  it('对话失败不假装文件没恢复', async () => {
+    const restoreLatestTurn = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        ok: true,
+        message: '已恢复上一轮文件，历史检查点仍保留。',
+        appliedPaths: ['README.md']
+      })
+    )
+    const startTurn = vi.fn(async () => ({
+      ok: false as const,
+      error: { code: 'runtime-unavailable' as const, message: 'Runtime 暂时不可用。' }
+    }))
+    const api = createApi({ restoreLatestTurn, startTurn })
+    const controller = useTaskChanges(ref('task-1'), api)
+    await waitUntilIdle(controller.loading)
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: latestTurnRestorePreview()
+    })
+    await controller.confirmTurnRewind(preview, { conversation: true, files: true })
+    expect(restoreLatestTurn).toHaveBeenCalledTimes(1)
+    expect(startTurn).toHaveBeenCalledTimes(1)
+    expect(controller.restoreMessage.value).toMatch(/已恢复上一轮文件/)
+    expect(controller.restoreError.value).toMatch(/Runtime 暂时不可用/)
+    expect(controller.restoreMessage.value).not.toMatch(/已发送对话回退/)
+  })
+
+  it('漂移且广告 rewind 时不 restore，只发对话', async () => {
+    const restoreLatestTurn = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        ok: true,
+        message: 'should-not-run'
+      })
+    )
+    const startTurn = vi.fn<(taskId: string, prompt: string) => Promise<DesktopIpcResult<unknown>>>(
+      async () => ok({ executorEpoch: 'e1', executionRevision: 1, execution: null })
+    )
+    const api = createApi({ restoreLatestTurn, startTurn })
+    const controller = useTaskChanges(ref('task-1'), api)
+    await waitUntilIdle(controller.loading)
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: {
+        taskId: 'task-1',
+        revertible: { kind: 'none', reason: '执行环境已漂移，不能自动恢复上一轮文件。' },
+        willLosePaths: []
+      }
+    })
+    await controller.confirmTurnRewind(preview, { conversation: true, files: true })
+    expect(restoreLatestTurn).not.toHaveBeenCalled()
+    expect(startTurn).toHaveBeenCalledTimes(1)
+    expect(startTurn.mock.calls[0]?.[1]).toBe(
+      resolveTurnRewindConversationPrompt(preview, { conversation: true, files: true })
+    )
+  })
+
+  it('command-missing 时 startTurn 次数为 0', async () => {
+    const startTurn = vi.fn(async () =>
+      ok({ executorEpoch: 'e1', executionRevision: 1, execution: null })
+    )
+    const restoreLatestTurn = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        ok: true,
+        message: '已恢复上一轮文件，历史检查点仍保留。'
+      })
+    )
+    const api = createApi({ restoreLatestTurn, startTurn })
+    const controller = useTaskChanges(ref('task-1'), api)
+    await waitUntilIdle(controller.loading)
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'compact' }],
+      busy: false,
+      restorePreview: latestTurnRestorePreview()
+    })
+    await controller.confirmTurnRewind(preview, { conversation: true, files: true })
+    expect(startTurn).toHaveBeenCalledTimes(0)
+    expect(restoreLatestTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('文件未预览却勾了文件时不 restore、不 startTurn', async () => {
+    const restoreLatestTurn = vi.fn(async () =>
+      ok({
+        taskId: 'task-1',
+        ok: true,
+        message: 'should-not-run'
+      })
+    )
+    const startTurn = vi.fn(async () =>
+      ok({ executorEpoch: 'e1', executionRevision: 1, execution: null })
+    )
+    const api = createApi({ restoreLatestTurn, startTurn })
+    const controller = useTaskChanges(ref('task-1'), api)
+    await waitUntilIdle(controller.loading)
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: null,
+      changeSetRevertible: {
+        kind: 'latest-turn',
+        turnId: 'turn-1',
+        paths: ['README.md'],
+        restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+      }
+    })
+    await controller.confirmTurnRewind(preview, { conversation: true, files: true })
+    expect(restoreLatestTurn).not.toHaveBeenCalled()
+    expect(startTurn).toHaveBeenCalledTimes(0)
+    expect(controller.restoreError.value).toMatch(/不能自动恢复上一轮文件/)
+    expect(controller.restoreMessage.value).not.toMatch(/已发送对话回退/)
   })
 })

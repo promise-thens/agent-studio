@@ -6,7 +6,10 @@ import {
   PhFile as File,
   PhFolder as Folder
 } from '@phosphor-icons/vue'
-import { buildTurnRewindPreview } from '../../../shared/turn-rewind-preview'
+import {
+  buildTurnRewindPreview,
+  type TurnRewindSelection
+} from '../../../shared/turn-rewind-preview'
 import type { TaskChangesController } from '../composables/useTaskChanges'
 import {
   attributionLabel,
@@ -59,7 +62,7 @@ const {
   restoreMessage,
   openRestorePreview,
   cancelRestorePreview,
-  confirmRestore
+  confirmTurnRewind
 } = props.controller
 
 const fileFilter = ref('')
@@ -156,6 +159,11 @@ function pathTabIndex(path: string): number {
   if (selectedPath.value === path) return 0
   if (!selectedPath.value && fileRows.value[0]?.path === path) return 0
   return -1
+}
+
+/** 卡确认带上勾选；本面板不 startTurn，对话发送由注入的执行函数负责。 */
+function onConfirmRewind(selection: TurnRewindSelection): void {
+  void confirmTurnRewind(rewindPreview.value, selection)
 }
 </script>
 
@@ -317,7 +325,7 @@ function pathTabIndex(path: string): number {
           :preview="rewindPreview"
           :restore-busy="restoreBusy"
           @preview-files="openRestorePreview()"
-          @confirm-files="confirmRestore()"
+          @confirm="onConfirmRewind"
           @cancel-files="cancelRestorePreview()"
         />
       </section>

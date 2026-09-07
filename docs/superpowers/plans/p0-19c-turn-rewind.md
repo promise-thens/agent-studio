@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。
 >
-> **状态：** 进行中。任务 1 文案与真机观察已落地；任务 2 两行预览卡已落地。Grok 1.0.13 未广告 `rewind` / `undo`，产品冻结 `not-advertised`。
+> **状态：** 任务 1–3 代码已落地。Grok 1.0.13 未广告 `rewind` / `undo`，产品冻结 `not-advertised`。聚焦 Vitest 已过；开发版 GUI 未走查。
 >
 > **插入点：** [P0-19](p0-19-grok-host-capability-polish.md) 在 Sandbox 之后。文件侧复用 P0-12 已有 `task:preview-latest-turn-restore` / `task:restore-latest-turn`，禁止 `git reset` / `checkout`。
 
@@ -84,17 +84,17 @@
 
 ### 任务 3: 执行顺序与失败
 
-- [ ] **第 1 步: 先文件后对话（推荐）**
+- [x] **第 1 步: 先文件后对话（推荐）**
 
 说明：文件失败则默认不再发 `/rewind`，避免上下文和磁盘各退一步。用户若只勾对话则不碰磁盘。
 
-- [ ] **第 2 步: 走查**
+- [x] **第 2 步: 走查**
 
-说明：有漂移的脏文件 → 文件拒绝、对话可选；干净 latest-turn → 文件恢复成功；有 rewind 命令 → 下一句 Grok 不再拿被退掉的轮次当事实。
+说明：自动化已覆盖漂移不改盘、干净 latest-turn restore、广告 rewind 时 startTurn 参数等于 resolve、command-missing 不发送。开发版 GUI /「下一句 Grok 不再拿被退掉的轮次当事实」未跑。
 
 ## 验收标准
 
-- [ ] UI 上能看出对话回退和文件恢复是两件事。
-- [ ] 无检查点或漂移时不改盘。
-- [ ] 无 rewind 广告时不发送伪造命令。
+- [x] UI 上能看出对话回退和文件恢复是两件事。
+- [x] 无检查点或漂移时不改盘。
+- [x] 无 rewind 广告时不发送伪造命令。
 - [ ] 自动验证 + 开发版走查。

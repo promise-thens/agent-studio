@@ -15,6 +15,11 @@ import type {
   TaskChangeSetQueryResult
 } from '../../../shared/git-review'
 import type { DesktopIpcResult } from '../../../shared/ipc-result'
+import {
+  executeTurnRewind,
+  type ExecuteTurnRewindResult
+} from '../../../shared/turn-rewind-execute'
+import type { TurnRewindPreview, TurnRewindSelection } from '../../../shared/turn-rewind-preview'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import { restoreAppliedNotice } from '../task-changes-presentation'
 
@@ -27,6 +32,7 @@ export interface TaskChangesQueryApi {
   ) => Promise<DesktopIpcResult<CommandExecutionEvidence>>
   previewLatestTurnRestore?: (taskId: string) => Promise<DesktopIpcResult<LatestTurnRestorePreview>>
   restoreLatestTurn?: (taskId: string) => Promise<DesktopIpcResult<LatestTurnRestoreResult>>
+  startTurn?: (taskId: string, prompt: string) => Promise<DesktopIpcResult<unknown>>
 }
 
 interface QuerySlot<T> {
@@ -59,6 +65,7 @@ export interface TaskChangesController {
   openRestorePreview(): Promise<void>
   cancelRestorePreview(): void
   confirmRestore(): Promise<void>
+  confirmTurnRewind(preview: TurnRewindPreview, selection: TurnRewindSelection): Promise<void>
   dispose(): void
 }
 
@@ -68,8 +75,16 @@ function defaultApi(): TaskChangesQueryApi {
     getFileDiff: (taskId, path) => window.task.getFileDiff(taskId, path),
     getCommandEvidence: (taskId, commandId) => window.task.getCommandEvidence(taskId, commandId),
     previewLatestTurnRestore: (taskId) => window.task.previewLatestTurnRestore(taskId),
-    restoreLatestTurn: (taskId) => window.task.restoreLatestTurn(taskId)
+    restoreLatestTurn: (taskId) => window.task.restoreLatestTurn(taskId),
+    startTurn: (taskId, prompt) => window.agent.startTurn(taskId, prompt)
   }
+}
+
+/** 允许 App 注入对话 startTurn，同时保留默认的变更审阅 IPC。 */
+export function createTaskChangesQueryApi(
+  overrides: Partial<TaskChangesQueryApi> = {}
+): TaskChangesQueryApi {
+  return { ...defaultApi(), ...overrides }
 }
 
 function readErrorMessage(error: unknown): string {
@@ -287,6 +302,91 @@ export function useTaskChanges(
     }
   }
 
+  /**
+   * 按勾选执行整次回退：先文件后对话。
+   * 文件失败不再发对话；对话失败不回滚已恢复文件；未预览不得直接 restore。
+   */
+  async function confirmTurnRewind(
+    preview: TurnRewindPreview,
+    selection: TurnRewindSelection
+  ): Promise<void> {
+    if (restoreBusy.value) return
+    restoreBusy.value = true
+    restoreError.value = ''
+    restoreMessage.value = ''
+    try {
+      const result = await executeTurnRewind({
+        preview,
+        selection,
+        restoreLatestTurn: async () => {
+          const id = toValue(taskId)
+          const restoreApi = api.restoreLatestTurn
+          if (!id || !restoreApi) {
+            return { ok: false, message: '当前不能自动恢复上一轮文件。' }
+          }
+          return unwrapDesktopIpcResult(await restoreApi(id))
+        },
+        startTurn: async (prompt) => {
+          const id = toValue(taskId)
+          const send = api.startTurn
+          if (!id || !send) {
+            throw new Error('当前不能发送对话回退。')
+          }
+          unwrapDesktopIpcResult(await send(id, prompt))
+        }
+      })
+      await applyTurnRewindResult(result)
+    } catch (error) {
+      restoreError.value = readErrorMessage(error)
+    } finally {
+      restoreBusy.value = false
+    }
+  }
+
+  /** 成功/失败分开展示，禁止一侧失败时假装另一侧没发生。 */
+  async function applyTurnRewindResult(result: ExecuteTurnRewindResult): Promise<void> {
+    if (result.status === 'noop') return
+    if (result.status === 'completed') {
+      if (result.files) {
+        restorePreview.value = null
+        await reload()
+        restoreMessage.value = restoreAppliedNotice({
+          message: result.files.message ?? '已恢复上一轮文件。',
+          appliedPaths: result.files.appliedPaths
+        })
+      }
+      if (result.conversationPrompt) {
+        const conversationNotice = '已发送对话回退。'
+        restoreMessage.value = restoreMessage.value
+          ? `${restoreMessage.value} ${conversationNotice}`
+          : conversationNotice
+      }
+      return
+    }
+    if (result.status === 'files-failed') {
+      if (result.files?.appliedPaths?.length) {
+        restorePreview.value = null
+        await reload()
+      }
+      restoreError.value = result.files
+        ? restoreAppliedNotice({
+            message: result.error,
+            appliedPaths: result.files.appliedPaths
+          })
+        : result.error
+      return
+    }
+    if (result.files?.ok) {
+      restorePreview.value = null
+      await reload()
+      restoreMessage.value = restoreAppliedNotice({
+        message: result.files.message ?? '已恢复上一轮文件。',
+        appliedPaths: result.files.appliedPaths
+      })
+    }
+    restoreError.value = result.error
+  }
+
   function dispose(): void {
     disposed = true
     changeSetGeneration += 1
@@ -324,6 +424,7 @@ export function useTaskChanges(
     openRestorePreview,
     cancelRestorePreview,
     confirmRestore,
+    confirmTurnRewind,
     dispose
   }
 }

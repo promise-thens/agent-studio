@@ -21,6 +21,10 @@ export const TURN_REWIND_FILES_LABEL = '文件恢复'
 export const TURN_REWIND_CONVERSATION_DESCRIPTION = '只影响 Grok 上下文，不改磁盘'
 export const TURN_REWIND_COMMAND_MISSING_COPY = '当前会话未提供 rewind'
 export const TURN_REWIND_BUSY_COPY = '任务执行中，暂时不能回退'
+export const TURN_REWIND_CONFIRM_BOTH = '确认回退'
+export const TURN_REWIND_CONFIRM_FILES = '确认恢复文件'
+export const TURN_REWIND_CONFIRM_CONVERSATION = '确认对话回退'
+export const TURN_REWIND_PREVIEW_FILES_ACTION = '恢复上一轮文件'
 
 export type TurnRewindConversationStatus = 'available' | 'command-missing' | 'busy'
 export type TurnRewindConversationCommandName = 'rewind' | 'undo'
@@ -62,6 +66,9 @@ export interface TurnRewindCardPresentation {
   filesButtonDisabled: boolean
   filesReason: string | null
   conversationPrompt: string | null
+  confirmDisabled: boolean
+  confirmLabel: string
+  needsFilePreview: boolean
 }
 
 /**
@@ -194,6 +201,7 @@ export function presentTurnRewindCard(
 ): TurnRewindCardPresentation {
   const clamped = clampTurnRewindSelection(preview, selection)
   const filesLocked = preview.files.blocked || preview.conversation === 'busy'
+  const needsFilePreview = clamped.files && preview.files.preview?.revertible.kind !== 'latest-turn'
   return {
     conversationCheckboxDisabled: preview.conversation !== 'available',
     conversationChecked: clamped.conversation,
@@ -213,8 +221,26 @@ export function presentTurnRewindCard(
       : preview.conversation === 'busy'
         ? TURN_REWIND_BUSY_COPY
         : null,
-    conversationPrompt: resolveTurnRewindConversationPrompt(preview, clamped)
+    conversationPrompt: resolveTurnRewindConversationPrompt(preview, clamped),
+    confirmDisabled: !clamped.conversation && !clamped.files,
+    confirmLabel: resolveTurnRewindConfirmLabel(clamped, needsFilePreview),
+    needsFilePreview
   }
+}
+
+/**
+ * 确认文案按勾选分行，不得把对话和文件合成一个笼统动词。
+ * 文件还没 latest-turn 预览时先走预览动作，不能假装已经可以 restore。
+ */
+function resolveTurnRewindConfirmLabel(
+  clamped: TurnRewindSelection,
+  needsFilePreview: boolean
+): string {
+  if (needsFilePreview) return TURN_REWIND_PREVIEW_FILES_ACTION
+  if (clamped.conversation && clamped.files) return TURN_REWIND_CONFIRM_BOTH
+  if (clamped.files) return TURN_REWIND_CONFIRM_FILES
+  if (clamped.conversation) return TURN_REWIND_CONFIRM_CONVERSATION
+  return TURN_REWIND_CONFIRM_BOTH
 }
 
 function canSelectTurnRewindConversation(preview: TurnRewindPreview): boolean {
