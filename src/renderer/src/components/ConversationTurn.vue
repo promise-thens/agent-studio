@@ -245,6 +245,7 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
         :files="mergedReadFiles(block)"
         :detail="block.detail"
         :warning="block.warning"
+        :execution="block.execution"
       />
 
       <SubagentCard

@@ -15,6 +15,17 @@ const subagentSource = readFileSync(join(cssDir, 'components/SubagentCard.vue'),
 const conversationTurnSource = readFileSync(join(cssDir, 'components/ConversationTurn.vue'), 'utf8')
 
 describe('子 Agent 与 ToolRow/计划卡密度', () => {
+  it('后台徽章复用 text-3，与 tool-row-status 同级密度，不另开调色板', () => {
+    const badge = extractCssRuleBlock(mainCss, '.tool-row-execution')
+    const status = extractCssRuleBlock(mainCss, '.tool-row-status')
+    expect(badge).toContain('var(--text-3)')
+    expect(badge).toContain('font-size: 11px')
+    expect(status).toContain('font-size: 11px')
+    expect(badge).not.toMatch(/#[0-9a-fA-F]{3,8}/)
+    expect(badge).not.toContain('--danger')
+    expect(badge).not.toContain('--accent')
+  })
+
   it('字号、圆角、工具缩进与计划卡同一套，失败走危险色', () => {
     const density = subagentSkinMatchesToolRowDensity(mainCss)
     expect(extractCssRuleBlock(mainCss, '.tool-row')).toContain('font-size: 13px')

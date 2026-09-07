@@ -938,6 +938,18 @@ button:disabled {
   white-space: nowrap;
 }
 
+.tool-row-execution {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 550;
+}
+
+.tool-row-execution + .tool-row-status {
+  margin-left: 0;
+}
+
 .tool-row-status {
   flex: 0 0 auto;
   margin-left: auto;

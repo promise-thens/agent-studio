@@ -1020,6 +1020,100 @@ describe('历史截断提示', () => {
   })
 })
 
+describe('工具节点 execution 后台标记', () => {
+  it('无 execution 的 tool 节点形状与今天一致，没有该键', () => {
+    const tool = timelineNodes([toolCall(1, 'tool-1', 'Vitest', 'completed')]).find(
+      (node) => node.kind === 'tool'
+    )
+
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      toolCallId: 'tool-1',
+      title: 'Vitest',
+      status: 'completed'
+    })
+    expect(tool).not.toHaveProperty('execution')
+    expect(JSON.stringify(tool)).not.toContain('"execution"')
+  })
+
+  it('tool-call 带 execution=background 时节点保留该字段', () => {
+    const tool = timelineNodes([
+      {
+        ...BASE,
+        sequence: 1,
+        kind: 'tool-call',
+        toolCallId: 'bash-1',
+        title: 'Execute `sleep 30`',
+        status: 'in_progress',
+        execution: 'background'
+      }
+    ]).find((node) => node.kind === 'tool')
+
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      toolCallId: 'bash-1',
+      title: 'Execute `sleep 30`',
+      status: 'in_progress',
+      execution: 'background'
+    })
+  })
+
+  it('先 background 再来只有 status 的 tool-update 仍是 background', () => {
+    const tool = timelineNodes([
+      {
+        ...BASE,
+        sequence: 1,
+        kind: 'tool-call',
+        toolCallId: 'bash-1',
+        title: 'Execute `sleep 30`',
+        status: 'in_progress',
+        execution: 'background'
+      },
+      toolUpdate(2, 'bash-1', 'completed')
+    ]).find((node) => node.kind === 'tool')
+
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      toolCallId: 'bash-1',
+      status: 'completed',
+      execution: 'background'
+    })
+  })
+
+  it('后续 tool-update 带 execution=background 时只升不降', () => {
+    const tool = timelineNodes([
+      toolCall(1, 'bash-1', 'Execute `sleep 30`', 'in_progress'),
+      {
+        ...BASE,
+        sequence: 2,
+        kind: 'tool-update',
+        toolCallId: 'bash-1',
+        status: 'in_progress',
+        execution: 'background'
+      }
+    ]).find((node) => node.kind === 'tool')
+
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      status: 'in_progress',
+      execution: 'background'
+    })
+  })
+
+  it('不得把 title 含 background 的工具标成后台', () => {
+    const tool = timelineNodes([toolCall(1, 'bash-1', 'run background job', 'in_progress')]).find(
+      (node) => node.kind === 'tool'
+    )
+
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      title: 'run background job',
+      status: 'in_progress'
+    })
+    expect(tool).not.toHaveProperty('execution')
+  })
+})
+
 function thoughtEvent(sequence: number): PublicAgentEvent {
   return { ...BASE, sequence, kind: 'agent-thought', text: '分析' }
 }

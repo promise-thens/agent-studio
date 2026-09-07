@@ -141,6 +141,7 @@ watch(
             :status="tool.status"
             :files="tool.files ?? []"
             :detail="tool.detail"
+            :execution="tool.execution"
           />
         </div>
       </section>

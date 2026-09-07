@@ -71,6 +71,11 @@ export interface ConversationToolBlock {
   status: AgentToolStatus | 'unknown'
   tools: TimelineToolNode[]
   mergedReadCount?: number
+  /**
+   * 工具执行位置。只从 first 节点拷贝 'background'。
+   * 合并读取块不得带该字段：后台命令是 execute，不会进合并读取。
+   */
+  execution?: 'background'
   /** 长命令/路径，主列默认折叠，不进 summary。 */
   detail?: string
   /** 标题与退出事实冲突时主列可见，不得只藏在折叠详情里。 */
@@ -643,7 +648,8 @@ function toToolBlock(tools: TimelineToolNode[]): ConversationToolBlock {
     tools,
     ...(detail ? { detail } : {}),
     ...(warning ? { warning } : {}),
-    ...(isReadToolTitle(first.title) ? { mergedReadCount: 1 } : {})
+    ...(isReadToolTitle(first.title) ? { mergedReadCount: 1 } : {}),
+    ...(first.execution === 'background' ? { execution: 'background' as const } : {})
   }
 }
 

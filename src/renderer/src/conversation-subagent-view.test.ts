@@ -392,6 +392,46 @@ describe('子 Agent 第 7 节皮肤', () => {
       }
     ])
     expect(rows[0]?.label).not.toContain('ls -la')
+    expect(rows[0]).not.toHaveProperty('execution')
+  })
+
+  it('子 Agent 内部 ToolRow 透传孩子 execution，没有则省略', () => {
+    const rows = toSubagentToolRows([
+      {
+        kind: 'tool',
+        nodeId: 'task-1:turn-1:tool:exec-bg',
+        label: '跑了命令',
+        status: 'in_progress',
+        execution: 'background',
+        tools: [
+          {
+            ...tool('exec-bg', 'Execute `sleep 30`', 'in_progress'),
+            execution: 'background'
+          }
+        ]
+      },
+      {
+        kind: 'tool',
+        nodeId: 'task-1:turn-1:tool:read-1',
+        label: '读了 src/auth.ts',
+        status: 'completed',
+        tools: [tool('read-1', '读取 src/auth.ts')]
+      }
+    ])
+
+    expect(rows[0]).toMatchObject({
+      key: 'task-1:turn-1:tool:exec-bg',
+      label: '跑了命令',
+      status: 'in_progress',
+      execution: 'background'
+    })
+    expect(rows[1]).toMatchObject({
+      key: 'task-1:turn-1:tool:read-1',
+      label: '读了 src/auth.ts',
+      status: 'completed'
+    })
+    expect(rows[1]).not.toHaveProperty('execution')
+    expect(subagentCardSource).toContain(':execution="tool.execution"')
   })
 })
 

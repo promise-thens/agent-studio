@@ -96,4 +96,36 @@ describe('工具行折叠皮肤', () => {
   it('当前 Turn 事件默认完整展示，不再提供手动加载按钮', () => {
     expect(conversationTurnSource).not.toContain('加载本轮更多事件')
   })
+
+  it('折叠态 summary/line 可见后台徽章，无 execution 时不得渲染该字', () => {
+    expect(toolRowSource).toContain("execution?: 'background'")
+    expect(toolRowSource).toContain('data-execution')
+    expect(toolRowSource).toContain('tool-row-execution')
+    expect(toolRowSource).toMatch(/v-if="isBackground"/)
+    expect(toolRowSource).toContain('后台')
+    expect(conversationTurnSource).toContain(':execution="block.execution"')
+    expect(subagentCardSource).toContain(':execution="tool.execution"')
+
+    const summaries = [...toolRowSource.matchAll(/<summary>[\s\S]*?<\/summary>/g)].map(
+      (match) => match[0]
+    )
+    expect(summaries.length).toBeGreaterThan(0)
+    for (const summary of summaries) {
+      expect(summary).toContain('tool-row-execution')
+      expect(summary).toContain('后台')
+      expect(summary).toContain('tool-row-status')
+    }
+    const line = toolRowSource.match(/<div v-else class="tool-row-line">[\s\S]*?<\/div>/)?.[0]
+    expect(line).toContain('tool-row-execution')
+    expect(line).toContain('后台')
+    expect(line).toContain('tool-row-status')
+  })
+
+  it('进行中保留 spinner 与「进行中」，徽章只跟在明确 background 之后', () => {
+    expect(toolRowSource).toContain('conversation-spinner')
+    expect(toolRowSource).toContain("return '进行中'")
+    expect(toolRowSource).toContain("return '等待中'")
+    expect(toolRowSource).toMatch(/accessibleLabel[\s\S]*后台/)
+    expect(toolRowSource).not.toMatch(/status === 'in_progress'[\s\S]{0,80}后台/)
+  })
 })

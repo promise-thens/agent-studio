@@ -11,12 +11,18 @@ const props = withDefaults(
     detail?: string
     /** 标题与退出事实冲突时主列可见。 */
     warning?: string
+    /** 缺省视为前台；只有明确 background 才出徽章，禁止用进行中猜后台。 */
+    execution?: 'background'
   }>(),
   { files: () => [], detail: '', warning: '' }
 )
 
 const busy = computed(() => props.status === 'in_progress' || props.status === 'pending')
-const hint = computed(() => props.detail || props.label)
+const isBackground = computed(() => props.execution === 'background')
+const hint = computed(() => {
+  const base = props.detail || props.label
+  return isBackground.value ? `${base}，后台` : base
+})
 /** 把 Runtime 工具终态翻成稳定短文案，让调用链无需靠颜色猜状态。 */
 const statusLabel = computed(() => {
   switch (props.status) {
@@ -36,6 +42,7 @@ const statusLabel = computed(() => {
 })
 const accessibleLabel = computed(() => {
   const parts = [props.label, statusLabel.value]
+  if (isBackground.value) parts.push('后台')
   if (props.warning) parts.push(props.warning)
   if (props.detail) parts.push('点开查看详情')
   return parts.join('，')
@@ -47,6 +54,7 @@ const accessibleLabel = computed(() => {
     class="tool-row"
     data-kind="tool"
     :data-status="status"
+    :data-execution="isBackground ? 'background' : undefined"
     :title="hint"
     :aria-label="accessibleLabel"
   >
@@ -56,6 +64,7 @@ const accessibleLabel = computed(() => {
         <span v-if="busy" class="conversation-spinner" aria-hidden="true" />
         <span class="tool-row-label">{{ label }}</span>
         <span v-if="warning" class="tool-row-warning">{{ warning }}</span>
+        <span v-if="isBackground" class="tool-row-execution">后台</span>
         <span class="tool-row-status">{{ statusLabel }}</span>
       </summary>
       <ul class="tool-row-files">
@@ -68,6 +77,7 @@ const accessibleLabel = computed(() => {
         <span v-if="busy" class="conversation-spinner" aria-hidden="true" />
         <span class="tool-row-label">{{ label }}</span>
         <span v-if="warning" class="tool-row-warning">{{ warning }}</span>
+        <span v-if="isBackground" class="tool-row-execution">后台</span>
         <span class="tool-row-status">{{ statusLabel }}</span>
       </summary>
       <pre class="tool-row-detail">{{ detail }}</pre>
@@ -77,6 +87,7 @@ const accessibleLabel = computed(() => {
       <span v-if="busy" class="conversation-spinner" aria-hidden="true" />
       <span class="tool-row-label">{{ label }}</span>
       <span v-if="warning" class="tool-row-warning">{{ warning }}</span>
+      <span v-if="isBackground" class="tool-row-execution">后台</span>
       <span class="tool-row-status">{{ statusLabel }}</span>
     </div>
   </div>

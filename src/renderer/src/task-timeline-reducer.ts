@@ -155,6 +155,11 @@ export interface TimelineToolNode extends TimelineNodeBase {
   status: AgentToolStatus | 'unknown'
   /** 父 tool 的 toolCallId；缺省或悬空时保持扁平，不得按标题猜树。 */
   parentId?: string
+  /**
+   * 工具执行位置。缺省视为前台，不得写入 'foreground'。
+   * 只有公开事件明确带 'background' 才出现；标题含 background 不能当后台。
+   */
+  execution?: 'background'
   /** 该 tool 最后一次被接受的 sequence，用来判断 spawn 窗口是否已关闭。 */
   lastSequence?: number
   firstObservedAt?: string
@@ -622,6 +627,8 @@ function projectNodes(
         const retained = nextRetainedToolStatus(existing.status, event.status)
         if (retained) existing.status = retained
         if (event.parentId) existing.parentId = event.parentId
+        // 后台标记只升不降：后续无字段的 update 不得把已确认的 background 清掉。
+        if (event.execution === 'background') existing.execution = 'background'
         existing.lastSequence = event.sequence
         existing.lastObservedAt = event.observedAt
         const matched = matchCommandEvidence(commands, event.toolCallId)
@@ -637,7 +644,8 @@ function projectNodes(
           lastSequence: event.sequence,
           firstObservedAt: event.observedAt,
           lastObservedAt: event.observedAt,
-          ...(event.parentId ? { parentId: event.parentId } : {})
+          ...(event.parentId ? { parentId: event.parentId } : {}),
+          ...(event.execution === 'background' ? { execution: 'background' as const } : {})
         }
         const matched = matchCommandEvidence(commands, event.toolCallId)
         if (matched) node.command = toCommandEvidenceView(matched)

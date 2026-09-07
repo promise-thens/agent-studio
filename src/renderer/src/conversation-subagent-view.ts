@@ -21,6 +21,8 @@ export interface SubagentToolRowView {
   status: AgentToolStatus | 'unknown'
   files: readonly string[]
   detail?: string
+  /** 孩子 Timeline 节点有后台标记时透传；没有就省略，不另做徽章样式。 */
+  execution?: 'background'
 }
 
 export interface SubagentStopPolicy {
@@ -166,7 +168,8 @@ export function toSubagentToolRows(tools: readonly ConversationToolBlock[]): Sub
     label: tool.label,
     status: tool.status,
     files: filesOfToolBlock(tool),
-    ...(tool.detail ? { detail: tool.detail } : {})
+    ...(tool.detail ? { detail: tool.detail } : {}),
+    ...(tool.execution === 'background' ? { execution: 'background' as const } : {})
   }))
 }
 

@@ -170,10 +170,58 @@ describe('对话块投影', () => {
       label: '读了 10 个文件',
       mergedReadCount: 10
     })
+    expect(toolBlocks[0]).not.toHaveProperty('execution')
     expect(toolBlocks[1]).toMatchObject({
       kind: 'tool',
       label: '写入 src/auth.ts'
     })
+    expect(toolBlocks[1]).not.toHaveProperty('execution')
+  })
+
+  it('toToolBlock 从 first 节点拷贝 execution=background，合并读取块没有该键', () => {
+    const background = projectConversationTurn(
+      turn('running', [
+        {
+          ...tool('exec-bg', 'Execute `sleep 30`', 'in_progress'),
+          execution: 'background'
+        }
+      ])
+    ).find((block) => block.kind === 'tool')
+    expect(background).toMatchObject({
+      kind: 'tool',
+      label: '跑了命令',
+      status: 'in_progress',
+      execution: 'background'
+    })
+
+    const merged = projectConversationTurn(
+      turn('completed', [
+        {
+          ...tool('read-1', '读取 src/a.ts'),
+          execution: 'background'
+        },
+        tool('read-2', '读取 src/b.ts')
+      ])
+    ).find((block) => block.kind === 'tool')
+    expect(merged).toMatchObject({
+      kind: 'tool',
+      label: '读了 2 个文件',
+      mergedReadCount: 2
+    })
+    expect(merged).not.toHaveProperty('execution')
+  })
+
+  it('标题含 background 但节点无 execution 时对话块不得标后台', () => {
+    const block = projectConversationTurn(
+      turn('running', [tool('bash-1', 'run background job', 'in_progress')])
+    ).find((item) => item.kind === 'tool')
+
+    expect(block).toMatchObject({
+      kind: 'tool',
+      label: 'run background job',
+      status: 'in_progress'
+    })
+    expect(block).not.toHaveProperty('execution')
   })
 
   it('无 parent 字段时不按标题编造 subagent 组，工具保持扁平', () => {
