@@ -35,6 +35,7 @@ import {
   type AppGrokSandboxApplyResult,
   type AppGrokSandboxState
 } from '../shared/app-ipc'
+import { parseGrokHookSummary, type GrokHookSummary } from '../shared/grok-hook'
 import { isGrokSandboxProfile } from '../shared/grok-sandbox-profile'
 import {
   parseGrokMemoryDocument,
@@ -981,6 +982,25 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
         }
       }
       return { ok: true, value: applied }
+    },
+    // Preload 再 parse：丢掉 command / url / 绝对路径，坏项静默剔除而不是整表失败
+    listHooks: async () => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.listHooks
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      if (!Array.isArray(result.value)) {
+        return {
+          ok: false,
+          error: { code: 'operation-failed', message: '钩子列表无效。' }
+        }
+      }
+      const hooks: GrokHookSummary[] = []
+      for (const item of result.value) {
+        const parsed = parseGrokHookSummary(item)
+        if (parsed) hooks.push(parsed)
+      }
+      return { ok: true, value: hooks }
     },
     listMcpServers: async (projectId) => {
       const result = (await ipcRenderer.invoke(

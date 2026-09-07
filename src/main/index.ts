@@ -92,6 +92,7 @@ import { createEnsureTaskChangeBaseline, TaskChangeBaselineStore } from './git/t
 import { createRecordTurnChangeCheckpoint, GitReviewService } from './git/git-review-service'
 import { TurnChangeCheckpointStore } from './git/turn-change-checkpoint'
 import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
+import { listGrokHooks } from './runtime/grok/grok-hooks-inventory'
 import { listGrokMarketplacePlugins } from './runtime/grok/grok-marketplace-inventory'
 import {
   ensureGrokMarketplaceSource,
@@ -861,6 +862,8 @@ function registerIpcHandlers(): void {
       }
       return { profile, applied: true }
     },
+    // 钩子扫描牢笼绑在 userData，不执行钩子，不把 command / url 经 IPC 回传
+    listHooks: () => listGrokHooks(app.getPath('userData')),
     listMcpServers: async (projectId) => {
       const projectServers = projectId
         ? await listProjectMcpServers(

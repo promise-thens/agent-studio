@@ -6,6 +6,7 @@ import {
   type AppGrokSandboxState,
   type AppPluginEnabledState
 } from '../shared/app-ipc'
+import type { GrokHookSummary } from '../shared/grok-hook'
 import { isGrokSandboxProfile, type GrokSandboxProfile } from '../shared/grok-sandbox-profile'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import {
@@ -63,6 +64,7 @@ export interface AppIpcDependencies {
   setMemoryEnabled: (enabled: boolean) => Promise<GrokMemoryEnabledState>
   getGrokSandbox: () => Promise<AppGrokSandboxState>
   setGrokSandbox: (profile: GrokSandboxProfile) => Promise<AppGrokSandboxApplyResult>
+  listHooks: () => Promise<GrokHookSummary[]>
   listMcpServers: (projectId?: string) => Promise<McpServerSummary[]>
   upsertMcpServer: (input: McpServerInput) => Promise<McpServerSummary>
   deleteMcpServer: (name: string) => Promise<void>
@@ -278,6 +280,13 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
       throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
     }
     return dependencies.setGrokSandbox(profile)
+  })
+  /**
+   * 只读扫描 App grok-home/hooks。无参；Renderer 不得指定路径或要求执行钩子。
+   */
+  register(APP_INVOKE_CHANNELS.listHooks, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.listHooks()
   })
   register(APP_INVOKE_CHANNELS.listMcpServers, (args) => {
     const request = readOptionalRequest(args, ['projectId'])

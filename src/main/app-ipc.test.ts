@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { APP_INVOKE_CHANNELS } from '../shared/app-ipc'
+import type { GrokHookSummary } from '../shared/grok-hook'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import type { MarketplacePluginSummary } from '../shared/runtime-marketplace-plugin'
 import type { RuntimePluginDetail, RuntimePluginSummary } from '../shared/runtime-plugin'
@@ -47,6 +48,13 @@ const marketplacePlugin: MarketplacePluginSummary = {
   installed: false
 }
 
+const hookSummary: GrokHookSummary = {
+  id: 'session-start.json:SessionStart:0',
+  event: 'SessionStart',
+  enabled: true,
+  targetKind: 'command'
+}
+
 function createFixture(): {
   handlers: Map<string, DesktopIpcHandler>
   chooseProject: ReturnType<typeof vi.fn>
@@ -63,6 +71,7 @@ function createFixture(): {
   openMacosFilesPrivacySettings: ReturnType<typeof vi.fn>
   getGrokSandbox: ReturnType<typeof vi.fn>
   setGrokSandbox: ReturnType<typeof vi.fn>
+  listHooks: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<DesktopIpcResult<T>>
 } {
   const handlers = new Map<string, DesktopIpcHandler>()
@@ -120,6 +129,7 @@ function createFixture(): {
     profile,
     applied: true
   }))
+  const listHooks = vi.fn(async () => [hookSummary])
   const listMcpServers = vi.fn(async () => [])
   const upsertMcpServer = vi.fn(async () => ({
     name: 'docs',
@@ -164,6 +174,7 @@ function createFixture(): {
     setMemoryEnabled,
     getGrokSandbox,
     setGrokSandbox,
+    listHooks,
     listMcpServers,
     upsertMcpServer,
     deleteMcpServer,
@@ -196,6 +207,7 @@ function createFixture(): {
     openMacosFilesPrivacySettings,
     getGrokSandbox,
     setGrokSandbox,
+    listHooks,
     invoke
   }
 }
@@ -578,5 +590,20 @@ describe('App IPC Handler', () => {
       await fixture.invoke(APP_INVOKE_CHANNELS.getGrokSandbox, { profile: 'off' })
     ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
     expect(fixture.setGrokSandbox).toHaveBeenCalledTimes(1)
+  })
+
+  it('钩子列表无参返回摘要，拒绝未知字段', async () => {
+    const fixture = createFixture()
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.listHooks)).toEqual({
+      ok: true,
+      value: [hookSummary]
+    })
+    expect(fixture.listHooks).toHaveBeenCalledTimes(1)
+
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.listHooks, { extra: true })).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-input' }
+    })
+    expect(fixture.listHooks).toHaveBeenCalledTimes(1)
   })
 })

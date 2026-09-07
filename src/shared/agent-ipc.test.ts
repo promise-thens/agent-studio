@@ -58,6 +58,7 @@ describe('桌面 IPC 静态契约', () => {
       'app:set-memory-enabled',
       'app:get-grok-sandbox',
       'app:set-grok-sandbox',
+      'app:list-hooks',
       'app:list-mcp-servers',
       'app:upsert-mcp-server',
       'app:delete-mcp-server',

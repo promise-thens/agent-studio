@@ -1,5 +1,6 @@
 import type { AppAppearanceMode, AppAppearanceState } from './app-appearance'
 import type { DesktopIpcResult } from './ipc-result'
+import type { GrokHookSummary } from './grok-hook'
 import type { GrokSandboxProfile } from './grok-sandbox-profile'
 import type { GrokMemoryDocument, GrokMemoryEnabledState, GrokMemorySummary } from './grok-memory'
 import type { McpServerInput, McpServerSummary } from './mcp-server-config'
@@ -30,6 +31,7 @@ export const APP_INVOKE_CHANNELS = {
   setMemoryEnabled: 'app:set-memory-enabled',
   getGrokSandbox: 'app:get-grok-sandbox',
   setGrokSandbox: 'app:set-grok-sandbox',
+  listHooks: 'app:list-hooks',
   listMcpServers: 'app:list-mcp-servers',
   upsertMcpServer: 'app:upsert-mcp-server',
   deleteMcpServer: 'app:delete-mcp-server',
@@ -160,6 +162,8 @@ export interface AppDesktopApi {
   setGrokSandbox: (
     profile: GrokSandboxProfile
   ) => Promise<DesktopIpcResult<AppGrokSandboxApplyResult>>
+  /** 列出 App 专属 grok-home/hooks 脱敏摘要，不回传 command / url / 绝对路径。 */
+  listHooks: () => Promise<DesktopIpcResult<GrokHookSummary[]>>
   listMcpServers: (projectId?: string) => Promise<DesktopIpcResult<McpServerSummary[]>>
   upsertMcpServer: (input: McpServerInput) => Promise<DesktopIpcResult<McpServerSummary>>
   deleteMcpServer: (name: string) => Promise<DesktopIpcResult<null>>
