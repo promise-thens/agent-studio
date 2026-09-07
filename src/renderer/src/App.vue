@@ -53,6 +53,8 @@ import {
   createAgentToolKey
 } from './agent-event-consumer'
 import { unwrapDesktopIpcResult, type RendererDesktopIpcError } from './desktop-ipc-result'
+import { readRendererErrorMessage } from './renderer-error-message'
+import { useTransientNotice } from './composables/useTransientNotice'
 import { describeProjectFolderRevealFailure } from './project-folder-reveal'
 import BrandMark from './components/BrandMark.vue'
 import ProviderOnboarding from './components/ProviderOnboarding.vue'
@@ -241,6 +243,7 @@ const runtimeConnectNotice = ref<{
   canRetry: boolean
   retryLabel: string
 } | null>(null)
+const transientNotice = useTransientNotice()
 const projectSelectionPending = ref(false)
 /** 发送入口共享单飞门禁，并同步投影到 UI busy 状态。 */
 const runPromptSubmission = createAsyncSingleFlight((pending) => {
@@ -870,24 +873,27 @@ const conversationConnectFailure = computed(() =>
 )
 /** 顶部警告条需要始终有可读文案；同文案已被连接判定去重时回退到 Runtime 状态。 */
 const runtimeNotice = computed(() => {
-  if (
-    !providerSummary.value?.configured ||
-    activeExecution.value ||
-    projectConnectionPending.value
-  ) {
-    return null
+  if (activeExecution.value || projectConnectionPending.value) return null
+  if (providerSummary.value?.configured) {
+    const failure = conversationConnectFailure.value
+    const connectNotice = runtimeConnectNotice.value
+    if (failure || connectNotice) {
+      return {
+        message:
+          connectNotice?.message ||
+          failure?.message ||
+          status.value.message?.trim() ||
+          'Runtime 连接异常',
+        canRetry: connectNotice?.canRetry ?? failure?.canRetry ?? true,
+        retryLabel: connectNotice?.retryLabel || failure?.retryLabel || '重试'
+      }
+    }
   }
-  const failure = conversationConnectFailure.value
-  const connectNotice = runtimeConnectNotice.value
-  if (!failure && !connectNotice) return null
+  if (!transientNotice.message.value) return null
   return {
-    message:
-      connectNotice?.message ||
-      failure?.message ||
-      status.value.message?.trim() ||
-      'Runtime 连接异常',
-    canRetry: connectNotice?.canRetry ?? failure?.canRetry ?? true,
-    retryLabel: connectNotice?.retryLabel || failure?.retryLabel || '重试'
+    message: transientNotice.message.value,
+    canRetry: false,
+    retryLabel: ''
   }
 })
 
@@ -1007,6 +1013,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   clearDraftAttachmentPreviews()
+  transientNotice.dispose()
   workbench.dispose()
   taskTimeline.dispose()
   taskChanges.dispose()
@@ -1329,8 +1336,14 @@ function handleModelChanged(summary: ProviderConfigSummary): void {
   providerSummary.value = summary
 }
 
+/** 切换模型失败不进对话，只弹顶部短提示。 */
 function handleModelError(message: string): void {
-  appendMessage('error', message)
+  showTransientNotice(readRendererErrorMessage(message, '模型切换失败。'))
+}
+
+/** 瞬时操作失败走顶部小框，几秒后自动消失，不进对话流。 */
+function showTransientNotice(message: string): void {
+  transientNotice.show(message)
 }
 
 function openSettingsDialog(): void {

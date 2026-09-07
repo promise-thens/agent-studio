@@ -12,6 +12,7 @@ import {
   type ProviderModelOption,
   type ProviderTestResult
 } from '../../../shared/provider'
+import { readRendererErrorMessage } from '../renderer-error-message'
 
 interface Props {
   model: ProviderModelOption | null
@@ -133,8 +134,8 @@ async function chooseModel(model: ProviderModelOption): Promise<void> {
     emit('changed', await props.selectModel(toSerializableProviderModel(model)))
     closeMenu(true)
   } catch (error) {
-    menuError.value = errorMessage(error)
-    emit('error', menuError.value)
+    closeMenu(true)
+    emit('error', errorMessage(error))
   } finally {
     selectingId.value = null
   }
@@ -178,9 +179,7 @@ function handleOutsideClick(event: PointerEvent): void {
 }
 
 function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  const message = (error as { message?: unknown } | null)?.message
-  return typeof message === 'string' ? message : '模型切换失败。'
+  return readRendererErrorMessage(error, '模型切换失败。')
 }
 </script>
 
