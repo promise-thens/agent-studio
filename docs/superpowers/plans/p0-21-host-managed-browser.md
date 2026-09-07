@@ -4,7 +4,7 @@
 >
 > **状态：** 计划已写（2026-09-04 产品确认）。代码未开工。
 >
-> **插入点：** 不挡 [P0-19b](p0-19b-grok-sandbox-profile.md)。实现建议在 19b 空闲重建 session 纪律之后（MCP 注入只发生在 `session/new` / `load` / `resume`）。可与 19c–e 并行。权限层与 [P0-19f](p0-19f-browser-computer-use-surface.md) 共享 `browser` L3：谁先改策略谁打开 `browser`，后到者不得改回 `unsupported`。19f 覆盖 **插件自己的浏览器**（虚拟鼠标 HUD），不自建第二只 Chrome，也 **不再** 打开 `screen` / `clipboard`。本计划取代 [P3-05](p3-05-managed-browser.md) 的第一波共享页面，不依赖 P3-01 Capability Pack。
+> **插入点：** 不挡 [P0-19b](p0-19b-grok-sandbox-profile.md)。实现建议在 19b 空闲重建 session 纪律之后（MCP 注入只发生在 `session/new` / `load` / `resume`）。可与 19c–e 并行。权限层与 [P0-19f](p0-19f-browser-computer-use-surface.md) 共享 `browser` L3：**19f 已打开 `browser`，本计划不得改回 `unsupported`。** 19f 覆盖 **插件自己的浏览器**（置顶 overlay；虚拟鼠标硬验收仍因坐标不可映射开放），不自建第二只 Chrome。`screen` / `clipboard` **不再留给 19f**，改留给后置软件表面 / P3-07。本计划的内置页 **仍不画光标**。本计划取代 [P3-05](p3-05-managed-browser.md) 的第一波共享页面，不依赖 P3-01 Capability Pack。
 
 **优先级：** P0+ / 权重 4（用户要和 Agent 看同一只浏览器；Grok 已经会调 MCP，缺的是宿主视图）
 
@@ -42,12 +42,12 @@
 5. **默认注入宿主浏览器 MCP。** 设置里可关；关闭后须空闲重建 session 才生效。
 6. **文件编辑器不是本计划。** Changes 仍只读审阅。
 
-当前策略代码把 `browser` / `screen` / `clipboard` 直接 `deny` + `unsupported`（见 `evaluatePermissionPolicy`）。本计划必须改 `browser`，不得顺手打开 `screen` / `clipboard`。
+当前策略代码（P0-19f 已落地）把 `browser` 开成 L3（`once` / `task`，grant 含 origin），`screen` / `clipboard` 仍 `deny` + `unsupported`。本计划 **不得** 把 `browser` 改回 `unsupported`，也不得顺手打开 `screen` / `clipboard`。
 
 ## 非目标
 
 - 不实现文件编辑器、LSP、未保存缓冲、ACP `fs`（GACP-05）。
-- 不实现 Chrome Native Bridge（P3-06）、macOS Computer Use Helper（P3-07）。不在本计划的 WebContentsView 上画虚拟光标；插件浏览器的置顶 HUD 虚拟鼠标见 [P0-19f](p0-19f-browser-computer-use-surface.md) 方案 A。
+- 不实现 Chrome Native Bridge（P3-06）、macOS Computer Use Helper（P3-07）。**内置页仍不画光标。** 插件虚拟鼠标只在 [P0-19f](p0-19f-browser-computer-use-surface.md) 的置顶 overlay（方案 A）；当前因 ACP 指针键 not-observed / `click_at` 为 viewport-css 尚未画出，本计划不得补画。
 - 不把 chrome-devtools-mcp 接到这只视图的调试端口。
 - 不在 Inspector 增加 `browser` 标签。浏览器是工作区右栏。
 - 不把桌面做成 MCP Host / Marketplace Host；Grok 仍是 MCP 客户端。
@@ -126,7 +126,7 @@ if (['browser', 'screen', 'clipboard'].includes(intent.operationType)) {
 
 改为：
 
-- `screen` / `clipboard` 仍 `unsupported`（留给后置软件表面 / P3-07；P0-19f 已确认这期不打开它们）。
+- `screen` / `clipboard` 仍 `unsupported`（留给后置软件表面 / P3-07，**不再留给 19f**）。
 - `browser`：`approval` + L3；`allowedScopes: ['once', 'task']`。
 - `OPERATION_TARGET_KINDS.browser` 改为 `['origin', 'unknown']`。能解析 origin 就用 origin；解析失败用 unknown，不得自动过。
 - `createOperationGrantKey` 必须把 browser 的 origin 算进去，避免 `https://a.example` 的 task grant 覆盖 `https://b.example`。
@@ -148,6 +148,8 @@ if (['browser', 'screen', 'clipboard'].includes(intent.operationType)) {
 ---
 
 ### 任务 1: 打开 browser L3，且不能捎带写文件
+
+> **2026-09-07：** [P0-19f](p0-19f-browser-computer-use-surface.md) 已打开 `browser` L3，且写文件 grant 不能捎带。本任务落地时 **复用/核对** 现有策略，不得改回 `unsupported`，也不得打开 `screen` / `clipboard`。
 
 **任务目标：** 策略层先能审批浏览器，且与写文件 grant 隔离。没有这一步，后面的 MCP 只能被 `unsupported` 挡死。
 
@@ -353,7 +355,7 @@ git diff --check
 - [ ] 用户只发自然语言，Grok 能操作右侧那只浏览器。
 - [ ] 用户也能在同一只浏览器里导航；两边看到同一文档。
 - [ ] Profile 与用户 Chrome、App defaultSession、HTML Preview 隔离。
-- [ ] `browser` 为 L3 + origin；写文件 grant 不能捎带；`screen` / `clipboard` 仍未接入。
+- [ ] `browser` 为 L3 + origin；写文件 grant 不能捎带；`screen` / `clipboard` 仍未接入（留给后置软件表面 / P3-07，不留给 19f）。内置页仍不画光标。
 - [ ] 无任意 CDP、无 `grok:*` IPC、`clientCapabilities` 仍为 `{}`。
 - [ ] 控制期间停止可见；截图按 P0-13 注册或明确降级。
 - [ ] 自动验证通过；开发版走查有记录。
@@ -364,7 +366,7 @@ git diff --check
 | 计划 | 关系 |
 | --- | --- |
 | P0-19b | 空闲重建 session 纪律；开关 MCP 依赖它。本计划不挡 19b 开工。 |
-| P0-19f | 插件操作浏览器的 L3、截图、停止条与虚拟鼠标 HUD。共享 `browser` L3 原则；**不**在 19f 里建 WebContentsView；19f 不打开 `screen` / `clipboard`。 |
+| P0-19f | 插件操作浏览器的 L3、截图、停止条已落地；置顶 overlay 有停止芯片。**虚拟鼠标硬验收仍开放。** 共享 `browser` L3 原则（19f 已打开，后到者不得改回）；**不**在 19f 里建 WebContentsView；内置页仍不画光标；`screen` / `clipboard` 留给后置软件表面 / P3-07，不留给 19f。 |
 | P3-05 | **被本计划取代第一波共享页。** 文件保留，状态改为后置/取代，不开工。 |
 | P3-06 | 用户 Chrome 标签页桥，仍后置。 |
 | P0-16 | HTML Artifact 预览；禁止共用 session。 |

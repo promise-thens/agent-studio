@@ -302,7 +302,7 @@ Capability Manifest / ActionDescriptor
 2. 通过 Chrome Extension 和 Native Messaging 连接用户现有 Chrome（P3-06，后置）；
 3. 由用户主动选择标签页，并按网站或会话授予权限。
 
-Grok 插件自己的浏览器（chrome-devtools、browser-use、tinyfish）仍走插件表面与 L3 审批（P0-19f），不得再开第二只无头 Chrome 冒充「内置浏览器」。点桌面软件不是 P0-19f。
+Grok 插件自己的浏览器（chrome-devtools、browser-use、tinyfish）仍走插件表面与 L3 审批（P0-19f），不得再开第二只无头 Chrome 冒充「内置浏览器」。插件虚拟鼠标只在 19f 的置顶 overlay，**不画在 P0-21 内置页上**。19f 已落地 browser L3、截图 Artifact 与停止条；虚拟鼠标因 ACP 指针键 not-observed、`click_at` 为 viewport-css 尚未画出，不得宣称已完成。点桌面软件不是 P0-19f。
 
 不能通过直接读取用户 Chrome Profile 的方式绕过浏览器权限或复用登录状态。
 
@@ -310,7 +310,7 @@ Grok 插件自己的浏览器（chrome-devtools、browser-use、tinyfish）仍�
 
 Computer Use 建议作为独立原生 Helper 和插件能力运行。
 
-**2026-09-07：** 第一波不做 Helper，也不在 P0-19f 里点桌面软件。Grok 插件操作**浏览器**走 [P0-19f](superpowers/plans/p0-19f-browser-computer-use-surface.md)：`browser` L3、截图 Artifact、主窗口停止条，以及失焦仍可见的**虚拟鼠标 HUD**（点击穿透，不移动系统指针；虚拟鼠标是硬验收，禁止猜点）。`screen` / `clipboard` 与 Accessibility / CGEvent 真控鼠标仍后置（软件表面 / P3-07）。
+**2026-09-07：** 第一波不做 Helper，也不在 P0-19f 里点桌面软件。Grok 插件操作**浏览器**走 [P0-19f](superpowers/plans/p0-19f-browser-computer-use-surface.md)：`browser` L3、截图 Artifact、主窗口停止条，以及失焦仍可见的**虚拟鼠标 HUD**（点击穿透，不移动系统指针；虚拟鼠标是硬验收，禁止猜点）。**2026-09-07 快照：** L3 / 截图 / 停止条 / overlay 芯片已落地；虚拟鼠标因观察阻塞未画出；开发版 GUI 未走查。`screen` / `clipboard` 与 Accessibility / CGEvent 真控鼠标仍后置（软件表面 / P3-07），**不再留给 19f**。
 
 macOS 首期可以基于公开系统能力实现：
 
@@ -588,7 +588,7 @@ P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService �
 ### 2026-08-31
 
 - 先打磨一个 Runtime：Grok Build。P1-06～08 多 Provider 与 P2 Codex 搁置；现有单 Provider 设置保留。
-- P3 提前指把 Grok 已有能力摊到桌面（Plan、子 Agent、少打断权限、Sandbox、rewind、Hooks、后台命令、浏览器插件的审批、截图与虚拟鼠标），不是先做桌面自建 Computer Use Helper。点桌面软件仍后置。
+- P3 提前指把 Grok 已有能力摊到桌面（Plan、子 Agent、少打断权限、Sandbox、rewind、Hooks、后台命令、浏览器插件的审批、截图与虚拟鼠标），不是先做桌面自建 Computer Use Helper。点桌面软件仍后置。P0-19f 虚拟鼠标硬验收仍开放；`screen` / `clipboard` 留给后置软件表面 / P3-07。
 - 完全接管要写：当前 Task 显式确认后走 Grok always-approve；默认询问；不静默 yolo、不写全局 config。确认后零确认卡：Grok 再问也由桌面代批 allow-once，午休期间不能卡死。少打断询问模式仍走桌面 Task grant。见 [p0-19g-task-takeover-always-approve.md](superpowers/plans/p0-19g-task-takeover-always-approve.md)。
 - 程序计划见 [p0-19-grok-host-capability-polish.md](superpowers/plans/p0-19-grok-host-capability-polish.md)。
 - P0-10C 至 P0-13 开发版走查暂时可以通过，不挡 P0-19 新能力开工；未走查不得标成 GUI 已过。

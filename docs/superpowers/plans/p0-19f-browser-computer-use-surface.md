@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。步骤使用复选框 (`- [ ]`) 跟踪。
 >
-> **状态：** 待开始。2026-09-07 产品对齐：**本计划只做插件操作浏览器**；**虚拟鼠标是硬验收**；点桌面软件 / `screen` / `clipboard` 后置。方案 A 置顶 HUD 光标，不注入系统鼠标（方案 B / P3-07）。
+> **状态：** 任务 1–5 代码已落地。任务 6 overlay 窗口与停止芯片已落地，**虚拟鼠标硬验收未过**（ACP 指针键 not-observed；`click_at` 为 viewport-css，不可映射到 overlay 屏幕 DIP；未发明光标）。任务 7 自动验证已过；**开发版 GUI 未走查**。`screen` / `clipboard` 仍 deny。不得宣称计划完成。2026-09-07 产品对齐：**本计划只做插件操作浏览器**；**虚拟鼠标是硬验收**；点桌面软件 / `screen` / `clipboard` 后置到软件表面 / P3-07。方案 A 置顶 HUD 光标，不注入系统鼠标（方案 B / P3-07）。
 >
 > **插入点：** [P0-19](p0-19-grok-host-capability-polish.md) 插件浏览器表面。前置：P0-10E 能安装市场插件；GACP-03 不得把 `browser` 放进「本任务写文件」grant。
 >
@@ -190,7 +190,7 @@ export interface BrowserPluginOverlaySnapshot {
 - Consumes: 无代码接口。对照材料是 SDK 1.3 `schema.json`、chrome-devtools / browser-use 公开工具文档、Grok 二进制字符串。
 - Produces: 观察表。任务 3 的工具名白名单、任务 6 的 pointer 键和坐标空间都以本表为准。
 
-- [ ] **第 1 步: 写观察记录（禁止冒充真机）**
+- [x] **第 1 步: 写观察记录（禁止冒充真机）**
 
 方法写清 `sdk+docs+binary` 或隔离 ACP。真机 ACP 会话未跑就标明 **未做**，不得把夹具 `computer-use` 写进表。
 
@@ -252,11 +252,11 @@ export interface BrowserPluginOverlaySnapshot {
 5. 本计划不打开 screen / clipboard。
 ```
 
-- [ ] **第 2 步: README 加指针**
+- [x] **第 2 步: README 加指针**
 
 在 `observations/README.md` 追加一段，格式与 P0-19e 条相同。
 
-- [ ] **第 3 步: 提交**
+- [x] **第 3 步: 提交**
 
 ```bash
 git add docs/superpowers/plans/grokACP计划/observations/p0-19f-browser-plugin-pointer-observation.md \
@@ -288,7 +288,7 @@ git commit -m "docs(p0-19f): freeze browser plugin tool and pointer observation"
 export function parseBrowserOrigin(url: string): string | null
 ```
 
-- [ ] **第 1 步: 失败测试 — origin 纯函数**
+- [x] **第 1 步: 失败测试 — origin 纯函数**
 
 ```ts
 import { parseBrowserOrigin } from './browser-origin'
@@ -302,7 +302,7 @@ it('http(s) URL 投影为 origin，userinfo 与残缺值返回 null', () => {
 })
 ```
 
-- [ ] **第 2 步: 失败测试 — 策略**
+- [x] **第 2 步: 失败测试 — 策略**
 
 说明：扩展 `src/main/security/permission-policy.test.ts`。`createIntent('browser')` 默认目标若仍是 `unknown`，补一条 origin 目标。
 
@@ -346,7 +346,7 @@ it('写文件 task grant 不能复用到 browser，不同 origin 不能互相复
 
 Broker 集成：同一 Task 先 `allow-task` 写文件，再 `browser`，不得 `grant-reused`，必须再弹卡。接管下 `browser` 从「unsupported 不可执行」改为可 `auto-allowed`（P0-19g 本意）；改 `permission-broker.test.ts` 里「完全访问仍不把 browser 当成可执行」那条，browser 不再断言 `unsupported`，`screen` 仍是。
 
-- [ ] **第 3 步: 跑测试确认失败**
+- [x] **第 3 步: 跑测试确认失败**
 
 ```bash
 pnpm exec vitest run src/shared/browser-origin.test.ts src/main/security/permission-policy.test.ts src/main/security/permission-broker.test.ts
@@ -354,7 +354,7 @@ pnpm exec vitest run src/shared/browser-origin.test.ts src/main/security/permiss
 
 Expected: FAIL（`parseBrowserOrigin` 未定义，或 browser 仍 deny）。
 
-- [ ] **第 4 步: 最小实现**
+- [x] **第 4 步: 最小实现**
 
 `src/shared/browser-origin.ts`：
 
@@ -389,7 +389,7 @@ if (['browser', 'screen', 'clipboard'].includes(intent.operationType)) {
 
 `createGrantKeyMaterial`：browser 必须把 origin target 算进去（走现有「精确目标」分支即可，禁止把 browser 做成和 write-file 一样的整类钥匙）。
 
-- [ ] **第 5 步: 跑测试确认通过**
+- [x] **第 5 步: 跑测试确认通过**
 
 ```bash
 pnpm exec vitest run src/shared/browser-origin.test.ts src/main/security/permission-policy.test.ts src/main/security/permission-broker.test.ts
@@ -397,7 +397,7 @@ pnpm exec vitest run src/shared/browser-origin.test.ts src/main/security/permiss
 
 Expected: PASS
 
-- [ ] **第 6 步: 提交**
+- [x] **第 6 步: 提交**
 
 ```bash
 git add src/shared/browser-origin.ts src/shared/browser-origin.test.ts \
@@ -437,7 +437,7 @@ export interface GrokValidToolCallAuthorizationSnapshot {
 }
 ```
 
-- [ ] **第 1 步: 失败测试**
+- [x] **第 1 步: 失败测试**
 
 白名单以任务 1 表为准。下面用 chrome-devtools 文档名做骨架，实现时改成观察表抄下来的集合。
 
@@ -520,7 +520,7 @@ it('带 userinfo 的 URL 降为 unknown 目标，不得投影 origin', () => {
 
 `name` 目前被 mapper 丢掉。本任务允许 **只**为白名单比对读取 `toolCall.name`，读完丢弃，不得写入公开事件。URL 只从任务 1 冻结的 rawInput 键读取（文档主路径是 `url`）。禁止从 title 正则猜 URL。
 
-- [ ] **第 2 步: 跑测试确认失败**
+- [x] **第 2 步: 跑测试确认失败**
 
 ```bash
 pnpm exec vitest run src/main/runtime/grok/grok-acp-mappers.test.ts
@@ -528,11 +528,11 @@ pnpm exec vitest run src/main/runtime/grok/grok-acp-mappers.test.ts
 
 Expected: FAIL（仍是 unknown / fetch）。
 
-- [ ] **第 3 步: 最小实现**
+- [x] **第 3 步: 最小实现**
 
 在 `mapGrokOperation` 里，白名单 `browserToolName` 优先于 `kind === 'fetch'`。有 `browserOrigin` 则 target.kind=`origin`，否则 `unknown`。`kind === 'fetch'` 且能解析冻结 URL 时也可以标 `network-egress`（保持旧行为），不要把普通 fetch 全部改成 browser。
 
-- [ ] **第 4 步: 跑测试确认通过**
+- [x] **第 4 步: 跑测试确认通过**
 
 ```bash
 pnpm exec vitest run src/main/runtime/grok/grok-acp-mappers.test.ts
@@ -540,7 +540,7 @@ pnpm exec vitest run src/main/runtime/grok/grok-acp-mappers.test.ts
 
 Expected: PASS。序列化结果不含 rawInput、假 Key、userinfo。
 
-- [ ] **第 5 步: 提交**
+- [x] **第 5 步: 提交**
 
 ```bash
 git add src/main/runtime/grok/grok-acp-mappers.ts src/main/runtime/grok/grok-acp-mappers.test.ts
@@ -561,7 +561,7 @@ git commit -m "feat(p0-19f): map browser plugin tools to L3 origin intents"
 - Consumes: `ArtifactRegistry.registerFileCandidate`；P0-13 路径白名单
 - Produces: 成功时 Turn 绑定 opaque `artifactId`；失败时 Timeline 可展示「无可用截图」，不抛到 Turn
 
-- [ ] **第 1 步: 失败测试**
+- [x] **第 1 步: 失败测试**
 
 只注册已允许路径上的 png/jpeg/webp。chrome-devtools `take_screenshot` 的 `filePath` 若落在 execution root 或已冻结 session `images/` 目录，才注册。越界路径、svg、空文件：返回降级，不 throw 到 prompt。
 
@@ -589,7 +589,7 @@ it('越界路径或非图片不阻断，返回无截图', async () => {
 
 函数名以实现为准；不要把绝对路径塞进 Timeline 事件。标题用脱敏后的短句，例如「屏幕截图」，不要用 URL 全文。
 
-- [ ] **第 2 步: 跑测试确认失败**
+- [x] **第 2 步: 跑测试确认失败**
 
 ```bash
 pnpm exec vitest run src/main/runtime/grok src/main/artifact/artifact-registry.test.ts
@@ -597,11 +597,11 @@ pnpm exec vitest run src/main/runtime/grok src/main/artifact/artifact-registry.t
 
 Expected: FAIL 或新文件未定义。
 
-- [ ] **第 3 步: 最小实现**
+- [x] **第 3 步: 最小实现**
 
 复用 `readGrokSessionMediaFile` / `registerFileCandidate`。失败只记脱敏原因。不要为截图新开 IPC。
 
-- [ ] **第 4 步: 跑测试确认通过后提交**
+- [x] **第 4 步: 跑测试确认通过后提交**
 
 ```bash
 git commit -m "feat(p0-19f): register browser plugin screenshots as artifacts"
@@ -637,7 +637,7 @@ export function resolveBrowserPluginHudCopy(input: {
 }
 ```
 
-- [ ] **第 1 步: 失败测试**
+- [x] **第 1 步: 失败测试**
 
 ```ts
 it('写文件进行中不出浏览器 HUD，browser overlay 可见时出停止文案', () => {
@@ -660,13 +660,13 @@ Composer：与 `.composer-takeover-hud` 共用一条 `role="status"`，不要再
 
 主进程何时把 `overlayVisible=true`：当前 Task 有未完成的 `operationType=browser` 工具，或有未决 browser L3。写文件 in_progress 不得置 true。本任务可用纯函数 + 假快照测 UI；真正的窗口在任务 6。
 
-- [ ] **第 2 步: 跑测试 → 实现 → 再跑**
+- [x] **第 2 步: 跑测试 → 实现 → 再跑**
 
 ```bash
 pnpm exec vitest run src/shared/browser-plugin-overlay.test.ts src/renderer/src/workbench-walkthrough.test.ts
 ```
 
-- [ ] **第 3 步: 提交**
+- [x] **第 3 步: 提交**
 
 ```bash
 git commit -m "feat(p0-19f): show stop hud while plugin browser runs"
@@ -675,6 +675,8 @@ git commit -m "feat(p0-19f): show stop hud while plugin browser runs"
 ---
 
 ### 任务 6: 虚拟光标 HUD（方案 A，硬验收）
+
+> **2026-09-07 快照：** overlay 窗口 + 停止芯片已落地（`2f6b8f0` / `90ca64a`）。`projectBrowserPluginPointer` 恒返回 `undefined`；DOM 无 `.overlay-cursor`。**本任务不得打勾。** 阻塞：任务 1 冻结 ACP 指针键 not-observed；`click_at` 为 viewport-css，禁止用 Accessibility / 窗几何补映射。停止芯片 ≠ 虚拟鼠标。
 
 **任务目标：** 浏览器插件进行中，失焦也能看见虚拟鼠标；桌面不移动系统指针。
 
@@ -796,7 +798,7 @@ git commit -m "feat(p0-19f): show click-through overlay cursor for browser plugi
 
 ### 任务 7: 走查与文档快照
 
-- [ ] **第 1 步: 自动走查意图**
+- [x] **第 1 步: 自动走查意图**
 
 单元/源码测试锁：
 
@@ -826,18 +828,20 @@ git diff --check
 5. 拒绝权限：无截图、无 overlay、不得声称正在控制。
 6. 同一 Task 先允许写文件，再要求打开网页：必须再弹 browser 卡。
 
+**走查记录（2026-09-07）：** 本任务 **未跑** 开发版 GUI。虚拟鼠标被任务 1 观察阻塞（ACP 指针键 not-observed；`click_at` 为 viewport-css，不可映射到 overlay 屏幕 DIP）。停止芯片不等于虚拟鼠标。不得打勾「开发版 GUI 已过」。
+
 未跑 GUI 不得打勾「开发版 GUI 已过」。虚拟鼠标若因坐标不可映射没画出来，走查记录写阻塞，不得改口说「停止条就算虚拟鼠标」。
 
-- [ ] **第 3 步: 文档**
+- [x] **第 3 步: 文档**
 
 同步 `AGENTS.md` / `CLAUDE.md` 第 15 节、roadmap、P0-19 程序索引、P0-21 交叉引用、product-vision §7.2 / §7.3。P0-21 写明：插件虚拟鼠标在 19f；内置页仍不画光标；`screen` / `clipboard` 不再「留给 19f」，改留给后置软件表面 / P3-07。
 
 ## 验收标准
 
-- [ ] 写文件授权不能捎带浏览器。
-- [ ] `screen` / `clipboard` 仍未接入。
-- [ ] 有截图则进 Artifact；无截图有明确降级。
-- [ ] 控制期间主窗口停止入口始终可见。
-- [ ] **虚拟鼠标必须可见**（失焦仍在）；无坐标不发明光标，也不得把计划标成已完成。
-- [ ] 没有 BrowserView、没有读用户 Chrome Profile、没有系统鼠标注入、没有点桌面软件。
-- [ ] 自动验证 + 开发版走查记录（走查未跑则保持未过）。
+- [x] 写文件授权不能捎带浏览器。
+- [x] `screen` / `clipboard` 仍未接入。
+- [x] 有截图则进 Artifact；无截图有明确降级。
+- [x] 控制期间主窗口停止入口始终可见（代码路径 + 聚焦测试；开发版 GUI 未走查）。
+- [ ] **虚拟鼠标必须可见**（失焦仍在）；无坐标不发明光标，也不得把计划标成已完成。← 观察阻塞，保持开放。
+- [x] 没有 BrowserView、没有读用户 Chrome Profile、没有系统鼠标注入、没有点桌面软件。
+- [ ] 自动验证 + 开发版走查记录（走查未跑则保持未过）。← 自动验证已过（2026-09-07）；开发版 GUI 未跑。
