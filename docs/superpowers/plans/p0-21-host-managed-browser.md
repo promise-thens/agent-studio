@@ -4,7 +4,7 @@
 >
 > **状态：** 计划已写（2026-09-04 产品确认）。代码未开工。
 >
-> **插入点：** 不挡 [P0-19b](p0-19b-grok-sandbox-profile.md)。实现建议在 19b 空闲重建 session 纪律之后（MCP 注入只发生在 `session/new` / `load` / `resume`）。可与 19c–e 并行。权限层与 [P0-19f](p0-19f-browser-computer-use-surface.md) 共享：本计划先把 `browser` 从 `unsupported` 改成 L3；19f 继续覆盖 **插件自己的** browser / screen / clipboard，不自建第二只 Chrome。本计划取代 [P3-05](p3-05-managed-browser.md) 的第一波共享页面，不依赖 P3-01 Capability Pack。
+> **插入点：** 不挡 [P0-19b](p0-19b-grok-sandbox-profile.md)。实现建议在 19b 空闲重建 session 纪律之后（MCP 注入只发生在 `session/new` / `load` / `resume`）。可与 19c–e 并行。权限层与 [P0-19f](p0-19f-browser-computer-use-surface.md) 共享 `browser` L3：谁先改策略谁打开 `browser`，后到者不得改回 `unsupported`。19f 覆盖 **插件自己的浏览器**（虚拟鼠标 HUD），不自建第二只 Chrome，也 **不再** 打开 `screen` / `clipboard`。本计划取代 [P3-05](p3-05-managed-browser.md) 的第一波共享页面，不依赖 P3-01 Capability Pack。
 
 **优先级：** P0+ / 权重 4（用户要和 Agent 看同一只浏览器；Grok 已经会调 MCP，缺的是宿主视图）
 
@@ -47,7 +47,7 @@
 ## 非目标
 
 - 不实现文件编辑器、LSP、未保存缓冲、ACP `fs`（GACP-05）。
-- 不实现 Chrome Native Bridge（P3-06）、macOS Computer Use Helper（P3-07）。不在本计划的 WebContentsView 上画虚拟光标；插件屏幕的置顶 HUD 光标见 [P0-19f](p0-19f-browser-computer-use-surface.md) 方案 A。
+- 不实现 Chrome Native Bridge（P3-06）、macOS Computer Use Helper（P3-07）。不在本计划的 WebContentsView 上画虚拟光标；插件浏览器的置顶 HUD 虚拟鼠标见 [P0-19f](p0-19f-browser-computer-use-surface.md) 方案 A。
 - 不把 chrome-devtools-mcp 接到这只视图的调试端口。
 - 不在 Inspector 增加 `browser` 标签。浏览器是工作区右栏。
 - 不把桌面做成 MCP Host / Marketplace Host；Grok 仍是 MCP 客户端。
@@ -126,7 +126,7 @@ if (['browser', 'screen', 'clipboard'].includes(intent.operationType)) {
 
 改为：
 
-- `screen` / `clipboard` 仍 `unsupported`（留给 19f / P3-07）。
+- `screen` / `clipboard` 仍 `unsupported`（留给后置软件表面 / P3-07；P0-19f 已确认这期不打开它们）。
 - `browser`：`approval` + L3；`allowedScopes: ['once', 'task']`。
 - `OPERATION_TARGET_KINDS.browser` 改为 `['origin', 'unknown']`。能解析 origin 就用 origin；解析失败用 unknown，不得自动过。
 - `createOperationGrantKey` 必须把 browser 的 origin 算进去，避免 `https://a.example` 的 task grant 覆盖 `https://b.example`。
@@ -134,7 +134,7 @@ if (['browser', 'screen', 'clipboard'].includes(intent.operationType)) {
 
 ## 文件范围
 
-- 新增：`src/shared/host-browser.ts` 及测试（chrome 快照 DTO、动作名、URL 校验纯函数）
+- 新增：`src/shared/host-browser.ts` 及测试（chrome 快照 DTO、动作名）；`parseBrowserOrigin` 优先复用 `src/shared/browser-origin.ts`
 - 新增：`src/main/browser/host-browser-service.ts`、`host-browser-session.ts`、`host-browser-actions.ts`、`host-browser-mcp-stdio.ts`、`host-browser-ipc.ts` 及就近测试
 - 新增：`src/renderer/src/components/HostBrowserPane.vue`、`src/renderer/src/composables/useHostBrowser.ts`
 - 修改：`src/main/security/permission-policy.ts`（打开 browser L3）
@@ -165,7 +165,7 @@ if (['browser', 'screen', 'clipboard'].includes(intent.operationType)) {
 
 - [ ] **第 2 步: 最小策略实现**
 
-说明：只改 `browser` 分支和 `OPERATION_TARGET_KINDS`。增加 `parseBrowserOrigin(url: string): string | null`（纯函数，放 `src/shared/host-browser.ts`）：只接受 http/https，去掉路径/query/hash/用户信息，失败返回 null。
+说明：只改 `browser` 分支和 `OPERATION_TARGET_KINDS`。`parseBrowserOrigin(url: string): string | null` 优先复用 P0-19f 的 `src/shared/browser-origin.ts`；若 19f 尚未落地，可暂放 `src/shared/host-browser.ts`，后到者合并为同一函数。只接受 http/https，去掉路径/query/hash/用户信息，失败返回 null。
 
 - [ ] **第 3 步: 跑测试**
 
@@ -364,7 +364,7 @@ git diff --check
 | 计划 | 关系 |
 | --- | --- |
 | P0-19b | 空闲重建 session 纪律；开关 MCP 依赖它。本计划不挡 19b 开工。 |
-| P0-19f | 插件 browser/screen/clipboard 的 HUD 与截图。共享 L3 原则；**不**在 19f 里建 WebContentsView。 |
+| P0-19f | 插件操作浏览器的 L3、截图、停止条与虚拟鼠标 HUD。共享 `browser` L3 原则；**不**在 19f 里建 WebContentsView；19f 不打开 `screen` / `clipboard`。 |
 | P3-05 | **被本计划取代第一波共享页。** 文件保留，状态改为后置/取代，不开工。 |
 | P3-06 | 用户 Chrome 标签页桥，仍后置。 |
 | P0-16 | HTML Artifact 预览；禁止共用 session。 |

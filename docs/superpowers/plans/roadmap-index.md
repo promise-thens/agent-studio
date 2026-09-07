@@ -96,7 +96,7 @@
 | 5 | [P0-19c](p0-19c-turn-rewind.md) | 4 | 对话 /rewind 与文件 latest-turn 恢复分开 | 代码已落地；开发版 GUI 未走查 | P0-12 |
 | 6 | [P0-19d](p0-19d-hooks-surface.md) | 3 | Hooks 只读库存，桌面不执行 | 代码已落地；开发版 GUI 未走查 | grok-home 扫描模式 |
 | 7 | [P0-19e](p0-19e-background-command-monitor.md) | 3 | 后台命令 Timeline 监视 | 代码已落地；开发版 GUI 未走查 | 先观察 ACP 字段 |
-| 8 | [P0-19f](p0-19f-browser-computer-use-surface.md) | 4 | 插件 browser/screen/clipboard：L3、截图、停止条、方案 A 置顶光标 HUD | 待开始；2026-09-07 确认 HUD 光标，不注入系统鼠标 | P0-10E、GACP-03、P0-13；不自建 WebContentsView；P3-07 后置 |
+| 8 | [P0-19f](p0-19f-browser-computer-use-surface.md) | 4 | 插件操作浏览器：browser L3、截图、停止条、方案 A 虚拟鼠标 | 待开始；2026-09-07 对齐为浏览器-only，虚拟鼠标硬验收；screen/软件后置 | P0-10E、GACP-03、P0-13；不自建 WebContentsView；不打开 screen/clipboard；P3-07 后置 |
 | 9 | [P0-19h](p0-19h-context-usage-signals-bridge.md) | 3 | Grok signals 上下文用量桥接 | 代码已落地；开发版 GUI 待走查 | 现有 Usage 事件链；不改 Renderer |
 | 后 | [P0-21](p0-21-host-managed-browser.md) | 4 | 宿主内置浏览器（Codex 式共享页） | 计划已写（2026-09-04） | 不挡 19b；取代 P3-05 第一波共享页 |
 | 后 | P3-06～07 | 3 | Chrome 桥 / macOS Helper | 后置 | P0-21 之后仍缺用户 Chrome / 系统 GUI 再评估 |
@@ -152,8 +152,9 @@ P2-01、P2-02 先完成 account-backed Codex 的独立状态、账号、Thread/T
 
 ## P3：插件能力中心（引擎后置，宿主表面走 P0-19）
 
-> 2026-08-31：浏览器 / Computer Use 的**插件表面**见 P0-19f。
-> **2026-09-04：** Codex 式宿主内置浏览器（共享页、Agent 操作同一只视图）见 [P0-21](p0-21-host-managed-browser.md)，取代 P3-05 第一波。P3-01 Capability Pack、P3-06 Chrome 桥、P3-07 Helper 仍后置。文件编辑器另开计划，尚未立项。
+> 2026-08-31：浏览器插件表面见 P0-19f。
+> **2026-09-04：** Codex 式宿主内置浏览器（共享页、Agent 操作同一只视图）见 [P0-21](p0-21-host-managed-browser.md)，取代 P3-05 第一波。
+> **2026-09-07：** P0-19f 收成「插件操作浏览器 + 虚拟鼠标」；点桌面软件 / `screen` / `clipboard` 后置。P3-01 Capability Pack、P3-06 Chrome 桥、P3-07 Helper 仍后置。文件编辑器另开计划，尚未立项。
 
 P3 统一沿用 `Manifest / ActionDescriptor → Registry → Executor → Permission Broker → 核心事实服务`，Capability 不直接调用 Runtime，也不复制 Timeline、Command Evidence、Changes、Validation 或 Artifact。P3-03 只提供项目体检这一首个内置 Capability，不重新定义通用 Action 契约。
 

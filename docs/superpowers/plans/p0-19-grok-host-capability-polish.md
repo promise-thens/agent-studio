@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。本文件是**程序索引**，不是一次性写完的实现清单。每个子系统只在对应分计划里落地。
 >
-> **状态：** 已立项（2026-08-31 产品确认）。GACP-03 / P0-19g / P0-19a / GACP-06 / P0-19b / P0-19c / P0-19d / P0-19e 代码已落地（开发版 GUI 未过）。下一步 P0-19f（2026-09-07 确认方案 A：可见光标 HUD，不注入系统鼠标）。
+> **状态：** 已立项（2026-08-31 产品确认）。GACP-03 / P0-19g / P0-19a / GACP-06 / P0-19b / P0-19c / P0-19d / P0-19e 代码已落地（开发版 GUI 未过）。下一步 P0-19f（2026-09-07 对齐：只做插件操作浏览器；虚拟鼠标是硬验收；点桌面软件 / screen / clipboard 后置）。
 >
 > **插入点：** 当前主线。P1 扩展与 P2 Codex 搁置期间，Grok 日用能力按本程序推进。P0-13 产物走查仍建议做，但 **2026-08-31 确认：P0-10C 至 P0-13 的开发版走查暂时可以通过，不挡 P0-19 新能力开工**。走查可并行补，未走查不得把对应计划标成「开发版 GUI 已过」。
 
@@ -10,7 +10,7 @@
 
 **Goal：** 把 Agent Studio 打磨成 Grok Build 的桌面宿主：Grok 已经会做的事，用户在桌面上能看见、能切换、能审批、能停、能审阅；桌面不自己再做一套 Agent、MCP Host 或 Computer Use 引擎。
 
-**Architecture：** 桌面仍是 ACP Client。Plan / Sandbox / Rewind / Hooks / 后台命令 / 插件 Computer Use 都由 **Grok Runtime 执行**。桌面只做：配置写入 App `GROK_HOME`、受限 spawn 参数、Permission Broker、Timeline / Artifact / Changes 投影、可见停止。本程序 19a–e **不**自建 BrowserView。Codex 式宿主内置浏览器（共享页）已于 2026-09-04 确认，独立计划 [P0-21](p0-21-host-managed-browser.md)，不挡 19b。P3-06/07 Chrome 桥与 Helper 仍后置。
+**Architecture：** 桌面仍是 ACP Client。Plan / Sandbox / Rewind / Hooks / 后台命令 / 插件浏览器都由 **Grok Runtime 执行**。桌面只做：配置写入 App `GROK_HOME`、受限 spawn 参数、Permission Broker、Timeline / Artifact / Changes 投影、可见停止、插件虚拟鼠标 HUD。本程序 19a–e **不**自建 BrowserView。Codex 式宿主内置浏览器（共享页）已于 2026-09-04 确认，独立计划 [P0-21](p0-21-host-managed-browser.md)，不挡 19b。P3-06/07 Chrome 桥与 Helper 仍后置。
 
 **Tech Stack：** Electron 39、Vue 3、TypeScript、electron-vite、pnpm 10、Node.js 20+、Vitest、现有 `@agentclientprotocol/sdk`、现有 Permission Broker / Task Inspector。不新增 UI 框架，不把桌面做成 MCP Host。
 
@@ -52,7 +52,7 @@
 | `/rewind` 回退一轮 | 只有 latest-turn 文件撤销 | [P0-19c](p0-19c-turn-rewind.md) 分清对话回退与文件恢复 |
 | Hooks | 代码已落地：设置「Grok 配置」只读列表；开发版 GUI 未走查 | [P0-19d](p0-19d-hooks-surface.md) 只展示，不由桌面执行 |
 | 后台命令 / monitor | 代码已落地：Timeline 后台徽章；停止走 Task cancel；证据仍 P0-11；开发版 GUI 未走查 | [P0-19e](p0-19e-background-command-monitor.md) |
-| 浏览器、Computer Use | Grok 靠插件；无共享页、无 HUD | 插件表面 [P0-19f](p0-19f-browser-computer-use-surface.md)（L3、截图、停止条、方案 A 置顶光标 HUD）；Codex 式共享页 [P0-21](p0-21-host-managed-browser.md)（2026-09-04 确认，取代 P3-05） |
+| 浏览器、Computer Use | Grok 靠插件；无共享页、无 HUD | 插件**浏览器**表面 [P0-19f](p0-19f-browser-computer-use-surface.md)（browser L3、截图、停止条、方案 A 虚拟鼠标；不做 screen/软件）；Codex 式共享页 [P0-21](p0-21-host-managed-browser.md)（2026-09-04 确认，取代 P3-05）；点桌面软件仍后置 P3-07 |
 
 已接上但几乎没走查（不算新功能，算 0 号门）：
 
@@ -83,7 +83,7 @@
      ↓
 7. P0-19e 后台命令监视
      ↓
-8. P0-19f 插件 browser / screen / clipboard 表面（截图 Artifact、L3、可见停止、方案 A 光标 HUD；不自建视图、不注入系统鼠标）
+8. P0-19f 插件操作浏览器（截图 Artifact、browser L3、可见停止、方案 A 虚拟鼠标；不打开 screen/clipboard，不自建视图，不注入系统鼠标）
      ↓
 9. 宿主内置浏览器见独立计划 P0-21（不挡 19b；不在本程序 19a–e 里做）
 ```
@@ -113,7 +113,7 @@
 - 不把桌面做成 Marketplace Host 或 MCP Host。
 - 不把 always-approve 做成静默默认或全局 config；接管只按 [P0-19g](p0-19g-task-takeover-always-approve.md) 做当前 Task 显式开关。
 - Inspector 现有顶层标签为 `timeline | plan | changes | terminal | artifacts`；计划详情独立放在 Plan，插件浏览器证据进 Timeline + Artifacts，终端标签继续留给 P0-15 用户 PTY，**不得**把 Agent 后台命令写进用户 Shell。宿主内置浏览器是工作区右栏，见 P0-21，不新增 Inspector 标签。
-- 本程序 19a–e 不做共享 BrowserView。P0-21 的 WebContentsView 禁止任意 CDP 转发、禁止读用户 Chrome Profile。系统级 macOS 虚拟光标（Accessibility / CGEvent）仍禁止，见 P3-07。P0-19f 只做点击穿透的置顶 HUD 光标，不移动系统指针。
+- 本程序 19a–e 不做共享 BrowserView。P0-21 的 WebContentsView 禁止任意 CDP 转发、禁止读用户 Chrome Profile。系统级 macOS 虚拟光标（Accessibility / CGEvent）仍禁止，见 P3-07。P0-19f 只为**浏览器插件**做点击穿透的置顶 HUD 虚拟鼠标，不移动系统指针，不画在 P0-21 内置页上，也不打开 `screen` / `clipboard`。
 - 不为 Codex 复制本程序的表面。
 
 ## 6. 安全总则
@@ -134,7 +134,7 @@
 4. 回退上一轮时分得清「对话」和「文件」，漂移则拒绝自动改盘。
 5. 看见本 GROK_HOME 里的 Hooks 是否启用，桌面不替 Grok 跑它们。
 6. 后台命令在 Timeline 标成后台，可停，输出进证据而不是用户终端。
-7. 安装并信任浏览器/电脑插件后，截图进 Artifacts，屏幕/浏览器动作走 L3 + 可见停止；屏幕类 Computer Use 失焦时仍能看见 HUD 光标或停止芯片。
+7. 安装并信任浏览器插件后，截图进 Artifacts，浏览器动作走 L3 + 可见停止；失焦时仍能看见虚拟鼠标。点桌面软件不是本程序 19f 的验收项。
 8. 宿主内置浏览器（P0-21）不作为本程序 19a–e 的验收项；做完 P0-21 后，用户说一句话应能操作右侧同一只页面。
 
 自动门禁仍是：目标文件 ESLint、相关 Vitest、`pnpm typecheck`、`pnpm build`、`git diff --check`。UI 改动必须有开发版走查记录。
