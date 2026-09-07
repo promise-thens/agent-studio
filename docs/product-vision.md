@@ -310,6 +310,8 @@ Grok 插件自己的 browser / Computer Use（chrome-devtools 等）仍走插件
 
 Computer Use 建议作为独立原生 Helper 和插件能力运行。
 
+**2026-09-07：** 第一波不做 Helper。Grok 插件自己的屏幕/电脑操作走 [P0-19f](superpowers/plans/p0-19f-browser-computer-use-surface.md)：L3 审批、截图 Artifact、主窗口停止条，以及失焦仍可见的**置顶 HUD 光标**（点击穿透，不移动系统指针）。Accessibility / CGEvent 真控鼠标仍是后置的 macOS Helper（P3-07）。
+
 macOS 首期可以基于公开系统能力实现：
 
 - Accessibility / AXUIElement；

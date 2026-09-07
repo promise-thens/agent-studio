@@ -47,7 +47,7 @@
 ## 非目标
 
 - 不实现文件编辑器、LSP、未保存缓冲、ACP `fs`（GACP-05）。
-- 不实现 Chrome Native Bridge（P3-06）、macOS Computer Use Helper（P3-07）、虚拟光标。
+- 不实现 Chrome Native Bridge（P3-06）、macOS Computer Use Helper（P3-07）。不在本计划的 WebContentsView 上画虚拟光标；插件屏幕的置顶 HUD 光标见 [P0-19f](p0-19f-browser-computer-use-surface.md) 方案 A。
 - 不把 chrome-devtools-mcp 接到这只视图的调试端口。
 - 不在 Inspector 增加 `browser` 标签。浏览器是工作区右栏。
 - 不把桌面做成 MCP Host / Marketplace Host；Grok 仍是 MCP 客户端。
