@@ -3529,6 +3529,76 @@ button:disabled {
   align-items: center;
 }
 
+.turn-rewind-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: var(--radius-soft);
+  background: color-mix(in srgb, var(--surface-2) 42%, transparent);
+}
+
+.turn-rewind-card-title {
+  margin: 0;
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.turn-rewind-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 10px;
+  align-items: start;
+  min-width: 0;
+}
+
+.turn-rewind-row[data-disabled='true'] {
+  color: var(--text-3);
+}
+
+.turn-rewind-row input[type='checkbox'] {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.turn-rewind-row-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.turn-rewind-row-copy strong {
+  color: var(--text-1);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.turn-rewind-row-copy p {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.turn-rewind-status {
+  color: var(--text-2);
+}
+
+.turn-rewind-files-preview {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.turn-rewind-files-preview ul {
+  margin: 0;
+  padding-left: 1.1em;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
 .changes-muted {
   color: var(--text-3);
 }
@@ -4254,7 +4324,10 @@ button:disabled {
   background: transparent;
   text-align: left;
   cursor: pointer;
-  transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease;
 }
 
 .task-artifact-item:hover {

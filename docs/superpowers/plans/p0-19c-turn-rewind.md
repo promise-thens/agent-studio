@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。
 >
-> **状态：** 进行中。任务 1 文案与真机观察已落地；Grok 1.0.13 未广告 `rewind` / `undo`，产品冻结 `not-advertised`。
+> **状态：** 进行中。任务 1 文案与真机观察已落地；任务 2 两行预览卡已落地。Grok 1.0.13 未广告 `rewind` / `undo`，产品冻结 `not-advertised`。
 >
 > **插入点：** [P0-19](p0-19-grok-host-capability-polish.md) 在 Sandbox 之后。文件侧复用 P0-12 已有 `task:preview-latest-turn-restore` / `task:restore-latest-turn`，禁止 `git reset` / `checkout`。
 
@@ -74,11 +74,11 @@
 
 ### 任务 2: 预览卡
 
-- [ ] **第 1 步: 组合预览模型**
+- [x] **第 1 步: 组合预览模型**
 
 说明：共享类型例如 `TurnRewindPreview { conversation: 'available' | 'command-missing' | 'busy'; files: RestorePreview }`。Renderer 只渲染该模型。
 
-- [ ] **第 2 步: 测试**
+- [x] **第 2 步: 测试**
 
 说明：command-missing 时对话 checkbox disabled；files.blocked 时文件按钮 disabled 且显示漂移/无检查点原因。
 

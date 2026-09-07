@@ -23,6 +23,7 @@ import {
   resolvePlanSubmit,
   type ComposerPlanMode
 } from '../../shared/session-plan-mode'
+import { isTurnRewindBusy } from '../../shared/turn-rewind-preview'
 import type {
   AgentAvailableCommand,
   AgentAvailableCommandSnapshot
@@ -567,6 +568,14 @@ const taskPermission = ref<
 >({})
 const composerPlanModeByTask = ref<Record<string, ComposerPlanMode>>({})
 const permissionModeBusy = ref(false)
+/** 与 Composer 同一套忙碌判定；对话回退不新开 IPC。 */
+const turnRewindBusy = computed(() =>
+  isTurnRewindBusy({
+    modelBusy: composerChrome.value.modelBusy || permissionModeBusy.value,
+    composerAction: composerAction.value,
+    hasActiveExecution: Boolean(activeExecution.value)
+  })
+)
 const activePermissionState = computed(() => taskPermission.value[activeTaskId.value] ?? null)
 const composerPermissionMode = computed<TaskPermissionMode>(
   () => activePermissionState.value?.mode ?? 'assist'
@@ -2263,6 +2272,8 @@ function scrollMessagesToBottom(): void {
         :show-permission-audits="activeTaskView?.mode === 'history'"
         :changes-controller="taskChanges"
         :artifacts-controller="taskArtifacts"
+        :advertised-commands="runtimeSlashCommands"
+        :rewind-busy="turnRewindBusy"
         @close="closeInspector"
         @update:active-tab="inspectorTab = $event"
         @update:docked="inspectorDocked = $event"

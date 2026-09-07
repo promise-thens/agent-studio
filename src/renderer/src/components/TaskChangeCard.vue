@@ -5,7 +5,7 @@ import type { ChangeCardView } from '../task-changes-presentation'
 import { formatChangeLineDelta } from '../task-changes-presentation'
 import TaskChangeMediaThumbnail from './TaskChangeMediaThumbnail.vue'
 
-/** 对话里的变更入口：只负责展示与发出审核/文件恢复，不自己调 IPC。 */
+/** 对话里的变更入口：审核打开 Changes；回退上一轮打开同一张两行卡，不自己调 IPC。 */
 
 const props = defineProps<{
   taskId: string
@@ -43,12 +43,12 @@ const hiddenFileCount = computed(() =>
         <button
           class="secondary-button"
           type="button"
-          :title="model.canRestore ? '恢复上一轮文件' : '当前不能一键恢复上一轮文件'"
-          :aria-label="model.canRestore ? '恢复上一轮文件' : '当前不能一键恢复上一轮文件'"
-          :disabled="!model.canRestore || restoreBusy"
+          title="回退上一轮"
+          aria-label="回退上一轮"
+          :disabled="restoreBusy"
           @click="$emit('restore')"
         >
-          恢复上一轮文件
+          回退上一轮
         </button>
         <button
           class="secondary-button"

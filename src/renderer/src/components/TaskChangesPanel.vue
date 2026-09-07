@@ -6,6 +6,7 @@ import {
   PhFile as File,
   PhFolder as Folder
 } from '@phosphor-icons/vue'
+import { buildTurnRewindPreview } from '../../../shared/turn-rewind-preview'
 import type { TaskChangesController } from '../composables/useTaskChanges'
 import {
   attributionLabel,
@@ -21,19 +22,25 @@ import {
   presentChangeCard,
   presentChangeFileTree,
   presentChangeSetSummary,
-  restoreActionLabel,
-  restorePreviewSummary,
-  revertibleNotice,
   unverifiedTaskPaths
 } from '../task-changes-presentation'
 import FileDiffViewer from './FileDiffViewer.vue'
+import TurnRewindCard from './TurnRewindCard.vue'
 
-/** Changes 审阅工作区：文件树 + Diff；文件恢复仍只允许 latest-turn。不在这里展示内部 commandId。 */
+/** Changes 审阅工作区：文件树 + Diff；回退上一轮拆成对话/文件两行，文件仍只允许 latest-turn。 */
 
-const props = defineProps<{
-  taskId: string
-  controller: TaskChangesController
-}>()
+const props = withDefaults(
+  defineProps<{
+    taskId: string
+    controller: TaskChangesController
+    advertisedCommands?: readonly { name: string }[]
+    rewindBusy?: boolean
+  }>(),
+  {
+    advertisedCommands: () => [],
+    rewindBusy: false
+  }
+)
 
 const {
   changeSet,
@@ -81,18 +88,19 @@ const unverifiedPaths = computed(() =>
 const incompletePaths = computed(() =>
   changeSet.value ? incompleteReviewPaths(changeSet.value) : []
 )
-const revertibleText = computed(() =>
-  changeSet.value ? revertibleNotice(changeSet.value.revertible) : ''
-)
 const canRestore = computed(() =>
   changeSet.value ? canRestoreLatestTurn(changeSet.value.revertible) : false
 )
-const restorePlan = computed(() =>
-  restorePreview.value?.revertible.kind === 'latest-turn'
-    ? restorePreview.value.revertible.restorePlan
-    : []
+/** 对话状态由命令快照 + 空闲/忙碌推导；文件状态沿用 latest-turn 预览，不新开 IPC。 */
+const rewindPreview = computed(() =>
+  buildTurnRewindPreview({
+    advertisedCommands: props.advertisedCommands,
+    busy: props.rewindBusy,
+    restorePreview: restorePreview.value,
+    changeSetRevertible: changeSet.value?.revertible ?? null
+  })
 )
-/** 没有可审阅文件时不展示「不可一键恢复文件」，避免空页脚堆内部原因。 */
+/** 没有可审阅文件时不展示回退卡，避免空页脚堆内部原因。 */
 const showRestoreUnavailable = computed(
   () => !canRestore.value && readiness.value?.kind !== 'empty'
 )
@@ -302,61 +310,16 @@ function pathTabIndex(path: string): number {
         </ul>
       </section>
 
-      <section v-if="showRestoreSection" class="changes-restore" aria-label="文件恢复边界">
+      <section v-if="showRestoreSection" class="changes-restore" aria-label="回退上一轮">
         <p v-if="restoreMessage" class="changes-muted" role="status">{{ restoreMessage }}</p>
         <p v-if="restoreError" class="changes-risk" role="alert">{{ restoreError }}</p>
-        <p
-          v-if="showRestoreUnavailable"
-          class="changes-risk"
-          role="status"
-          aria-label="不可一键恢复文件"
-        >
-          {{ revertibleText }}
-        </p>
-        <template v-if="canRestore">
-          <p class="changes-muted" role="status">{{ revertibleText }}</p>
-          <div v-if="restorePreview" class="changes-restore-preview">
-            <p>{{ restorePreviewSummary(restorePreview) }}</p>
-            <ul>
-              <li v-for="item in restorePlan" :key="item.path">
-                {{ item.path }} · {{ restoreActionLabel(item) }}
-              </li>
-            </ul>
-            <div class="changes-restore-actions">
-              <button
-                class="secondary-button"
-                type="button"
-                title="确认恢复上一轮文件"
-                aria-label="确认恢复上一轮文件"
-                :disabled="restoreBusy"
-                @click="confirmRestore()"
-              >
-                确认恢复上一轮文件
-              </button>
-              <button
-                class="secondary-button"
-                type="button"
-                title="取消恢复"
-                aria-label="取消恢复"
-                :disabled="restoreBusy"
-                @click="cancelRestorePreview()"
-              >
-                取消
-              </button>
-            </div>
-          </div>
-          <button
-            v-else
-            class="secondary-button"
-            type="button"
-            title="恢复上一轮文件"
-            aria-label="恢复上一轮文件"
-            :disabled="restoreBusy"
-            @click="openRestorePreview()"
-          >
-            恢复上一轮文件
-          </button>
-        </template>
+        <TurnRewindCard
+          :preview="rewindPreview"
+          :restore-busy="restoreBusy"
+          @preview-files="openRestorePreview()"
+          @confirm-files="confirmRestore()"
+          @cancel-files="cancelRestorePreview()"
+        />
       </section>
     </template>
   </section>

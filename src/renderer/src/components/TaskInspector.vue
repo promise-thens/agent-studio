@@ -36,6 +36,8 @@ const props = withDefaults(
     showPermissionAudits?: boolean
     changesController?: TaskChangesController | null
     artifactsController?: TaskArtifactsController | null
+    advertisedCommands?: readonly { name: string }[]
+    rewindBusy?: boolean
   }>(),
   {
     docked: false,
@@ -47,7 +49,9 @@ const props = withDefaults(
     loadingMorePermissionAudits: false,
     showPermissionAudits: false,
     changesController: null,
-    artifactsController: null
+    artifactsController: null,
+    advertisedCommands: () => [],
+    rewindBusy: false
   }
 )
 
@@ -374,6 +378,8 @@ function selectTab(tab: InspectorTab): void {
       :show-permission-audits="showPermissionAudits"
       :changes-controller="changesController"
       :artifacts-controller="artifactsController"
+      :advertised-commands="advertisedCommands"
+      :rewind-busy="rewindBusy"
       @update:primary-tab="selectTab"
       @update:secondary-tab="secondaryTab = $event"
       @load-more-permission-audits="emit('loadMorePermissionAudits')"

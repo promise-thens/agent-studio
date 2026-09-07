@@ -24,6 +24,8 @@ const props = withDefaults(
     showPermissionAudits?: boolean
     changesController?: TaskChangesController | null
     artifactsController?: TaskArtifactsController | null
+    advertisedCommands?: readonly { name: string }[]
+    rewindBusy?: boolean
   }>(),
   {
     taskId: '',
@@ -34,7 +36,9 @@ const props = withDefaults(
     loadingMorePermissionAudits: false,
     showPermissionAudits: false,
     changesController: null,
-    artifactsController: null
+    artifactsController: null,
+    advertisedCommands: () => [],
+    rewindBusy: false
   }
 )
 
@@ -99,6 +103,8 @@ function tabPanelId(): string {
       v-else-if="showChangesPanel && changesController"
       :task-id="taskId"
       :controller="changesController"
+      :advertised-commands="advertisedCommands"
+      :rewind-busy="rewindBusy"
     />
 
     <TaskArtifactsPanel

@@ -22,6 +22,8 @@ withDefaults(
     showPermissionAudits?: boolean
     changesController?: TaskChangesController | null
     artifactsController?: TaskArtifactsController | null
+    advertisedCommands?: readonly { name: string }[]
+    rewindBusy?: boolean
   }>(),
   {
     taskId: '',
@@ -32,7 +34,9 @@ withDefaults(
     loadingMorePermissionAudits: false,
     showPermissionAudits: false,
     changesController: null,
-    artifactsController: null
+    artifactsController: null,
+    advertisedCommands: () => [],
+    rewindBusy: false
   }
 )
 
@@ -67,6 +71,8 @@ function loadMorePermissionAudits(): void {
         :show-permission-audits="showPermissionAudits"
         :changes-controller="changesController"
         :artifacts-controller="artifactsController"
+        :advertised-commands="advertisedCommands"
+        :rewind-busy="rewindBusy"
         @load-more-permission-audits="loadMorePermissionAudits"
       />
     </div>
@@ -96,6 +102,8 @@ function loadMorePermissionAudits(): void {
         :show-permission-audits="false"
         :changes-controller="changesController"
         :artifacts-controller="artifactsController"
+        :advertised-commands="advertisedCommands"
+        :rewind-busy="rewindBusy"
         @load-more-permission-audits="loadMorePermissionAudits"
       />
     </div>
