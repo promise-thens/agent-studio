@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { promises as fs } from 'node:fs'
-import { basename, dirname, extname, isAbsolute, join, relative, sep } from 'node:path'
+import { constants, promises as fs } from 'node:fs'
+import { basename, extname, isAbsolute, join, relative, sep } from 'node:path'
 import { classifyArtifactBytes, type ArtifactDescriptor } from '../../../shared/artifact'
 import { ArtifactRegistry, ArtifactRegistryError } from '../../artifact/artifact-registry'
 import { isPathInsideRoot, toPosixRelativePath } from '../../project/project-root-resolver'
@@ -37,7 +37,7 @@ export async function registerBrowserPluginScreenshot(
     const relativePath =
       located.kind === 'execution-root'
         ? located.relativePath
-        : await materializeSessionScreenshot(input.executionRoot, located.realPath)
+        : await materializeSessionScreenshot(input.executionRoot, located.bytes, located.ext)
     if (!relativePath) return null
     const descriptor = await input.registry.registerFileCandidate({
       taskId: input.taskId,
@@ -93,7 +93,7 @@ async function locateBrowserPluginScreenshot(input: {
   mediaRoots: readonly string[]
 }): Promise<
   | { kind: 'execution-root'; realPath: string; relativePath: string }
-  | { kind: 'session-media'; realPath: string }
+  | { kind: 'session-media'; bytes: Buffer; ext: string }
   | null
 > {
   const realFile = await confineRegularScreenshotFile(input.absolutePath)
@@ -113,8 +113,9 @@ async function locateBrowserPluginScreenshot(input: {
     const realMediaRoot = await fs.realpath(mediaRoot).catch(() => null)
     if (!realMediaRoot || !isPathInsideRoot(realMediaRoot, realFile)) continue
     if (!isSessionImagesPath(realMediaRoot, realFile)) continue
-    if (!(await screenshotBytesAreAllowed(realFile, `shot${ext}`, input.mediaRoots))) return null
-    return { kind: 'session-media', realPath: realFile }
+    const bytes = await screenshotBytesAreAllowed(realFile, `shot${ext}`, input.mediaRoots)
+    if (!bytes) return null
+    return { kind: 'session-media', bytes, ext }
   }
   return null
 }
@@ -138,44 +139,84 @@ async function screenshotBytesAreAllowed(
   realFile: string,
   relativePath: string,
   mediaRoots: readonly string[]
-): Promise<boolean> {
+): Promise<Buffer | null> {
   const numbered = await readGrokSessionMediaFile(
     { absolutePath: realFile, originalName: basename(realFile) },
     { mediaRoots: [...mediaRoots] }
   )
-  if (numbered) return ALLOWED_SCREENSHOT_MIME.has(numbered.mimeType)
+  if (numbered) {
+    return ALLOWED_SCREENSHOT_MIME.has(numbered.mimeType) ? numbered.bytes : null
+  }
 
   const bytes = await fs.readFile(realFile).catch(() => null)
-  if (!bytes) return false
+  if (!bytes) return null
   const classified = classifyArtifactBytes({ relativePath, bytes })
-  return (
-    classified.ok && classified.kind === 'image' && ALLOWED_SCREENSHOT_MIME.has(classified.mimeType)
-  )
+  if (
+    !classified.ok ||
+    classified.kind !== 'image' ||
+    !ALLOWED_SCREENSHOT_MIME.has(classified.mimeType)
+  ) {
+    return null
+  }
+  return bytes
 }
 
 /**
  * session 媒体根在 execution root 之外，必须先落到 Task 可注册的相对路径。
- * 描述符只保存 posix 相对路径，不用原文件名，避免 URL 或绝对路径泄漏。
+ * 只写入已经校验过的字节，禁止再次 readFile 跟随中途换成的 symlink。
  */
 async function materializeSessionScreenshot(
   executionRoot: string,
-  realFile: string
+  bytes: Buffer,
+  ext: string
 ): Promise<string | null> {
   const realRoot = await fs.realpath(executionRoot).catch(() => null)
-  if (!realRoot) return null
-  const bytes = await fs.readFile(realFile).catch(() => null)
-  if (!bytes) return null
-  const ext = extname(realFile).toLowerCase()
-  if (!ALLOWED_SCREENSHOT_EXT.has(ext)) return null
+  if (!realRoot || !ALLOWED_SCREENSHOT_EXT.has(ext)) return null
   const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
-  const relativePath = `screenshots/${hash}${ext}`
-  const destination = join(realRoot, 'screenshots', `${hash}${ext}`)
-  if (!isPathInsideRoot(realRoot, destination)) return null
-  await fs.mkdir(dirname(destination), { recursive: true })
-  await fs.writeFile(destination, bytes, { mode: 0o600 })
+  const screenshotsDir = await confineScreenshotsDirectory(realRoot)
+  if (!screenshotsDir) return null
+  const destination = join(screenshotsDir, `${hash}${ext}`)
+  if (!isPathInsideRoot(realRoot, destination) || !isPathInsideRoot(screenshotsDir, destination)) {
+    return null
+  }
+  const destStats = await fs.lstat(destination).catch(() => null)
+  if (destStats?.isSymbolicLink()) return null
+  // O_NOFOLLOW：父目录已确认是普通目录后，目标若在写入瞬间被换成链接则失败而不是跟出去。
+  const handle = await fs
+    .open(
+      destination,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
+      0o600
+    )
+    .catch(() => null)
+  if (!handle) return null
+  try {
+    await handle.writeFile(bytes)
+  } finally {
+    await handle.close()
+  }
   const realDestination = await fs.realpath(destination).catch(() => null)
   if (!realDestination || !isPathInsideRoot(realRoot, realDestination)) return null
-  return relativePath
+  return toPosixRelativePath(realRoot, realDestination)
+}
+
+/**
+ * screenshots 目录必须是 execution root 内的普通目录。
+ * 若它是指向根外的 symlink，lstat 直接拒绝，禁止 mkdir/writeFile 先把字节写出去。
+ */
+async function confineScreenshotsDirectory(realRoot: string): Promise<string | null> {
+  const screenshotsDir = join(realRoot, 'screenshots')
+  const existing = await fs.lstat(screenshotsDir).catch(() => null)
+  if (existing) {
+    if (existing.isSymbolicLink() || !existing.isDirectory()) return null
+  } else {
+    await fs.mkdir(screenshotsDir, { recursive: true, mode: 0o700 })
+    const created = await fs.lstat(screenshotsDir).catch(() => null)
+    if (!created || created.isSymbolicLink() || !created.isDirectory()) return null
+  }
+  const realDir = await fs.realpath(screenshotsDir).catch(() => null)
+  if (!realDir || !isPathInsideRoot(realRoot, realDir)) return null
+  return realDir
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

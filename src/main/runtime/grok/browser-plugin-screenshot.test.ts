@@ -1,7 +1,8 @@
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { promises as fs } from 'node:fs'
+import { mkdtemp, mkdir, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ArtifactRegistry, ArtifactRegistryError } from '../../artifact/artifact-registry'
 import {
   copyBrowserPluginScreenshotFilePath,
@@ -196,6 +197,62 @@ describe('registerBrowserPluginScreenshot', () => {
       absolutePath: join(executionRoot, 'screenshots', 'page.webp')
     })
     expect(webp?.mimeType).toBe('image/webp')
+  })
+
+  it('session 文件在校验后被换成越界 symlink 时仍只用已读字节，不跟读外部图片', async () => {
+    await setupRegistry()
+    const sessionFile = join(mediaRoot, 'sess-1', 'images', 'page.png')
+    await mkdir(join(mediaRoot, 'sess-1', 'images'), { recursive: true })
+    await writeFile(sessionFile, PNG)
+    const outside = await createTemporaryDirectory()
+    const secret = join(outside, 'secret.png')
+    const leaked = Buffer.concat([PNG, Buffer.from([0xde, 0xad])])
+    await writeFile(secret, leaked)
+
+    const originalReadFile = fs.readFile.bind(fs)
+    let sessionReads = 0
+    const spy = vi.spyOn(fs, 'readFile').mockImplementation(async (path, options) => {
+      const result = await originalReadFile(path as never, options as never)
+      if (String(path) === sessionFile) {
+        sessionReads += 1
+        if (sessionReads === 1) {
+          await rm(sessionFile)
+          await symlink(secret, sessionFile)
+        }
+      }
+      return result
+    })
+
+    try {
+      const descriptor = await registerBrowserPluginScreenshot({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        absolutePath: sessionFile
+      })
+      expect(descriptor?.kind).toBe('image')
+      expect(descriptor?.size).toBe(PNG.byteLength)
+      expect(descriptor?.size).not.toBe(leaked.byteLength)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('screenshots 目录若是指向根外的 symlink，不得先写出再失败', async () => {
+    await setupRegistry()
+    const sessionFile = join(mediaRoot, 'sess-1', 'images', 'page.png')
+    await mkdir(join(mediaRoot, 'sess-1', 'images'), { recursive: true })
+    await writeFile(sessionFile, PNG)
+    const outside = await createTemporaryDirectory()
+    await symlink(outside, join(executionRoot, 'screenshots'))
+
+    await expect(
+      registerBrowserPluginScreenshot({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        absolutePath: sessionFile
+      })
+    ).resolves.toBeNull()
+    expect(await readdir(outside)).toEqual([])
   })
 
   it('session 根下非 images 路径不注册', async () => {
