@@ -27,6 +27,7 @@ import {
   type SlashCommandItem
 } from '../slash-command-palette'
 import { resolveTakeoverHudCopy, type TaskPermissionMode } from '../../../shared/task-takeover'
+import { resolveBrowserPluginHudCopy } from '../../../shared/browser-plugin-overlay'
 import { isPlanCommandAdvertised, type ComposerPlanMode } from '../../../shared/session-plan-mode'
 import { resolveComposerPlanStatusCopy, resolveComposerPlanSwitch } from '../composer-plan-mode'
 import type { ComposerContextUsagePresentation } from '../task-composer-actions'
@@ -69,6 +70,11 @@ const props = defineProps<{
     previewUrl?: string
   }>
   promptMediaHint?: string | null
+  /**
+   * 任务 6 overlay 快照的 visible。写文件进行中必须为 false，避免冒充浏览器句。
+   * 任务 6 接入前 App 可传 false。
+   */
+  overlayVisible?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -120,6 +126,16 @@ const takeoverHudCopy = computed(() =>
     takeoverApplied: props.takeoverApplied === true,
     takeoverMayStillBeActive: props.takeoverMayStillBeActive,
     executing: props.action === 'stop'
+  })
+)
+/**
+ * 与接管共用一条 role=status 停止条：接管句优先，否则才写浏览器插件句。
+ * 写文件 in_progress 不得靠 overlayVisible 挤进这根条。
+ */
+const composerHudCopy = computed(() =>
+  resolveBrowserPluginHudCopy({
+    takeoverCopy: takeoverHudCopy.value,
+    overlayVisible: props.overlayVisible === true
   })
 )
 
@@ -519,12 +535,12 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
             <span class="composer-usage-copy">{{ contextUsage.compactLabel }}</span>
           </span>
           <span
-            v-if="takeoverHudCopy"
-            class="composer-takeover-hud"
+            v-if="composerHudCopy"
+            class="composer-takeover-hud no-drag"
             role="status"
-            :title="takeoverHudCopy"
+            :title="composerHudCopy"
           >
-            {{ takeoverHudCopy }}
+            {{ composerHudCopy }}
           </span>
           <button
             v-if="action === 'stop'"

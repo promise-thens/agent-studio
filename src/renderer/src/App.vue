@@ -2290,6 +2290,7 @@ function scrollMessagesToBottom(): void {
             @open-plan="openPlanReview"
           />
 
+          <!-- 任务 6 接入 overlay 快照前 overlayVisible 保持 false；写文件不得冒充浏览器 HUD。 -->
           <TaskComposer
             ref="taskComposer"
             :prompt="prompt"
@@ -2315,6 +2316,7 @@ function scrollMessagesToBottom(): void {
             :runtime-commands="runtimeSlashCommands"
             :attachments="composerAttachmentViews"
             :prompt-media-hint="promptMediaHint"
+            :overlay-visible="false"
             @update:prompt="prompt = $event"
             @send="sendPrompt"
             @stop="cancelTurn"
