@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。本文件是**程序索引**，不是一次性写完的实现清单。每个子系统只在对应分计划里落地。
 >
-> **状态：** 已立项（2026-08-31 产品确认）。GACP-03 / P0-19g / P0-19a / GACP-06 / P0-19b / P0-19c / P0-19d 代码已落地（开发版 GUI 未过）。下一步 P0-19e。
+> **状态：** 已立项（2026-08-31 产品确认）。GACP-03 / P0-19g / P0-19a / GACP-06 / P0-19b / P0-19c / P0-19d / P0-19e 代码已落地（开发版 GUI 未过）。下一步 P0-19f。
 >
 > **插入点：** 当前主线。P1 扩展与 P2 Codex 搁置期间，Grok 日用能力按本程序推进。P0-13 产物走查仍建议做，但 **2026-08-31 确认：P0-10C 至 P0-13 的开发版走查暂时可以通过，不挡 P0-19 新能力开工**。走查可并行补，未走查不得把对应计划标成「开发版 GUI 已过」。
 
@@ -51,7 +51,7 @@
 | Sandbox（workspace / read-only / strict） | 代码已落地：设置「Grok 沙箱」四档 + 空闲 spawn `--sandbox`；开发版 GUI 未走查 | [P0-19b](p0-19b-grok-sandbox-profile.md) |
 | `/rewind` 回退一轮 | 只有 latest-turn 文件撤销 | [P0-19c](p0-19c-turn-rewind.md) 分清对话回退与文件恢复 |
 | Hooks | 代码已落地：设置「Grok 配置」只读列表；开发版 GUI 未走查 | [P0-19d](p0-19d-hooks-surface.md) 只展示，不由桌面执行 |
-| 后台命令 / monitor | 当普通 tool_call | [P0-19e](p0-19e-background-command-monitor.md) |
+| 后台命令 / monitor | 代码已落地：Timeline 后台徽章；停止走 Task cancel；证据仍 P0-11；开发版 GUI 未走查 | [P0-19e](p0-19e-background-command-monitor.md) |
 | 浏览器、Computer Use | Grok 靠插件；无共享页、无 HUD | 插件表面 [P0-19f](p0-19f-browser-computer-use-surface.md)；Codex 式共享页 [P0-21](p0-21-host-managed-browser.md)（2026-09-04 确认，取代 P3-05） |
 
 已接上但几乎没走查（不算新功能，算 0 号门）：
