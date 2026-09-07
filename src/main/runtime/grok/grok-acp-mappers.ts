@@ -253,8 +253,9 @@ export function mapGrokSessionUpdate(
       ]
     case 'plan_update': {
       // 未广告 plan 能力时 Grok 仍可能发 items 整表；按同一张清单覆盖，不叠卡。
+      // 夹具/畸形 payload 可能没有 plan；缺字段与非 items 一样丢弃，禁止抛 TypeError。
       const content = update.plan
-      if (content.type !== 'items') return []
+      if (content?.type !== 'items') return []
       return [
         {
           ...base,
