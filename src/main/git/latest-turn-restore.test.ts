@@ -43,6 +43,8 @@ describe('最新一轮受控恢复', () => {
 
     const restored = await fixture.service.restoreLatestTurn('task-1')
     expect(restored.ok).toBe(true)
+    expect(restored.message).toBe('已恢复上一轮文件，历史检查点仍保留。')
+    expect(restored.message).not.toContain('撤销')
     expect(restored.recoveryCheckpointId).toMatch(/^recovery_/)
     expect(await readFile(join(repo, 'README.md'), 'utf8')).toBe('hello\n')
     const checkpoints = (await fixture.checkpointStore.list('task-1')).items
@@ -280,6 +282,8 @@ describe('最新一轮受控恢复', () => {
     const restored = await fixture.service.restoreLatestTurn('task-1')
     expect(restored.ok).toBe(false)
     expect(restored.reason).toBe('active-turn')
+    expect(restored.message).toBe('当前有活动 Turn，不能自动恢复上一轮文件。')
+    expect(restored.message).not.toContain('撤销')
     expect(await readFile(join(repo, 'README.md'), 'utf8')).toBe('agent-edit\n')
   })
 
@@ -299,6 +303,8 @@ describe('最新一轮受控恢复', () => {
     expect(await readFile(join(repo, 'README.md'), 'utf8')).toBe('hello\n')
     expect(intents.every((intent) => intent.operationType !== 'git-mutate')).toBe(true)
     expect(intents.some((intent) => intent.operationType === 'write-file')).toBe(true)
+    expect(intents.some((intent) => intent.title === '写回上一轮文件恢复目标')).toBe(true)
+    expect(intents.every((intent) => !intent.title.includes('撤销'))).toBe(true)
   })
 
   it('git show 失败不得当成文件本不存在而去删除', async () => {

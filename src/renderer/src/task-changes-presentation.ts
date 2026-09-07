@@ -423,10 +423,11 @@ export function changeSetWarnings(changeSet: TaskChangeSetQueryResult): string[]
   ].filter((item): item is string => Boolean(item))
 }
 
+/** 用户可见说明只承诺文件检查点恢复，禁止暗示对话也会一起回退。 */
 export function revertibleNotice(revertible: TaskChangeSet['revertible']): string {
-  if (revertible === false) return '不可一键撤销 · 当前版本不提供一键撤销。'
-  if (revertible.kind === 'none') return `不可一键撤销 · ${revertible.reason}`
-  return `可撤销最新一轮 · ${revertible.paths.length} 个文件`
+  if (revertible === false) return '不可一键恢复文件 · 当前版本不提供一键恢复上一轮文件。'
+  if (revertible.kind === 'none') return `不可一键恢复文件 · ${revertible.reason}`
+  return `可恢复上一轮文件 · ${revertible.paths.length} 个文件`
 }
 
 export function canRestoreLatestTurn(
@@ -445,7 +446,7 @@ export function restorePreviewSummary(preview: LatestTurnRestorePreview): string
     return preview.revertible.reason
   }
   const lose = preview.willLosePaths.length
-  return `将撤销最新一轮 ${preview.revertible.turnId}，涉及 ${preview.revertible.paths.length} 个文件；当前这些内容会被丢弃：${lose} 个路径。`
+  return `将恢复上一轮文件 ${preview.revertible.turnId}，涉及 ${preview.revertible.paths.length} 个文件；当前这些内容会被丢弃：${lose} 个路径。`
 }
 
 /** 半恢复时把已改写路径写进提示，避免用户以为什么都没动。 */

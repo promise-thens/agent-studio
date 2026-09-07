@@ -48,7 +48,7 @@ function changeSet(overrides: Partial<TaskChangeSetQueryResult> = {}): TaskChang
     unknownCount: 0,
     validations: [],
     paths: [{ path: 'README.md', attribution: 'task-modified' }],
-    revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' },
+    revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键恢复上一轮文件。' },
     baseCommit: 'abcdef1234567890',
     ...overrides
   }
@@ -132,8 +132,8 @@ describe('截断与空变更语义', () => {
   })
 })
 
-describe('基线失效与不可撤销', () => {
-  it('基线失效给出原因，且只展示不可一键撤销说明', () => {
+describe('基线失效与不可一键恢复文件', () => {
+  it('基线失效给出原因，且只展示不可一键恢复文件说明', () => {
     expect(
       baselineWarning(changeSet({ baselineStatus: 'invalid', invalidReason: 'head-changed' }))
     ).toMatch(/基线已失效/)
@@ -141,9 +141,13 @@ describe('基线失效与不可撤销', () => {
       baselineWarning(changeSet({ baselineStatus: 'invalid', invalidReason: 'head-changed' }))
     ).toMatch(/HEAD/)
     expect(
-      revertibleNotice({ kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' })
-    ).toBe('不可一键撤销 · 当前版本仅提供只读审阅，不支持一键撤销。')
-    expect(revertibleNotice(false)).toMatch(/不可一键撤销/)
+      revertibleNotice({
+        kind: 'none',
+        reason: '当前版本仅提供只读审阅，不支持一键恢复上一轮文件。'
+      })
+    ).toBe('不可一键恢复文件 · 当前版本仅提供只读审阅，不支持一键恢复上一轮文件。')
+    expect(revertibleNotice(false)).toMatch(/不可一键恢复文件/)
+    expect(revertibleNotice(false)).not.toContain('撤销')
     expect(
       revertibleNotice({
         kind: 'latest-turn',
@@ -151,7 +155,15 @@ describe('基线失效与不可撤销', () => {
         paths: ['README.md'],
         restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
       })
-    ).toMatch(/可撤销最新一轮/)
+    ).toMatch(/可恢复上一轮文件/)
+    expect(
+      revertibleNotice({
+        kind: 'latest-turn',
+        turnId: 'turn-1',
+        paths: ['README.md'],
+        restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+      })
+    ).not.toContain('撤销')
     expect(
       canRestoreLatestTurn({
         kind: 'latest-turn',
@@ -160,7 +172,7 @@ describe('基线失效与不可撤销', () => {
         restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
       })
     ).toBe(true)
-    expect(canRestoreLatestTurn({ kind: 'none', reason: '不可撤销' })).toBe(false)
+    expect(canRestoreLatestTurn({ kind: 'none', reason: '不可恢复' })).toBe(false)
     expect(restoreActionLabel({ path: 'README.md', action: 'write', from: 'head' })).toMatch(/HEAD/)
     expect(
       restorePreviewSummary({
@@ -173,7 +185,31 @@ describe('基线失效与不可撤销', () => {
         },
         willLosePaths: ['README.md']
       })
+    ).toMatch(/将恢复上一轮文件/)
+    expect(
+      restorePreviewSummary({
+        taskId: 'task-1',
+        revertible: {
+          kind: 'latest-turn',
+          turnId: 'turn-1',
+          paths: ['README.md'],
+          restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+        },
+        willLosePaths: ['README.md']
+      })
     ).toMatch(/将丢失|丢弃/)
+    expect(
+      restorePreviewSummary({
+        taskId: 'task-1',
+        revertible: {
+          kind: 'latest-turn',
+          turnId: 'turn-1',
+          paths: ['README.md'],
+          restorePlan: [{ path: 'README.md', action: 'write', from: 'head' }]
+        },
+        willLosePaths: ['README.md']
+      })
+    ).not.toContain('撤销')
     expect(
       restoreAppliedNotice({
         message: '待删除路径在写回后已漂移，已停止删除。',
@@ -426,12 +462,15 @@ describe('验证与未验证文件', () => {
 })
 
 describe('Changes 面板源码约束', () => {
-  it('只在 latest-turn 显示撤销按钮，没有继续任务', () => {
+  it('只在 latest-turn 显示恢复上一轮文件按钮，没有继续任务，也不写笼统撤销', () => {
     const panel = readFileSync(join(rendererDir, 'components/TaskChangesPanel.vue'), 'utf8')
     const viewer = readFileSync(join(rendererDir, 'components/FileDiffViewer.vue'), 'utf8')
     const inspector = readFileSync(join(rendererDir, 'components/TaskInspector.vue'), 'utf8')
     const app = readFileSync(join(rendererDir, 'App.vue'), 'utf8')
-    expect(panel).toContain('撤销最新一轮')
+    expect(panel).toContain('恢复上一轮文件')
+    expect(panel).toContain('确认恢复上一轮文件')
+    expect(panel).toContain('aria-label="文件恢复边界"')
+    expect(panel).not.toContain('撤销')
     expect(panel).toContain('canRestoreLatestTurn')
     expect(panel).toContain('restoreMessage')
     expect(panel).toContain('changes-review-split')
@@ -459,7 +498,9 @@ describe('Changes 面板源码约束', () => {
     const presentation = readFileSync(join(rendererDir, 'task-changes-presentation.ts'), 'utf8')
     expect(presentation).toContain('已编辑')
     expect(card).toContain('审核')
-    expect(card).toContain('撤销')
+    expect(card).toContain('恢复上一轮文件')
+    expect(card).not.toContain('撤销')
+    expect(presentation).not.toContain('撤销')
     expect(card).toContain('CHANGE_CARD_PREVIEW_LIMIT = 6')
     expect(card).toContain('v-for="file in previewFiles"')
     expect(card).toContain('查看其余 {{ hiddenFileCount }} 个文件')

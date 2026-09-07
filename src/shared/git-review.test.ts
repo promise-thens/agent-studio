@@ -29,7 +29,7 @@ describe('git-review IPC 投影', () => {
         }
       ],
       paths: [{ path: 'README.md', attribution: 'task-modified' }],
-      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' },
+      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键恢复上一轮文件。' },
       executionRoot: '/Users/secret/project',
       fingerprint: 'dev:ino:/Users/secret/project',
       porcelainSummary: 'M README.md'
@@ -57,7 +57,7 @@ describe('git-review IPC 投影', () => {
       unknownCount: 0,
       validations: [],
       paths: [{ path: 'README.md', attribution: 'task-modified', added: 12, deleted: 3 }],
-      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' }
+      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键恢复上一轮文件。' }
     })
     expect(parsed?.paths[0]).toEqual({
       path: 'README.md',
@@ -77,7 +77,7 @@ describe('git-review IPC 投影', () => {
         unknownCount: 0,
         validations: [],
         paths: [{ path: 'README.md', attribution: 'task-modified', added: -1, deleted: 0 }],
-        revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' }
+        revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键恢复上一轮文件。' }
       })
     ).toBeNull()
   })
@@ -216,5 +216,27 @@ describe('git-review IPC 投影', () => {
         message: '/Users/secret/project 无法恢复'
       })?.message
     ).toBe('恢复未完成。')
+  })
+
+  it('reason 含绝对路径时改写为文件恢复语义，不回传路径或笼统撤销', () => {
+    const parsed = parseTaskChangeSetQueryResult({
+      taskId: 'task-1',
+      environmentId: 'local:testenv',
+      baselineStatus: 'captured',
+      gitPresence: 'git',
+      generatedAt: '2026-08-22T12:00:00.000Z',
+      preExistingCount: 0,
+      taskChangedCount: 1,
+      unknownCount: 0,
+      validations: [],
+      paths: [{ path: 'README.md', attribution: 'task-modified' }],
+      revertible: { kind: 'none', reason: '/Users/secret/project' }
+    })
+    expect(parsed?.revertible).toEqual({
+      kind: 'none',
+      reason: '当前版本不提供一键恢复上一轮文件。'
+    })
+    expect(JSON.stringify(parsed)).not.toContain('/Users/secret')
+    expect(JSON.stringify(parsed?.revertible)).not.toContain('撤销')
   })
 })

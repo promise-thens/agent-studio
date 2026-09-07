@@ -28,7 +28,7 @@ import {
 } from '../task-changes-presentation'
 import FileDiffViewer from './FileDiffViewer.vue'
 
-/** Changes 审阅工作区：文件树 + Diff；撤销仍只允许 latest-turn。不在这里展示内部 commandId。 */
+/** Changes 审阅工作区：文件树 + Diff；文件恢复仍只允许 latest-turn。不在这里展示内部 commandId。 */
 
 const props = defineProps<{
   taskId: string
@@ -92,7 +92,7 @@ const restorePlan = computed(() =>
     ? restorePreview.value.revertible.restorePlan
     : []
 )
-/** 没有可审阅文件时不展示「不可一键撤销」，避免空页脚堆内部原因。 */
+/** 没有可审阅文件时不展示「不可一键恢复文件」，避免空页脚堆内部原因。 */
 const showRestoreUnavailable = computed(
   () => !canRestore.value && readiness.value?.kind !== 'empty'
 )
@@ -302,14 +302,14 @@ function pathTabIndex(path: string): number {
         </ul>
       </section>
 
-      <section v-if="showRestoreSection" class="changes-restore" aria-label="撤销边界">
+      <section v-if="showRestoreSection" class="changes-restore" aria-label="文件恢复边界">
         <p v-if="restoreMessage" class="changes-muted" role="status">{{ restoreMessage }}</p>
         <p v-if="restoreError" class="changes-risk" role="alert">{{ restoreError }}</p>
         <p
           v-if="showRestoreUnavailable"
           class="changes-risk"
           role="status"
-          aria-label="不可一键撤销"
+          aria-label="不可一键恢复文件"
         >
           {{ revertibleText }}
         </p>
@@ -326,18 +326,18 @@ function pathTabIndex(path: string): number {
               <button
                 class="secondary-button"
                 type="button"
-                title="确认撤销最新一轮"
-                aria-label="确认撤销最新一轮"
+                title="确认恢复上一轮文件"
+                aria-label="确认恢复上一轮文件"
                 :disabled="restoreBusy"
                 @click="confirmRestore()"
               >
-                确认撤销
+                确认恢复上一轮文件
               </button>
               <button
                 class="secondary-button"
                 type="button"
-                title="取消撤销"
-                aria-label="取消撤销"
+                title="取消恢复"
+                aria-label="取消恢复"
                 :disabled="restoreBusy"
                 @click="cancelRestorePreview()"
               >
@@ -349,12 +349,12 @@ function pathTabIndex(path: string): number {
             v-else
             class="secondary-button"
             type="button"
-            title="撤销最新一轮"
-            aria-label="撤销最新一轮"
+            title="恢复上一轮文件"
+            aria-label="恢复上一轮文件"
             :disabled="restoreBusy"
             @click="openRestorePreview()"
           >
-            撤销最新一轮
+            恢复上一轮文件
           </button>
         </template>
       </section>

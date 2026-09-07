@@ -31,7 +31,7 @@ function changeSet(overrides: Partial<TaskChangeSetQueryResult> = {}): TaskChang
       }
     ],
     paths: [{ path: 'README.md', attribution: 'task-modified' }],
-    revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' },
+    revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键恢复上一轮文件。' },
     baseCommit: 'abcdef1234567890',
     ...overrides
   }
@@ -177,7 +177,7 @@ describe('useTaskChanges', () => {
     expect(controller.selectedCommandEvidence.value?.source).toBe('runtime-tool')
   })
 
-  it('撤销预览按需调用，确认后才 restore 并刷新变更', async () => {
+  it('文件恢复预览按需调用，确认后才 restore 并刷新变更', async () => {
     const previewLatestTurnRestore = vi.fn(async () =>
       ok({
         taskId: 'task-1',
@@ -194,7 +194,7 @@ describe('useTaskChanges', () => {
       ok({
         taskId: 'task-1',
         ok: true,
-        message: '已撤销最新一轮写入，历史检查点仍保留。',
+        message: '已恢复上一轮文件，历史检查点仍保留。',
         recoveryCheckpointId: 'recovery_1',
         restoredPaths: ['README.md'],
         appliedPaths: ['README.md']
@@ -248,7 +248,7 @@ describe('useTaskChanges', () => {
     expect(api.getChangeSet).toHaveBeenCalledTimes(2)
   })
 
-  it('preview 不是 latest-turn 时确认撤销不得调用 restore', async () => {
+  it('preview 不是 latest-turn 时确认恢复不得调用 restore', async () => {
     const restoreLatestTurn = vi.fn(async () =>
       ok({
         taskId: 'task-1',
@@ -271,6 +271,7 @@ describe('useTaskChanges', () => {
     await controller.openRestorePreview()
     await controller.confirmRestore()
     expect(restoreLatestTurn).not.toHaveBeenCalled()
-    expect(controller.restoreError.value).toMatch(/不能自动撤销/)
+    expect(controller.restoreError.value).toMatch(/不能自动恢复上一轮文件/)
+    expect(controller.restoreError.value).not.toContain('撤销')
   })
 })

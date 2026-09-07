@@ -264,7 +264,7 @@ export function useTaskChanges(
     const restoreApi = api.restoreLatestTurn
     if (!id || !restoreApi || restoreBusy.value) return
     if (restorePreview.value?.revertible.kind !== 'latest-turn') {
-      restoreError.value = '当前不能自动撤销。'
+      restoreError.value = '当前不能自动恢复上一轮文件。'
       return
     }
     restoreBusy.value = true

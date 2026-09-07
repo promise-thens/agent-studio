@@ -976,7 +976,7 @@ describe('窄 Preload API', () => {
         unknownCount: 0,
         validations: [],
         paths: [{ path: 'README.md', attribution: 'task-modified' }],
-        revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' },
+        revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键恢复上一轮文件。' },
         executionRoot: '/Users/secret/project',
         fingerprint: '1:2:/Users/secret/project',
         porcelainSummary: '1 .M ... /Users/secret/project/README.md'

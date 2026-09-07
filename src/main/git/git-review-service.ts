@@ -43,7 +43,8 @@ import type { TurnChangeCheckpointStore } from './turn-change-checkpoint'
 
 export const MAX_CHANGE_SET_PATHS = 500
 export const MAX_FILE_DIFF_BYTES = 64 * 1024
-export const REVERT_UNAVAILABLE_REASON = '当前版本仅提供只读审阅，不支持一键撤销。'
+/** 用户可见：只承诺文件检查点，禁止暗示对话也会一起回退。 */
+export const REVERT_UNAVAILABLE_REASON = '当前版本仅提供只读审阅，不支持一键恢复上一轮文件。'
 const RECOVERY_TURN_PREFIX = 'recovery_'
 /** 与 PermissionPolicy MAX_TARGETS 对齐，超出则整次拒绝，禁止拆成部分应用。 */
 const MAX_RESTORE_INTENT_TARGETS = 32
@@ -505,46 +506,49 @@ export class GitReviewService {
     computed: ComputedChangeSet
   ): Promise<RestoreEvaluation> {
     if (this.deps.hasActiveExecution?.() === true) {
-      return refuseRestore('active-turn', '当前有活动 Turn，不能自动撤销。')
+      return refuseRestore('active-turn', '当前有活动 Turn，不能自动恢复上一轮文件。')
     }
     if (computed.checkpointsTruncated) {
-      return refuseRestore('incomplete', '检查点列表被截断，不能确定最新一轮，不能自动撤销。')
+      return refuseRestore(
+        'incomplete',
+        '检查点列表被截断，不能确定最新一轮，不能自动恢复上一轮文件。'
+      )
     }
     if (computed.unavailable || computed.truncated || computed.changeSet.truncated) {
-      return refuseRestore('incomplete', '变更列表不完整，不能自动撤销。')
+      return refuseRestore('incomplete', '变更列表不完整，不能自动恢复上一轮文件。')
     }
     if (!computed.baselineUsable && computed.changeSet.baselineStatus !== 'captured') {
-      return refuseRestore('none', '基线未捕获或已失效，不能自动撤销。')
+      return refuseRestore('none', '基线未捕获或已失效，不能自动恢复上一轮文件。')
     }
     if (!computed.baseline || computed.baseline.status !== 'captured' || !computed.baselineUsable) {
-      return refuseRestore('none', '基线未捕获或已失效，不能自动撤销。')
+      return refuseRestore('none', '基线未捕获或已失效，不能自动恢复上一轮文件。')
     }
     if (computed.resolved.environmentId !== identity.environmentId) {
-      return refuseRestore('drift', '执行环境已漂移，不能自动撤销。')
+      return refuseRestore('drift', '执行环境已漂移，不能自动恢复上一轮文件。')
     }
     if (computed.resolved.executionRoot !== identity.executionRoot) {
-      return refuseRestore('drift', '执行根目录已漂移，不能自动撤销。')
+      return refuseRestore('drift', '执行根目录已漂移，不能自动恢复上一轮文件。')
     }
 
     const latest = computed.checkpoints.at(-1)
     if (!latest) return refuseRestore('none', '没有已完成的写入型最新一轮。')
     if (latest.turnId.startsWith(RECOVERY_TURN_PREFIX)) {
-      return refuseRestore('none', '最新一轮已撤销，历史检查点仍保留。')
+      return refuseRestore('none', '最新一轮文件已恢复，历史检查点仍保留。')
     }
     if (latest.status === 'incomplete') {
-      return refuseRestore('incomplete', '最新检查点不完整，不能自动撤销。')
+      return refuseRestore('incomplete', '最新检查点不完整，不能自动恢复上一轮文件。')
     }
     if (latest.status !== 'complete' || !latest.afterPaths || latest.affectedPaths.length === 0) {
       return refuseRestore('none', '没有已完成的写入型最新一轮。')
     }
     if (latest.environmentId !== identity.environmentId || latest.drift) {
-      return refuseRestore('drift', '检查点环境已漂移，不能自动撤销。')
+      return refuseRestore('drift', '检查点环境已漂移，不能自动恢复上一轮文件。')
     }
     if (
       latest.beforePaths.length >= MAX_CHANGE_SET_PATHS ||
       latest.afterPaths.length >= MAX_CHANGE_SET_PATHS
     ) {
-      return refuseRestore('incomplete', '检查点路径列表可能被截断，不能自动撤销。')
+      return refuseRestore('incomplete', '检查点路径列表可能被截断，不能自动恢复上一轮文件。')
     }
 
     const currentByPath = new Map(computed.current.map((item) => [item.path, item]))
@@ -578,7 +582,7 @@ export class GitReviewService {
       ) {
         return refuseRestore(
           'not-recoverable',
-          '重命名无法从 Git HEAD 完整恢复源路径，不能自动撤销。'
+          '重命名无法从 Git HEAD 完整恢复源路径，不能自动恢复上一轮文件。'
         )
       }
     }
@@ -605,7 +609,7 @@ export class GitReviewService {
     const writes = restorePlan.filter((item) => item.action === 'write')
     const deletes = restorePlan.filter((item) => item.action === 'delete')
     if (writes.length > MAX_RESTORE_INTENT_TARGETS || deletes.length > MAX_RESTORE_INTENT_TARGETS) {
-      return refuseRestore('not-recoverable', '恢复路径过多，不能自动撤销。')
+      return refuseRestore('not-recoverable', '恢复路径过多，不能自动恢复上一轮文件。')
     }
     return {
       kind: 'latest-turn',
@@ -824,7 +828,7 @@ export class GitReviewService {
     return {
       taskId: identity.taskId,
       ok: true,
-      message: '已撤销最新一轮写入，历史检查点仍保留。',
+      message: '已恢复上一轮文件，历史检查点仍保留。',
       recoveryCheckpointId: recoveryId,
       restoredPaths: [...applied],
       appliedPaths: [...applied]
@@ -836,7 +840,11 @@ export class GitReviewService {
     expected: Extract<RestoreEvaluation, { kind: 'latest-turn' }>
   ): Promise<{ kind: 'ok' } | { kind: 'refuse'; reason: RestoreRefusalReason; message: string }> {
     if (this.deps.hasActiveExecution?.() === true) {
-      return { kind: 'refuse', reason: 'active-turn', message: '当前有活动 Turn，不能自动撤销。' }
+      return {
+        kind: 'refuse',
+        reason: 'active-turn',
+        message: '当前有活动 Turn，不能自动恢复上一轮文件。'
+      }
     }
     const computed = await this.computeAttributedChangeSet(identity)
     const evaluation = await this.evaluateRestoreFromComputed(identity, computed)
@@ -879,7 +887,7 @@ export class GitReviewService {
         operationType,
         targets: steps.map((item) => ({ kind: 'path', value: item.path })),
         parameterFingerprint: fingerprint,
-        title: '写回最新一轮撤销目标',
+        title: '写回上一轮文件恢复目标',
         impact: `将把 ${count} 个文件恢复为 Git HEAD 中的内容。检查点只存哈希，不会执行 git reset、checkout、clean 或 stash。`
       }
     }

@@ -74,7 +74,7 @@ export interface BaselineInvalidation {
   reason?: NonNullable<TaskChangeBaseline['invalidReason']>
 }
 
-/** 无法证明属于本 Task 的变化一律不得标成可安全撤销。 */
+/** 无法证明属于本 Task 的变化一律不得标成可安全恢复上一轮文件。 */
 export type TaskChangeAttribution =
   | 'pre-existing'
   | 'task-added'
@@ -368,7 +368,7 @@ function parseRevertible(value: unknown): TaskChangeSet['revertible'] | null {
   if (value === false) return false
   if (!isPlainRecord(value) || typeof value.kind !== 'string') return null
   if (value.kind === 'none') {
-    const reason = parseSafeReason(value.reason, '当前版本不提供一键撤销。')
+    const reason = parseSafeReason(value.reason, '当前版本不提供一键恢复上一轮文件。')
     if (reason === null) return null
     return { kind: 'none', reason }
   }

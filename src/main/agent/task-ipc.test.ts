@@ -159,7 +159,7 @@ function createFixture(
       unknownCount: 0,
       validations: [],
       paths: [{ path: 'README.md', attribution: 'task-modified' }],
-      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' }
+      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键恢复上一轮文件。' }
     })),
     getFileDiff: vi.fn(async (taskId: string, path: string): Promise<FileDiffResult> => {
       if (path.includes('..') || path.startsWith('/')) {
@@ -170,14 +170,14 @@ function createFixture(
     listTurnCheckpoints: vi.fn(async (): Promise<TurnChangeCheckpoint[]> => []),
     previewLatestTurnRestore: vi.fn(async (taskId: string): Promise<LatestTurnRestorePreview> => ({
       taskId,
-      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键撤销。' },
+      revertible: { kind: 'none', reason: '当前版本仅提供只读审阅，不支持一键恢复上一轮文件。' },
       willLosePaths: []
     })),
     restoreLatestTurn: vi.fn(async (taskId: string): Promise<LatestTurnRestoreResult> => ({
       taskId,
       ok: false,
       reason: 'none',
-      message: '当前不能自动撤销。'
+      message: '当前不能自动恢复上一轮文件。'
     }))
   }
   const artifactRegistry = {

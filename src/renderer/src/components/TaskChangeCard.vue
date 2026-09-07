@@ -5,7 +5,7 @@ import type { ChangeCardView } from '../task-changes-presentation'
 import { formatChangeLineDelta } from '../task-changes-presentation'
 import TaskChangeMediaThumbnail from './TaskChangeMediaThumbnail.vue'
 
-/** 对话里的变更入口：只负责展示与发出审核/撤销，不自己调 IPC。 */
+/** 对话里的变更入口：只负责展示与发出审核/文件恢复，不自己调 IPC。 */
 
 const props = defineProps<{
   taskId: string
@@ -43,12 +43,12 @@ const hiddenFileCount = computed(() =>
         <button
           class="secondary-button"
           type="button"
-          :title="model.canRestore ? '撤销最新一轮' : '当前不能一键撤销'"
-          :aria-label="model.canRestore ? '撤销最新一轮' : '当前不能一键撤销'"
+          :title="model.canRestore ? '恢复上一轮文件' : '当前不能一键恢复上一轮文件'"
+          :aria-label="model.canRestore ? '恢复上一轮文件' : '当前不能一键恢复上一轮文件'"
           :disabled="!model.canRestore || restoreBusy"
           @click="$emit('restore')"
         >
-          撤销
+          恢复上一轮文件
         </button>
         <button
           class="secondary-button"
