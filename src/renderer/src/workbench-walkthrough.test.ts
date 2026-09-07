@@ -217,7 +217,9 @@ describe('工作台对照走查（夹具，非桌面 GUI）', () => {
     expect(composerSource.match(/class="composer-takeover-hud[^"]*"/g)).toEqual([
       'class="composer-takeover-hud no-drag"'
     ])
-    expect(appSource).toContain(':overlay-visible="false"')
+    expect(appSource).toContain(':overlay-visible="browserPluginOverlayVisible"')
+    expect(appSource).toContain('onBrowserPluginOverlay')
+    expect(appSource).not.toContain(':overlay-visible="false"')
     expect(appSource).toContain('@stop="cancelTurn"')
     expect(composerSource).toContain('composer-usage-copy')
     expect(composerSource).not.toContain('composer-usage-tooltip')

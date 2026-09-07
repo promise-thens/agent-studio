@@ -7,7 +7,13 @@ export default defineConfig({
   preload: {
     build: {
       // 沙箱 Preload 无法在运行时加载第三方包，因此必须在构建阶段一并打包。
-      externalizeDeps: false
+      externalizeDeps: false,
+      rollupOptions: {
+        input: {
+          index: resolve('src/preload/index.ts'),
+          overlay: resolve('src/preload/overlay.ts')
+        }
+      }
     }
   },
   renderer: {
@@ -22,6 +28,14 @@ export default defineConfig({
         '@renderer': resolve('src/renderer/src')
       }
     },
-    plugins: [vue()]
+    plugins: [vue()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/renderer/index.html'),
+          overlay: resolve('src/renderer/overlay.html')
+        }
+      }
+    }
   }
 })

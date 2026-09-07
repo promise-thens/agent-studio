@@ -12,6 +12,7 @@ import type {
   AgentEvent,
   AgentRuntimeCapabilitySnapshot,
   AgentRuntimeStatus,
+  AgentToolStatus,
   AgentTurnOutcome
 } from '../../../shared/agent'
 import { AgentEventNormalizer, type AgentEventDraft } from '../../agent/event-normalizer'
@@ -257,6 +258,19 @@ const GROK_PLAN_APPROVAL_METHODS = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function asBrowserPluginToolStatus(value: unknown): AgentToolStatus | undefined {
+  if (
+    value === 'pending' ||
+    value === 'in_progress' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'cancelled'
+  ) {
+    return value
+  }
+  return undefined
 }
 
 /** ACP SDK 把 extMethod params 标成 Record，运行时仍可能是 RawValue 字符串。 */
@@ -613,6 +627,16 @@ export interface GrokAcpAdapterOptions {
     turnId: string
     absolutePath: string
   }) => Promise<{ artifactId: string } | null>
+  /**
+   * 仅白名单 browser 工具通知 overlay。rawInput 只给投影用，不得原样进 Renderer。
+   */
+  onBrowserPluginTool?: (activity: {
+    taskId: string
+    turnId: string
+    toolCallId: string
+    status?: AgentToolStatus
+    rawInput?: unknown
+  }) => void
   /** 仅测试注入 Grok session 媒体根；生产固定 /tmp/sessions。 */
   grokSessionMediaRoot?: string
   /** 仅测试注入 signals 根；生产固定为 App 专属 Managed GROK_HOME。 */
@@ -1723,6 +1747,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       if (!isSafeGrokToolCallId(update.toolCallId)) {
         this.rejectAllToolPermissions(activeTurn)
       } else if (update.status === 'completed' || update.status === 'failed') {
+        this.emitBrowserPluginToolActivity(activeTurn, update)
         this.markToolCallTerminal(activeTurn, update.toolCallId)
         this.queueCommandEvidenceFromTool(activeTurn, update)
       } else if (
@@ -1740,6 +1765,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
           // title、status 等展示更新不撤销审批；真实授权事实变化才使旧审批失效。
           this.cancelPendingPermissionsForToolCall(activeTurn, update.toolCallId)
         }
+        this.emitBrowserPluginToolActivity(activeTurn, update)
         this.queueCommandEvidenceFromTool(activeTurn, update)
       } else {
         this.queueCommandEvidenceFromTool(activeTurn, update)
@@ -2103,6 +2129,30 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     activeTurn.terminalToolCallIds.clear()
     activeTurn.toolCallAuthorizationSnapshots.clear()
     this.cancelPendingPermissions(activeTurn)
+  }
+
+  /**
+   * 只把任务 1 白名单 browser 工具交给 overlay。rawInput 仅供投影，当前冻结下不会变成光标。
+   */
+  private emitBrowserPluginToolActivity(
+    activeTurn: ActiveTurn,
+    update: Extract<
+      acp.SessionNotification['update'],
+      { sessionUpdate: 'tool_call' | 'tool_call_update' }
+    >
+  ): void {
+    const notify = this.options.onBrowserPluginTool
+    if (!notify) return
+    const snapshot = activeTurn.toolCallAuthorizationSnapshots.get(update.toolCallId)
+    if (snapshot?.integrity !== 'valid' || !snapshot.browserToolName) return
+    const status = asBrowserPluginToolStatus(update.status)
+    notify({
+      taskId: activeTurn.taskId,
+      turnId: activeTurn.turnId,
+      toolCallId: update.toolCallId,
+      ...(status ? { status } : {}),
+      ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {})
+    })
   }
 
   /** ToolCall 终态先建立 tombstone，再删除快照并精确撤销同一 ToolCall 的等待权限。 */

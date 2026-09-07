@@ -78,8 +78,13 @@ import {
   type ArtifactDescriptor
 } from '../shared/artifact'
 import {
+  parseBrowserPluginOverlaySnapshot,
+  type BrowserPluginOverlaySnapshot
+} from '../shared/browser-plugin-overlay'
+import {
   parseSubagentActivityPage,
   TASK_INVOKE_CHANNELS,
+  TASK_PUSH_CHANNELS,
   type SubagentActivityPage,
   type TaskDesktopApi
 } from '../shared/task-ipc'
@@ -1399,7 +1404,14 @@ export function createTaskDesktopApi(
         return { ok: false, error: { code: 'operation-failed', message: '子代理活动无效。' } }
       }
       return { ok: true, value: parsed as SubagentActivityPage }
-    }
+    },
+    onBrowserPluginOverlay: (listener: (snapshot: BrowserPluginOverlaySnapshot) => void) =>
+      subscribe(
+        ipcRenderer,
+        TASK_PUSH_CHANNELS.browserPluginOverlay,
+        listener,
+        parseBrowserPluginOverlaySnapshot
+      )
   }
 }
 

@@ -19,6 +19,8 @@ import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { appearanceWindowBackground, type AppAppearanceState } from '../shared/app-appearance'
 import { AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
+import { TASK_PUSH_CHANNELS } from '../shared/task-ipc'
+import { BrowserPluginOverlayHost } from './browser-plugin-overlay'
 import { APP_PUSH_CHANNELS } from '../shared/app-ipc'
 import { sanitizeExternalHref } from '../shared/external-href'
 import { TAKEOVER_CONTROL_TURN_KIND } from '../shared/task-takeover'
@@ -137,6 +139,7 @@ let commandEvidenceStore: CommandEvidenceStore | null = null
 let gitReviewService: GitReviewService | null = null
 let artifactRegistry: ArtifactRegistry | null = null
 let artifactContentService: ArtifactContentService | null = null
+let browserPluginOverlayHost: BrowserPluginOverlayHost | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -160,6 +163,7 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
   mainWindow.on('closed', () => {
+    browserPluginOverlayHost?.destroy()
     mainWindow = null
   })
 
@@ -288,9 +292,16 @@ async function initializeServices(
   })
   permissionBroker = new PermissionBroker({
     auditStore: permissionAuditStore,
-    onApproval: (request) =>
-      sendToTrustedRenderer(createRendererTrustOptions(), AGENT_PUSH_CHANNELS.permission, request),
+    onApproval: (request) => {
+      browserPluginOverlayHost?.acceptPermission(request)
+      return sendToTrustedRenderer(
+        createRendererTrustOptions(),
+        AGENT_PUSH_CHANNELS.permission,
+        request
+      )
+    },
     onApprovalCancelled: (request) => {
+      browserPluginOverlayHost?.acceptPermissionCancelled(request)
       sendToTrustedRenderer(
         createRendererTrustOptions(),
         AGENT_PUSH_CHANNELS.permissionCancelled,
@@ -500,6 +511,9 @@ async function initializeServices(
           originalName: descriptor.originalName
         }
       },
+      onBrowserPluginTool: (activity) => {
+        browserPluginOverlayHost?.acceptBrowserTool(activity)
+      },
       registerBrowserPluginScreenshot: async (input) => {
         // 插件截图走 P0-13 Artifact，不进会话附件柜；失败返回 null，不抛进 Turn。
         const registry = artifactRegistry
@@ -545,8 +559,10 @@ async function initializeServices(
     redactText: redactProviderText,
     onCancelTimeout: (identity) =>
       requirePermissionBroker().cancelTurn(identity.taskId, identity.turnId),
-    onSnapshot: (snapshot) =>
-      sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.executionUpdate, snapshot),
+    onSnapshot: (snapshot) => {
+      sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.executionUpdate, snapshot)
+      browserPluginOverlayHost?.acceptExecutionSnapshot(snapshot)
+    },
     onEvent: (event) =>
       sendToTrustedRenderer(
         rendererTrust,
@@ -707,10 +723,22 @@ function registerIpcHandlers(): void {
   const assertTrustedSender = (event: Parameters<typeof assertTrustedIpcSender>[0]): void => {
     assertTrustedIpcSender(event, rendererTrust)
   }
+  const assertTrustedCancelTurnSender = (
+    event: Parameters<typeof assertTrustedIpcSender>[0]
+  ): void => {
+    try {
+      assertTrustedIpcSender(event, rendererTrust)
+    } catch (error) {
+      const overlayTrust = browserPluginOverlayHost?.getRendererTrustOptions()
+      if (!overlayTrust) throw error
+      assertTrustedIpcSender(event, overlayTrust)
+    }
+  }
 
   registerAgentIpcHandlers({
     ipcMain: desktopIpcMain,
     assertTrustedSender,
+    assertTrustedCancelTurnSender,
     getAgent: () => {
       const service = agentService
       const executor = taskExecutor
@@ -736,7 +764,13 @@ function registerIpcHandlers(): void {
         },
         getTaskRuntimeState: (taskId) => service.getTaskRuntimeState(taskId),
         getAvailableCommands: (taskId) => service.getAvailableCommands(taskId),
-        respondPermission: (request) => service.respondPermission(request),
+        respondPermission: async (request) => {
+          await service.respondPermission(request)
+          browserPluginOverlayHost?.acceptPermissionResponse({
+            approvalId: request.approvalId,
+            decision: request.decision
+          })
+        },
         // 门面必须转发问答；漏挂时 IPC 会成功返回，Grok 却一直等 skip。
         respondQuestion: (request) => service.respondQuestion(request),
         setPermissionMode: async (request) => {
@@ -1230,6 +1264,23 @@ function createRendererTrustOptions(): RendererTrustOptions {
   }
 }
 
+/** 组装 overlay 生命周期；窗口细节留在 browser-plugin-overlay 模块。 */
+function createBrowserPluginOverlayHostInstance(): BrowserPluginOverlayHost {
+  return new BrowserPluginOverlayHost({
+    isDev: Boolean(is.dev && process.env.ELECTRON_RENDERER_URL),
+    rendererUrl: process.env.ELECTRON_RENDERER_URL,
+    preloadPath: join(__dirname, '../preload/overlay.js'),
+    productionHtmlPath: join(__dirname, '../renderer/overlay.html'),
+    platform: process.platform,
+    publishToMain: (snapshot) =>
+      sendToTrustedRenderer(
+        createRendererTrustOptions(),
+        TASK_PUSH_CHANNELS.browserPluginOverlay,
+        snapshot
+      )
+  })
+}
+
 /** 把 Electron nativeTheme 收成可测适配器，避免 AppearanceController 直接依赖 electron 模块。 */
 function createNativeThemeAdapter(): NativeThemeAdapter {
   return {
@@ -1559,6 +1610,7 @@ if (hasSingleInstanceLock)
       electronApp.setAppUserModelId('com.promise-thens.agent-studio')
       app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
       await initializeServices(controlledAcpE2e, gacp01Observe)
+      browserPluginOverlayHost = createBrowserPluginOverlayHostInstance()
       registerIpcHandlers()
       installApplicationMenu()
       createWindow()
