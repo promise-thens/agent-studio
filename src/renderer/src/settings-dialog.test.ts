@@ -6,6 +6,7 @@ import { APP_APPEARANCE_BACKGROUNDS } from '../../shared/app-appearance'
 import {
   APPEARANCE_OPTIONS,
   DEFAULT_SETTINGS_SECTION,
+  SETTINGS_SECTIONS,
   applyResolvedAppearance,
   resolveSettingsSection
 } from './settings-dialog'
@@ -23,6 +24,7 @@ describe('设置弹窗与外观应用', () => {
     expect(resolveSettingsSection('appearance')).toBe('appearance')
     expect(resolveSettingsSection('grok-config')).toBe('grok-config')
     expect(resolveSettingsSection('memory')).toBe('memory')
+    expect(resolveSettingsSection('hooks')).toBe('hooks')
     expect(resolveSettingsSection('mcp')).toBe(DEFAULT_SETTINGS_SECTION)
     expect(resolveSettingsSection('fonts')).toBe(DEFAULT_SETTINGS_SECTION)
     expect(settingsSource).not.toContain("section === 'mcp'")
@@ -65,6 +67,26 @@ describe('设置弹窗与外观应用', () => {
     expect(baseCss).toContain('--text-1: #1c1c1e')
     expect(settingsSource).toContain(lightBg)
     expect(settingsSource).not.toContain('#f4efe6')
+  })
+
+  it('侧栏在 Grok 配置后单独开 Hooks 页，不并进 grok-config', () => {
+    expect(SETTINGS_SECTIONS.map((section) => section.id)).toEqual([
+      'provider',
+      'appearance',
+      'memory',
+      'grok-config',
+      'hooks'
+    ])
+    expect(SETTINGS_SECTIONS.map((section) => section.label)).toEqual([
+      '供应商',
+      '外观',
+      '记忆',
+      'Grok 配置',
+      'Hooks'
+    ])
+    expect(settingsSource).toContain("section === 'hooks'")
+    expect(settingsSource).toContain('GrokHooksPanel')
+    expect(settingsSource).toContain('PhWebhooksLogo')
   })
 
   it('供应商页说明生图走同一 Base URL', () => {

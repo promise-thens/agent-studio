@@ -5,6 +5,7 @@ import {
   PhCode as Code,
   PhPalette as Palette,
   PhPlugsConnected as PlugsConnected,
+  PhWebhooksLogo as WebhooksLogo,
   PhX as X
 } from '@phosphor-icons/vue'
 import type { AppAppearanceMode, AppAppearanceState } from '../../../shared/app-appearance'
@@ -16,6 +17,7 @@ import type {
 } from '../../../shared/provider'
 import { APPEARANCE_OPTIONS, SETTINGS_SECTIONS, type SettingsSection } from '../settings-dialog'
 import GrokConfigEditor from './GrokConfigEditor.vue'
+import GrokHooksPanel from './GrokHooksPanel.vue'
 import MemorySettingsPanel from './MemorySettingsPanel.vue'
 import ProviderOnboarding from './ProviderOnboarding.vue'
 
@@ -64,6 +66,7 @@ function sectionIcon(id: SettingsSection): typeof Palette {
   if (id === 'appearance') return Palette
   if (id === 'memory') return Brain
   if (id === 'grok-config') return Code
+  if (id === 'hooks') return WebhooksLogo
   return PlugsConnected
 }
 </script>
@@ -109,7 +112,9 @@ function sectionIcon(id: SettingsSection): typeof Palette {
 
         <div
           class="settings-pane"
-          :class="{ fill: section === 'memory' || section === 'grok-config' }"
+          :class="{
+            fill: section === 'memory' || section === 'grok-config' || section === 'hooks'
+          }"
         >
           <div v-if="section === 'provider'" class="provider-pane">
             <h3>供应商</h3>
@@ -166,6 +171,7 @@ function sectionIcon(id: SettingsSection): typeof Palette {
             :runtime-busy="runtimeBusy"
             @dirty="paneDirty = $event"
           />
+          <GrokHooksPanel v-else-if="section === 'hooks'" />
         </div>
       </div>
     </section>
@@ -251,7 +257,7 @@ function sectionIcon(id: SettingsSection): typeof Palette {
   padding: 20px 22px 24px;
 }
 
-/* 记忆和配置编辑需要铺满右侧，避免外层滚动把内部两栏裁成一团。 */
+/* 记忆、配置编辑和 Hooks 列表需要铺满右侧，避免外层滚动把内部两栏裁成一团。 */
 .settings-pane.fill {
   display: grid;
   overflow: hidden;

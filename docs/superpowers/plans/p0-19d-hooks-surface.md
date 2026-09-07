@@ -8,7 +8,7 @@
 
 **优先级：** P0-A / 权重 3（让用户知道 Grok 会在何时跑钩子；桌面不执行钩子）
 
-**Goal：** 在设置「Grok 配置」或插件页提供 Hooks 列表：事件名、启用与否、目标类型（命令 / HTTP）、有限说明。用户改钩子仍用文件 + Grok，不在桌面提供任意命令编辑器。
+**Goal：** 在设置独立「Hooks」栏目提供只读列表：事件名、启用与否、目标类型（命令 / HTTP）、有限说明。用户改钩子仍用文件 + Grok，不在桌面提供任意命令编辑器。
 
 **Architecture：** 主进程扫描 `getManagedGrokHome()/hooks` 与 Grok 文档允许的 hooks 注册文件（若 App grok-home 存在）。跟随 symlink 逃出 grok-home 的整项 `invalid`。Renderer 只拿脱敏摘要。不 spawn 钩子，不把 hooks 命令注入 ACP。
 
@@ -34,7 +34,7 @@
 ## 数据流
 
 ```text
-设置打开 Hooks 段
+设置打开独立 Hooks 栏目
   → app:list-hooks
   → 主进程 realpath 扫描 grok-home/hooks
   → { id, event, enabled, targetKind: 'command' | 'http' | 'invalid', warning? }
@@ -69,7 +69,7 @@
 
 - [x] **第 1 步: 只读列表**
 
-说明：事件名、启用、目标类型、invalid 原因。空态说明隔离边界。所有图标有 title。
+说明：设置侧栏独立 Hooks 页。事件名、启用、目标类型、invalid 原因。空态说明隔离边界。所有图标有 title。
 
 - [ ] **第 2 步: 走查**
 

@@ -5,16 +5,6 @@ import { useGrokSandboxSettings } from '../composables/useGrokSandboxSettings'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import { parseTomlCursor } from '../grok-config-cursor'
 import {
-  GROK_HOOKS_EMPTY_COPY,
-  GROK_HOOKS_ERROR_COPY,
-  GROK_HOOKS_INTRO,
-  GROK_HOOKS_LOADING_COPY,
-  GROK_HOOKS_RETRY_LABEL,
-  GROK_HOOKS_TITLE,
-  mapGrokHookSummariesToRowViews,
-  type GrokHookRowView
-} from '../grok-hooks-settings'
-import {
   GROK_SANDBOX_DIRTY_TITLE,
   GROK_SANDBOX_INTRO,
   GROK_SANDBOX_OPTIONS,
@@ -45,9 +35,6 @@ const parseError = ref('')
 const cursorOffset = ref(0)
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const sandbox = useGrokSandboxSettings()
-const hooksLoadState = ref<'loading' | 'ready' | 'error'>('loading')
-const hooksErrorMessage = ref('')
-const hookRows = ref<GrokHookRowView[]>([])
 
 const dirty = computed(() => text.value !== savedText.value)
 const sandboxDisabled = computed(
@@ -87,8 +74,6 @@ watch(dirty, (value) => emit('dirty', value))
 async function loadConfig(): Promise<void> {
   loadState.value = 'loading'
   errorMessage.value = ''
-  // Hooks 与 toml 并行；钩子失败只留字段错误，不得挡住编辑器。
-  const hooksPromise = loadHooks()
   try {
     const document = unwrapDesktopIpcResult(await window.app.getGrokConfig())
     text.value = document.text
@@ -99,22 +84,6 @@ async function loadConfig(): Promise<void> {
     errorMessage.value = error instanceof Error ? error.message : String(error)
     loadState.value = 'error'
     await sandbox.load()
-  }
-  await hooksPromise
-}
-
-/** 只读库存：走 listHooks，Renderer 不读磁盘、不执行钩子。 */
-async function loadHooks(): Promise<void> {
-  hooksLoadState.value = 'loading'
-  hooksErrorMessage.value = ''
-  try {
-    const summaries = unwrapDesktopIpcResult(await window.app.listHooks())
-    hookRows.value = mapGrokHookSummariesToRowViews(summaries)
-    hooksLoadState.value = 'ready'
-  } catch (error) {
-    hookRows.value = []
-    hooksErrorMessage.value = error instanceof Error ? error.message : String(error)
-    hooksLoadState.value = 'error'
   }
 }
 
@@ -248,42 +217,6 @@ onMounted(() => {
           {{ sandbox.statusMessage.value }}
         </p>
       </fieldset>
-      <fieldset
-        class="hooks-field"
-        aria-describedby="grok-hooks-intro"
-        :aria-busy="hooksLoadState === 'loading' ? 'true' : undefined"
-      >
-        <legend id="grok-hooks-title">{{ GROK_HOOKS_TITLE }}</legend>
-        <p id="grok-hooks-intro">{{ GROK_HOOKS_INTRO }}</p>
-        <p v-if="hooksLoadState === 'loading'" class="hooks-status" role="status">
-          {{ GROK_HOOKS_LOADING_COPY }}
-        </p>
-        <div v-else-if="hooksLoadState === 'error'" class="hooks-error" role="alert">
-          <p id="grok-hooks-error" class="error">
-            {{ hooksErrorMessage || GROK_HOOKS_ERROR_COPY }}
-          </p>
-          <button
-            class="hub-secondary"
-            type="button"
-            :title="GROK_HOOKS_RETRY_LABEL"
-            :aria-label="GROK_HOOKS_RETRY_LABEL"
-            @click="loadHooks"
-          >
-            重试
-          </button>
-        </div>
-        <p v-else-if="hookRows.length === 0" class="hooks-empty">{{ GROK_HOOKS_EMPTY_COPY }}</p>
-        <ul v-else class="hooks-list">
-          <li v-for="row in hookRows" :key="row.id" class="hooks-row">
-            <div class="hooks-row-main">
-              <span class="hooks-event">{{ row.eventLabel }}</span>
-              <span class="hooks-enabled">{{ row.enabledLabel }}</span>
-              <span class="hooks-target">{{ row.targetLabel }}</span>
-            </div>
-            <p v-if="row.warning" class="hooks-warning">{{ row.warning }}</p>
-          </li>
-        </ul>
-      </fieldset>
       <div class="config-body">
         <div class="editor-column">
           <div class="editor-frame">
@@ -377,12 +310,11 @@ header p,
 .config-stack {
   display: grid;
   min-height: 0;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
 }
 
-.sandbox-field,
-.hooks-field {
+.sandbox-field {
   display: grid;
   gap: 10px;
   min-width: 0;
@@ -393,16 +325,14 @@ header p,
   background: var(--app-bg);
 }
 
-.sandbox-field legend,
-.hooks-field legend {
+.sandbox-field legend {
   padding: 0 4px;
   color: var(--text-1);
   font-size: 14px;
   font-weight: 650;
 }
 
-.sandbox-field > p,
-.hooks-field > p {
+.sandbox-field > p {
   margin: 0;
 }
 
@@ -441,59 +371,11 @@ header p,
 }
 
 .sandbox-help,
-.sandbox-status,
-.hooks-status,
-.hooks-empty,
-.hooks-warning {
+.sandbox-status {
   margin: 0;
   color: var(--text-3);
   font-size: 12px;
   line-height: 1.45;
-  overflow-wrap: anywhere;
-}
-
-.hooks-error {
-  display: grid;
-  gap: 8px;
-  justify-items: start;
-}
-
-.hooks-list {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.hooks-row {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.hooks-row-main {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.hooks-event {
-  min-width: 0;
-  color: var(--text-1);
-  font-size: 13px;
-  font-weight: 650;
-  overflow-wrap: anywhere;
-}
-
-.hooks-enabled,
-.hooks-target {
-  min-width: 0;
-  color: var(--text-3);
-  font-size: 12px;
-  overflow-wrap: anywhere;
 }
 
 .config-body {
