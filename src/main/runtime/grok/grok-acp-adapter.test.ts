@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -3487,6 +3487,33 @@ describe('Grok Runtime 环境隔离', () => {
   })
 })
 
+describe('Gemini 工具 schema 兼容代理', () => {
+  it('Gemini 模型把 Grok Base URL 指到本机代理，断开后写回真实 URL', async () => {
+    const captured = await connectAndCaptureRuntime('gemini-3-flash')
+    try {
+      expect(captured.env?.GROK_XAI_API_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/c\//)
+      expect(captured.toml).toMatch(/base_url = "http:\/\/127\.0\.0\.1:\d+\/c\//)
+      expect(captured.toml).not.toContain('https://api.example.com/v1')
+      await captured.disconnect()
+      expect(await readFile(captured.configPath, 'utf8')).toContain(
+        'base_url = "https://api.example.com/v1"'
+      )
+    } finally {
+      await captured.cleanup()
+    }
+  })
+
+  it('非 Gemini 模型不改写 Base URL', async () => {
+    const captured = await connectAndCaptureRuntime('grok-4.6')
+    try {
+      expect(captured.env?.GROK_XAI_API_BASE_URL).toBe('https://api.example.com/v1')
+      expect(captured.toml).toContain('base_url = "https://api.example.com/v1"')
+    } finally {
+      await captured.cleanup()
+    }
+  })
+})
+
 describe('Grok Runtime 受控 E2E fixture spawn', () => {
   it('fixture spawn 使用独立 argv 与 ELECTRON_RUN_AS_NODE，不含生产 --no-auto-update', async () => {
     const userDataPath = await realpath(
@@ -4220,6 +4247,56 @@ async function connectAndCaptureProductionArgv(
     return captured
   } finally {
     await rm(userDataPath, { recursive: true, force: true })
+  }
+}
+
+/** 捕获生产 spawn 环境与 grok-home toml，供 Gemini 兼容代理断言。 */
+async function connectAndCaptureRuntime(modelId: string): Promise<{
+  env: NodeJS.ProcessEnv | undefined
+  toml: string
+  configPath: string
+  disconnect: () => Promise<void>
+  cleanup: () => Promise<void>
+}> {
+  const userDataPath = await mkdtemp(join(tmpdir(), 'grok-gemini-compat-'))
+  const workspace = join(userDataPath, 'workspace')
+  await mkdir(workspace)
+  const child = createFakeSpawnChild()
+  let capturedEnv: NodeJS.ProcessEnv | undefined
+  const adapter = new GrokAcpAdapter(
+    {
+      onStatus: () => undefined,
+      onEvent: () => undefined,
+      onPermission: () => undefined,
+      onPermissionCancelled: () => undefined,
+      onAvailableCommands: () => undefined
+    },
+    {
+      userDataPath,
+      getProviderConfig: () => ({ ...providerConfig(), modelId }),
+      getClientVersion: () => '0.1.0-test',
+      redactText: redactFakeText,
+      spawnProductionProcess: (_command, _args, options) => {
+        capturedEnv = (options as { env?: NodeJS.ProcessEnv }).env
+        return child
+      }
+    }
+  )
+  const internal = adapter as unknown as GrokAcpAdapterTestAccess
+  vi.spyOn(internal, 'initializeConnection').mockResolvedValue(true)
+  await adapter.connect(workspace)
+  const configPath = join(getManagedGrokHome(userDataPath), 'config.toml')
+  return {
+    env: capturedEnv,
+    toml: await readFile(configPath, 'utf8'),
+    configPath,
+    disconnect: async () => {
+      await adapter.disconnect()
+    },
+    cleanup: async () => {
+      await adapter.disconnect()
+      await rm(userDataPath, { recursive: true, force: true })
+    }
   }
 }
 

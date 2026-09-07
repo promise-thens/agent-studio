@@ -38,6 +38,10 @@ import {
   getManagedGrokHome,
   writeGrokProviderConfig
 } from '../../provider/grok-provider-config'
+import {
+  bindGeminiCompatRuntimeConfig,
+  type ProviderCompatProxy
+} from '../../provider/provider-compat-proxy'
 import { GrokHomeConfigController } from './grok-home-config-controller'
 import {
   AGENT_STUDIO_MODEL_ALIAS,
@@ -654,6 +658,9 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
    * 握手可能先以非 ENOENT 失败；分类时优先认缺 CLI，避免笼统“连接失败”。
    */
   private connectProcessError: unknown | null = null
+  /** Gemini 兼容代理只活在本次连接里，断开必须停掉并写回真实 Base URL。 */
+  private providerCompatProxy: ProviderCompatProxy | null = null
+  private rewroteProviderBaseUrl = false
 
   constructor(
     private readonly sink: AgentRuntimeAdapterSink,
@@ -709,9 +716,15 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       }
     } else {
       let grokHome: string
+      let runtimeProviderConfig = providerConfig
       try {
-        grokHome = await writeGrokProviderConfig(this.options.userDataPath, providerConfig)
+        const bound = await bindGeminiCompatRuntimeConfig(providerConfig)
+        this.providerCompatProxy = bound.proxy
+        this.rewroteProviderBaseUrl = bound.proxy !== null
+        runtimeProviderConfig = bound.runtimeConfig
+        grokHome = await writeGrokProviderConfig(this.options.userDataPath, runtimeProviderConfig)
       } catch (error) {
+        await this.stopProviderCompatProxy()
         const resolved = resolveGrokAcpFailure('config-write-failed', {
           redactedDetail: this.redactError(error)
         })
@@ -734,12 +747,13 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
           : `无法读取 Grok sandbox 配置：${detail}`
         const adapterError = this.createError('operation-failed', message)
         this.updateStatus({ state: 'error', message: adapterError.message, workspace })
+        await this.stopProviderCompatProxy()
         throw adapterError
       }
       // 备注：stdio 全 pipe 时运行时一定是 WithoutNullStreams；测试注入必须返回同类形状。
       child = spawnProduction(this.resolveBinary(), productionArgv, {
         cwd: workspace,
-        env: buildGrokRuntimeEnvironment(providerConfig, grokHome, process.env, {
+        env: buildGrokRuntimeEnvironment(runtimeProviderConfig, grokHome, process.env, {
           memoryEnabled
         }),
         stdio: ['pipe', 'pipe', 'pipe']
@@ -2405,12 +2419,29 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     this.selectedSession = null
     this.supportsCloseSession = false
     process?.kill()
+    await this.stopProviderCompatProxy()
     this.resetCapabilitySnapshot()
 
     if (updateStatus) {
       this.updateStatus({ state: 'idle', message: '已断开 Grok Build' })
     }
     return this.status
+  }
+
+  /**
+   * 停掉 Gemini 兼容代理，并把 grok-home 的 Base URL 写回 Provider Store 里的真实地址。
+   * 写回失败不能阻断断开；下次 connect 会再覆盖。
+   */
+  private async stopProviderCompatProxy(): Promise<void> {
+    const proxy = this.providerCompatProxy
+    const shouldRestore = this.rewroteProviderBaseUrl
+    this.providerCompatProxy = null
+    this.rewroteProviderBaseUrl = false
+    if (proxy) await proxy.stop().catch(() => undefined)
+    if (!shouldRestore) return
+    const providerConfig = this.options.getProviderConfig()
+    if (!providerConfig) return
+    await writeGrokProviderConfig(this.options.userDataPath, providerConfig).catch(() => undefined)
   }
 
   private handleRuntimeProcessError(
