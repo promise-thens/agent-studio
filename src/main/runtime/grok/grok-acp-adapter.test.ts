@@ -1631,6 +1631,49 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     expect(registerBrowserPluginScreenshot).toHaveBeenCalledTimes(2)
   })
 
+  it('失败截图按 toolCallId 去重，不按 path 封死同一 Turn 的后续截图', async () => {
+    const screenshotPath = '/tmp/sessions/sess-shot/images/page.png'
+    const registerBrowserPluginScreenshot = vi.fn(async () => ({ artifactId: 'art-shot-2' }))
+    const prompt = vi.fn()
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, { registerBrowserPluginScreenshot })
+    prompt.mockImplementation(async () => {
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-shot-fail',
+          title: 'take_screenshot',
+          name: 'take_screenshot',
+          status: 'failed',
+          rawInput: { filePath: screenshotPath }
+        }),
+        connection
+      )
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-shot-ok',
+          title: 'take_screenshot',
+          name: 'take_screenshot',
+          status: 'completed',
+          rawInput: { filePath: screenshotPath }
+        }),
+        connection
+      )
+      return { stopReason: 'end_turn' as const }
+    })
+
+    await expect(harness.adapter.startTurn(turnContext('task-shot', 'turn-shot'))).resolves.toEqual(
+      { outcome: 'completed' }
+    )
+    expect(registerBrowserPluginScreenshot).toHaveBeenCalledTimes(1)
+    expect(registerBrowserPluginScreenshot).toHaveBeenCalledWith({
+      taskId: 'task-shot',
+      turnId: 'turn-shot',
+      absolutePath: screenshotPath
+    })
+  })
+
   it('同一 Task 的第二轮继续使用同一 Runtime session，但 turnId 由服务层更新', async () => {
     const prompt = vi
       .fn()

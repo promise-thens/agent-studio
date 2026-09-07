@@ -127,7 +127,8 @@ export function createLocalEnvironmentId(projectId: string, canonicalRoot: strin
 /**
  * 固定首期风险表。minimumRisk 只能升级，Runtime 或调用方不能用它降低默认风险。
  * Screen / Clipboard 在能力真正接入前直接拒绝。
- * Browser 已接入 L3：允许 once 与 task，但不得把其它 L3（未知命令等）放宽成 task。
+ * Browser 已接入 L3：有可信 origin 时允许 once 与 task；unknown origin 只允许 once。
+ * 不得把其它 L3（未知命令等）放宽成 task。
  * 未知 execute 与未知出网一样强制 L3，不能靠 mapper 漏标 minimumRisk 变成 Task 通行证。
  */
 export function evaluatePermissionPolicy(intent: OperationIntent): PermissionPolicyEvaluation {
@@ -149,9 +150,13 @@ export function evaluatePermissionPolicy(intent: OperationIntent): PermissionPol
     }
   }
   if (risk === 'L0') return { kind: 'allow', risk, allowedScopes: [] }
-  // Browser 按 origin 精确绑钥匙，允许本任务复用；其它 L3 仍只允许单次。
+  // unknown origin 不能当本任务钥匙，否则 click/upload 会互相捎带。
   if (intent.operationType === 'browser') {
-    return { kind: 'approval', risk, allowedScopes: ['once', 'task'] }
+    return {
+      kind: 'approval',
+      risk,
+      allowedScopes: hasTrustedBrowserOrigin(intent) ? ['once', 'task'] : ['once']
+    }
   }
   if (risk === 'L3') return { kind: 'approval', risk, allowedScopes: ['once'] }
   return { kind: 'approval', risk, allowedScopes: ['once', 'task'] }
@@ -407,6 +412,15 @@ function pathContainsGitSegment(root: string, absoluteTarget: string): boolean {
   return relative(root, absoluteTarget)
     .split(/[\\/]+/u)
     .some((segment) => segment.toLowerCase() === '.git')
+}
+
+/** Browser 只有全部目标都是已解析 origin 才能发 task；夹带 unknown 一律仅本次。 */
+function hasTrustedBrowserOrigin(intent: OperationIntent): boolean {
+  return (
+    intent.operationType === 'browser' &&
+    intent.targets.length > 0 &&
+    intent.targets.every((target) => target.kind === 'origin')
+  )
 }
 
 /** 未知命令与未知出网对齐：共用指纹、「未提供可信」或 unknown 目标都必须 L3。 */

@@ -968,4 +968,158 @@ describe('mapGrokPermissionRequest 浏览器插件映射', () => {
     expect(snapshotJson).not.toContain('token=')
     expect(snapshotJson).not.toContain('apiKey')
   })
+
+  it('冻结 browserToolName 优先于 edit/execute/delete，path 仍保留但不从 title 猜 URL', () => {
+    const upload = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-upload',
+          title: 'https://title.example/from-title',
+          kind: 'edit',
+          name: 'upload_file',
+          locations: [{ path: '/tmp/fixture/secret.png' }],
+          rawInput: { filePath: '/tmp/fixture/secret.png' }
+        }
+      },
+      'permission-upload',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    expect(upload).toMatchObject({
+      operationType: 'browser',
+      minimumRisk: 'L3'
+    })
+    expect(upload?.targets).toEqual([
+      { kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }
+    ])
+    expect(JSON.stringify(upload?.targets)).not.toContain('title.example')
+    expect(upload?.impact).toContain('/tmp/fixture/secret.png')
+
+    const screenshot = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-shot',
+          title: 'https://title.example/shot',
+          kind: 'edit',
+          name: 'take_screenshot',
+          locations: [{ path: '/tmp/sessions/s/images/1.png' }]
+        }
+      },
+      'permission-shot',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    expect(screenshot?.operationType).toBe('browser')
+    expect(screenshot?.targets).toEqual([
+      { kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }
+    ])
+
+    const script = mapGrokPermissionRequest(
+      {
+        sessionId: SESSION_ID,
+        options: [{ optionId: 'allow-once', name: '允许一次', kind: 'allow_once' }],
+        toolCall: {
+          toolCallId: 'tool-eval',
+          kind: 'execute',
+          name: 'evaluate_script',
+          rawInput: { url: 'https://example.com/app' }
+        }
+      },
+      'permission-eval',
+      'task-mapper',
+      'turn-mapper',
+      redactFakeText,
+      true
+    )
+    expect(script).toMatchObject({
+      operationType: 'browser',
+      targets: [{ kind: 'origin', value: 'https://example.com' }]
+    })
+
+    const snapshot = mergeGrokToolCallAuthorizationPatch(undefined, {
+      toolCallId: 'tool-upload-snap',
+      kind: 'edit',
+      name: 'upload_file',
+      locations: [{ path: '/tmp/fixture/secret.png' }]
+    })
+    expect(snapshot).toMatchObject({
+      integrity: 'valid',
+      browserToolName: 'upload_file',
+      locationPaths: ['/tmp/fixture/secret.png']
+    })
+  })
+
+  it('origin 合并遵循 ACP omit-keep：无 url 的后续 rawInput 保持已有 origin', () => {
+    const withOrigin = mergeGrokToolCallAuthorizationPatch(undefined, {
+      toolCallId: 'tool-omit-keep',
+      name: 'navigate_page',
+      rawInput: { url: 'https://example.com/app?token=fake-key' }
+    })
+    expect(withOrigin).toMatchObject({
+      integrity: 'valid',
+      browserToolName: 'navigate_page',
+      browserOrigin: 'https://example.com'
+    })
+
+    const omittedUrl = mergeGrokToolCallAuthorizationPatch(withOrigin, {
+      toolCallId: 'tool-omit-keep',
+      rawInput: { filePath: '/tmp/sessions/s/images/1.png' }
+    })
+    expect(omittedUrl).toMatchObject({
+      integrity: 'valid',
+      browserToolName: 'navigate_page',
+      browserOrigin: 'https://example.com'
+    })
+
+    const nullInput = mergeGrokToolCallAuthorizationPatch(withOrigin, {
+      toolCallId: 'tool-omit-keep',
+      rawInput: null
+    })
+    expect(nullInput).toMatchObject({
+      integrity: 'valid',
+      browserOrigin: 'https://example.com'
+    })
+
+    const conflicting = mergeGrokToolCallAuthorizationPatch(withOrigin, {
+      toolCallId: 'tool-omit-keep',
+      rawInput: { url: 'https://other.example/' }
+    })
+    expect(conflicting).toEqual({
+      integrity: 'invalid',
+      toolCallId: 'tool-omit-keep',
+      reason: 'target-conflict'
+    })
+  })
+
+  it('url 先到、name 后到也累积已 parse 的 origin', () => {
+    const urlFirst = mergeGrokToolCallAuthorizationPatch(undefined, {
+      toolCallId: 'tool-url-first',
+      rawInput: { url: 'https://example.com/secret?token=fake-key' }
+    })
+    expect(urlFirst).toMatchObject({
+      integrity: 'valid',
+      browserOrigin: 'https://example.com'
+    })
+    expect(urlFirst.integrity === 'valid' ? urlFirst.browserToolName : undefined).toBeUndefined()
+
+    const nameLater = mergeGrokToolCallAuthorizationPatch(urlFirst, {
+      toolCallId: 'tool-url-first',
+      name: 'new_page'
+    })
+    expect(nameLater).toMatchObject({
+      integrity: 'valid',
+      browserToolName: 'new_page',
+      browserOrigin: 'https://example.com'
+    })
+    expect(JSON.stringify(nameLater)).not.toContain('token=')
+    expect(JSON.stringify(nameLater)).not.toContain('rawInput')
+  })
 })

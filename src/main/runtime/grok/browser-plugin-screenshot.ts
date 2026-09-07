@@ -20,6 +20,8 @@ export interface RegisterBrowserPluginScreenshotInput {
   absolutePath: string
   registry: ArtifactRegistry
   executionRoot: string
+  /** session 截图落到 Task 私有目录，禁止写进用户项目 screenshots/。 */
+  taskDirectory: string
   mediaRoots: readonly string[]
 }
 
@@ -37,7 +39,7 @@ export async function registerBrowserPluginScreenshot(
     const relativePath =
       located.kind === 'execution-root'
         ? located.relativePath
-        : await materializeSessionScreenshot(input.executionRoot, located.bytes, located.ext)
+        : await materializeSessionScreenshot(input.taskDirectory, located.bytes, located.ext)
     if (!relativePath) return null
     const descriptor = await input.registry.registerFileCandidate({
       taskId: input.taskId,
@@ -162,18 +164,18 @@ async function screenshotBytesAreAllowed(
 }
 
 /**
- * session 媒体根在 execution root 之外，必须先落到 Task 可注册的相对路径。
+ * session 媒体根在 execution root 之外，必须先落到 Task 私有相对路径。
  * 只写入已经校验过的字节，禁止再次 readFile 跟随中途换成的 symlink。
  */
 async function materializeSessionScreenshot(
-  executionRoot: string,
+  taskDirectory: string,
   bytes: Buffer,
   ext: string
 ): Promise<string | null> {
-  const realRoot = await fs.realpath(executionRoot).catch(() => null)
+  const realRoot = await fs.realpath(taskDirectory).catch(() => null)
   if (!realRoot || !ALLOWED_SCREENSHOT_EXT.has(ext)) return null
   const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 16)
-  const screenshotsDir = await confineScreenshotsDirectory(realRoot)
+  const screenshotsDir = await confineTaskScreenshotDirectory(realRoot)
   if (!screenshotsDir) return null
   const destination = join(screenshotsDir, `${hash}${ext}`)
   if (!isPathInsideRoot(realRoot, destination) || !isPathInsideRoot(screenshotsDir, destination)) {
@@ -201,21 +203,27 @@ async function materializeSessionScreenshot(
 }
 
 /**
- * screenshots 目录必须是 execution root 内的普通目录。
- * 若它是指向根外的 symlink，lstat 直接拒绝，禁止 mkdir/writeFile 先把字节写出去。
+ * 私有截图目录必须是 taskDirectory/artifacts/screenshots 下的普通目录。
+ * 任一层若是指向根外的 symlink，lstat 直接拒绝，禁止 mkdir/writeFile 先把字节写出去。
  */
-async function confineScreenshotsDirectory(realRoot: string): Promise<string | null> {
-  const screenshotsDir = join(realRoot, 'screenshots')
-  const existing = await fs.lstat(screenshotsDir).catch(() => null)
+async function confineTaskScreenshotDirectory(realTaskDirectory: string): Promise<string | null> {
+  const artifactsDir = await confineChildDirectory(realTaskDirectory, 'artifacts')
+  if (!artifactsDir) return null
+  return confineChildDirectory(artifactsDir, 'screenshots')
+}
+
+async function confineChildDirectory(realParent: string, name: string): Promise<string | null> {
+  const child = join(realParent, name)
+  const existing = await fs.lstat(child).catch(() => null)
   if (existing) {
     if (existing.isSymbolicLink() || !existing.isDirectory()) return null
   } else {
-    await fs.mkdir(screenshotsDir, { recursive: true, mode: 0o700 })
-    const created = await fs.lstat(screenshotsDir).catch(() => null)
+    await fs.mkdir(child, { recursive: true, mode: 0o700 })
+    const created = await fs.lstat(child).catch(() => null)
     if (!created || created.isSymbolicLink() || !created.isDirectory()) return null
   }
-  const realDir = await fs.realpath(screenshotsDir).catch(() => null)
-  if (!realDir || !isPathInsideRoot(realRoot, realDir)) return null
+  const realDir = await fs.realpath(child).catch(() => null)
+  if (!realDir || !isPathInsideRoot(realParent, realDir)) return null
   return realDir
 }
 

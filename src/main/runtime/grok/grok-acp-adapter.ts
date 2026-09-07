@@ -194,7 +194,7 @@ interface ActiveTurn {
   sessionUpdateQueueActive: boolean
   /** 同一 Turn 的坏图片只提示一次，避免 Runtime 连续脏块刷满时间线。 */
   runtimeAttachmentErrorReported: boolean
-  /** 同一 Turn 已入库的 session 媒体或插件截图路径，避免 tool_call 与 update 重复落盘。 */
+  /** 同一 Turn 已入库的 session 媒体路径或插件截图 toolCallId，避免重复落盘。 */
   ingestedRuntimeMediaKeys: Set<string>
   /** 尚未成功登记的插件截图路径，按 toolCallId 暂存；不得写入事件。 */
   browserScreenshotPathsByToolCallId?: Map<string, string>
@@ -1824,7 +1824,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
   /**
    * chrome-devtools take_screenshot 的 filePath 只在已允许路径上登记 Artifact。
-   * pending 只记住路径；completed 才登记；成功后才写入去重键。
+   * pending 只记住路径；completed 才登记；成功后按 toolCallId 写入去重键。
    * 失败返回后 Timeline 可展示「无可用截图」，绝对路径不得进入事件。
    */
   private async ingestBrowserPluginScreenshot(
@@ -1848,7 +1848,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     }
     const absolutePath = this.resolveBrowserPluginScreenshotPath(activeTurn, update)
     if (!absolutePath) return
-    const ingestKey = `screenshot:${absolutePath}`
+    const ingestKey = `screenshot:${update.toolCallId}`
     if (activeTurn.ingestedRuntimeMediaKeys.has(ingestKey)) return
     const register = this.options.registerBrowserPluginScreenshot
     if (!register) return
@@ -1909,11 +1909,10 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     )
   }
 
-  /** failed 明确放弃该次截图，避免 pending 路径一直重试。 */
+  /** failed 只封死该 toolCallId，不得按 path 挡住同一 Turn 的后续截图。 */
   private abandonBrowserPluginScreenshot(activeTurn: ActiveTurn, toolCallId: string): void {
-    const absolutePath = activeTurn.browserScreenshotPathsByToolCallId?.get(toolCallId)
     activeTurn.browserScreenshotPathsByToolCallId?.delete(toolCallId)
-    if (absolutePath) activeTurn.ingestedRuntimeMediaKeys.add(`screenshot:${absolutePath}`)
+    activeTurn.ingestedRuntimeMediaKeys.add(`screenshot:${toolCallId}`)
   }
 
   /** 测试可替换媒体根；生产同时认 App grok-home/sessions 与 Grok 默认 /tmp/sessions。 */

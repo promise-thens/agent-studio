@@ -243,6 +243,55 @@ describe('PermissionBroker', () => {
     })
   })
 
+  it('unknown origin 的 browser 只允许 once，误发 allow-task 不能登记宽 grant', async () => {
+    const fixture = createFixture()
+    const unknownBrowser = {
+      ...createIntent('write-file'),
+      operationType: 'browser' as const,
+      targets: [{ kind: 'unknown' as const, value: 'Runtime 未提供可信的目标 origin。' }],
+      parameterFingerprint: 'grok-acp:browser:unknown-origin:v1',
+      minimumRisk: 'L3' as const
+    }
+    const first = fixture.broker.authorizeOperation(
+      unknownBrowser,
+      vi.fn(() => 'browser-once')
+    )
+    const approval = await waitForApproval(fixture.approvals, 0)
+    expect(approval).toMatchObject({
+      operationType: 'browser',
+      risk: 'L3',
+      allowedScopes: ['once']
+    })
+    expect(approval.allowedScopes).not.toContain('task')
+
+    await fixture.broker.respond({
+      approvalId: approval.approvalId,
+      taskId: approval.taskId,
+      turnId: approval.turnId,
+      decision: 'allow-task'
+    })
+
+    await fixture.broker.respond({
+      approvalId: approval.approvalId,
+      taskId: approval.taskId,
+      turnId: approval.turnId,
+      decision: 'allow-once'
+    })
+    await expect(first).resolves.toMatchObject({
+      ok: true,
+      reason: 'user-allowed',
+      scope: 'once'
+    })
+
+    const second = fixture.broker.authorizeOperation(
+      { ...unknownBrowser, turnId: 'turn-2' },
+      vi.fn()
+    )
+    await waitForApproval(fixture.approvals, 1)
+    await fixture.broker.shutdown()
+    await expect(second).resolves.toEqual({ ok: false, reason: 'cancelled' })
+  })
+
   it('受控执行只接收 canonical intent，执行失败不会留下 Task grant', async () => {
     const fixture = createFixture()
     const execute = vi.fn(() => {

@@ -11,28 +11,42 @@ vi.mock('electron', () => {
   class BrowserWindow {
     webContents = { send: vi.fn(), once: vi.fn(), on: vi.fn() }
     setIgnoreMouseEvents = vi.fn()
-    constructor(_options: unknown) {
+    constructor() {
       overlayWindowMocks.windows.push(this)
     }
-    setAlwaysOnTop(): void {}
-    setVisibleOnAllWorkspaces(): void {}
-    showInactive(): void {}
-    hide(): void {}
-    destroy(): void {}
+    setAlwaysOnTop(): void {
+      // electron mock
+    }
+    setVisibleOnAllWorkspaces(): void {
+      // electron mock
+    }
+    showInactive(): void {
+      // electron mock
+    }
+    hide(): void {
+      // electron mock
+    }
+    destroy(): void {
+      // electron mock
+    }
     isDestroyed(): boolean {
       return false
     }
     isVisible(): boolean {
       return true
     }
-    setBounds(): void {}
+    setBounds(): void {
+      // electron mock
+    }
     loadURL(): Promise<void> {
       return Promise.resolve()
     }
     loadFile(): Promise<void> {
       return Promise.resolve()
     }
-    on(): void {}
+    on(): void {
+      // electron mock
+    }
   }
   return {
     BrowserWindow,
@@ -138,6 +152,23 @@ describe('overlay 源码纪律', () => {
     expect(indexSource).toContain('onBrowserPluginTool')
     expect(indexSource).toContain('TASK_PUSH_CHANNELS.browserPluginOverlay')
     expect(indexSource).not.toContain('grok:browser')
+  })
+
+  it('macOS 关主窗不拆 overlay host；activate 按主窗重建，host 跟 app 退出走', () => {
+    const indexSource = readFileSync(join(mainDir, 'index.ts'), 'utf8')
+    const closedStart = indexSource.indexOf("mainWindow.on('closed'")
+    const closedEnd = indexSource.indexOf('})', closedStart)
+    const closedHandler = indexSource.slice(closedStart, closedEnd + 2)
+    expect(closedHandler).toContain("mainWindow.on('closed'")
+    expect(closedHandler).not.toContain('browserPluginOverlayHost?.destroy()')
+    expect(indexSource).toContain('if (!mainWindow || mainWindow.isDestroyed()) createWindow()')
+    expect(indexSource).not.toContain(
+      'if (BrowserWindow.getAllWindows().length === 0) createWindow()'
+    )
+    const shutdownStart = indexSource.indexOf('beginShutdown:')
+    const shutdownEnd = indexSource.indexOf('},', shutdownStart)
+    const beginShutdown = indexSource.slice(shutdownStart, shutdownEnd + 2)
+    expect(beginShutdown).toContain('browserPluginOverlayHost?.destroy()')
   })
 })
 

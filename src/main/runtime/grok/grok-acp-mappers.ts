@@ -537,15 +537,14 @@ export function mergeGrokToolCallAuthorizationPatch(
     }
   }
   // URL 只从冻结键 rawInput.url 投影 origin；禁止读 tool_input.url / _meta / title。
-  if (patch.rawInput !== undefined && browserToolName) {
+  // ACP omit/null 保持已有 origin；url 可先于 name 到达并累积。
+  if (patch.rawInput !== undefined && patch.rawInput != null) {
     const origin = copyBrowserOrigin(patch.rawInput)
     if (origin) {
       if (browserOrigin != null && origin !== browserOrigin) {
         return invalidAuthorizationSnapshot(patch.toolCallId, 'target-conflict')
       }
       browserOrigin = origin
-    } else if (browserOrigin != null) {
-      return invalidAuthorizationSnapshot(patch.toolCallId, 'target-conflict')
     }
   }
 
@@ -611,6 +610,21 @@ function mapGrokOperation(snapshot: GrokToolCallAuthorizationSnapshot): {
   const paths = collectGrokPermissionPaths(snapshot)
   const pathTargets = paths.map((value): AgentOperationTarget => ({ kind: 'path', value }))
 
+  // 冻结 browserToolName 优先于 execute/edit/delete，避免 upload_file 被写文件 grant 捎带。
+  if (snapshot.browserToolName) {
+    const origin = snapshot.browserOrigin
+    return {
+      operationType: 'browser',
+      targets: origin
+        ? [{ kind: 'origin', value: origin }]
+        : [{ kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }],
+      parameterFingerprint: origin
+        ? 'grok-acp:browser:origin:v1'
+        : 'grok-acp:browser:unknown-origin:v1',
+      impact: formatBrowserPermissionImpact(origin, paths),
+      minimumRisk: 'L3'
+    }
+  }
   if ((kind === 'read' || kind === 'search') && pathTargets.length) {
     return {
       operationType: 'read-project',
@@ -646,23 +660,6 @@ function mapGrokOperation(snapshot: GrokToolCallAuthorizationSnapshot): {
       minimumRisk: 'L3'
     }
   }
-  // 白名单浏览器工具优先于 fetch 宽桶；edit/delete 带 path 仍走文件授权。
-  if (snapshot.browserToolName) {
-    const origin = snapshot.browserOrigin
-    return {
-      operationType: 'browser',
-      targets: origin
-        ? [{ kind: 'origin', value: origin }]
-        : [{ kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }],
-      parameterFingerprint: origin
-        ? 'grok-acp:browser:origin:v1'
-        : 'grok-acp:browser:unknown-origin:v1',
-      impact: origin
-        ? 'Runtime 请求操作浏览器页面。'
-        : 'Runtime 请求操作浏览器，但当前 ACP 请求无法准确展示目标 origin。',
-      minimumRisk: 'L3'
-    }
-  }
   if (kind === 'fetch') {
     return {
       operationType: 'network-egress',
@@ -687,6 +684,18 @@ function mapGrokOperation(snapshot: GrokToolCallAuthorizationSnapshot): {
 function collectGrokPermissionPaths(snapshot: GrokToolCallAuthorizationSnapshot): string[] {
   if (snapshot.integrity === 'invalid') return []
   return uniqueNonEmptyPaths([...snapshot.locationPaths, ...snapshot.diffPaths])
+}
+
+/** Browser 目标只能是 origin/unknown；locations 里的 path 改放到 impact 展示，不从 title 猜 URL。 */
+function formatBrowserPermissionImpact(origin: string | undefined, paths: string[]): string {
+  const base = origin
+    ? 'Runtime 请求操作浏览器页面。'
+    : 'Runtime 请求操作浏览器，但当前 ACP 请求无法准确展示目标 origin。'
+  if (paths.length === 0) return base
+  const withPaths = `${base} 路径：${paths.join('、')}`
+  return Buffer.byteLength(withPaths, 'utf8') <= MAX_PERMISSION_DISPLAY_TEXT_BYTES
+    ? withPaths
+    : base
 }
 
 const TITLE_PATH_KINDS = new Set<acp.ToolKind>(['read', 'search', 'edit', 'delete'])

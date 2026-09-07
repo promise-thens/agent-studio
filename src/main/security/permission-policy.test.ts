@@ -73,6 +73,11 @@ describe('Permission 风险策略', () => {
       risk: 'L3',
       allowedScopes: ['once', 'task']
     })
+    expect(evaluatePermissionPolicy(createIntent('browser'))).toEqual({
+      kind: 'approval',
+      risk: 'L3',
+      allowedScopes: ['once']
+    })
     expect(evaluatePermissionPolicy(createIntent('screen'))).toMatchObject({
       kind: 'deny',
       reason: 'unsupported'
@@ -563,8 +568,23 @@ describe('Permission 路径边界', () => {
       turnId: 'turn-2',
       targets: [{ kind: 'origin', value: 'https://b.example' }]
     })
+    const browserUnknown = await resolveOperationIntentTargets({
+      ...createIntent('browser', root),
+      turnId: 'turn-3',
+      targets: [{ kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }]
+    })
+    expect(evaluatePermissionPolicy(browserA)).toMatchObject({
+      allowedScopes: ['once', 'task']
+    })
+    expect(evaluatePermissionPolicy(browserUnknown)).toMatchObject({
+      kind: 'approval',
+      risk: 'L3',
+      allowedScopes: ['once']
+    })
+    expect(evaluatePermissionPolicy(browserUnknown).allowedScopes).not.toContain('task')
     expect(createOperationGrantKey(writeResolved)).not.toBe(createOperationGrantKey(browserA))
     expect(createOperationGrantKey(browserA)).not.toBe(createOperationGrantKey(browserB))
+    expect(createOperationGrantKey(browserA)).not.toBe(createOperationGrantKey(browserUnknown))
   })
 })
 

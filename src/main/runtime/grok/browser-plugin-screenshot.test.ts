@@ -34,6 +34,7 @@ afterEach(async () => {
 describe('registerBrowserPluginScreenshot', () => {
   let executionRoot: string
   let mediaRoot: string
+  let taskDirectory: string
   let registerBrowserPluginScreenshot: (input: {
     taskId: string
     turnId: string
@@ -44,7 +45,7 @@ describe('registerBrowserPluginScreenshot', () => {
   async function setupRegistry(): Promise<void> {
     executionRoot = await createTemporaryDirectory()
     mediaRoot = await createTemporaryDirectory()
-    const taskDirectory = await createTemporaryDirectory()
+    taskDirectory = await createTemporaryDirectory()
     attached = []
     let id = 0
     const registry = new ArtifactRegistry({
@@ -71,6 +72,7 @@ describe('registerBrowserPluginScreenshot', () => {
         ...input,
         registry,
         executionRoot,
+        taskDirectory,
         mediaRoots: [mediaRoot]
       })
   }
@@ -121,7 +123,7 @@ describe('registerBrowserPluginScreenshot', () => {
     expect(attached).toEqual([{ taskId: 'task-1', turnId: 'turn-1', artifactIds: ['art-1'] }])
   })
 
-  it('session images 目录中的截图复制进 execution root 后再注册', async () => {
+  it('session images 目录中的截图复制进 taskDirectory 后再注册，不写进项目 screenshots/', async () => {
     await setupRegistry()
     const sessionFile = join(mediaRoot, 'sess-1', 'images', 'page.png')
     await mkdir(join(mediaRoot, 'sess-1', 'images'), { recursive: true })
@@ -139,9 +141,13 @@ describe('registerBrowserPluginScreenshot', () => {
     expect(JSON.stringify(descriptor)).not.toContain(sessionFile)
     expect(JSON.stringify(descriptor)).not.toContain(mediaRoot)
     expect(JSON.stringify(descriptor)).not.toContain(executionRoot)
+    expect(JSON.stringify(descriptor)).not.toContain(taskDirectory)
     if (descriptor?.location.kind === 'file') {
-      expect(descriptor.location.relativePath.startsWith('screenshots/')).toBe(true)
+      expect(descriptor.location.relativePath.startsWith('artifacts/screenshots/')).toBe(true)
     }
+    await expect(readdir(join(executionRoot, 'screenshots')).catch(() => [])).resolves.toEqual([])
+    const copied = await readdir(join(taskDirectory, 'artifacts', 'screenshots'))
+    expect(copied.some((name) => name.endsWith('.png'))).toBe(true)
   })
 
   it('svg、空文件、gif、缺失文件和符号链接都返回 null', async () => {
@@ -237,13 +243,14 @@ describe('registerBrowserPluginScreenshot', () => {
     }
   })
 
-  it('screenshots 目录若是指向根外的 symlink，不得先写出再失败', async () => {
+  it('taskDirectory 的 screenshots 目录若是指向根外的 symlink，不得先写出再失败', async () => {
     await setupRegistry()
     const sessionFile = join(mediaRoot, 'sess-1', 'images', 'page.png')
     await mkdir(join(mediaRoot, 'sess-1', 'images'), { recursive: true })
     await writeFile(sessionFile, PNG)
     const outside = await createTemporaryDirectory()
-    await symlink(outside, join(executionRoot, 'screenshots'))
+    await mkdir(join(taskDirectory, 'artifacts'), { recursive: true })
+    await symlink(outside, join(taskDirectory, 'artifacts', 'screenshots'))
 
     await expect(
       registerBrowserPluginScreenshot({
@@ -253,6 +260,7 @@ describe('registerBrowserPluginScreenshot', () => {
       })
     ).resolves.toBeNull()
     expect(await readdir(outside)).toEqual([])
+    await expect(readdir(join(executionRoot, 'screenshots')).catch(() => [])).resolves.toEqual([])
   })
 
   it('session 根下非 images 路径不注册', async () => {

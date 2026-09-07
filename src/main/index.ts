@@ -163,8 +163,9 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
   mainWindow.on('closed', () => {
-    browserPluginOverlayHost?.destroy()
+    // overlay host 跟 app 生命周期走；darwin 关主窗不退出，拆 host 会让停止芯片再也点不到。
     mainWindow = null
+    if (process.platform !== 'darwin') app.quit()
   })
 
   // 对话 Markdown 外链走 target=_blank；这里再拦一层，避免 javascript: / file: 进系统浏览器。
@@ -524,6 +525,7 @@ async function initializeServices(
             ...input,
             registry,
             executionRoot: task.environment.rootSnapshot,
+            taskDirectory: requireTaskStore().getTaskFilesystemRoot(input.taskId),
             mediaRoots: [
               join(getManagedGrokHome(app.getPath('userData')), 'sessions'),
               DEFAULT_GROK_SESSION_MEDIA_ROOT
@@ -1616,7 +1618,8 @@ if (hasSingleInstanceLock)
       createWindow()
 
       app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) createWindow()
+        // overlay 窗口也算 BrowserWindow；按主窗是否存在重建，避免芯片还在却唤不回工作台。
+        if (!mainWindow || mainWindow.isDestroyed()) createWindow()
       })
     })
     .catch((error) => {
@@ -1658,6 +1661,8 @@ const appShutdownGate = createAppShutdownGate({
   },
   beginShutdown: () => {
     operationGate?.beginShutdown()
+    browserPluginOverlayHost?.destroy()
+    browserPluginOverlayHost = null
   },
   cancelActiveExecution: async () => {
     const identity = taskExecutor?.getActiveIdentity()
