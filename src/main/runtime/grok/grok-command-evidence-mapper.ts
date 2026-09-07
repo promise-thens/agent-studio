@@ -162,6 +162,7 @@ export function rememberGrokCommandToolFacts(
 /**
  * execute 工具，或 rawInput.command 为字符串时才视为命令证据候选。
  * 读/改文件等工具即使带未验证 rawInput 也不能当成命令。
+ * rawInput.background 只给 Timeline 徽章，不得复制进证据对象或 Inspector terminal。
  */
 export function isGrokCommandEvidenceCandidate(facts: GrokCommandToolFacts): boolean {
   return facts.kind === 'execute' || facts.command != null

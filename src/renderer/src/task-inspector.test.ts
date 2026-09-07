@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { TaskTimelineViewModel } from './task-timeline-reducer'
 import {
@@ -25,6 +28,9 @@ import {
   permissionAuditReasonLabel,
   permissionAuditScopeLabel
 } from './task-inspector'
+
+const rendererDir = dirname(fileURLToPath(import.meta.url))
+const inspectorPaneSource = readFileSync(join(rendererDir, 'components/InspectorPane.vue'), 'utf8')
 
 function fakeClosestNode(
   matches: readonly string[],
@@ -158,6 +164,24 @@ describe('Inspector 占位文案', () => {
     expect(copy.heading).toBe('尚未实现 · P0-15 用户交互终端')
     expect(copy.detail).toMatch(/用户可输入|可交互/)
     expect(copy.heading + copy.detail).not.toMatch(/命令证据缺失|命令证据尚未|尚未接入命令/)
+  })
+
+  it('后台工具输出不作为 terminal 标签内容，仍是 P0-15 占位', () => {
+    const copy = inspectorPlaceholderCopy('terminal')
+    const backgroundOutput = 'slept-ok-limited-output'
+    expect(copy.heading).toContain('P0-15')
+    expect(copy.detail).toMatch(/不是命令证据查看器/)
+    expect(`${copy.heading}${copy.detail}`).not.toContain(backgroundOutput)
+    expect(`${copy.heading}${copy.detail}`).not.toMatch(/runtime-tool|transcriptId|sleep 30/)
+    expect(inspectorPlaceholderCopy.length).toBe(1)
+
+    expect(inspectorPaneSource).toContain('inspectorPlaceholderCopy')
+    expect(inspectorPaneSource).not.toContain('listCommandEvidence')
+    expect(inspectorPaneSource).not.toContain('getCommandTranscript')
+    expect(inspectorPaneSource).not.toContain('command-evidence')
+    expect(inspectorPaneSource).not.toContain(backgroundOutput)
+    expect(inspectorPaneSource).toContain("currentTab === 'timeline'")
+    expect(inspectorPaneSource).toContain('inspector-placeholder')
   })
 
   it('默认关、默认 Timeline，Plan 作为独立标签且主列仍是两列 overlay', () => {

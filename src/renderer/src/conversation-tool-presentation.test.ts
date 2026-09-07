@@ -2,12 +2,17 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { presentToolTitle } from './conversation-tool-presentation'
+import { SUBAGENT_STOP_COPY } from './conversation-subagent-view'
+import { presentToolTitle, resolveToolRowChrome } from './conversation-tool-presentation'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const toolRowSource = readFileSync(join(root, 'components/ToolRow.vue'), 'utf8')
 const conversationTurnSource = readFileSync(join(root, 'components/ConversationTurn.vue'), 'utf8')
 const subagentCardSource = readFileSync(join(root, 'components/SubagentCard.vue'), 'utf8')
+const appSource = readFileSync(join(root, 'App.vue'), 'utf8')
+const composerSource = readFileSync(join(root, 'components/TaskComposer.vue'), 'utf8')
+const permissionPromptSource = readFileSync(join(root, 'components/PermissionPrompt.vue'), 'utf8')
+const composerActionsSource = readFileSync(join(root, 'task-composer-actions.ts'), 'utf8')
 
 describe('工具行标题人话化', () => {
   it('List 带反引号路径时标签是「列目录」，路径进详情', () => {
@@ -123,9 +128,73 @@ describe('工具行折叠皮肤', () => {
 
   it('进行中保留 spinner 与「进行中」，徽章只跟在明确 background 之后', () => {
     expect(toolRowSource).toContain('conversation-spinner')
-    expect(toolRowSource).toContain("return '进行中'")
-    expect(toolRowSource).toContain("return '等待中'")
+    expect(toolRowSource).toContain('resolveToolRowChrome')
     expect(toolRowSource).toMatch(/accessibleLabel[\s\S]*后台/)
     expect(toolRowSource).not.toMatch(/status === 'in_progress'[\s\S]{0,80}后台/)
+  })
+})
+
+describe('折叠 ToolRow 后台走查', () => {
+  it('execution=background 且 in_progress 时可见「后台」+「进行中」', () => {
+    const chrome = resolveToolRowChrome({ status: 'in_progress', execution: 'background' })
+    expect(chrome).toMatchObject({
+      busy: true,
+      isBackground: true,
+      statusLabel: '进行中'
+    })
+    expect(chrome.visibleLabels).toEqual(['后台', '进行中'])
+  })
+
+  it('取消后「后台」可保留，状态不是「进行中」', () => {
+    const chrome = resolveToolRowChrome({ status: 'cancelled', execution: 'background' })
+    expect(chrome).toMatchObject({
+      busy: false,
+      isBackground: true,
+      statusLabel: '已取消'
+    })
+    expect(chrome.visibleLabels).toEqual(['后台', '已取消'])
+    expect(chrome.visibleLabels).not.toContain('进行中')
+  })
+
+  it('无 execution 的普通工具没有「后台」', () => {
+    const chrome = resolveToolRowChrome({ status: 'in_progress' })
+    expect(chrome.isBackground).toBe(false)
+    expect(chrome.visibleLabels).toEqual(['进行中'])
+    expect(chrome.visibleLabels).not.toContain('后台')
+    expect(JSON.stringify(chrome)).not.toContain('foreground')
+  })
+})
+
+describe('停止仍走整场 Turn，不碰用户 PTY', () => {
+  it('Composer / 工作台停止调用 window.agent.cancelTurn，源码不含 PTY 或轮询', () => {
+    expect(appSource).toContain('window.agent.cancelTurn')
+    expect(appSource).toContain('@stop="cancelTurn"')
+    expect(appSource).toContain('@cancel-turn="cancelTurn"')
+    expect(composerSource).toContain("emit('stop')")
+    expect(composerSource).toContain('data-composer-stop')
+    expect(permissionPromptSource).toContain("emit('cancelTurn')")
+    expect(composerActionsSource).toContain('export function resolveCancelTurnRequest')
+
+    for (const source of [
+      appSource,
+      composerSource,
+      permissionPromptSource,
+      composerActionsSource,
+      toolRowSource
+    ]) {
+      expect(source).not.toContain('get_command_or_subagent_output')
+      expect(source).not.toContain('agent:kill-background')
+      expect(source).not.toMatch(/Ctrl\+C/)
+      expect(source).not.toContain('\\x03')
+    }
+  })
+
+  it('没有「停这一条后台命令」按钮，SUBAGENT_STOP_COPY 仍是整场 Turn', () => {
+    expect(SUBAGENT_STOP_COPY).toBe('停止会结束整场 Turn，不能只停这张卡。')
+    expect(subagentCardSource).toContain('SUBAGENT_STOP_COPY')
+    expect(toolRowSource).not.toContain('停这一条')
+    expect(toolRowSource).not.toContain('kill-background')
+    expect(composerSource).not.toContain('停这一条后台')
+    expect(appSource).not.toContain('停这一条后台')
   })
 })

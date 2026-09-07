@@ -1,7 +1,22 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { AGENT_INVOKE_CHANNELS, AGENT_PUSH_CHANNELS } from './agent-ipc'
 import { APP_INVOKE_CHANNELS, APP_PUSH_CHANNELS } from './app-ipc'
 import { TASK_INVOKE_CHANNELS, parseSubagentActivityPage } from './task-ipc'
+
+const sharedDir = dirname(fileURLToPath(import.meta.url))
+
+function allDesktopChannels(): string[] {
+  return [
+    ...Object.values(AGENT_INVOKE_CHANNELS),
+    ...Object.values(AGENT_PUSH_CHANNELS),
+    ...Object.values(APP_INVOKE_CHANNELS),
+    ...Object.values(APP_PUSH_CHANNELS),
+    ...Object.values(TASK_INVOKE_CHANNELS)
+  ]
+}
 
 describe('桌面 IPC 静态契约', () => {
   it('所有 Agent 与 App channel 都固定且唯一', () => {
@@ -114,6 +129,39 @@ describe('桌面 IPC 静态契约', () => {
     expect(channels).not.toContain('agent:send-prompt')
     expect(channels).not.toContain('agent:cancel')
     expect(channels).not.toContain('app:choose-workspace')
+  })
+})
+
+describe('P0-19e 停止仍走 Task 级 cancel，不碰用户 PTY', () => {
+  it('invoke 停止 channel 仍是 agent:cancel-turn，没有 terminal/pty/kill-background', () => {
+    expect(AGENT_INVOKE_CHANNELS.cancelTurn).toBe('agent:cancel-turn')
+    expect(Object.keys(AGENT_INVOKE_CHANNELS)).toContain('cancelTurn')
+    expect(Object.keys(AGENT_INVOKE_CHANNELS)).not.toContain('killBackground')
+    expect(Object.keys(AGENT_INVOKE_CHANNELS)).not.toContain('killTurn')
+
+    const channels = allDesktopChannels()
+    expect(channels.filter((channel) => channel.startsWith('terminal:'))).toEqual([])
+    expect(channels.filter((channel) => channel.startsWith('pty:'))).toEqual([])
+    expect(channels).not.toContain('agent:kill-background')
+    expect(channels.some((channel) => /kill-background|user-pty|pty-write/i.test(channel))).toBe(
+      false
+    )
+  })
+
+  it('IPC 源码未声明 PTY 写入或后台单条 kill', () => {
+    const sources = [
+      readFileSync(join(sharedDir, 'agent-ipc.ts'), 'utf8'),
+      readFileSync(join(sharedDir, 'app-ipc.ts'), 'utf8'),
+      readFileSync(join(sharedDir, 'task-ipc.ts'), 'utf8'),
+      readFileSync(join(sharedDir, '../preload/desktop-api.ts'), 'utf8')
+    ].join('\n')
+
+    expect(sources).toContain("cancelTurn: 'agent:cancel-turn'")
+    expect(sources).toContain('AGENT_INVOKE_CHANNELS.cancelTurn')
+    expect(sources).not.toContain('get_command_or_subagent_output')
+    expect(sources).not.toContain('agent:kill-background')
+    expect(sources).not.toMatch(/['"]terminal:[^'"]+['"]/)
+    expect(sources).not.toMatch(/['"]pty:[^'"]+['"]/)
   })
 })
 

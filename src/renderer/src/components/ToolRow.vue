@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { AgentToolStatus } from '../../../shared/agent'
+import { resolveToolRowChrome } from '../conversation-tool-presentation'
 
 const props = withDefaults(
   defineProps<{
@@ -17,28 +18,16 @@ const props = withDefaults(
   { files: () => [], detail: '', warning: '' }
 )
 
-const busy = computed(() => props.status === 'in_progress' || props.status === 'pending')
-const isBackground = computed(() => props.execution === 'background')
+/** 折叠徽章与状态走同一 helper，避免取消后源码里仍同时写着「进行中」。 */
+const chrome = computed(() =>
+  resolveToolRowChrome({ status: props.status, execution: props.execution })
+)
+const busy = computed(() => chrome.value.busy)
+const isBackground = computed(() => chrome.value.isBackground)
+const statusLabel = computed(() => chrome.value.statusLabel)
 const hint = computed(() => {
   const base = props.detail || props.label
   return isBackground.value ? `${base}，后台` : base
-})
-/** 把 Runtime 工具终态翻成稳定短文案，让调用链无需靠颜色猜状态。 */
-const statusLabel = computed(() => {
-  switch (props.status) {
-    case 'pending':
-      return '等待中'
-    case 'in_progress':
-      return '进行中'
-    case 'completed':
-      return '已完成'
-    case 'failed':
-      return '失败'
-    case 'cancelled':
-      return '已取消'
-    default:
-      return '状态未知'
-  }
 })
 const accessibleLabel = computed(() => {
   const parts = [props.label, statusLabel.value]

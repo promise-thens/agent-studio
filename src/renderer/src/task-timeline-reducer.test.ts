@@ -1112,6 +1112,55 @@ describe('工具节点 execution 后台标记', () => {
     })
     expect(tool).not.toHaveProperty('execution')
   })
+
+  it('后台 in_progress 收到 cancelled update 后不是 in_progress，仍保留 execution', () => {
+    const tool = timelineNodes([
+      {
+        ...BASE,
+        sequence: 1,
+        kind: 'tool-call',
+        toolCallId: 'bash-1',
+        title: 'Execute `sleep 30`',
+        status: 'in_progress',
+        execution: 'background'
+      },
+      toolUpdate(2, 'bash-1', 'cancelled')
+    ]).find((node) => node.kind === 'tool')
+
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      toolCallId: 'bash-1',
+      status: 'cancelled',
+      execution: 'background'
+    })
+    expect(tool && 'status' in tool ? tool.status : '').not.toBe('in_progress')
+  })
+
+  it('turn-complete 不发明工具终态：未收到 cancelled 时后台工具仍是 in_progress', () => {
+    const tool = timelineNodes([
+      {
+        ...BASE,
+        sequence: 1,
+        kind: 'tool-call',
+        toolCallId: 'bash-1',
+        title: 'Execute `sleep 30`',
+        status: 'in_progress',
+        execution: 'background'
+      },
+      {
+        ...BASE,
+        sequence: 2,
+        kind: 'turn-complete',
+        outcome: 'cancelled'
+      }
+    ]).find((node) => node.kind === 'tool')
+
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      status: 'in_progress',
+      execution: 'background'
+    })
+  })
 })
 
 function thoughtEvent(sequence: number): PublicAgentEvent {

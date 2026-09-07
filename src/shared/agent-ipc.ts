@@ -24,6 +24,7 @@ export const AGENT_INVOKE_CHANNELS = {
   createTask: 'agent:create-task',
   enterTask: 'agent:enter-task',
   startTurn: 'agent:start-turn',
+  /** 停止整场 Turn。P0-19e 后台命令同样走这条，禁止另开 terminal:* / pty:* / kill-background。 */
   cancelTurn: 'agent:cancel-turn',
   getTaskRuntimeState: 'agent:get-task-runtime-state',
   respondPermission: 'agent:respond-permission',

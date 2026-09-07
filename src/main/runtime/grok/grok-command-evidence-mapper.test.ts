@@ -89,6 +89,42 @@ describe('Grok 命令证据字段冻结', () => {
 })
 
 describe('mapGrokCommandEvidence', () => {
+  it('execute 且 rawInput.background: true 仍映射 runtime-tool，有限 output 进 transcript，不含 rawInput 整对象', () => {
+    const leak = 'RAW_INPUT_MUST_NOT_LEAK'
+    const facts = baseFacts({
+      kind: 'execute',
+      title: 'Execute `sleep 30`',
+      status: 'completed',
+      rawInput: {
+        command: 'sleep 30',
+        background: true,
+        cwd: '/secret/cwd-must-not-leak',
+        extra: { token: leak }
+      },
+      rawOutput: { exit_code: 0, timed_out: false, output: 'slept-ok-limited-output' }
+    })
+    const mapping = mapGrokCommandEvidence(facts, redactFakeText)
+    expect(mapping).not.toBeNull()
+    expect(mapping!.evidence).toMatchObject({
+      source: 'runtime-tool',
+      displayCommand: 'sleep 30',
+      status: 'succeeded',
+      exitCode: 0
+    })
+    expect(mapping!.evidence).not.toHaveProperty('rawInput')
+    expect(mapping!.evidence).not.toHaveProperty('background')
+    expect(mapping!.evidence).not.toHaveProperty('execution')
+    expect(facts).not.toHaveProperty('rawInput')
+    expect(facts).not.toHaveProperty('rawOutput')
+    expect(mapping!.chunks.some((chunk) => chunk.text.includes('slept-ok-limited-output'))).toBe(
+      true
+    )
+    const serialized = JSON.stringify(mapping)
+    expect(serialized).not.toContain(leak)
+    expect(serialized).not.toContain('/secret/cwd-must-not-leak')
+    expect(serialized).not.toMatch(/"background"\s*:\s*true/)
+  })
+
   it('exit_code 为 0 且未超时时映射为 runtime-tool succeeded', () => {
     const evidence = mappedEvidence({
       rawInput: { command: 'pnpm test', cwd: '/tmp/should-not-become-cwd' },

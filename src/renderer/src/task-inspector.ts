@@ -280,6 +280,10 @@ export function projectInspectorTimelineSummary(
   }
 }
 
+/**
+ * Inspector 未实现标签的占位文案。
+ * Terminal 只声明 P0-15 用户 PTY；P0-19e 后台命令输出走 Command Evidence，不得写入本函数。
+ */
 export function inspectorPlaceholderCopy(
   tab: Exclude<InspectorTab, 'timeline'>
 ): InspectorPlaceholderCopy {

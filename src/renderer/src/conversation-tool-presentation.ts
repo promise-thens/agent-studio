@@ -1,3 +1,5 @@
+import type { AgentToolStatus } from '../../shared/agent'
+
 /** 无动词的长标题超过这个长度才考虑折叠，避免短写入标题被收成「工具」。 */
 const RAW_DUMP_MIN_CHARS = 24
 /** 不含命令/正则痕迹时，只有极长标题才折叠。 */
@@ -21,6 +23,50 @@ const KNOWN_VERBS: readonly { kind: KnownToolKind; pattern: RegExp; label: strin
 export interface ToolRowPresentation {
   label: string
   detail?: string
+}
+
+export interface ToolRowChrome {
+  busy: boolean
+  isBackground: boolean
+  statusLabel: string
+  /** 折叠态可见徽章：有后台时「后台」在状态前；取消后不得再显示「进行中」。 */
+  visibleLabels: readonly string[]
+}
+
+/**
+ * 折叠 ToolRow 的后台徽章与状态文案。
+ * 只认 execution=background，禁止用 in_progress 猜后台；取消后「后台」可保留。
+ */
+export function resolveToolRowChrome(input: {
+  status: AgentToolStatus | 'unknown'
+  execution?: 'background'
+}): ToolRowChrome {
+  const busy = input.status === 'in_progress' || input.status === 'pending'
+  const isBackground = input.execution === 'background'
+  const statusLabel = resolveToolRowStatusLabel(input.status)
+  return {
+    busy,
+    isBackground,
+    statusLabel,
+    visibleLabels: isBackground ? ['后台', statusLabel] : [statusLabel]
+  }
+}
+
+function resolveToolRowStatusLabel(status: AgentToolStatus | 'unknown'): string {
+  switch (status) {
+    case 'pending':
+      return '等待中'
+    case 'in_progress':
+      return '进行中'
+    case 'completed':
+      return '已完成'
+    case 'failed':
+      return '失败'
+    case 'cancelled':
+      return '已取消'
+    default:
+      return '状态未知'
+  }
 }
 
 /**

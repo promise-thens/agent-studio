@@ -211,6 +211,24 @@ describe('对话块投影', () => {
     expect(merged).not.toHaveProperty('execution')
   })
 
+  it('cancelled 后台工具块仍带 execution，status 不是 in_progress', () => {
+    const block = projectConversationTurn(
+      turn('cancelled', [
+        {
+          ...tool('exec-bg', 'Execute `sleep 30`', 'cancelled'),
+          execution: 'background'
+        }
+      ])
+    ).find((item) => item.kind === 'tool')
+
+    expect(block).toMatchObject({
+      kind: 'tool',
+      status: 'cancelled',
+      execution: 'background'
+    })
+    expect(block && 'status' in block ? block.status : '').not.toBe('in_progress')
+  })
+
   it('标题含 background 但节点无 execution 时对话块不得标后台', () => {
     const block = projectConversationTurn(
       turn('running', [tool('bash-1', 'run background job', 'in_progress')])
