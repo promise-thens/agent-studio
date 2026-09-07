@@ -4,6 +4,7 @@ import type { TurnRewindPreview, TurnRewindSelection } from '../../../shared/tur
 import {
   clampTurnRewindSelection,
   defaultTurnRewindSelection,
+  nextTurnRewindSelection,
   presentTurnRewindCard
 } from '../../../shared/turn-rewind-preview'
 import { restoreActionLabel, restorePreviewSummary } from '../task-changes-presentation'
@@ -30,11 +31,21 @@ const emit = defineEmits<{
 }>()
 
 const selection = ref<TurnRewindSelection>(defaultTurnRewindSelection(props.preview))
+/** 只比较 conversation/blocked 的值，避免预览对象换新把用户勾选打回默认。 */
+let selectionBasisConversation = props.preview.conversation
+let selectionBasisFilesBlocked = props.preview.files.blocked
 
 watch(
-  () => [props.preview.conversation, props.preview.files.blocked] as const,
-  () => {
-    selection.value = defaultTurnRewindSelection(props.preview)
+  () => props.preview,
+  (preview) => {
+    selection.value = nextTurnRewindSelection({
+      previousConversation: selectionBasisConversation,
+      previousFilesBlocked: selectionBasisFilesBlocked,
+      next: preview,
+      selection: selection.value
+    })
+    selectionBasisConversation = preview.conversation
+    selectionBasisFilesBlocked = preview.files.blocked
   }
 )
 

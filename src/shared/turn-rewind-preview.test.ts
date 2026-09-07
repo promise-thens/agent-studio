@@ -9,6 +9,7 @@ import {
   clampTurnRewindSelection,
   defaultTurnRewindSelection,
   isTurnRewindBusy,
+  nextTurnRewindSelection,
   presentTurnRewindCard,
   resolveTurnRewindConversationPrompt
 } from './turn-rewind-preview'
@@ -234,6 +235,33 @@ describe('对话 prompt 与默认勾选', () => {
     })
     expect(defaultTurnRewindSelection(busy)).toEqual({ conversation: false, files: false })
   })
+
+  it('取消对话后，相同 conversation/blocked 的新预览对象不得把对话重新勾上', () => {
+    const previous = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: null,
+      changeSetRevertible: latestTurnRevertible()
+    })
+    const next = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: latestTurnPreview()
+    })
+    expect(previous.conversation).toBe('available')
+    expect(next.conversation).toBe('available')
+    expect(previous.files.blocked).toBe(false)
+    expect(next.files.blocked).toBe(false)
+    expect(previous).not.toBe(next)
+    expect(
+      nextTurnRewindSelection({
+        previousConversation: previous.conversation,
+        previousFilesBlocked: previous.files.blocked,
+        next,
+        selection: { conversation: false, files: true }
+      })
+    ).toEqual({ conversation: false, files: true })
+  })
 })
 
 describe('presentTurnRewindCard 禁用态', () => {
@@ -303,6 +331,21 @@ describe('presentTurnRewindCard 禁用态', () => {
     expect(view.filesButtonDisabled).toBe(false)
     expect(view.filesChecked).toBe(true)
     expect(view.filesReason).toBeNull()
+  })
+
+  it('available 但用户取消对话时不得暴露可发送的 /rewind prompt', () => {
+    const preview = buildTurnRewindPreview({
+      advertisedCommands: [{ name: 'rewind' }],
+      busy: false,
+      restorePreview: latestTurnPreview()
+    })
+    const view = presentTurnRewindCard(preview, { conversation: false, files: true })
+    expect(view.conversationChecked).toBe(false)
+    expect(view.conversationPrompt).toBeNull()
+    expect(view.conversationPrompt).not.toBe('/rewind')
+    expect(resolveTurnRewindConversationPrompt(preview, { conversation: false, files: true })).toBe(
+      null
+    )
   })
 })
 

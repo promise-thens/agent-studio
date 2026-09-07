@@ -31,6 +31,8 @@ describe('回退上一轮两行卡源码约束', () => {
     expect(card).toContain('conversationCheckboxDisabled')
     expect(card).toContain('filesButtonDisabled')
     expect(card).toContain('presentTurnRewindCard')
+    expect(card).toContain('nextTurnRewindSelection')
+    expect(card).not.toMatch(/watch\([\s\S]*selection\.value = defaultTurnRewindSelection/)
     expect(card).toContain('对话回退')
     expect(card).toContain('文件恢复')
     expect(card).toContain('只影响 Grok 上下文，不改磁盘')

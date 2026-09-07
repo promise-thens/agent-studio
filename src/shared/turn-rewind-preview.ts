@@ -128,9 +128,14 @@ export function buildTurnRewindPreview(input: BuildTurnRewindPreviewInput): Turn
 }
 
 /**
- * 仅 available 时返回 `/` + 快照真名。command-missing / busy 必须是 null，禁止伪造 `/rewind`。
+ * 仅 available 且（未传 selection 或 clamp 后仍勾选对话）时返回 `/` + 快照真名。
+ * command-missing / busy / 用户取消对话必须是 null，禁止伪造 `/rewind`。
  */
-export function resolveTurnRewindConversationPrompt(preview: TurnRewindPreview): string | null {
+export function resolveTurnRewindConversationPrompt(
+  preview: TurnRewindPreview,
+  selection?: TurnRewindSelection
+): string | null {
+  if (selection && !clampTurnRewindSelection(preview, selection).conversation) return null
   if (preview.conversation !== 'available') return null
   if (preview.conversationCommandName !== 'rewind' && preview.conversationCommandName !== 'undo') {
     return null
@@ -162,6 +167,25 @@ export function clampTurnRewindSelection(
 }
 
 /**
+ * 预览对象换新但 conversation/blocked 没变时，只 clamp 保留用户勾选。
+ * 状态真变了才回到默认勾选，避免点「恢复上一轮文件」把已取消的对话重新勾上。
+ */
+export function nextTurnRewindSelection(input: {
+  previousConversation: TurnRewindConversationStatus
+  previousFilesBlocked: boolean
+  next: TurnRewindPreview
+  selection: TurnRewindSelection
+}): TurnRewindSelection {
+  if (
+    input.previousConversation === input.next.conversation &&
+    input.previousFilesBlocked === input.next.files.blocked
+  ) {
+    return clampTurnRewindSelection(input.next, input.selection)
+  }
+  return defaultTurnRewindSelection(input.next)
+}
+
+/**
  * 把预览模型投影成 checkbox / 按钮禁用态。不在这里发 prompt 或调 restore。
  */
 export function presentTurnRewindCard(
@@ -189,7 +213,7 @@ export function presentTurnRewindCard(
       : preview.conversation === 'busy'
         ? TURN_REWIND_BUSY_COPY
         : null,
-    conversationPrompt: resolveTurnRewindConversationPrompt(preview)
+    conversationPrompt: resolveTurnRewindConversationPrompt(preview, clamped)
   }
 }
 
