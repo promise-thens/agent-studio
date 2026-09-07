@@ -338,6 +338,11 @@ export type AgentToolCallEvent = AgentEventBase & {
    * 父 tool 的稳定 toolCallId。只允许观察白名单映射；缺省表示扁平工具行，禁止用标题猜测。
    */
   parentId?: string
+  /**
+   * 工具执行位置。缺省视为前台，不得写入 'foreground'。
+   * 只有观察冻结的 rawInput.background / is_background 严格布尔 true 才能写成 'background'。
+   */
+  execution?: 'background'
 }
 
 export type AgentToolUpdateEvent = AgentEventBase & {
@@ -349,6 +354,11 @@ export type AgentToolUpdateEvent = AgentEventBase & {
    * 父 tool 的稳定 toolCallId。只允许观察白名单映射；缺省表示扁平工具行，禁止用标题猜测。
    */
   parentId?: string
+  /**
+   * 工具执行位置。缺省视为前台，不得写入 'foreground'。
+   * 只有观察冻结的 rawInput.background / is_background 严格布尔 true 才能写成 'background'。
+   */
+  execution?: 'background'
 }
 
 export type AgentToolEvent = AgentToolCallEvent | AgentToolUpdateEvent

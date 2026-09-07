@@ -186,4 +186,45 @@ describe('projectPublicAgentEvent', () => {
     expect(Buffer.byteLength(projected.parentId ?? '', 'utf8')).toBeLessThanOrEqual(4 * 1024)
     expect(JSON.stringify(projected)).not.toContain('runtime-session-private')
   })
+
+  it('白名单 execution:background 进入公开工具事件，非法值与未知键丢掉', () => {
+    const background = projectPublicAgentEvent(
+      {
+        ...BASE_EVENT,
+        kind: 'tool-call',
+        toolCallId: 'tool-bg-1',
+        title: 'Run sleep',
+        status: 'in_progress',
+        execution: 'background'
+      },
+      (text) => text
+    )
+    expect(background).toMatchObject({
+      kind: 'tool-call',
+      toolCallId: 'tool-bg-1',
+      execution: 'background'
+    })
+    expect(JSON.stringify(background)).not.toContain('runtime-session-private')
+
+    const rejected = projectPublicAgentEvent(
+      {
+        ...BASE_EVENT,
+        kind: 'tool-update',
+        toolCallId: 'tool-bg-1',
+        title: 'Run sleep',
+        status: 'in_progress',
+        execution: 'foreground',
+        rawInput: { background: true, apiKey: 'fake-secret' },
+        task_id: 'grok-internal-task'
+      } as unknown as AgentEvent,
+      (text) => text.replaceAll('fake-secret', '[REDACTED]')
+    )
+    expect(rejected).not.toHaveProperty('execution')
+    const serialized = JSON.stringify(rejected)
+    expect(serialized).not.toContain('"execution"')
+    expect(serialized).not.toContain('foreground')
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain('fake-secret')
+    expect(serialized).not.toContain('task_id')
+  })
 })

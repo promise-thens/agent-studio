@@ -6,6 +6,11 @@ import {
   mapGrokRuntimeImageContent,
   mapGrokSessionUpdate
 } from './grok-acp-mappers'
+import {
+  GROK_COMMAND_EVIDENCE_FIELD_FREEZE,
+  accumulateGrokCommandToolFacts,
+  mapGrokCommandEvidence
+} from './grok-command-evidence-mapper'
 
 const FAKE_KEY = 'sk-fake-available-commands-mapper'
 const SESSION_ID = 'runtime-session-available-commands'
@@ -527,5 +532,195 @@ describe('mapGrokSessionUpdate 子 Agent parentId', () => {
         redactFakeText
       )
     ).toEqual([])
+  })
+})
+
+describe('mapGrokSessionUpdate 后台 execution', () => {
+  it('rawInput.background === true 投影 execution:background，且不透传 rawInput/command/假 Key', () => {
+    const events = mapGrokSessionUpdate(
+      {
+        sessionId: SESSION_ID,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-bg-1',
+          title: 'Run sleep',
+          status: 'in_progress',
+          rawInput: {
+            command: 'sleep 30',
+            background: true,
+            apiKey: FAKE_KEY
+          }
+        }
+      },
+      redactFakeText
+    )
+
+    expect(events[0]).toMatchObject({
+      kind: 'tool-call',
+      toolCallId: 'tool-bg-1',
+      title: 'Run sleep',
+      status: 'in_progress',
+      execution: 'background'
+    })
+    const serialized = JSON.stringify(events)
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain('sleep 30')
+    expect(serialized).not.toContain(FAKE_KEY)
+  })
+
+  it('rawInput.is_background === true 同样投影', () => {
+    const events = mapGrokSessionUpdate(
+      {
+        sessionId: SESSION_ID,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-bg-2',
+          title: 'Run sleep',
+          status: 'in_progress',
+          rawInput: { is_background: true }
+        }
+      },
+      redactFakeText
+    )
+
+    expect(events[0]).toMatchObject({
+      kind: 'tool-call',
+      execution: 'background'
+    })
+    expect(JSON.stringify(events)).not.toContain('is_background')
+    expect(JSON.stringify(events)).not.toContain('rawInput')
+  })
+
+  it('background:false / is_background:yes / 缺 rawInput 不写 execution', () => {
+    const cases: Array<Record<string, unknown> | undefined> = [
+      { command: 'sleep 30', background: false },
+      { is_background: 'yes' },
+      undefined
+    ]
+
+    for (const rawInput of cases) {
+      const events = mapGrokSessionUpdate(
+        {
+          sessionId: SESSION_ID,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tool-fg-1',
+            title: 'Run sleep',
+            status: 'pending',
+            ...(rawInput === undefined ? {} : { rawInput })
+          } as acp.SessionUpdate
+        },
+        redactFakeText
+      )
+
+      expect(events[0]).not.toHaveProperty('execution')
+      expect(JSON.stringify(events)).not.toContain('"execution"')
+    }
+  })
+
+  it('标题含 background / sleep 30 &、以及未知键 task_id / _meta.background 不写 execution', () => {
+    for (const title of ['background sleep', 'sleep 30 &']) {
+      const events = mapGrokSessionUpdate(
+        {
+          sessionId: SESSION_ID,
+          update: {
+            sessionUpdate: 'tool_call',
+            toolCallId: 'tool-guess-1',
+            title,
+            status: 'in_progress'
+          }
+        },
+        redactFakeText
+      )
+
+      expect(events[0]).not.toHaveProperty('execution')
+      expect(JSON.stringify(events)).not.toContain('"execution"')
+    }
+
+    const unknown = mapGrokSessionUpdate(
+      {
+        sessionId: SESSION_ID,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-meta-1',
+          title: 'Run sleep',
+          status: 'in_progress',
+          task_id: 'grok-internal-task',
+          rawInput: { task_id: 'grok-internal-task', command: 'sleep 30' },
+          _meta: { background: true, is_background: true, secret: FAKE_KEY }
+        } as unknown as acp.SessionUpdate
+      },
+      redactFakeText
+    )
+
+    expect(unknown[0]).not.toHaveProperty('execution')
+    const serialized = JSON.stringify(unknown)
+    expect(serialized).not.toContain('"execution"')
+    expect(serialized).not.toContain('task_id')
+    expect(serialized).not.toContain('_meta')
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain('grok-internal-task')
+    expect(serialized).not.toContain(FAKE_KEY)
+  })
+
+  it('tool_call_update 带 rawInput.background:true 同样投影', () => {
+    const events = mapGrokSessionUpdate(
+      {
+        sessionId: SESSION_ID,
+        update: {
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tool-bg-3',
+          status: 'in_progress',
+          rawInput: { background: true, apiKey: FAKE_KEY }
+        }
+      },
+      redactFakeText
+    )
+
+    expect(events[0]).toMatchObject({
+      kind: 'tool-update',
+      toolCallId: 'tool-bg-3',
+      status: 'in_progress',
+      execution: 'background'
+    })
+    const serialized = JSON.stringify(events)
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain(FAKE_KEY)
+  })
+
+  it('命令证据路径仍只冻结 rawInput.command，不吸收 background / task_id', () => {
+    expect(GROK_COMMAND_EVIDENCE_FIELD_FREEZE.rawInput).toEqual(['command'])
+    const facts = accumulateGrokCommandToolFacts(
+      undefined,
+      {
+        toolCallId: 'tool-bg-evidence',
+        kind: 'execute',
+        title: 'Run sleep',
+        status: 'in_progress',
+        rawInput: {
+          command: 'sleep 30',
+          background: true,
+          is_background: true,
+          task_id: 'grok-internal-task',
+          apiKey: FAKE_KEY
+        }
+      },
+      {
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        environmentId: 'env-1',
+        nowIso: '2026-09-07T00:00:00.000Z'
+      }
+    )
+    const mapping = mapGrokCommandEvidence(facts, redactFakeText)
+
+    expect(mapping).not.toBeNull()
+    expect(mapping?.evidence).not.toHaveProperty('execution')
+    expect(mapping?.evidence.displayCommand).toBe('sleep 30')
+    const serialized = JSON.stringify(mapping)
+    expect(serialized).not.toContain('"execution"')
+    expect(serialized).not.toContain(FAKE_KEY)
+    expect(serialized).not.toContain('task_id')
+    expect(serialized).not.toContain('grok-internal-task')
   })
 })

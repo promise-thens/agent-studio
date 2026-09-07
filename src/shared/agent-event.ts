@@ -48,6 +48,11 @@ export type PublicAgentToolCallEvent = PublicAgentEventBase & {
    * 父 tool 的稳定 toolCallId。无白名单来源时缺省，Renderer 不得据此猜树。
    */
   parentId?: string
+  /**
+   * 工具执行位置。缺省视为前台，不得写入 'foreground'。
+   * 只有观察冻结的 rawInput 布尔才能写成 'background'。
+   */
+  execution?: 'background'
 }
 
 export type PublicAgentToolUpdateEvent = PublicAgentEventBase & {
@@ -59,6 +64,11 @@ export type PublicAgentToolUpdateEvent = PublicAgentEventBase & {
    * 父 tool 的稳定 toolCallId。无白名单来源时缺省，Renderer 不得据此猜树。
    */
   parentId?: string
+  /**
+   * 工具执行位置。缺省视为前台，不得写入 'foreground'。
+   * 只有观察冻结的 rawInput 布尔才能写成 'background'。
+   */
+  execution?: 'background'
 }
 
 export type PublicAgentToolEvent = PublicAgentToolCallEvent | PublicAgentToolUpdateEvent

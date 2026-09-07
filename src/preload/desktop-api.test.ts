@@ -407,6 +407,68 @@ describe('窄 Preload API', () => {
     expect(JSON.stringify(listener.mock.calls)).not.toContain('_meta')
   })
 
+  it('工具事件 execution:background 进入 Renderer，非法值省略字段仍接受事件', () => {
+    const ipcRenderer = createIpcRenderer()
+    const agent = createAgentDesktopApi(ipcRenderer)
+    const listener = vi.fn()
+    agent.onEvent(listener)
+    const eventHandler = ipcRenderer.on.mock.calls[0]?.[1]
+    const base = {
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 1,
+      observedAt: '2026-08-18T00:00:00.000Z',
+      kind: 'tool-call',
+      toolCallId: 'tool-bg-1',
+      title: 'Run sleep',
+      status: 'in_progress'
+    }
+
+    eventHandler?.({}, { ...base, execution: 'background' })
+    eventHandler?.({}, { ...base, sequence: 2, execution: 'foreground' })
+    eventHandler?.({}, { ...base, sequence: 3, execution: 'yes' })
+    eventHandler?.({}, { ...base, sequence: 4, execution: true })
+    eventHandler?.({}, { ...base, sequence: 5 })
+    eventHandler?.(
+      {},
+      {
+        ...base,
+        sequence: 6,
+        kind: 'tool-update',
+        title: 'Run sleep',
+        status: 'in_progress',
+        execution: 'background',
+        rawInput: { apiKey: 'fake-secret' }
+      }
+    )
+
+    expect(listener.mock.calls.map((call) => call[0])).toEqual([
+      { ...base, execution: 'background' },
+      { ...base, sequence: 2 },
+      { ...base, sequence: 3 },
+      { ...base, sequence: 4 },
+      { ...base, sequence: 5 },
+      {
+        runtimeId: 'grok',
+        capabilityState: 'native',
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        sequence: 6,
+        observedAt: '2026-08-18T00:00:00.000Z',
+        kind: 'tool-update',
+        toolCallId: 'tool-bg-1',
+        title: 'Run sleep',
+        status: 'in_progress',
+        execution: 'background'
+      }
+    ])
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('foreground')
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('rawInput')
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('fake-secret')
+  })
+
   it('进入对话只重建公开恢复状态，剥掉 runtimeSessionId', async () => {
     const ipcRenderer = createIpcRenderer()
     ipcRenderer.invoke.mockResolvedValue({

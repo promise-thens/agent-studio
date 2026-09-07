@@ -349,6 +349,7 @@ function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
       const toolCallId = readBoundedText(payload.toolCallId, MAX_EVENT_FIELD_BYTES)
       const title = readBoundedText(payload.title, MAX_EVENT_FIELD_BYTES, true)
       const parentId = readOptionalParentId(payload.parentId)
+      const execution = readOptionalBackgroundExecution(payload.execution)
       if (
         !toolCallId ||
         title === null ||
@@ -363,13 +364,15 @@ function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
         toolCallId,
         title,
         ...(payload.status === undefined ? {} : { status: payload.status }),
-        ...(parentId === undefined ? {} : { parentId })
+        ...(parentId === undefined ? {} : { parentId }),
+        ...(execution ? { execution } : {})
       }
     }
     case 'tool-update': {
       const toolCallId = readBoundedText(payload.toolCallId, MAX_EVENT_FIELD_BYTES)
       const title = readOptionalEventText(payload.title)
       const parentId = readOptionalParentId(payload.parentId)
+      const execution = readOptionalBackgroundExecution(payload.execution)
       if (
         !toolCallId ||
         title === null ||
@@ -384,7 +387,8 @@ function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
         toolCallId,
         ...(title === undefined ? {} : { title }),
         ...(payload.status === undefined ? {} : { status: payload.status }),
-        ...(parentId === undefined ? {} : { parentId })
+        ...(parentId === undefined ? {} : { parentId }),
+        ...(execution ? { execution } : {})
       }
     }
     case 'plan': {
@@ -486,6 +490,13 @@ function readOptionalEventText(value: unknown): string | undefined | null {
 function readOptionalParentId(value: unknown): string | undefined | null {
   if (value === undefined) return undefined
   return readBoundedText(value, MAX_EVENT_FIELD_BYTES)
+}
+
+/**
+ * execution 不是身份键：只有 'background' 才拷贝；非法值省略字段、事件仍接受。
+ */
+function readOptionalBackgroundExecution(value: unknown): 'background' | undefined {
+  return value === 'background' ? 'background' : undefined
 }
 
 function parsePlanEntry(value: unknown): {

@@ -16,6 +16,8 @@ P0-19a Session Plan（`/plan` 广告有无与一次 `session/prompt` 提交）�
 
 P0-19c 一轮回退（`/rewind` / `undo` 广告有无；观察发送是否写盘或截断会话）见 [p0-19c-turn-rewind-observation.md](p0-19c-turn-rewind-observation.md)。产品冻结为 `not-advertised`。
 
+P0-19e 后台命令（`rawInput.background` / `rawInput.is_background` 严格布尔；method=`sdk+docs+binary`）见 [p0-19e-background-command-observation.md](p0-19e-background-command-observation.md)。
+
 ## 用脚本走正式产品路径
 
 不要另写 `grok agent stdio` Client。默认测试也不连真实 Grok。

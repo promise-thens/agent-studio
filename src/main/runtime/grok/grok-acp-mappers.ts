@@ -218,24 +218,28 @@ export function mapGrokSessionUpdate(
       ]
     case 'tool_call': {
       // 观察白名单为空：SDK 1.3 ToolCall 无稳定 parent/agentId。不得从 title/_meta/未知键发明 parentId。
+      const execution = copyBackgroundExecution(update.rawInput)
       const toolEvent: AgentEventDraft = {
         ...base,
         kind: 'tool-call',
         toolCallId: update.toolCallId,
         title: redactText(update.title),
         // Ask 等阻塞工具经常省略 status；缺省 pending，避免主列显示“状态未知”。
-        status: update.status ?? 'pending'
+        status: update.status ?? 'pending',
+        ...(execution ? { execution } : {})
       }
       return appendMappedDiffEvent(toolEvent, update.toolCallId, update.content, base, redactText)
     }
     case 'tool_call_update': {
       // 观察白名单为空：SDK 1.3 ToolCallUpdate 同样无 parentToolCallId，不读 _meta。
+      const execution = copyBackgroundExecution(update.rawInput)
       const toolEvent: AgentEventDraft = {
         ...base,
         kind: 'tool-update',
         toolCallId: update.toolCallId,
         ...(update.title != null ? { title: redactText(update.title) } : {}),
-        ...(update.status != null ? { status: update.status } : {})
+        ...(update.status != null ? { status: update.status } : {}),
+        ...(execution ? { execution } : {})
       }
       return appendMappedDiffEvent(toolEvent, update.toolCallId, update.content, base, redactText)
     }
@@ -791,6 +795,21 @@ export function createGrokEventBase(
     runtimeSessionId,
     capabilityState
   }
+}
+
+/**
+ * 只承认 rawInput 上观察冻结的严格布尔 true。
+ * 不得读 _meta、task_id、标题或命令行；false / 非布尔 / 缺省一律省略，默认前台。
+ */
+function copyBackgroundExecution(rawInput: unknown): 'background' | undefined {
+  if (rawInput == null || typeof rawInput !== 'object' || Array.isArray(rawInput)) {
+    return undefined
+  }
+  const input = rawInput as Record<string, unknown>
+  if (input.background === true || input.is_background === true) {
+    return 'background'
+  }
+  return undefined
 }
 
 function appendMappedDiffEvent(

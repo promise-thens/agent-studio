@@ -48,24 +48,28 @@ export function projectPublicAgentEvent(
       }
     case 'tool-call': {
       const parentId = copyPublicParentId(event.parentId, redactText)
+      const execution = copyPublicBackgroundExecution(event.execution)
       return {
         ...base,
         kind: 'tool-call',
         toolCallId: redactText(event.toolCallId),
         title: redactText(event.title),
         ...(event.status ? { status: event.status } : {}),
-        ...(parentId ? { parentId } : {})
+        ...(parentId ? { parentId } : {}),
+        ...(execution ? { execution } : {})
       }
     }
     case 'tool-update': {
       const parentId = copyPublicParentId(event.parentId, redactText)
+      const execution = copyPublicBackgroundExecution(event.execution)
       return {
         ...base,
         kind: 'tool-update',
         toolCallId: redactText(event.toolCallId),
         ...(event.title ? { title: redactText(event.title) } : {}),
         ...(event.status ? { status: event.status } : {}),
-        ...(parentId ? { parentId } : {})
+        ...(parentId ? { parentId } : {}),
+        ...(execution ? { execution } : {})
       }
     }
     case 'plan':
@@ -116,6 +120,13 @@ function copyPublicParentId(
   if (!parentId?.trim()) return undefined
   const redacted = limitUtf8Text(redactText(parentId), MAX_PUBLIC_SHORT_TEXT_BYTES)
   return redacted.trim() ? redacted : undefined
+}
+
+/**
+ * 公开 execution 只拷贝 'background'；非法值省略，避免前台字面量进入 Renderer。
+ */
+function copyPublicBackgroundExecution(value: unknown): 'background' | undefined {
+  return value === 'background' ? 'background' : undefined
 }
 
 function projectDiffReference(

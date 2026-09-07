@@ -2307,7 +2307,8 @@ export function projectPersistedAgentEvent(
         toolCallId: redactText(event.toolCallId),
         title: redactText(event.title),
         ...(event.status ? { status: event.status } : {}),
-        ...(event.parentId?.trim() ? { parentId: redactText(event.parentId) } : {})
+        ...(event.parentId?.trim() ? { parentId: redactText(event.parentId) } : {}),
+        ...(event.execution === 'background' ? { execution: 'background' as const } : {})
       }
     case 'tool-update':
       return {
@@ -2316,7 +2317,8 @@ export function projectPersistedAgentEvent(
         toolCallId: redactText(event.toolCallId),
         ...(event.title ? { title: redactText(event.title) } : {}),
         ...(event.status ? { status: event.status } : {}),
-        ...(event.parentId?.trim() ? { parentId: redactText(event.parentId) } : {})
+        ...(event.parentId?.trim() ? { parentId: redactText(event.parentId) } : {}),
+        ...(event.execution === 'background' ? { execution: 'background' as const } : {})
       }
     case 'plan':
       return {

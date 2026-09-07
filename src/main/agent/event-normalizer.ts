@@ -34,6 +34,7 @@ interface LimitedDraft {
 interface ToolState {
   title?: string
   status?: AgentToolStatus
+  execution?: 'background'
 }
 
 interface TextLimitResult {
@@ -117,6 +118,10 @@ export class AgentEventNormalizer {
     const nextStatus =
       event.status ?? current?.status ?? (event.kind === 'tool-call' ? 'pending' : undefined)
     const nextTitle = event.title ?? current?.title
+    const incomingBackground = event.execution === 'background'
+    const currentBackground = current?.execution === 'background'
+    const nextExecution =
+      incomingBackground || currentBackground ? ('background' as const) : undefined
 
     if (current?.status === 'in_progress' && nextStatus === 'pending') return false
     if (
@@ -128,12 +133,17 @@ export class AgentEventNormalizer {
       return false
     }
 
-    if (current && current.status === nextStatus && current.title === nextTitle) return false
+    const sameTitleStatus = Boolean(
+      current && current.status === nextStatus && current.title === nextTitle
+    )
+    // title/status 不变时，新草稿补上 background 仍必须接受，避免后台标记被当重复丢掉。
+    if (sameTitleStatus && !(incomingBackground && !currentBackground)) return false
     if (!current && nextStatus == null && nextTitle == null) return false
 
     this.toolStates.set(event.toolCallId, {
       ...(nextTitle != null ? { title: nextTitle } : {}),
-      ...(nextStatus != null ? { status: nextStatus } : {})
+      ...(nextStatus != null ? { status: nextStatus } : {}),
+      ...(nextExecution ? { execution: nextExecution } : {})
     })
     return true
   }
@@ -193,6 +203,7 @@ function limitDraft(event: AgentEventDraft): LimitedDraft {
       const toolCallId = limitText(event.toolCallId, MAX_SHORT_TEXT_BYTES)
       const title = limitText(event.title, MAX_SHORT_TEXT_BYTES)
       const parentId = copyOptionalParentId(event.parentId)
+      const execution = copyOptionalBackgroundExecution(event.execution)
       truncated ||= toolCallId.truncated || title.truncated || parentId.truncated
       return {
         event: {
@@ -201,7 +212,8 @@ function limitDraft(event: AgentEventDraft): LimitedDraft {
           toolCallId: toolCallId.value,
           title: title.value,
           ...(event.status != null ? { status: event.status } : {}),
-          ...(parentId.value != null ? { parentId: parentId.value } : {})
+          ...(parentId.value != null ? { parentId: parentId.value } : {}),
+          ...(execution ? { execution } : {})
         },
         truncated
       }
@@ -210,6 +222,7 @@ function limitDraft(event: AgentEventDraft): LimitedDraft {
       const toolCallId = limitText(event.toolCallId, MAX_SHORT_TEXT_BYTES)
       const title = limitOptionalText(event.title, MAX_SHORT_TEXT_BYTES)
       const parentId = copyOptionalParentId(event.parentId)
+      const execution = copyOptionalBackgroundExecution(event.execution)
       truncated ||= toolCallId.truncated || title.truncated || parentId.truncated
       return {
         event: {
@@ -218,7 +231,8 @@ function limitDraft(event: AgentEventDraft): LimitedDraft {
           toolCallId: toolCallId.value,
           ...(title.value != null ? { title: title.value } : {}),
           ...(event.status != null ? { status: event.status } : {}),
-          ...(parentId.value != null ? { parentId: parentId.value } : {})
+          ...(parentId.value != null ? { parentId: parentId.value } : {}),
+          ...(execution ? { execution } : {})
         },
         truncated
       }
@@ -395,6 +409,14 @@ function copyOptionalParentId(value: string | null | undefined): {
     return { truncated: limited.truncated }
   }
   return limited
+}
+
+/**
+ * execution 只拷贝观察冻结的 'background'。
+ * 非法值省略字段，不得发明 'foreground' 字面量。
+ */
+function copyOptionalBackgroundExecution(value: unknown): 'background' | undefined {
+  return value === 'background' ? 'background' : undefined
 }
 
 /** 按 Unicode code point 截断，避免在中文或 emoji 的 UTF-8 字节中间切开。 */

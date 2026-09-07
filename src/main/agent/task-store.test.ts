@@ -383,6 +383,107 @@ describe('TaskStore', () => {
     expect(page.items[0]).not.toHaveProperty('parentId')
   })
 
+  it('工具事件 execution:background 可持久化往返，未知键不得落盘', async () => {
+    const { store } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '后台命令',
+      model: { modelId: 'model-1' }
+    })
+    await store.appendEvent(
+      projectPersistedAgentEvent(
+        {
+          runtimeId: 'grok',
+          capabilityState: 'native',
+          runtimeSessionId: 'private-session',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          sequence: 1,
+          observedAt: '2026-08-12T00:00:00.000Z',
+          kind: 'tool-call',
+          toolCallId: 'tool-bg-1',
+          title: 'Run sleep',
+          status: 'in_progress',
+          execution: 'background',
+          rawInput: { apiKey: 'fake-secret', background: true },
+          task_id: 'grok-internal-task'
+        } as unknown as AgentEvent,
+        (text) => text.replaceAll('fake-secret', '[REDACTED]')
+      )
+    )
+
+    const page = await store.listEvents('task-1', 'turn-1')
+    expect(page.items).toEqual([
+      expect.objectContaining({
+        kind: 'tool-call',
+        toolCallId: 'tool-bg-1',
+        title: 'Run sleep',
+        status: 'in_progress',
+        execution: 'background'
+      })
+    ])
+    const serialized = JSON.stringify(page)
+    expect(serialized).not.toContain('private-session')
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain('fake-secret')
+    expect(serialized).not.toContain('task_id')
+    expect(serialized).not.toContain('grok-internal-task')
+  })
+
+  it('execution 缺省或非法值持久化后仍不含该键', async () => {
+    const { store } = await createStore()
+    await store.createTurn({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      promptDisplayText: '前台命令',
+      model: { modelId: 'model-1' }
+    })
+    await store.appendEvent(
+      projectPersistedAgentEvent(
+        {
+          runtimeId: 'grok',
+          capabilityState: 'native',
+          runtimeSessionId: 'private-session',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          sequence: 1,
+          observedAt: '2026-08-12T00:00:00.000Z',
+          kind: 'tool-update',
+          toolCallId: 'tool-1',
+          title: 'Run sleep',
+          status: 'completed'
+        },
+        (text) => text
+      )
+    )
+    await store.appendEvent(
+      projectPersistedAgentEvent(
+        {
+          runtimeId: 'grok',
+          capabilityState: 'native',
+          runtimeSessionId: 'private-session',
+          taskId: 'task-1',
+          turnId: 'turn-1',
+          sequence: 2,
+          observedAt: '2026-08-12T00:00:01.000Z',
+          kind: 'tool-update',
+          toolCallId: 'tool-2',
+          title: 'Run sleep',
+          status: 'in_progress',
+          execution: 'foreground'
+        } as unknown as AgentEvent,
+        (text) => text
+      )
+    )
+
+    const page = await store.listEvents('task-1', 'turn-1')
+    expect(page.items[0]).not.toHaveProperty('execution')
+    expect(page.items[1]).not.toHaveProperty('execution')
+    expect(JSON.stringify(page)).not.toContain('"execution"')
+    expect(JSON.stringify(page)).not.toContain('foreground')
+  })
+
   it('同 Task 重绑 Runtime session 时保留历史身份，且详情 DTO 仍不暴露 session ID', async () => {
     const { store, project } = await createStore()
     await store.createTurn({

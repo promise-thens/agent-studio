@@ -239,6 +239,89 @@ describe('AgentEventNormalizer', () => {
     })
     expect(JSON.stringify(event)).not.toContain('parentToolCallId')
   })
+
+  it('白名单 execution:background 经 limitDraft 保留，未知键丢掉', () => {
+    const event = createNormalizer().normalize({
+      ...draftBase(),
+      kind: 'tool-call',
+      toolCallId: 'tool-bg-1',
+      title: 'Run sleep',
+      status: 'in_progress',
+      execution: 'background',
+      rawInput: { command: 'sleep 30', background: true, apiKey: 'fake-secret' },
+      _meta: { background: true }
+    } as unknown as AgentEventDraft)
+
+    expect(event).toMatchObject({
+      kind: 'tool-call',
+      toolCallId: 'tool-bg-1',
+      title: 'Run sleep',
+      status: 'in_progress',
+      execution: 'background'
+    })
+    const serialized = JSON.stringify(event)
+    expect(serialized).not.toContain('rawInput')
+    expect(serialized).not.toContain('fake-secret')
+    expect(serialized).not.toContain('_meta')
+  })
+
+  it('execution 非法值省略字段，不发明前台字面量', () => {
+    const event = createNormalizer().normalize({
+      ...draftBase(),
+      kind: 'tool-call',
+      toolCallId: 'tool-fg-1',
+      title: 'Run sleep',
+      status: 'in_progress',
+      execution: 'foreground',
+      task_id: 'grok-internal-task'
+    } as unknown as AgentEventDraft)
+
+    expect(event).not.toHaveProperty('execution')
+    expect(JSON.stringify(event)).not.toContain('"execution"')
+    expect(JSON.stringify(event)).not.toContain('foreground')
+    expect(JSON.stringify(event)).not.toContain('task_id')
+  })
+
+  it('title/status 不变但新草稿带 execution:background 且当前没有时必须接受', () => {
+    const normalizer = createNormalizer()
+    const first = normalizer.normalize({
+      ...draftBase(),
+      kind: 'tool-call',
+      toolCallId: 'tool-bg-1',
+      title: 'Run sleep',
+      status: 'in_progress'
+    })
+    const second = normalizer.normalize({
+      ...draftBase(),
+      kind: 'tool-update',
+      toolCallId: 'tool-bg-1',
+      title: 'Run sleep',
+      status: 'in_progress',
+      execution: 'background'
+    })
+    const duplicate = normalizer.normalize({
+      ...draftBase(),
+      kind: 'tool-update',
+      toolCallId: 'tool-bg-1',
+      title: 'Run sleep',
+      status: 'in_progress',
+      execution: 'background'
+    })
+
+    expect(first).toMatchObject({
+      kind: 'tool-call',
+      sequence: 1,
+      title: 'Run sleep',
+      status: 'in_progress'
+    })
+    expect(first).not.toHaveProperty('execution')
+    expect(second).toMatchObject({
+      kind: 'tool-update',
+      sequence: 2,
+      execution: 'background'
+    })
+    expect(duplicate).toBeNull()
+  })
 })
 
 function createNormalizer(): AgentEventNormalizer {

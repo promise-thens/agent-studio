@@ -162,14 +162,16 @@ describe('Agent 领域契约', () => {
         toolCallId: 'tool-1',
         title: '读取文件',
         status: 'in_progress',
-        parentId: 'parent-tool-1'
+        parentId: 'parent-tool-1',
+        execution: 'background'
       },
       {
         ...base,
         kind: 'tool-update',
         toolCallId: 'tool-1',
         status: 'completed',
-        parentId: 'parent-tool-1'
+        parentId: 'parent-tool-1',
+        execution: 'background'
       },
       {
         ...base,
