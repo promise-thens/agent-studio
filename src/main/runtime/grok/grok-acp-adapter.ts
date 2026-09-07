@@ -82,6 +82,11 @@ import {
 } from './grok-acp-mappers'
 import { buildGrokPromptContentBlocks } from './grok-acp-prompt-blocks'
 import {
+  copyBrowserPluginScreenshotFilePath,
+  isBrowserPluginScreenshotToolName,
+  toolCallHasBrowserPluginScreenshot
+} from './browser-plugin-screenshot'
+import {
   DEFAULT_GROK_SESSION_MEDIA_ROOT,
   extractGrokRuntimeMediaPaths,
   readGrokSessionMediaFile,
@@ -188,7 +193,7 @@ interface ActiveTurn {
   sessionUpdateQueueActive: boolean
   /** 同一 Turn 的坏图片只提示一次，避免 Runtime 连续脏块刷满时间线。 */
   runtimeAttachmentErrorReported: boolean
-  /** 同一 Turn 已入库的 session 媒体路径，避免 tool_call 与 update 重复落盘。 */
+  /** 同一 Turn 已入库的 session 媒体或插件截图路径，避免 tool_call 与 update 重复落盘。 */
   ingestedRuntimeMediaKeys: Set<string>
   /** signals.json 已发布的最后一份上下文用量；同值快照只允许进入事件链一次。 */
   lastContextUsageFingerprint?: string
@@ -598,6 +603,14 @@ export interface GrokAcpAdapterOptions {
     mimeType: string
     bytes: Buffer
   }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
+  /**
+   * 浏览器插件截图登记为 Artifact。缺省跳过；失败必须由实现返回 null，不得抛进 prompt。
+   */
+  registerBrowserPluginScreenshot?: (input: {
+    taskId: string
+    turnId: string
+    absolutePath: string
+  }) => Promise<{ artifactId: string } | null>
   /** 仅测试注入 Grok session 媒体根；生产固定 /tmp/sessions。 */
   grokSessionMediaRoot?: string
   /** 仅测试注入 signals 根；生产固定为 App 专属 Managed GROK_HOME。 */
@@ -1645,8 +1658,14 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     const isSessionMediaTool =
       (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') &&
       toolCallHasGrokRuntimeMedia(update.content)
+    const isBrowserScreenshotTool = this.shouldQueueBrowserPluginScreenshot(activeTurn, update)
 
-    if (!activeTurn.sessionUpdateQueueActive && !isRuntimeImage && !isSessionMediaTool) {
+    if (
+      !activeTurn.sessionUpdateQueueActive &&
+      !isRuntimeImage &&
+      !isSessionMediaTool &&
+      !isBrowserScreenshotTool
+    ) {
       void this.processSessionUpdate(params, sourceConnection, activeTurn)
       return
     }
@@ -1756,6 +1775,53 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       await this.ingestGrokSessionMedia(activeTurn, update.content)
+      await this.ingestBrowserPluginScreenshot(activeTurn, update)
+    }
+  }
+
+  /** 有 filePath 的截图工具必须进串行队列，保证 Turn 终态前登记结束。 */
+  private shouldQueueBrowserPluginScreenshot(
+    activeTurn: ActiveTurn,
+    update: acp.SessionNotification['update']
+  ): boolean {
+    if (toolCallHasBrowserPluginScreenshot(update)) return true
+    if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') {
+      return false
+    }
+    if (!copyBrowserPluginScreenshotFilePath(update.rawInput)) return false
+    const snapshot = activeTurn.toolCallAuthorizationSnapshots.get(update.toolCallId)
+    return (
+      snapshot?.integrity === 'valid' && isBrowserPluginScreenshotToolName(snapshot.browserToolName)
+    )
+  }
+
+  /**
+   * chrome-devtools take_screenshot 的 filePath 只在已允许路径上登记 Artifact。
+   * 失败返回后 Timeline 可展示「无可用截图」，绝对路径不得进入事件。
+   */
+  private async ingestBrowserPluginScreenshot(
+    activeTurn: ActiveTurn,
+    update: acp.SessionNotification['update']
+  ): Promise<void> {
+    if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') {
+      return
+    }
+    if (!this.shouldQueueBrowserPluginScreenshot(activeTurn, update)) return
+    const absolutePath = copyBrowserPluginScreenshotFilePath(update.rawInput)
+    if (!absolutePath) return
+    const ingestKey = `screenshot:${absolutePath}`
+    if (activeTurn.ingestedRuntimeMediaKeys.has(ingestKey)) return
+    activeTurn.ingestedRuntimeMediaKeys.add(ingestKey)
+    const register = this.options.registerBrowserPluginScreenshot
+    if (!register) return
+    try {
+      await register({
+        taskId: activeTurn.taskId,
+        turnId: activeTurn.turnId,
+        absolutePath
+      })
+    } catch {
+      // 截图失败不得抛进 session/prompt，也不把路径写进错误事件。
     }
   }
 

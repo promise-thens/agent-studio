@@ -91,7 +91,9 @@ import { CommandEvidenceStore } from './command/command-evidence-store'
 import { createEnsureTaskChangeBaseline, TaskChangeBaselineStore } from './git/task-change-baseline'
 import { createRecordTurnChangeCheckpoint, GitReviewService } from './git/git-review-service'
 import { TurnChangeCheckpointStore } from './git/turn-change-checkpoint'
+import { registerBrowserPluginScreenshot as registerBrowserPluginScreenshotArtifact } from './runtime/grok/browser-plugin-screenshot'
 import { GrokAcpAdapter } from './runtime/grok/grok-acp-adapter'
+import { DEFAULT_GROK_SESSION_MEDIA_ROOT } from './runtime/grok/grok-runtime-media'
 import { listGrokHooks } from './runtime/grok/grok-hooks-inventory'
 import { listGrokMarketplacePlugins } from './runtime/grok/grok-marketplace-inventory'
 import {
@@ -496,6 +498,25 @@ async function initializeServices(
           attachmentId: descriptor.attachmentId,
           attachmentKind: 'image',
           originalName: descriptor.originalName
+        }
+      },
+      registerBrowserPluginScreenshot: async (input) => {
+        // 插件截图走 P0-13 Artifact，不进会话附件柜；失败返回 null，不抛进 Turn。
+        const registry = artifactRegistry
+        if (!registry) return null
+        try {
+          const task = requireTaskStore().getTaskRecord(input.taskId)
+          return await registerBrowserPluginScreenshotArtifact({
+            ...input,
+            registry,
+            executionRoot: task.environment.rootSnapshot,
+            mediaRoots: [
+              join(getManagedGrokHome(app.getPath('userData')), 'sessions'),
+              DEFAULT_GROK_SESSION_MEDIA_ROOT
+            ]
+          })
+        } catch {
+          return null
         }
       },
       ...(controlledE2e ? { controlledFixture: controlledE2e.fixture } : {}),

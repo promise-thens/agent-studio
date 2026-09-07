@@ -98,6 +98,8 @@ export class ArtifactRegistry {
     turnId?: string
     source: ArtifactSource
     relativePath: string
+    /** 可选展示标题；不含路径分隔符。缺省仍用相对路径末段。 */
+    title?: string
   }): Promise<ArtifactDescriptor> {
     const context = await this.requireContext(input.taskId)
     const located = await this.resolveRegularFile(context.executionRoot, input.relativePath)
@@ -121,7 +123,7 @@ export class ArtifactRegistry {
       turnId: input.turnId,
       source: input.source,
       kind: classified.kind,
-      title: classified.title,
+      title: optionalArtifactTitle(input.title) ?? classified.title,
       mimeType: classified.mimeType,
       location: { kind: 'file', relativePath: located.relativePath },
       size: bytes.byteLength,
@@ -476,6 +478,19 @@ function isArtifactIdentity(value: string): boolean {
 
 function isFileNotFound(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
+}
+
+/** 展示标题不得夹带路径或 URL，避免把 filePath 泄漏到 Artifacts 列表。 */
+function optionalArtifactTitle(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.includes('\0') || /[/\\]/.test(trimmed) || /:\/\//.test(trimmed)) {
+    return undefined
+  }
+  if (trimmed.length > ARTIFACT_LIMITS.maxTitleBytes) {
+    return trimmed.slice(0, ARTIFACT_LIMITS.maxTitleBytes)
+  }
+  return trimmed
 }
 
 function rejectMessage(reason: ArtifactRegistryErrorCode): string {
