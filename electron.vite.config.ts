@@ -2,12 +2,33 @@
 import { defineConfig } from 'electron-vite'
 import vue from '@vitejs/plugin-vue'
 
+/**
+ * isolatedEntries 的进度条会调用 stdout.clearLine / cursorTo。
+ * 非 TTY（CI、管道）没有这些方法，不补齐 preload 构建会直接失败。
+ */
+function ensureStdoutCursorApis(): void {
+  const stdout = process.stdout
+  if (typeof stdout.clearLine !== 'function') {
+    stdout.clearLine = () => true
+  }
+  if (typeof stdout.cursorTo !== 'function') {
+    stdout.cursorTo = () => true
+  }
+  if (typeof stdout.moveCursor !== 'function') {
+    stdout.moveCursor = () => true
+  }
+}
+
+ensureStdoutCursorApis()
+
 export default defineConfig({
   main: {},
   preload: {
     build: {
-      // 沙箱 Preload 无法在运行时加载第三方包，因此必须在构建阶段一并打包。
+      // 沙箱 Preload 无法 require 第三方包，也不能加载 Rollup 拆出的 ./chunks/*。
+      // 双入口必须各自打成单文件，否则 sandbox_bundle 会让 window.agent 整段缺失。
       externalizeDeps: false,
+      isolatedEntries: true,
       rollupOptions: {
         input: {
           index: resolve('src/preload/index.ts'),

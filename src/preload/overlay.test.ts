@@ -1,4 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const preloadDir = dirname(fileURLToPath(import.meta.url))
 
 const exposeInMainWorld = vi.fn()
 const ipcRenderer = {
@@ -43,5 +48,15 @@ describe('Overlay Preload 暴露面', () => {
     Object.defineProperty(process, 'contextIsolated', { configurable: true, value: false })
     await expect(import('./overlay')).rejects.toThrow('Agent Studio 需要启用 contextIsolation。')
     expect(exposeInMainWorld).not.toHaveBeenCalled()
+  })
+})
+
+describe('Overlay Preload 沙箱打包', () => {
+  it('双入口必须 isolatedEntries，避免 sandbox_bundle 无法加载共享 chunk', () => {
+    const config = readFileSync(join(preloadDir, '../../electron.vite.config.ts'), 'utf8')
+    expect(config).toContain("overlay: resolve('src/preload/overlay.ts')")
+    expect(config).toMatch(/isolatedEntries:\s*true/)
+    expect(config).toMatch(/externalizeDeps:\s*false/)
+    expect(config).toContain('ensureStdoutCursorApis')
   })
 })

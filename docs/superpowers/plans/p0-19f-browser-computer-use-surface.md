@@ -154,7 +154,7 @@ browser 进行中或未决 L3
 - 修改：`src/main/runtime/grok/grok-acp-mappers.ts`（浏览器工具白名单、origin、可选指针）
 - 修改：P0-13 Artifact 注册从 runtime 图片接到当前 Task（若尚未接线）
 - 修改：`src/renderer/src/components/TaskComposer.vue`（与 P0-19g 共用一条 HUD）
-- 修改：`electron.vite.config.ts`（overlay 入口）；必要时 `electron-builder.yml`
+- 修改：`electron.vite.config.ts`（overlay 入口 + preload `isolatedEntries`，禁止沙箱 `require('./chunks/*')`）；必要时 `electron-builder.yml`
 - 修改：`src/main/index.ts` 只组装 overlay 生命周期，不把窗口细节堆进入口
 - 测试：grant 不捎带；screen 仍 deny；无坐标不发明光标；停止关闭 overlay；无截图降级；overlay 源码不含 Accessibility / CGEvent
 - 走查：装 chrome-devtools → L3 卡 → 允许后主窗口 HUD + overlay；停止后消失
