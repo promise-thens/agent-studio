@@ -232,6 +232,18 @@ const mocks = vi.hoisted(() => {
       ok: true,
       stdout: ''
     })),
+    uninstallManagedGrokPlugin: vi.fn<
+      (input: {
+        userDataPath: string
+        grokHome: string
+        grokBinary: string
+        pluginId: string
+        timeoutMs: number
+      }) => Promise<{ ok: true; stdout: string } | { ok: false; message: string }>
+    >(async () => ({
+      ok: true,
+      stdout: ''
+    })),
     ensureGrokMarketplaceSource: vi.fn<
       (
         input: GrokPluginCliInput & { gitUrl: string }
@@ -492,7 +504,8 @@ vi.mock('./runtime/grok/grok-plugin-cli', () => ({
   grokPluginLeaderSocket: (grokHome: string) => `${grokHome}/studio-plugin.sock`,
   GROK_PLUGIN_CLI_TIMEOUT_MS: 900_000,
   runGrokPlugin: mocks.runGrokPlugin,
-  ensureGrokMarketplaceSource: mocks.ensureGrokMarketplaceSource
+  ensureGrokMarketplaceSource: mocks.ensureGrokMarketplaceSource,
+  uninstallManagedGrokPlugin: mocks.uninstallManagedGrokPlugin
 }))
 vi.mock('./runtime/grok/grok-marketplace-inventory', () => ({
   listGrokMarketplacePlugins: vi.fn(async () => [])
@@ -1086,9 +1099,11 @@ describe('Main 删除与权限失效编排', () => {
     )
   })
 
-  it('卸载附加 --confirm 且不加 --keep-data；加源走幂等 ensure 而不是直接 add', async () => {
+  it('卸载走独立封装；加源走幂等 ensure 而不是直接 add', async () => {
     mocks.runGrokPlugin.mockReset()
     mocks.runGrokPlugin.mockResolvedValue({ ok: true, stdout: '' })
+    mocks.uninstallManagedGrokPlugin.mockReset()
+    mocks.uninstallManagedGrokPlugin.mockResolvedValue({ ok: true, stdout: '' })
     mocks.ensureGrokMarketplaceSource.mockReset()
     mocks.ensureGrokMarketplaceSource.mockResolvedValue({ ok: true, stdout: '' })
     const dependencies = mocks.appDeletionDependencies!
@@ -1097,13 +1112,13 @@ describe('Main 删除与权限失效编排', () => {
     await expect(
       dependencies.uninstallPlugin({ pluginId: 'chrome-devtools-mcp' })
     ).resolves.toBeNull()
-    expect(mocks.runGrokPlugin).toHaveBeenCalledWith(
+    expect(mocks.uninstallManagedGrokPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
-        args: ['plugin', 'uninstall', 'chrome-devtools-mcp', '--confirm'],
+        pluginId: 'chrome-devtools-mcp',
         timeoutMs: 900_000
       })
     )
-    expect(mocks.runGrokPlugin.mock.calls[0]?.[0]?.args).not.toContain('--keep-data')
+    expect(mocks.runGrokPlugin).not.toHaveBeenCalled()
 
     await expect(dependencies.addMarketplaceSource({ gitUrl: official })).resolves.toBeNull()
     expect(mocks.ensureGrokMarketplaceSource).toHaveBeenCalledWith(

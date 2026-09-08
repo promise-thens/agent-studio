@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { getManagedGrokHome } from '../../provider/grok-provider-config'
 import { MANAGED_GROK_PLUGIN_SCOPE, MAX_RUNTIME_PLUGIN_NAMES } from '../../../shared/runtime-plugin'
-import { getGrokPlugin, listGrokPlugins } from './grok-plugin-inventory'
+import { getGrokPlugin, listGrokPlugins, removeGrokPluginLeftover } from './grok-plugin-inventory'
 
 const temporaryDirectories: string[] = []
 
@@ -487,6 +487,34 @@ description: 把长文压成要点
       }
     ])
     await expect(realpath(join(grokHome, 'plugins'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('installed-plugins 里只有 git 残留的目录不列入已安装', async () => {
+    const userDataPath = await createUserData()
+    const grokHome = getManagedGrokHome(userDataPath)
+    const leftover = join(grokHome, 'installed-plugins', 'chrome-devtools-mcp-2df60288')
+    await mkdir(join(leftover, '.git', 'objects'), { recursive: true })
+    await writeFile(join(leftover, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8')
+
+    expect(await listGrokPlugins(userDataPath)).toEqual([])
+    expect(await getGrokPlugin(userDataPath, 'chrome-devtools-mcp-2df60288')).toBeNull()
+  })
+
+  it('清掉 grok-home 内残留插件目录，但不跟 symlink 逃出，也不删 registry.json', async () => {
+    const userDataPath = await createUserData()
+    const grokHome = getManagedGrokHome(userDataPath)
+    const installedRoot = join(grokHome, 'installed-plugins')
+    const leftover = join(installedRoot, 'chrome-devtools-mcp-2df60288')
+    await mkdir(join(leftover, '.git'), { recursive: true })
+    await writeFile(join(installedRoot, 'registry.json'), '{"version":1,"repos":{}}\n', 'utf8')
+
+    expect(await removeGrokPluginLeftover(userDataPath, 'chrome-devtools-mcp-2df60288')).toBe(true)
+    await expect(realpath(leftover)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await realpath(join(installedRoot, 'registry.json'))).toBeTruthy()
+
+    expect(await removeGrokPluginLeftover(userDataPath, 'chrome-devtools-mcp-2df60288')).toBe(false)
+    expect(await removeGrokPluginLeftover(userDataPath, 'registry.json')).toBe(false)
+    expect(await removeGrokPluginLeftover(userDataPath, '../escape')).toBe(false)
   })
 
   it('registry 指向 grok-home 外的 path 时标 invalid，且不泄漏绝对路径', async () => {

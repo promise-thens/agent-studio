@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { AGENT_STUDIO_MODEL_API_KEY_ENV } from '../../provider/grok-provider-config'
 import { redactSensitiveText } from '../../security/sensitive-redaction'
+import { removeGrokPluginLeftover } from './grok-plugin-inventory'
 
 const LEADER_SOCKET_FILE = 'studio-plugin.sock'
 const LEADER_SOCKET_FLAG = '--leader-socket'
@@ -137,6 +138,38 @@ export async function runGrokPlugin(input: {
 }
 
 type GrokPluginCliResult = Awaited<ReturnType<typeof runGrokPlugin>>
+
+/** 匹配 Grok `plugin uninstall` 在名单里找不到插件时的句式。 */
+export function isGrokPluginNotFound(message: string): boolean {
+  return /plugin\s+(?:"[^"]+"|\S+)\s+not found/i.test(message)
+}
+
+/**
+ * 先走 `grok plugin uninstall --confirm`。
+ * Grok 已不认得该项、但 grok-home 里还留着空目录时，清掉残留并视为成功，
+ * 避免已安装栏卡着卸不掉的哈希目录。
+ */
+export async function uninstallManagedGrokPlugin(input: {
+  userDataPath: string
+  grokHome: string
+  grokBinary: string
+  pluginId: string
+  timeoutMs: number
+}): Promise<GrokPluginCliResult> {
+  const result = await runGrokPlugin({
+    grokHome: input.grokHome,
+    grokBinary: input.grokBinary,
+    args: ['plugin', 'uninstall', input.pluginId, '--confirm'],
+    timeoutMs: input.timeoutMs
+  })
+  if (result.ok) {
+    await removeGrokPluginLeftover(input.userDataPath, input.pluginId)
+    return result
+  }
+  if (!isGrokPluginNotFound(result.message)) return result
+  const removed = await removeGrokPluginLeftover(input.userDataPath, input.pluginId)
+  return removed ? { ok: true, stdout: '' } : result
+}
 
 /**
  * 添加市场 git 源；已写入 config 时改刷新 cache，而不是把重复配置当失败。

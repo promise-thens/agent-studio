@@ -106,6 +106,28 @@ export async function getGrokPlugin(
 }
 
 /**
+ * Grok 已卸掉但 installed-plugins 里留下的空目录 / 半截 clone。
+ * 只删 grok-home 扫描根下一层目录，不跟随逃出牢笼的 symlink，也不动 registry.json。
+ */
+export async function removeGrokPluginLeftover(
+  userDataPath: string,
+  pluginId: string
+): Promise<boolean> {
+  if (!isSafeLeftoverPluginId(pluginId)) return false
+  const jail = await resolvePluginJail(userDataPath)
+  if (!jail) return false
+
+  let removed = false
+  for (const root of [jail.installedPlugins, jail.dropInPlugins]) {
+    if (!root) continue
+    if (await removeJailedPluginDirectory(jail.grokHome, root, join(root, pluginId))) {
+      removed = true
+    }
+  }
+  return removed
+}
+
+/**
  * 解析扫描牢笼：realpath(grok-home) 必须落在 userData 内。
  * plugins / installed-plugins 各自可选；缺一个不妨碍扫另一个。
  * 任一跳到 ~/.grok 或其它位置则拒绝该项，避免桌面读到用户自己的 Grok 配置。
@@ -268,10 +290,21 @@ async function readPluginAt(
     return withRegistryVersion(makeInvalidDetail(pluginId, INVALID_READ_REASON), registryVersion)
   }
 
-  return withRegistryVersion(
-    await scanPluginContents(pluginId, resolved.canonical, jail.grokHome),
-    registryVersion
-  )
+  const scanned = await scanPluginContents(pluginId, resolved.canonical, jail.grokHome)
+  if (
+    scanned.manifestMissing &&
+    !scanned.detail.invalidReason &&
+    scanned.detail.skillCount === 0 &&
+    scanned.detail.mcpCount === 0 &&
+    scanned.detail.hookCount === 0 &&
+    jail.installedPlugins &&
+    isDirectChildPath(jail.installedPlugins, resolved.canonical)
+  ) {
+    // 市场安装失败或 Grok 卸完后留下的空 clone，不是可卸载插件。
+    return null
+  }
+
+  return withRegistryVersion(scanned.detail, registryVersion)
 }
 
 /** registry 的 version 只在清单没写时回填，避免再读逃出牢笼的文件。 */
@@ -287,7 +320,7 @@ async function scanPluginContents(
   pluginId: string,
   pluginCanonical: string,
   grokHome: string
-): Promise<RuntimePluginDetail> {
+): Promise<{ detail: RuntimePluginDetail; manifestMissing: boolean }> {
   let invalidReason: string | undefined
   let displayName = pluginId
   let version: string | undefined
@@ -317,15 +350,18 @@ async function scanPluginContents(
   const skillDescriptions = pickSkillDescriptions(skillNames, skills.descriptions)
 
   if (invalidReason) {
-    return makeInvalidDetail(pluginId, invalidReason, {
-      displayName,
-      version,
-      description,
-      skillNames,
-      mcpNames,
-      hookNames,
-      skillDescriptions
-    })
+    return {
+      manifestMissing: manifest.kind === 'missing',
+      detail: makeInvalidDetail(pluginId, invalidReason, {
+        displayName,
+        version,
+        description,
+        skillNames,
+        mcpNames,
+        hookNames,
+        skillDescriptions
+      })
+    }
   }
 
   const detail: RuntimePluginDetail = {
@@ -343,7 +379,7 @@ async function scanPluginContents(
   if (version) detail.version = version
   if (description) detail.description = description
   if (skillDescriptions) detail.skillDescriptions = skillDescriptions
-  return detail
+  return { detail, manifestMissing: manifest.kind === 'missing' }
 }
 
 /** Skill 名取 skills 下第一层子目录名，且该目录内必须有落在牢笼内的 SKILL.md。 */
@@ -650,6 +686,59 @@ function makeInvalidDetail(
   if (extras?.description) detail.description = extras.description
   if (extras?.skillDescriptions) detail.skillDescriptions = extras.skillDescriptions
   return detail
+}
+
+function isSafeLeftoverPluginId(pluginId: string): boolean {
+  if (!isRuntimePluginId(pluginId)) return false
+  if (pluginId === INSTALLED_REGISTRY_FILE) return false
+  if (pluginId.startsWith('.') || pluginId.startsWith('-')) return false
+  return true
+}
+
+function isDirectChildPath(parent: string, child: string): boolean {
+  const comparedParent = process.platform === 'win32' ? parent.toLowerCase() : parent
+  const comparedChild = process.platform === 'win32' ? child.toLowerCase() : child
+  const relativePath = relative(comparedParent, comparedChild)
+  return (
+    relativePath.length > 0 &&
+    relativePath !== '..' &&
+    !relativePath.startsWith(`..${sep}`) &&
+    !relativePath.includes(sep) &&
+    !isAbsolute(relativePath)
+  )
+}
+
+/**
+ * 只删除扫描根下一层目录。symlink 只摘链接本身，避免跟到 grok-home 外或误删兄弟插件。
+ */
+async function removeJailedPluginDirectory(
+  grokHome: string,
+  scanRoot: string,
+  candidate: string
+): Promise<boolean> {
+  let stats
+  try {
+    stats = await fs.lstat(candidate)
+  } catch {
+    return false
+  }
+
+  const resolved = await realpathExisting(candidate)
+  if (resolved.kind === 'invalid') return false
+  if (resolved.kind === 'ok') {
+    if (!isPathInside(grokHome, resolved.canonical)) return false
+    if (resolved.canonical === grokHome || resolved.canonical === scanRoot) return false
+  }
+
+  if (stats.isSymbolicLink()) {
+    await fs.unlink(candidate)
+    return true
+  }
+  if (!stats.isDirectory() || resolved.kind !== 'ok') return false
+  if (!isDirectChildPath(scanRoot, resolved.canonical)) return false
+
+  await fs.rm(candidate, { recursive: true, force: true })
+  return true
 }
 
 function isPathInside(root: string, target: string): boolean {

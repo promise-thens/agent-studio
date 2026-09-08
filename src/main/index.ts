@@ -97,7 +97,8 @@ import { listGrokMarketplacePlugins } from './runtime/grok/grok-marketplace-inve
 import {
   ensureGrokMarketplaceSource,
   GROK_PLUGIN_CLI_TIMEOUT_MS,
-  runGrokPlugin
+  runGrokPlugin,
+  uninstallManagedGrokPlugin
 } from './runtime/grok/grok-plugin-cli'
 import { getGrokPlugin, listGrokPlugins } from './runtime/grok/grok-plugin-inventory'
 import { PermissionAuditStore } from './security/permission-audit-store'
@@ -595,6 +596,23 @@ async function runManagedPluginCli(args: string[]): Promise<null> {
 }
 
 /**
+ * 卸载走独立封装：Grok 已不认得该项时，清掉 grok-home 残留目录而不是把 not found 甩给 UI。
+ */
+async function runManagedPluginUninstall(pluginId: string): Promise<null> {
+  const result = await uninstallManagedGrokPlugin({
+    userDataPath: app.getPath('userData'),
+    grokHome: getManagedGrokHome(app.getPath('userData')),
+    grokBinary: resolveGrokPluginBinary(),
+    pluginId,
+    timeoutMs: GROK_PLUGIN_CLI_TIMEOUT_MS
+  })
+  if (!result.ok) {
+    throw new Error(result.message)
+  }
+  return null
+}
+
+/**
  * 加源走幂等封装：config 已有该 git URL 时刷新 cache，而不是把 already configured 抛给 UI。
  */
 async function runManagedMarketplaceAdd(gitUrl: string): Promise<null> {
@@ -907,8 +925,7 @@ function registerIpcHandlers(): void {
       if (trust === true) args.push('--trust')
       return runManagedPluginCli(args)
     },
-    uninstallPlugin: ({ pluginId }) =>
-      runManagedPluginCli(['plugin', 'uninstall', pluginId, '--confirm']),
+    uninstallPlugin: ({ pluginId }) => runManagedPluginUninstall(pluginId),
     addMarketplaceSource: ({ gitUrl }) => runManagedMarketplaceAdd(gitUrl),
     /**
      * 选中或恢复工作区时由 Renderer 带 projectId 调用。
