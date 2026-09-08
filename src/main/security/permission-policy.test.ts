@@ -62,6 +62,32 @@ describe('Permission 风险策略', () => {
     })
   })
 
+  it('browser 改为 L3 审批，screen 与 clipboard 仍 unsupported', () => {
+    expect(
+      evaluatePermissionPolicy({
+        ...createIntent('browser'),
+        targets: [{ kind: 'origin', value: 'https://example.com' }]
+      })
+    ).toEqual({
+      kind: 'approval',
+      risk: 'L3',
+      allowedScopes: ['once', 'task']
+    })
+    expect(evaluatePermissionPolicy(createIntent('browser'))).toEqual({
+      kind: 'approval',
+      risk: 'L3',
+      allowedScopes: ['once']
+    })
+    expect(evaluatePermissionPolicy(createIntent('screen'))).toMatchObject({
+      kind: 'deny',
+      reason: 'unsupported'
+    })
+    expect(evaluatePermissionPolicy(createIntent('clipboard'))).toMatchObject({
+      kind: 'deny',
+      reason: 'unsupported'
+    })
+  })
+
   it('危险 Git 类别无需 minimumRisk 也固定为 L3，仅普通 Git 修改可按 Task 授权', () => {
     expect(
       evaluatePermissionPolicy({
@@ -528,6 +554,37 @@ describe('Permission 路径边界', () => {
         targets: [{ kind: 'command', value: 'beta' }]
       })
     )
+  })
+
+  it('写文件 task grant 不能复用到 browser，不同 origin 不能互相复用', async () => {
+    const root = await fs.realpath(await createTemporaryDirectory('policy-browser-grant-'))
+    const writeResolved = await resolveOperationIntentTargets(createIntent('write-file', root))
+    const browserA = await resolveOperationIntentTargets({
+      ...createIntent('browser', root),
+      targets: [{ kind: 'origin', value: 'https://a.example' }]
+    })
+    const browserB = await resolveOperationIntentTargets({
+      ...createIntent('browser', root),
+      turnId: 'turn-2',
+      targets: [{ kind: 'origin', value: 'https://b.example' }]
+    })
+    const browserUnknown = await resolveOperationIntentTargets({
+      ...createIntent('browser', root),
+      turnId: 'turn-3',
+      targets: [{ kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }]
+    })
+    expect(evaluatePermissionPolicy(browserA)).toMatchObject({
+      allowedScopes: ['once', 'task']
+    })
+    expect(evaluatePermissionPolicy(browserUnknown)).toMatchObject({
+      kind: 'approval',
+      risk: 'L3',
+      allowedScopes: ['once']
+    })
+    expect(evaluatePermissionPolicy(browserUnknown).allowedScopes).not.toContain('task')
+    expect(createOperationGrantKey(writeResolved)).not.toBe(createOperationGrantKey(browserA))
+    expect(createOperationGrantKey(browserA)).not.toBe(createOperationGrantKey(browserB))
+    expect(createOperationGrantKey(browserA)).not.toBe(createOperationGrantKey(browserUnknown))
   })
 })
 

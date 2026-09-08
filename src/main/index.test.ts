@@ -272,7 +272,9 @@ vi.mock('electron', () => {
       setWindowOpenHandler: vi.fn(),
       getZoomFactor: vi.fn(() => 1),
       setZoomFactor: vi.fn(),
-      on: vi.fn()
+      on: vi.fn(),
+      once: vi.fn(),
+      send: vi.fn()
     }
 
     constructor(options: unknown) {
@@ -307,6 +309,30 @@ vi.mock('electron', () => {
     setBackgroundColor(color: string): void {
       void color
     }
+    setIgnoreMouseEvents(): void {
+      return undefined
+    }
+    setAlwaysOnTop(): void {
+      return undefined
+    }
+    setVisibleOnAllWorkspaces(): void {
+      return undefined
+    }
+    showInactive(): void {
+      return undefined
+    }
+    hide(): void {
+      return undefined
+    }
+    destroy(): void {
+      return undefined
+    }
+    setBounds(): void {
+      return undefined
+    }
+    isVisible(): boolean {
+      return false
+    }
   }
 
   return {
@@ -320,11 +346,16 @@ vi.mock('electron', () => {
       quit: vi.fn()
     },
     BrowserWindow: BrowserWindowMock,
+    screen: {
+      getPrimaryDisplay: () => ({
+        bounds: { x: 0, y: 0, width: 1440, height: 900 }
+      })
+    },
     dialog: {
       showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })),
       showErrorBox: vi.fn()
     },
-    ipcMain: { handle: vi.fn() },
+    ipcMain: { handle: vi.fn(), on: vi.fn(), removeListener: vi.fn() },
     nativeTheme: {
       shouldUseDarkColors: true,
       themeSource: 'system',

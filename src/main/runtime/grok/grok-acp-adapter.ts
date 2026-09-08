@@ -12,6 +12,7 @@ import type {
   AgentEvent,
   AgentRuntimeCapabilitySnapshot,
   AgentRuntimeStatus,
+  AgentToolStatus,
   AgentTurnOutcome
 } from '../../../shared/agent'
 import { AgentEventNormalizer, type AgentEventDraft } from '../../agent/event-normalizer'
@@ -81,6 +82,11 @@ import {
   type GrokToolCallAuthorizationSnapshot
 } from './grok-acp-mappers'
 import { buildGrokPromptContentBlocks } from './grok-acp-prompt-blocks'
+import {
+  copyBrowserPluginScreenshotFilePath,
+  isBrowserPluginScreenshotToolName,
+  toolCallHasBrowserPluginScreenshot
+} from './browser-plugin-screenshot'
 import {
   DEFAULT_GROK_SESSION_MEDIA_ROOT,
   extractGrokRuntimeMediaPaths,
@@ -188,8 +194,10 @@ interface ActiveTurn {
   sessionUpdateQueueActive: boolean
   /** 同一 Turn 的坏图片只提示一次，避免 Runtime 连续脏块刷满时间线。 */
   runtimeAttachmentErrorReported: boolean
-  /** 同一 Turn 已入库的 session 媒体路径，避免 tool_call 与 update 重复落盘。 */
+  /** 同一 Turn 已入库的 session 媒体路径或插件截图 toolCallId，避免重复落盘。 */
   ingestedRuntimeMediaKeys: Set<string>
+  /** 尚未成功登记的插件截图路径，按 toolCallId 暂存；不得写入事件。 */
+  browserScreenshotPathsByToolCallId?: Map<string, string>
   /** signals.json 已发布的最后一份上下文用量；同值快照只允许进入事件链一次。 */
   lastContextUsageFingerprint?: string
   /** Turn 进行中轮询 signals.json 的定时器；终态必须清掉。 */
@@ -250,6 +258,19 @@ const GROK_PLAN_APPROVAL_METHODS = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function asBrowserPluginToolStatus(value: unknown): AgentToolStatus | undefined {
+  if (
+    value === 'pending' ||
+    value === 'in_progress' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'cancelled'
+  ) {
+    return value
+  }
+  return undefined
 }
 
 /** ACP SDK 把 extMethod params 标成 Record，运行时仍可能是 RawValue 字符串。 */
@@ -598,6 +619,24 @@ export interface GrokAcpAdapterOptions {
     mimeType: string
     bytes: Buffer
   }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
+  /**
+   * 浏览器插件截图登记为 Artifact。缺省跳过；失败必须由实现返回 null，不得抛进 prompt。
+   */
+  registerBrowserPluginScreenshot?: (input: {
+    taskId: string
+    turnId: string
+    absolutePath: string
+  }) => Promise<{ artifactId: string } | null>
+  /**
+   * 仅白名单 browser 工具通知 overlay。rawInput 只给投影用，不得原样进 Renderer。
+   */
+  onBrowserPluginTool?: (activity: {
+    taskId: string
+    turnId: string
+    toolCallId: string
+    status?: AgentToolStatus
+    rawInput?: unknown
+  }) => void
   /** 仅测试注入 Grok session 媒体根；生产固定 /tmp/sessions。 */
   grokSessionMediaRoot?: string
   /** 仅测试注入 signals 根；生产固定为 App 专属 Managed GROK_HOME。 */
@@ -1645,8 +1684,14 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     const isSessionMediaTool =
       (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') &&
       toolCallHasGrokRuntimeMedia(update.content)
+    const isBrowserScreenshotTool = this.shouldQueueBrowserPluginScreenshot(activeTurn, update)
 
-    if (!activeTurn.sessionUpdateQueueActive && !isRuntimeImage && !isSessionMediaTool) {
+    if (
+      !activeTurn.sessionUpdateQueueActive &&
+      !isRuntimeImage &&
+      !isSessionMediaTool &&
+      !isBrowserScreenshotTool
+    ) {
       void this.processSessionUpdate(params, sourceConnection, activeTurn)
       return
     }
@@ -1702,6 +1747,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
       if (!isSafeGrokToolCallId(update.toolCallId)) {
         this.rejectAllToolPermissions(activeTurn)
       } else if (update.status === 'completed' || update.status === 'failed') {
+        this.emitBrowserPluginToolActivity(activeTurn, update)
         this.markToolCallTerminal(activeTurn, update.toolCallId)
         this.queueCommandEvidenceFromTool(activeTurn, update)
       } else if (
@@ -1719,6 +1765,7 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
           // title、status 等展示更新不撤销审批；真实授权事实变化才使旧审批失效。
           this.cancelPendingPermissionsForToolCall(activeTurn, update.toolCallId)
         }
+        this.emitBrowserPluginToolActivity(activeTurn, update)
         this.queueCommandEvidenceFromTool(activeTurn, update)
       } else {
         this.queueCommandEvidenceFromTool(activeTurn, update)
@@ -1756,7 +1803,116 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
 
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       await this.ingestGrokSessionMedia(activeTurn, update.content)
+      await this.ingestBrowserPluginScreenshot(activeTurn, update)
     }
+  }
+
+  /** 有 filePath 的截图工具必须进串行队列，保证 Turn 终态前登记结束。 */
+  private shouldQueueBrowserPluginScreenshot(
+    activeTurn: ActiveTurn,
+    update: acp.SessionNotification['update']
+  ): boolean {
+    if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') {
+      return false
+    }
+    if (toolCallHasBrowserPluginScreenshot(update)) return true
+    const path = copyBrowserPluginScreenshotFilePath(update.rawInput)
+    if (path && this.isBrowserPluginScreenshotTool(activeTurn, update)) return true
+    if (update.status !== 'completed' && update.status !== 'failed') return false
+    return Boolean(activeTurn.browserScreenshotPathsByToolCallId?.get(update.toolCallId))
+  }
+
+  /**
+   * chrome-devtools take_screenshot 的 filePath 只在已允许路径上登记 Artifact。
+   * pending 只记住路径；completed 才登记；成功后按 toolCallId 写入去重键。
+   * 失败返回后 Timeline 可展示「无可用截图」，绝对路径不得进入事件。
+   */
+  private async ingestBrowserPluginScreenshot(
+    activeTurn: ActiveTurn,
+    update: acp.SessionNotification['update']
+  ): Promise<void> {
+    if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') {
+      return
+    }
+    this.rememberBrowserPluginScreenshotPath(activeTurn, update)
+    if (update.status === 'failed') {
+      this.abandonBrowserPluginScreenshot(activeTurn, update.toolCallId)
+      return
+    }
+    if (update.status !== 'completed') return
+    if (
+      !this.isBrowserPluginScreenshotTool(activeTurn, update) &&
+      !activeTurn.browserScreenshotPathsByToolCallId?.has(update.toolCallId)
+    ) {
+      return
+    }
+    const absolutePath = this.resolveBrowserPluginScreenshotPath(activeTurn, update)
+    if (!absolutePath) return
+    const ingestKey = `screenshot:${update.toolCallId}`
+    if (activeTurn.ingestedRuntimeMediaKeys.has(ingestKey)) return
+    const register = this.options.registerBrowserPluginScreenshot
+    if (!register) return
+    try {
+      const descriptor = await register({
+        taskId: activeTurn.taskId,
+        turnId: activeTurn.turnId,
+        absolutePath
+      })
+      if (!descriptor?.artifactId) return
+      activeTurn.ingestedRuntimeMediaKeys.add(ingestKey)
+      activeTurn.browserScreenshotPathsByToolCallId?.delete(update.toolCallId)
+    } catch {
+      // 截图失败不得抛进 session/prompt，也不把路径写进错误事件；去重键保持未占用以便 completed 重试。
+    }
+  }
+
+  private isBrowserPluginScreenshotTool(
+    activeTurn: ActiveTurn,
+    update: acp.SessionNotification['update']
+  ): boolean {
+    if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') {
+      return false
+    }
+    if (isBrowserPluginScreenshotToolName(update.name)) return true
+    const snapshot = activeTurn.toolCallAuthorizationSnapshots.get(update.toolCallId)
+    return (
+      snapshot?.integrity === 'valid' && isBrowserPluginScreenshotToolName(snapshot.browserToolName)
+    )
+  }
+
+  private rememberBrowserPluginScreenshotPath(
+    activeTurn: ActiveTurn,
+    update: acp.SessionNotification['update']
+  ): void {
+    if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') {
+      return
+    }
+    const absolutePath = copyBrowserPluginScreenshotFilePath(update.rawInput)
+    if (!absolutePath || !this.isBrowserPluginScreenshotTool(activeTurn, update)) return
+    if (!activeTurn.browserScreenshotPathsByToolCallId) {
+      activeTurn.browserScreenshotPathsByToolCallId = new Map()
+    }
+    activeTurn.browserScreenshotPathsByToolCallId.set(update.toolCallId, absolutePath)
+  }
+
+  private resolveBrowserPluginScreenshotPath(
+    activeTurn: ActiveTurn,
+    update: acp.SessionNotification['update']
+  ): string | null {
+    if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') {
+      return null
+    }
+    return (
+      copyBrowserPluginScreenshotFilePath(update.rawInput) ??
+      activeTurn.browserScreenshotPathsByToolCallId?.get(update.toolCallId) ??
+      null
+    )
+  }
+
+  /** failed 只封死该 toolCallId，不得按 path 挡住同一 Turn 的后续截图。 */
+  private abandonBrowserPluginScreenshot(activeTurn: ActiveTurn, toolCallId: string): void {
+    activeTurn.browserScreenshotPathsByToolCallId?.delete(toolCallId)
+    activeTurn.ingestedRuntimeMediaKeys.add(`screenshot:${toolCallId}`)
   }
 
   /** 测试可替换媒体根；生产同时认 App grok-home/sessions 与 Grok 默认 /tmp/sessions。 */
@@ -1972,6 +2128,30 @@ export class GrokAcpAdapter implements AgentRuntimeAdapter {
     activeTurn.terminalToolCallIds.clear()
     activeTurn.toolCallAuthorizationSnapshots.clear()
     this.cancelPendingPermissions(activeTurn)
+  }
+
+  /**
+   * 只把任务 1 白名单 browser 工具交给 overlay。rawInput 仅供投影，当前冻结下不会变成光标。
+   */
+  private emitBrowserPluginToolActivity(
+    activeTurn: ActiveTurn,
+    update: Extract<
+      acp.SessionNotification['update'],
+      { sessionUpdate: 'tool_call' | 'tool_call_update' }
+    >
+  ): void {
+    const notify = this.options.onBrowserPluginTool
+    if (!notify) return
+    const snapshot = activeTurn.toolCallAuthorizationSnapshots.get(update.toolCallId)
+    if (snapshot?.integrity !== 'valid' || !snapshot.browserToolName) return
+    const status = asBrowserPluginToolStatus(update.status)
+    notify({
+      taskId: activeTurn.taskId,
+      turnId: activeTurn.turnId,
+      toolCallId: update.toolCallId,
+      ...(status ? { status } : {}),
+      ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {})
+    })
   }
 
   /** ToolCall 终态先建立 tombstone，再删除快照并精确撤销同一 ToolCall 的等待权限。 */

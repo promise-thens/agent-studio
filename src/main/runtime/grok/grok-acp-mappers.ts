@@ -13,6 +13,7 @@ import type {
   AgentTurnUsage
 } from '../../../shared/agent'
 import type { AgentAvailableCommand } from '../../../shared/agent-available-command'
+import { parseBrowserOrigin } from '../../../shared/browser-origin'
 import { ATTACHMENT_LIMITS } from '../../../shared/task-attachment'
 import type { AgentRuntimePermissionRequest } from '../../agent/agent-runtime-adapter'
 import type { AgentEventDraft, AgentEventDraftBase } from '../../agent/event-normalizer'
@@ -64,6 +65,10 @@ export interface GrokValidToolCallAuthorizationSnapshot {
   locationPaths: string[]
   diffPaths: string[]
   diffFingerprint?: string
+  /** 仅任务 1 冻结的浏览器工具 name。 */
+  browserToolName?: string
+  /** 已通过 parseBrowserOrigin 的 origin。 */
+  browserOrigin?: string
 }
 
 export interface GrokInvalidToolCallAuthorizationSnapshot {
@@ -407,7 +412,8 @@ export function mapGrokPromptResponse(
 
 /**
  * 将 ACP 稳定字段投影为主进程内部权限请求。
- * rawInput/rawOutput/_meta/name 一律丢弃；Diff 正文只生成不可逆参数摘要，不进入展示或持久化 DTO。
+ * rawInput/rawOutput/_meta 不进入公开 DTO；name 只做任务 1 白名单精确比对，读完丢弃。
+ * Diff 正文只生成不可逆参数摘要，不进入展示或持久化 DTO。
  */
 export function mapGrokPermissionRequest(
   params: acp.RequestPermissionRequest,
@@ -470,6 +476,8 @@ export function mergeGrokToolCallAuthorizationPatch(
   let locationPaths = current ? [...current.locationPaths] : []
   let diffPaths = current ? [...current.diffPaths] : []
   let diffFingerprint = current?.diffFingerprint
+  let browserToolName = current?.browserToolName
+  let browserOrigin = current?.browserOrigin
 
   if (patch.kind !== undefined) {
     if (patch.kind == null) {
@@ -516,13 +524,39 @@ export function mergeGrokToolCallAuthorizationPatch(
     diffFingerprint = nextFingerprint
   }
 
+  // name 只为白名单精确比对读取；ACP 规定 omit/null 表示保持原值，不得当成清空。
+  if (typeof patch.name === 'string') {
+    const nextName = copyBrowserToolName(patch.name)
+    if (nextName) {
+      if (browserToolName != null && nextName !== browserToolName) {
+        return invalidAuthorizationSnapshot(patch.toolCallId, 'target-conflict')
+      }
+      browserToolName = nextName
+    } else if (browserToolName != null) {
+      return invalidAuthorizationSnapshot(patch.toolCallId, 'target-conflict')
+    }
+  }
+  // URL 只从冻结键 rawInput.url 投影 origin；禁止读 tool_input.url / _meta / title。
+  // ACP omit/null 保持已有 origin；url 可先于 name 到达并累积。
+  if (patch.rawInput !== undefined && patch.rawInput != null) {
+    const origin = copyBrowserOrigin(patch.rawInput)
+    if (origin) {
+      if (browserOrigin != null && origin !== browserOrigin) {
+        return invalidAuthorizationSnapshot(patch.toolCallId, 'target-conflict')
+      }
+      browserOrigin = origin
+    }
+  }
+
   const snapshot: GrokValidToolCallAuthorizationSnapshot = {
     integrity: 'valid',
     toolCallId: patch.toolCallId,
     ...(kind ? { kind } : {}),
     locationPaths,
     diffPaths,
-    ...(diffFingerprint ? { diffFingerprint } : {})
+    ...(diffFingerprint ? { diffFingerprint } : {}),
+    ...(browserToolName ? { browserToolName } : {}),
+    ...(browserOrigin ? { browserOrigin } : {})
   }
   if (
     uniqueNonEmptyPaths([...locationPaths, ...diffPaths]).length > MAX_TOOL_CALL_TARGET_PATHS ||
@@ -535,7 +569,7 @@ export function mergeGrokToolCallAuthorizationPatch(
 
 /**
  * 比较两份授权快照是否表达同一组安全事实。
- * 路径顺序和行号不影响授权；kind、目标集合、Diff 摘要或 invalid 原因变化都必须视为改写。
+ * 路径顺序和行号不影响授权；kind、目标集合、Diff 摘要、浏览器 name/origin 或 invalid 原因变化都必须视为改写。
  */
 export function areGrokAuthorizationSnapshotsEquivalent(
   previous: GrokToolCallAuthorizationSnapshot,
@@ -549,6 +583,8 @@ export function areGrokAuthorizationSnapshotsEquivalent(
   return (
     previous.kind === next.kind &&
     previous.diffFingerprint === next.diffFingerprint &&
+    previous.browserToolName === next.browserToolName &&
+    previous.browserOrigin === next.browserOrigin &&
     haveSameStringSet(previous.locationPaths, next.locationPaths) &&
     haveSameStringSet(previous.diffPaths, next.diffPaths)
   )
@@ -574,6 +610,21 @@ function mapGrokOperation(snapshot: GrokToolCallAuthorizationSnapshot): {
   const paths = collectGrokPermissionPaths(snapshot)
   const pathTargets = paths.map((value): AgentOperationTarget => ({ kind: 'path', value }))
 
+  // 冻结 browserToolName 优先于 execute/edit/delete，避免 upload_file 被写文件 grant 捎带。
+  if (snapshot.browserToolName) {
+    const origin = snapshot.browserOrigin
+    return {
+      operationType: 'browser',
+      targets: origin
+        ? [{ kind: 'origin', value: origin }]
+        : [{ kind: 'unknown', value: 'Runtime 未提供可信的目标 origin。' }],
+      parameterFingerprint: origin
+        ? 'grok-acp:browser:origin:v1'
+        : 'grok-acp:browser:unknown-origin:v1',
+      impact: formatBrowserPermissionImpact(origin, paths),
+      minimumRisk: 'L3'
+    }
+  }
   if ((kind === 'read' || kind === 'search') && pathTargets.length) {
     return {
       operationType: 'read-project',
@@ -633,6 +684,18 @@ function mapGrokOperation(snapshot: GrokToolCallAuthorizationSnapshot): {
 function collectGrokPermissionPaths(snapshot: GrokToolCallAuthorizationSnapshot): string[] {
   if (snapshot.integrity === 'invalid') return []
   return uniqueNonEmptyPaths([...snapshot.locationPaths, ...snapshot.diffPaths])
+}
+
+/** Browser 目标只能是 origin/unknown；locations 里的 path 改放到 impact 展示，不从 title 猜 URL。 */
+function formatBrowserPermissionImpact(origin: string | undefined, paths: string[]): string {
+  const base = origin
+    ? 'Runtime 请求操作浏览器页面。'
+    : 'Runtime 请求操作浏览器，但当前 ACP 请求无法准确展示目标 origin。'
+  if (paths.length === 0) return base
+  const withPaths = `${base} 路径：${paths.join('、')}`
+  return Buffer.byteLength(withPaths, 'utf8') <= MAX_PERMISSION_DISPLAY_TEXT_BYTES
+    ? withPaths
+    : base
 }
 
 const TITLE_PATH_KINDS = new Set<acp.ToolKind>(['read', 'search', 'edit', 'delete'])
@@ -796,6 +859,55 @@ export function createGrokEventBase(
     runtimeSessionId,
     capabilityState
   }
+}
+
+/**
+ * 任务 1 冻结的浏览器 MCP 工具名。只允许 toolCall.name 精确等于这些字符串。
+ * 禁止剥离 chrome-devtools__ 前缀，禁止把 use_tool / search_tool 标成 browser。
+ */
+const GROK_BROWSER_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'navigate_page',
+  'new_page',
+  'close_page',
+  'list_pages',
+  'select_page',
+  'wait_for',
+  'click',
+  'click_at',
+  'drag',
+  'fill',
+  'fill_form',
+  'hover',
+  'press_key',
+  'type_text',
+  'upload_file',
+  'handle_dialog',
+  'emulate',
+  'resize_page',
+  'evaluate_script',
+  'take_screenshot',
+  'take_snapshot',
+  'browser_exec',
+  'browser_screenshot',
+  'run_web_automation',
+  'run_web_automation_async',
+  'create_browser_session',
+  'close_browser_session'
+])
+
+/** 精确匹配冻结表；不剥前缀、不认合格名。 */
+function copyBrowserToolName(name: string): string | undefined {
+  return GROK_BROWSER_TOOL_NAMES.has(name) ? name : undefined
+}
+
+/** 只读 rawInput.url，经 parseBrowserOrigin；嵌套 tool_input 与假 Key 一律丢掉。 */
+function copyBrowserOrigin(rawInput: unknown): string | undefined {
+  if (rawInput == null || typeof rawInput !== 'object' || Array.isArray(rawInput)) {
+    return undefined
+  }
+  const url = (rawInput as Record<string, unknown>).url
+  if (typeof url !== 'string') return undefined
+  return parseBrowserOrigin(url) ?? undefined
 }
 
 /**

@@ -18,6 +18,8 @@ P0-19c 一轮回退（`/rewind` / `undo` 广告有无；观察发送是否写盘
 
 P0-19e 后台命令（`rawInput.background` / `rawInput.is_background` 严格布尔；method=`sdk+docs+binary`）见 [p0-19e-background-command-observation.md](p0-19e-background-command-observation.md)。
 
+P0-19f 浏览器插件（chrome-devtools / browser-use / tinyfish 工具白名单与指针字段；method=`sdk+docs+binary`；真机 ACP **未做**；ACP 指针键 not-observed，MCP `click_at` 为 viewport-css 不可映射）见 [p0-19f-browser-plugin-pointer-observation.md](p0-19f-browser-plugin-pointer-observation.md)。
+
 ## 用脚本走正式产品路径
 
 不要另写 `grok agent stdio` Client。默认测试也不连真实 Grok。

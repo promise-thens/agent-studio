@@ -68,6 +68,11 @@ export interface AgentIpcRuntime {
 export interface AgentIpcDependencies {
   ipcMain: DesktopIpcMain
   assertTrustedSender: (event: TrustedIpcInvokeEvent) => void
+  /**
+   * overlay 停止芯片只能走 cancel-turn；缺省回落到主窗口校验。
+   * 不得把 overlay sender 放行到 startTurn 等其它 channel。
+   */
+  assertTrustedCancelTurnSender?: (event: TrustedIpcInvokeEvent) => void
   getAgent: () => AgentIpcRuntime | null
   sanitizeError: (error: unknown) => string
 }
@@ -278,11 +283,12 @@ function assertPromptState(status: AgentRuntimeStatus): void {
 function registerResultHandler<T>(
   dependencies: AgentIpcDependencies,
   channel: string,
-  operation: (args: unknown[]) => T | Promise<T>
+  operation: (args: unknown[]) => T | Promise<T>,
+  assertSender: (event: TrustedIpcInvokeEvent) => void = dependencies.assertTrustedSender
 ): void {
   dependencies.ipcMain.handle(channel, (event, ...args): Promise<DesktopIpcResult<T>> =>
     runDesktopIpcOperation(async () => {
-      dependencies.assertTrustedSender(event)
+      assertSender(event)
       try {
         return await operation(args)
       } catch (error) {
@@ -349,12 +355,17 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
       : agent.startTurn(request.taskId, request.prompt)
   })
 
-  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.cancelTurn, async (args) => {
-    const request = readCancelRequest(args)
-    const agent = requireAgent(dependencies.getAgent)
-    await agent.cancelTurn(agent.getExecutionSnapshot ? request : request.taskId)
-    return null
-  })
+  registerResultHandler(
+    dependencies,
+    AGENT_INVOKE_CHANNELS.cancelTurn,
+    async (args) => {
+      const request = readCancelRequest(args)
+      const agent = requireAgent(dependencies.getAgent)
+      await agent.cancelTurn(agent.getExecutionSnapshot ? request : request.taskId)
+      return null
+    },
+    dependencies.assertTrustedCancelTurnSender ?? dependencies.assertTrustedSender
+  )
 
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.getTaskRuntimeState, (args) => {
     const request = readTaskRequest(args)

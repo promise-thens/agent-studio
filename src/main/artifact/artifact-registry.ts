@@ -98,9 +98,11 @@ export class ArtifactRegistry {
     turnId?: string
     source: ArtifactSource
     relativePath: string
+    /** 可选展示标题；不含路径分隔符。缺省仍用相对路径末段。 */
+    title?: string
   }): Promise<ArtifactDescriptor> {
     const context = await this.requireContext(input.taskId)
-    const located = await this.resolveRegularFile(context.executionRoot, input.relativePath)
+    const located = await this.resolveRegularFile(context, input.relativePath)
     const bytes = await fs.readFile(located.realPath)
     const classified = classifyArtifactBytes({
       relativePath: located.relativePath,
@@ -121,7 +123,7 @@ export class ArtifactRegistry {
       turnId: input.turnId,
       source: input.source,
       kind: classified.kind,
-      title: classified.title,
+      title: optionalArtifactTitle(input.title) ?? classified.title,
       mimeType: classified.mimeType,
       location: { kind: 'file', relativePath: located.relativePath },
       size: bytes.byteLength,
@@ -189,10 +191,7 @@ export class ArtifactRegistry {
     if (descriptor.availability !== 'ready' && descriptor.availability !== 'changed') {
       throw new ArtifactRegistryError('not-found', 'Artifact 当前不可读取。')
     }
-    const located = await this.resolveRegularFile(
-      context.executionRoot,
-      descriptor.location.relativePath
-    )
+    const located = await this.resolveRegularFile(context, descriptor.location.relativePath)
     const bytes = await fs.readFile(located.realPath)
     return { descriptor, bytes }
   }
@@ -301,7 +300,7 @@ export class ArtifactRegistry {
       return next
     }
 
-    const verified = await this.inspectFile(context.executionRoot, record.location.relativePath)
+    const verified = await this.inspectFile(context, record.location.relativePath)
     let next: ArtifactDescriptor = { ...record, availability: verified.availability }
     if (verified.availability === 'ready' && verified.contentHash !== record.contentHash) {
       next = {
@@ -323,14 +322,14 @@ export class ArtifactRegistry {
   }
 
   private async inspectFile(
-    executionRoot: string,
+    context: ArtifactTaskContext,
     relativePath: string
   ): Promise<
     | { availability: 'ready'; contentHash: string; size: number }
     | { availability: Exclude<ArtifactAvailability, 'ready' | 'changed'> }
   > {
     try {
-      const located = await this.resolveRegularFile(executionRoot, relativePath)
+      const located = await this.resolveRegularFile(context, relativePath)
       const bytes = await fs.readFile(located.realPath)
       const classified = classifyArtifactBytes({
         relativePath: located.relativePath,
@@ -358,30 +357,64 @@ export class ArtifactRegistry {
   }
 
   /**
-   * 先 lstat 拒绝符号链接，再 realpath 确认仍落在 Local execution root 内。
+   * 先在 execution root 找项目文件；缺失时才回落到 taskDirectory 私有存储。
+   * 两处都走 sanitize + lstat 拒绝 symlink，禁止把 session 截图写进用户仓库。
    */
   private async resolveRegularFile(
-    executionRoot: string,
+    context: Pick<ArtifactTaskContext, 'executionRoot' | 'taskDirectory'>,
     relativePath: string
   ): Promise<{ relativePath: string; realPath: string }> {
     const sanitized = sanitizeArtifactRelativePath(relativePath)
     if (!sanitized) throw new ArtifactRegistryError('invalid-path', 'Artifact 路径无效。')
-    const joined = resolve(executionRoot, sanitized)
-    if (isAbsolute(relativePath) || !isPathInsideRoot(executionRoot, joined)) {
+    if (isAbsolute(relativePath)) {
       throw new ArtifactRegistryError('escaped', 'Artifact 路径越界。')
     }
-    const stats = await fs.lstat(joined)
-    if (stats.isSymbolicLink()) {
-      throw new ArtifactRegistryError('escaped', '拒绝跟随符号链接。')
+
+    const inProject = await this.tryResolveRegularFile(context.executionRoot, sanitized)
+    if (inProject.kind === 'located') return inProject.value
+    if (inProject.kind === 'escaped' || inProject.kind === 'not-file') {
+      throw new ArtifactRegistryError(
+        inProject.kind,
+        inProject.kind === 'escaped' ? 'Artifact 路径越界。' : '只能注册普通文件。'
+      )
     }
-    if (!stats.isFile() || stats.isDirectory()) {
-      throw new ArtifactRegistryError('not-file', '只能注册普通文件。')
+
+    const taskRoot = await fs.realpath(context.taskDirectory).catch(() => null)
+    if (!taskRoot) {
+      throw Object.assign(new Error('Artifact 文件不存在。'), { code: 'ENOENT' })
     }
+    const inTask = await this.tryResolveRegularFile(taskRoot, sanitized)
+    if (inTask.kind === 'located') return inTask.value
+    if (inTask.kind === 'escaped' || inTask.kind === 'not-file') {
+      throw new ArtifactRegistryError(
+        inTask.kind,
+        inTask.kind === 'escaped' ? 'Artifact 路径越界。' : '只能注册普通文件。'
+      )
+    }
+    throw Object.assign(new Error('Artifact 文件不存在。'), { code: 'ENOENT' })
+  }
+
+  private async tryResolveRegularFile(
+    root: string,
+    sanitized: string
+  ): Promise<
+    | { kind: 'located'; value: { relativePath: string; realPath: string } }
+    | { kind: 'missing' }
+    | { kind: 'escaped' }
+    | { kind: 'not-file' }
+  > {
+    const joined = resolve(root, sanitized)
+    if (!isPathInsideRoot(root, joined)) return { kind: 'escaped' }
+    const stats = await fs.lstat(joined).catch((error: unknown) => {
+      if (isFileNotFound(error)) return null
+      throw error
+    })
+    if (!stats) return { kind: 'missing' }
+    if (stats.isSymbolicLink()) return { kind: 'escaped' }
+    if (!stats.isFile() || stats.isDirectory()) return { kind: 'not-file' }
     const realPath = await fs.realpath(joined)
-    if (!isPathInsideRoot(executionRoot, realPath)) {
-      throw new ArtifactRegistryError('escaped', 'Artifact 路径越界。')
-    }
-    return { relativePath: sanitized, realPath }
+    if (!isPathInsideRoot(root, realPath)) return { kind: 'escaped' }
+    return { kind: 'located', value: { relativePath: sanitized, realPath } }
   }
 
   private async requireContext(taskId: string): Promise<ArtifactTaskContext> {
@@ -391,7 +424,10 @@ export class ArtifactRegistry {
     }
     // macOS 上 /var 常是 /private/var 的符号链接，必须用真实根做越界判断。
     const executionRoot = await fs.realpath(context.executionRoot)
-    return { ...context, executionRoot }
+    const taskDirectory = await fs
+      .realpath(context.taskDirectory)
+      .catch(() => context.taskDirectory)
+    return { ...context, executionRoot, taskDirectory }
   }
 
   private artifactsRoot(context: ArtifactTaskContext): string {
@@ -476,6 +512,19 @@ function isArtifactIdentity(value: string): boolean {
 
 function isFileNotFound(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT'
+}
+
+/** 展示标题不得夹带路径或 URL，避免把 filePath 泄漏到 Artifacts 列表。 */
+function optionalArtifactTitle(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed || trimmed.includes('\0') || /[/\\]/.test(trimmed) || /:\/\//.test(trimmed)) {
+    return undefined
+  }
+  if (trimmed.length > ARTIFACT_LIMITS.maxTitleBytes) {
+    return trimmed.slice(0, ARTIFACT_LIMITS.maxTitleBytes)
+  }
+  return trimmed
 }
 
 function rejectMessage(reason: ArtifactRegistryErrorCode): string {

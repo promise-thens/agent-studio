@@ -1465,6 +1465,215 @@ describe('GrokAcpAdapter 会话与 Turn 生命周期', () => {
     await rm(mediaRoot, { recursive: true, force: true })
   })
 
+  it('take_screenshot 的 filePath 交给 Artifact 注册，事件不含绝对路径', async () => {
+    const screenshotPath = '/tmp/sessions/sess-shot/images/page.png'
+    const registerBrowserPluginScreenshot = vi.fn(async () => ({ artifactId: 'art-shot-1' }))
+    const prompt = vi.fn()
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, { registerBrowserPluginScreenshot })
+    prompt.mockImplementation(async () => {
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-shot-1',
+          title: 'take_screenshot',
+          name: 'take_screenshot',
+          kind: 'other',
+          status: 'completed',
+          rawInput: { filePath: screenshotPath, url: 'https://example.com/secret' }
+        }),
+        connection
+      )
+      return { stopReason: 'end_turn' as const }
+    })
+
+    await expect(harness.adapter.startTurn(turnContext('task-shot', 'turn-shot'))).resolves.toEqual(
+      { outcome: 'completed' }
+    )
+    expect(registerBrowserPluginScreenshot).toHaveBeenCalledWith({
+      taskId: 'task-shot',
+      turnId: 'turn-shot',
+      absolutePath: screenshotPath
+    })
+    const serialized = JSON.stringify(harness.events)
+    expect(serialized).not.toContain(screenshotPath)
+    expect(serialized).not.toContain('/tmp/sessions')
+    expect(serialized).not.toContain('example.com/secret')
+    expect(harness.events.at(-1)).toMatchObject({ kind: 'turn-complete', outcome: 'completed' })
+  })
+
+  it('截图登记失败或越界路径不阻断 Turn，事件不含路径', async () => {
+    const screenshotPath = '/etc/passwd'
+    const registerBrowserPluginScreenshot = vi.fn(async () => {
+      throw new Error(`private ${screenshotPath}`)
+    })
+    const prompt = vi.fn()
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, { registerBrowserPluginScreenshot })
+    prompt.mockImplementation(async () => {
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tool-shot-bad',
+          name: 'take_screenshot',
+          status: 'completed',
+          rawInput: { filePath: screenshotPath }
+        }),
+        connection
+      )
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-click',
+          title: 'click',
+          name: 'click',
+          status: 'completed',
+          rawInput: { filePath: screenshotPath }
+        }),
+        connection
+      )
+      return { stopReason: 'end_turn' as const }
+    })
+
+    await expect(harness.adapter.startTurn(turnContext('task-shot', 'turn-shot'))).resolves.toEqual(
+      { outcome: 'completed' }
+    )
+    expect(registerBrowserPluginScreenshot).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(harness.events)).not.toContain(screenshotPath)
+    expect(harness.events.at(-1)).toMatchObject({ kind: 'turn-complete', outcome: 'completed' })
+  })
+
+  it('pending take_screenshot 不登记；completed 才用记住的 filePath 登记', async () => {
+    const screenshotPath = '/tmp/sessions/sess-shot/images/page.png'
+    const registerBrowserPluginScreenshot = vi.fn(async () => ({ artifactId: 'art-shot-1' }))
+    const afterPending = deferred<void>()
+    const prompt = vi.fn()
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, { registerBrowserPluginScreenshot })
+    prompt.mockImplementation(async () => {
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-shot-pending',
+          title: 'take_screenshot',
+          name: 'take_screenshot',
+          kind: 'other',
+          status: 'pending',
+          rawInput: { filePath: screenshotPath }
+        }),
+        connection
+      )
+      await afterPending.promise
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tool-shot-pending',
+          status: 'completed'
+        }),
+        connection
+      )
+      return { stopReason: 'end_turn' as const }
+    })
+
+    const execution = harness.adapter.startTurn(turnContext('task-shot', 'turn-shot'))
+    await vi.waitFor(() => {
+      expect(harness.events.some((event) => event.kind === 'tool-call')).toBe(true)
+    })
+    expect(registerBrowserPluginScreenshot).not.toHaveBeenCalled()
+    afterPending.resolve()
+    await expect(execution).resolves.toEqual({ outcome: 'completed' })
+    expect(registerBrowserPluginScreenshot).toHaveBeenCalledTimes(1)
+    expect(registerBrowserPluginScreenshot).toHaveBeenCalledWith({
+      taskId: 'task-shot',
+      turnId: 'turn-shot',
+      absolutePath: screenshotPath
+    })
+    expect(JSON.stringify(harness.events)).not.toContain(screenshotPath)
+  })
+
+  it('completed 登记失败不占用去重键，后续 completed 可重试', async () => {
+    const screenshotPath = '/tmp/sessions/sess-shot/images/page.png'
+    const registerBrowserPluginScreenshot = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ artifactId: 'art-shot-retry' })
+    const prompt = vi.fn()
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, { registerBrowserPluginScreenshot })
+    prompt.mockImplementation(async () => {
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-shot-retry',
+          title: 'take_screenshot',
+          name: 'take_screenshot',
+          status: 'completed',
+          rawInput: { filePath: screenshotPath }
+        }),
+        connection
+      )
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: 'tool-shot-retry',
+          name: 'take_screenshot',
+          status: 'completed',
+          rawInput: { filePath: screenshotPath }
+        }),
+        connection
+      )
+      return { stopReason: 'end_turn' as const }
+    })
+
+    await expect(harness.adapter.startTurn(turnContext('task-shot', 'turn-shot'))).resolves.toEqual(
+      { outcome: 'completed' }
+    )
+    expect(registerBrowserPluginScreenshot).toHaveBeenCalledTimes(2)
+  })
+
+  it('失败截图按 toolCallId 去重，不按 path 封死同一 Turn 的后续截图', async () => {
+    const screenshotPath = '/tmp/sessions/sess-shot/images/page.png'
+    const registerBrowserPluginScreenshot = vi.fn(async () => ({ artifactId: 'art-shot-2' }))
+    const prompt = vi.fn()
+    const connection = { prompt } as unknown as acp.ClientSideConnection
+    const harness = createAdapterHarness(connection, true, { registerBrowserPluginScreenshot })
+    prompt.mockImplementation(async () => {
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-shot-fail',
+          title: 'take_screenshot',
+          name: 'take_screenshot',
+          status: 'failed',
+          rawInput: { filePath: screenshotPath }
+        }),
+        connection
+      )
+      harness.internal.handleSessionUpdate(
+        notification({
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tool-shot-ok',
+          title: 'take_screenshot',
+          name: 'take_screenshot',
+          status: 'completed',
+          rawInput: { filePath: screenshotPath }
+        }),
+        connection
+      )
+      return { stopReason: 'end_turn' as const }
+    })
+
+    await expect(harness.adapter.startTurn(turnContext('task-shot', 'turn-shot'))).resolves.toEqual(
+      { outcome: 'completed' }
+    )
+    expect(registerBrowserPluginScreenshot).toHaveBeenCalledTimes(1)
+    expect(registerBrowserPluginScreenshot).toHaveBeenCalledWith({
+      taskId: 'task-shot',
+      turnId: 'turn-shot',
+      absolutePath: screenshotPath
+    })
+  })
+
   it('同一 Task 的第二轮继续使用同一 Runtime session，但 turnId 由服务层更新', async () => {
     const prompt = vi
       .fn()
@@ -4330,6 +4539,11 @@ function createAdapterHarness(
     }) => Promise<{ attachmentId: string; attachmentKind: 'image'; originalName: string }>
     grokSessionMediaRoot?: string
     grokSessionSignalsRoot?: string
+    registerBrowserPluginScreenshot?: (input: {
+      taskId: string
+      turnId: string
+      absolutePath: string
+    }) => Promise<{ artifactId: string } | null>
   } = {}
 ): {
   adapter: GrokAcpAdapter

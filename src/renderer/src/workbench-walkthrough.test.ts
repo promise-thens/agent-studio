@@ -22,6 +22,7 @@ const conversationTurnViewSource = readFileSync(join(root, 'conversation-turn-vi
 const toolRowSource = readFileSync(join(root, 'components/ToolRow.vue'), 'utf8')
 const permissionSource = readFileSync(join(root, 'components/PermissionPrompt.vue'), 'utf8')
 const composerSource = readFileSync(join(root, 'components/TaskComposer.vue'), 'utf8')
+const appSource = readFileSync(join(root, 'App.vue'), 'utf8')
 const permissionModeSource = readFileSync(
   join(root, 'components/TaskPermissionModeMenu.vue'),
   'utf8'
@@ -209,6 +210,17 @@ describe('工作台对照走查（夹具，非桌面 GUI）', () => {
     expect(composerSource).toContain('openPermissionModeFromSlash')
     expect(composerSource).toContain('composer-takeover-hud')
     expect(composerSource).toContain('resolveTakeoverHudCopy')
+    expect(composerSource).toContain('resolveBrowserPluginHudCopy')
+    expect(composerSource).toContain('overlayVisible')
+    expect(composerSource).toContain("emit('stop')")
+    expect(composerSource).not.toContain('composer-browser-hud')
+    expect(composerSource.match(/class="composer-takeover-hud[^"]*"/g)).toEqual([
+      'class="composer-takeover-hud no-drag"'
+    ])
+    expect(appSource).toContain(':overlay-visible="browserPluginOverlayVisible"')
+    expect(appSource).toContain('onBrowserPluginOverlay')
+    expect(appSource).not.toContain(':overlay-visible="false"')
+    expect(appSource).toContain('@stop="cancelTurn"')
     expect(composerSource).toContain('composer-usage-copy')
     expect(composerSource).not.toContain('composer-usage-tooltip')
     expect(permissionModeSource).toContain('shouldResubmitPermissionMode')

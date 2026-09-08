@@ -52,7 +52,8 @@ const OPERATION_TARGET_KINDS: Record<AgentOperationType, readonly AgentOperation
     'worktree-create': ['worktree', 'path', 'project'],
     'worktree-remove': ['worktree', 'path'],
     'network-egress': ['origin', 'unknown'],
-    browser: ['unknown'],
+    // 能解析 origin 就精确绑定；解析失败才退到 unknown，不得因此自动过。
+    browser: ['origin', 'unknown'],
     screen: ['unknown'],
     clipboard: ['unknown'],
     unknown: ['unknown', 'path']
@@ -125,7 +126,9 @@ export function createLocalEnvironmentId(projectId: string, canonicalRoot: strin
 
 /**
  * 固定首期风险表。minimumRisk 只能升级，Runtime 或调用方不能用它降低默认风险。
- * Browser、Screen、Clipboard 在能力真正接入前直接拒绝。
+ * Screen / Clipboard 在能力真正接入前直接拒绝。
+ * Browser 已接入 L3：有可信 origin 时允许 once 与 task；unknown origin 只允许 once。
+ * 不得把其它 L3（未知命令等）放宽成 task。
  * 未知 execute 与未知出网一样强制 L3，不能靠 mapper 漏标 minimumRisk 变成 Task 通行证。
  */
 export function evaluatePermissionPolicy(intent: OperationIntent): PermissionPolicyEvaluation {
@@ -137,7 +140,7 @@ export function evaluatePermissionPolicy(intent: OperationIntent): PermissionPol
     (intent.operationType === 'delete-path' && classifyDeleteGrant(intent) === 'dangerous-exact')
   const risk = maxRisk(defaultRisk, forceHighRisk ? 'L3' : intent.minimumRisk)
 
-  if (['browser', 'screen', 'clipboard'].includes(intent.operationType)) {
+  if (intent.operationType === 'screen' || intent.operationType === 'clipboard') {
     return { kind: 'deny', risk, reason: 'unsupported', allowedScopes: [] }
   }
   // 共享记忆树是 Runtime 自己的笔记，不是项目逃逸；读/写不再打断 Grok 记东西。
@@ -147,6 +150,14 @@ export function evaluatePermissionPolicy(intent: OperationIntent): PermissionPol
     }
   }
   if (risk === 'L0') return { kind: 'allow', risk, allowedScopes: [] }
+  // unknown origin 不能当本任务钥匙，否则 click/upload 会互相捎带。
+  if (intent.operationType === 'browser') {
+    return {
+      kind: 'approval',
+      risk,
+      allowedScopes: hasTrustedBrowserOrigin(intent) ? ['once', 'task'] : ['once']
+    }
+  }
   if (risk === 'L3') return { kind: 'approval', risk, allowedScopes: ['once'] }
   return { kind: 'approval', risk, allowedScopes: ['once', 'task'] }
 }
@@ -200,8 +211,9 @@ export async function resolveOperationIntentTargets(
 
 /**
  * 授权键必须按操作类别控制粒度：同类读/写/普通删在同一 Task 内复用，
- * 避免每个文件一把钥匙；危险删除、未知命令、出网仍绑定精确目标。
+ * 避免每个文件一把钥匙；危险删除、未知命令、出网、浏览器 origin 仍绑定精确目标。
  * 身份字段（initiator/task/project/environment）始终参与，防止跨 Task 或跨环境继承。
+ * Browser 禁止做成 write-file 那种整类钥匙，否则 origin A 的 task grant 会捎带到 origin B。
  */
 export function createOperationGrantKey(intent: ResolvedOperationIntent): string {
   return createHash('sha256')
@@ -219,6 +231,7 @@ function createGrantKeyMaterial(intent: ResolvedOperationIntent): Record<string,
     operationType: intent.operationType
   }
 
+  // 读/写按身份整类复用；browser 不得加入这里，否则不同 origin 会共用一把钥匙。
   if (intent.operationType === 'read-project' || intent.operationType === 'write-file') {
     return identity
   }
@@ -399,6 +412,15 @@ function pathContainsGitSegment(root: string, absoluteTarget: string): boolean {
   return relative(root, absoluteTarget)
     .split(/[\\/]+/u)
     .some((segment) => segment.toLowerCase() === '.git')
+}
+
+/** Browser 只有全部目标都是已解析 origin 才能发 task；夹带 unknown 一律仅本次。 */
+function hasTrustedBrowserOrigin(intent: OperationIntent): boolean {
+  return (
+    intent.operationType === 'browser' &&
+    intent.targets.length > 0 &&
+    intent.targets.every((target) => target.kind === 'origin')
+  )
 }
 
 /** 未知命令与未知出网对齐：共用指纹、「未提供可信」或 unknown 目标都必须 L3。 */

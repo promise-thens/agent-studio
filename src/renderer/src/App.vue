@@ -42,6 +42,7 @@ import type {
 import type { ConversationEntryState, DeletionPreview } from '../../shared/task-history'
 import type { TaskAttachmentDescriptor } from '../../shared/task-attachment'
 import type { AgentQuestionRequest } from '../../shared/agent-question'
+import type { BrowserPluginOverlaySnapshot } from '../../shared/browser-plugin-overlay'
 import type { AgentRespondQuestionRequest } from '../../shared/agent-ipc'
 import {
   buildQuestionRespondIpcPayload,
@@ -432,6 +433,8 @@ const activeSidebarTaskId = computed(() =>
 )
 
 const cleanupListeners: Array<() => void> = []
+/** 主进程 overlay 快照的 visible；写文件 in_progress 不会把它打成 true。 */
+const browserPluginOverlayVisible = ref(false)
 const acceptAgentEvent = createAgentEventGuard()
 /** 记住已确认的内部控制 Turn，处理终态后的迟到事件时仍保持静默。 */
 const silentControlTurnKeys = new Set<string>()
@@ -972,6 +975,9 @@ onMounted(async () => {
     window.app.onAppearanceChanged(applyAppearanceState),
     window.agent.onAvailableCommands((snapshot) => {
       applySlashCommandSnapshot(snapshot)
+    }),
+    window.task.onBrowserPluginOverlay((snapshot: BrowserPluginOverlaySnapshot) => {
+      browserPluginOverlayVisible.value = snapshot.visible === true
     })
   )
 
@@ -2290,6 +2296,7 @@ function scrollMessagesToBottom(): void {
             @open-plan="openPlanReview"
           />
 
+          <!-- overlay visible 只认主进程快照；写文件 in_progress 不得把这根条变成浏览器句。 -->
           <TaskComposer
             ref="taskComposer"
             :prompt="prompt"
@@ -2315,6 +2322,7 @@ function scrollMessagesToBottom(): void {
             :runtime-commands="runtimeSlashCommands"
             :attachments="composerAttachmentViews"
             :prompt-media-hint="promptMediaHint"
+            :overlay-visible="browserPluginOverlayVisible"
             @update:prompt="prompt = $event"
             @send="sendPrompt"
             @stop="cancelTurn"

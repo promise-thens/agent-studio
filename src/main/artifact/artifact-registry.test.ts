@@ -163,6 +163,29 @@ describe('ArtifactRegistry', () => {
     expect(changed[0].revision).toBeGreaterThan(1)
   })
 
+  it('taskDirectory 内的相对路径可注册，不要求文件落在 executionRoot', async () => {
+    const { registry, executionRoot, taskDirectory } = await createRegistry()
+    await mkdir(join(taskDirectory, 'artifacts', 'screenshots'), { recursive: true })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    await writeFile(join(taskDirectory, 'artifacts', 'screenshots', 'shot.png'), png, {
+      mode: 0o600
+    })
+
+    const descriptor = await registry.registerFileCandidate({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      source: 'agent-event',
+      relativePath: 'artifacts/screenshots/shot.png',
+      title: '屏幕截图'
+    })
+    expect(descriptor).toMatchObject({
+      kind: 'image',
+      location: { kind: 'file', relativePath: 'artifacts/screenshots/shot.png' }
+    })
+    expect(JSON.stringify(descriptor)).not.toContain(taskDirectory)
+    expect(JSON.stringify(descriptor)).not.toContain(executionRoot)
+  })
+
   it('删除 Artifact 元数据不会删除项目文件', async () => {
     const { registry, executionRoot, taskDirectory } = await createRegistry()
     const file = join(executionRoot, 'note.md')
