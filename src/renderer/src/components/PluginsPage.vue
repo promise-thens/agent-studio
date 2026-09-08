@@ -313,7 +313,7 @@ onMounted(() => {
         </div>
       </header>
 
-      <div v-show="tab === 'plugins'">
+      <div v-show="tab === 'plugins'" class="plugins-filters">
         <div class="plugin-panes" role="tablist" aria-label="已安装与市场">
           <button
             class="plugins-tab"
@@ -342,8 +342,159 @@ onMounted(() => {
           {{ PLUGIN_INSTALLING_HINT_COPY }}
         </p>
         <p v-if="actionError" class="plugins-banner is-error" role="alert">{{ actionError }}</p>
+      </div>
+      <p v-if="toggleError" class="plugins-banner is-error" role="alert">{{ toggleError }}</p>
 
-        <template v-if="pane === 'installed'">
+      <div class="plugins-scroll">
+        <div v-show="tab === 'plugins'">
+          <template v-if="pane === 'installed'">
+            <div v-if="loadState === 'loading'" class="plugins-state" role="status">
+              <CircleNotch :size="18" class="spin" />
+              正在加载插件
+            </div>
+            <div v-else-if="loadState === 'error'" class="plugins-state" role="alert">
+              <p>{{ errorMessage || '插件列表加载失败。' }}</p>
+              <button
+                class="hub-secondary"
+                type="button"
+                title="重试加载插件"
+                aria-label="重试加载插件"
+                @click="loadHub"
+              >
+                重试
+              </button>
+            </div>
+            <div v-else-if="plugins.length === 0" class="plugins-state" role="status">
+              <p>{{ PLUGIN_EMPTY_COPY }}</p>
+              <button
+                class="hub-primary"
+                type="button"
+                title="去市场看看"
+                @click="pane = 'marketplace'"
+              >
+                {{ PLUGIN_GO_TO_MARKETPLACE_COPY }}
+              </button>
+            </div>
+            <p v-else-if="filteredPlugins.length === 0" class="plugins-state">
+              没有匹配的已安装插件。
+            </p>
+            <ul v-else class="hub-list" aria-label="已安装插件">
+              <li v-for="plugin in filteredPlugins" :key="plugin.pluginId" class="hub-row">
+                <span class="hub-icon" aria-hidden="true">
+                  <PuzzlePiece :size="18" />
+                </span>
+                <div class="hub-copy">
+                  <strong :title="pluginDisplayLabel(plugin)">{{
+                    pluginDisplayLabel(plugin)
+                  }}</strong>
+                  <small>{{ pluginHubSubtitle(plugin) }}</small>
+                </div>
+                <div class="hub-actions">
+                  <button
+                    class="hub-secondary"
+                    type="button"
+                    title="卸载插件"
+                    aria-label="卸载插件"
+                    :disabled="uninstallingId === plugin.pluginId || actionBusy"
+                    @click="uninstallListedPlugin(plugin)"
+                  >
+                    {{ uninstallingId === plugin.pluginId ? '正在卸载…' : '卸载' }}
+                  </button>
+                  <button
+                    class="studio-switch"
+                    type="button"
+                    role="switch"
+                    :aria-checked="plugin.status === 'enabled'"
+                    :disabled="plugin.status === 'invalid' || togglingId === plugin.pluginId"
+                    :title="switchTitle(plugin.status === 'enabled')"
+                    :aria-label="switchTitle(plugin.status === 'enabled')"
+                    @click="togglePlugin(plugin, plugin.status !== 'enabled')"
+                  />
+                </div>
+              </li>
+            </ul>
+          </template>
+
+          <template v-else>
+            <div v-if="marketLoadState === 'loading'" class="plugins-state" role="status">
+              <CircleNotch :size="18" class="spin" />
+              正在加载市场
+            </div>
+            <div v-else-if="marketLoadState === 'error'" class="plugins-state" role="alert">
+              <p>{{ marketError || '市场货架加载失败。' }}</p>
+              <button
+                class="hub-secondary"
+                type="button"
+                title="重试加载市场"
+                aria-label="重试加载市场"
+                @click="loadMarketplace"
+              >
+                重试
+              </button>
+            </div>
+            <div v-else-if="marketplacePlugins.length === 0" class="plugins-state" role="status">
+              <p>还没有市场条目。添加官方市场后由 Grok 拉取货架。</p>
+              <button
+                class="hub-primary"
+                type="button"
+                title="添加官方市场"
+                :disabled="addingSource"
+                @click="addOfficialMarketplace"
+              >
+                {{ addingSource ? '正在添加…' : PLUGIN_ADD_OFFICIAL_MARKETPLACE_COPY }}
+              </button>
+            </div>
+            <p v-else-if="filteredMarketplace.length === 0" class="plugins-state">
+              没有匹配的市场插件。
+            </p>
+            <ul v-else class="hub-list" aria-label="市场插件">
+              <li
+                v-for="plugin in filteredMarketplace"
+                :key="`${plugin.sourceName}:${plugin.name}`"
+                class="hub-row"
+              >
+                <span class="hub-icon" aria-hidden="true">
+                  <PuzzlePiece :size="18" />
+                </span>
+                <div class="hub-copy">
+                  <strong :title="marketplaceDisplayLabel(plugin)">{{
+                    marketplaceDisplayLabel(plugin)
+                  }}</strong>
+                  <small>{{ marketplacePluginSubtitle(plugin) || plugin.sourceName }}</small>
+                </div>
+                <span class="hub-origin">{{ plugin.sourceName }}</span>
+                <button
+                  class="hub-primary"
+                  type="button"
+                  :title="installButtonTitle(plugin)"
+                  :aria-label="installButtonTitle(plugin)"
+                  :disabled="plugin.installed || actionBusy"
+                  @click="openTrustDialog(plugin)"
+                >
+                  {{
+                    plugin.installed
+                      ? '已安装'
+                      : installingName === plugin.name
+                        ? '正在安装…'
+                        : '安装'
+                  }}
+                </button>
+              </li>
+            </ul>
+          </template>
+        </div>
+
+        <McpSettingsPanel
+          v-show="tab === 'mcp'"
+          ref="mcpPanel"
+          layout="hub"
+          :project-id="projectId"
+          :query="query"
+          :plugin-servers="pluginMcps"
+          @server-count="userMcpCount = $event"
+        />
+
+        <div v-show="tab === 'skills'">
           <div v-if="loadState === 'loading'" class="plugins-state" role="status">
             <CircleNotch :size="18" class="spin" />
             正在加载插件
@@ -360,183 +511,36 @@ onMounted(() => {
               重试
             </button>
           </div>
-          <div v-else-if="plugins.length === 0" class="plugins-state" role="status">
-            <p>{{ PLUGIN_EMPTY_COPY }}</p>
-            <button
-              class="hub-primary"
-              type="button"
-              title="去市场看看"
-              @click="pane = 'marketplace'"
-            >
-              {{ PLUGIN_GO_TO_MARKETPLACE_COPY }}
-            </button>
-          </div>
-          <p v-else-if="filteredPlugins.length === 0" class="plugins-state">
-            没有匹配的已安装插件。
+          <p v-else-if="skills.length === 0" class="plugins-state" role="status">
+            还没有技能。技能来自已安装插件，不能在桌面单独安装。
           </p>
-          <ul v-else class="hub-list" aria-label="已安装插件">
-            <li v-for="plugin in filteredPlugins" :key="plugin.pluginId" class="hub-row">
+          <p v-else-if="filteredSkills.length === 0" class="plugins-state">没有匹配的技能。</p>
+          <ul v-else class="hub-list" aria-label="已安装技能">
+            <li v-for="skill in filteredSkills" :key="skill.skillKey" class="hub-row">
               <span class="hub-icon" aria-hidden="true">
-                <PuzzlePiece :size="18" />
+                <Cube :size="18" />
               </span>
               <div class="hub-copy">
-                <strong :title="pluginDisplayLabel(plugin)">{{
-                  pluginDisplayLabel(plugin)
-                }}</strong>
-                <small>{{ pluginHubSubtitle(plugin) }}</small>
+                <strong :title="skill.name">{{ skill.name }}</strong>
+                <small>{{ skill.description || `来自 ${skill.pluginLabel}` }}</small>
               </div>
-              <div class="hub-actions">
-                <button
-                  class="hub-secondary"
-                  type="button"
-                  title="卸载插件"
-                  aria-label="卸载插件"
-                  :disabled="uninstallingId === plugin.pluginId || actionBusy"
-                  @click="uninstallListedPlugin(plugin)"
-                >
-                  {{ uninstallingId === plugin.pluginId ? '正在卸载…' : '卸载' }}
-                </button>
-                <button
-                  class="studio-switch"
-                  type="button"
-                  role="switch"
-                  :aria-checked="plugin.status === 'enabled'"
-                  :disabled="plugin.status === 'invalid' || togglingId === plugin.pluginId"
-                  :title="switchTitle(plugin.status === 'enabled')"
-                  :aria-label="switchTitle(plugin.status === 'enabled')"
-                  @click="togglePlugin(plugin, plugin.status !== 'enabled')"
-                />
-              </div>
-            </li>
-          </ul>
-        </template>
-
-        <template v-else>
-          <div v-if="marketLoadState === 'loading'" class="plugins-state" role="status">
-            <CircleNotch :size="18" class="spin" />
-            正在加载市场
-          </div>
-          <div v-else-if="marketLoadState === 'error'" class="plugins-state" role="alert">
-            <p>{{ marketError || '市场货架加载失败。' }}</p>
-            <button
-              class="hub-secondary"
-              type="button"
-              title="重试加载市场"
-              aria-label="重试加载市场"
-              @click="loadMarketplace"
-            >
-              重试
-            </button>
-          </div>
-          <div v-else-if="marketplacePlugins.length === 0" class="plugins-state" role="status">
-            <p>还没有市场条目。添加官方市场后由 Grok 拉取货架。</p>
-            <button
-              class="hub-primary"
-              type="button"
-              title="添加官方市场"
-              :disabled="addingSource"
-              @click="addOfficialMarketplace"
-            >
-              {{ addingSource ? '正在添加…' : PLUGIN_ADD_OFFICIAL_MARKETPLACE_COPY }}
-            </button>
-          </div>
-          <p v-else-if="filteredMarketplace.length === 0" class="plugins-state">
-            没有匹配的市场插件。
-          </p>
-          <ul v-else class="hub-list" aria-label="市场插件">
-            <li
-              v-for="plugin in filteredMarketplace"
-              :key="`${plugin.sourceName}:${plugin.name}`"
-              class="hub-row"
-            >
-              <span class="hub-icon" aria-hidden="true">
-                <PuzzlePiece :size="18" />
-              </span>
-              <div class="hub-copy">
-                <strong :title="marketplaceDisplayLabel(plugin)">{{
-                  marketplaceDisplayLabel(plugin)
-                }}</strong>
-                <small>{{ marketplacePluginSubtitle(plugin) || plugin.sourceName }}</small>
-              </div>
-              <span class="hub-origin">{{ plugin.sourceName }}</span>
+              <span class="hub-origin">{{ skill.pluginLabel }}</span>
               <button
-                class="hub-primary"
+                class="studio-switch"
                 type="button"
-                :title="installButtonTitle(plugin)"
-                :aria-label="installButtonTitle(plugin)"
-                :disabled="plugin.installed || actionBusy"
-                @click="openTrustDialog(plugin)"
-              >
-                {{
-                  plugin.installed
-                    ? '已安装'
-                    : installingName === plugin.name
-                      ? '正在安装…'
-                      : '安装'
-                }}
-              </button>
+                role="switch"
+                :aria-checked="skill.enabled"
+                :disabled="skill.invalid || togglingId === skill.pluginId"
+                :title="switchTitle(skill.enabled, `随所属插件启停。${PLUGIN_ENABLE_TOGGLE_HINT}`)"
+                :aria-label="
+                  switchTitle(skill.enabled, `随所属插件启停。${PLUGIN_ENABLE_TOGGLE_HINT}`)
+                "
+                @click="toggleSkill(skill)"
+              />
             </li>
           </ul>
-        </template>
-      </div>
-
-      <McpSettingsPanel
-        v-show="tab === 'mcp'"
-        ref="mcpPanel"
-        layout="hub"
-        :project-id="projectId"
-        :query="query"
-        :plugin-servers="pluginMcps"
-        @server-count="userMcpCount = $event"
-      />
-
-      <div v-show="tab === 'skills'">
-        <div v-if="loadState === 'loading'" class="plugins-state" role="status">
-          <CircleNotch :size="18" class="spin" />
-          正在加载插件
         </div>
-        <div v-else-if="loadState === 'error'" class="plugins-state" role="alert">
-          <p>{{ errorMessage || '插件列表加载失败。' }}</p>
-          <button
-            class="hub-secondary"
-            type="button"
-            title="重试加载插件"
-            aria-label="重试加载插件"
-            @click="loadHub"
-          >
-            重试
-          </button>
-        </div>
-        <p v-else-if="skills.length === 0" class="plugins-state" role="status">
-          还没有技能。技能来自已安装插件，不能在桌面单独安装。
-        </p>
-        <p v-else-if="filteredSkills.length === 0" class="plugins-state">没有匹配的技能。</p>
-        <ul v-else class="hub-list" aria-label="已安装技能">
-          <li v-for="skill in filteredSkills" :key="skill.skillKey" class="hub-row">
-            <span class="hub-icon" aria-hidden="true">
-              <Cube :size="18" />
-            </span>
-            <div class="hub-copy">
-              <strong :title="skill.name">{{ skill.name }}</strong>
-              <small>{{ skill.description || `来自 ${skill.pluginLabel}` }}</small>
-            </div>
-            <span class="hub-origin">{{ skill.pluginLabel }}</span>
-            <button
-              class="studio-switch"
-              type="button"
-              role="switch"
-              :aria-checked="skill.enabled"
-              :disabled="skill.invalid || togglingId === skill.pluginId"
-              :title="switchTitle(skill.enabled, `随所属插件启停。${PLUGIN_ENABLE_TOGGLE_HINT}`)"
-              :aria-label="
-                switchTitle(skill.enabled, `随所属插件启停。${PLUGIN_ENABLE_TOGGLE_HINT}`)
-              "
-              @click="toggleSkill(skill)"
-            />
-          </li>
-        </ul>
       </div>
-      <p v-if="toggleError" class="plugins-state" role="alert">{{ toggleError }}</p>
     </div>
 
     <PluginTrustDialog
@@ -553,24 +557,45 @@ onMounted(() => {
 
 <style scoped>
 .plugins-page {
+  /* 外层只铺满主列并裁切，标题和筛选栏不跟列表一起滑。 */
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   height: 100%;
-  overflow: auto;
+  overflow: hidden;
   color: var(--text-1);
   background: var(--app-bg);
 }
 
 .plugins-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   width: min(840px, 100%);
   margin: 0 auto;
-  padding: 28px 32px 48px;
+  padding: 28px 32px 0;
+}
+
+.plugins-header,
+.plugins-filters {
+  flex: 0 0 auto;
 }
 
 .plugins-header {
   display: grid;
   gap: 22px;
   margin-bottom: 22px;
+}
+
+.plugins-scroll {
+  /* 唯一滚动层：市场、技能、MCP 超出视口时只在这里滑。 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 48px;
 }
 
 .plugins-heading {

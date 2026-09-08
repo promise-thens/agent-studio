@@ -303,6 +303,7 @@ button:disabled {
   grid-area: plugins;
   min-width: 0;
   min-height: 0;
+  /* 整页裁在网格格里。标题和筛选栏固定，货架由页内滚动区滑动。 */
   overflow: hidden;
 }
 

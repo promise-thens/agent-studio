@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { RuntimePluginSummary } from '../../shared/runtime-plugin'
 import type { MarketplacePluginSummary } from '../../shared/runtime-marketplace-plugin'
+import { extractCssRuleBlock } from './task-list-overflow'
 import {
   OFFICIAL_MARKETPLACE_GIT_URL,
   PLUGIN_ADD_OFFICIAL_MARKETPLACE_COPY,
@@ -38,6 +39,7 @@ const bannerSource = readFileSync(
   'utf8'
 )
 const appSource = readFileSync(join(rendererDir, 'App.vue'), 'utf8')
+const mainCss = readFileSync(join(rendererDir, 'assets/main.css'), 'utf8')
 
 function plugin(
   partial: Partial<RuntimePluginSummary> & { pluginId: string }
@@ -218,6 +220,33 @@ describe('插件主列表面', () => {
     expect(bannerSource).toContain('任务等待审批')
     expect(bannerSource).not.toContain('cancelTurn')
     expect(bannerSource).not.toContain('disconnect')
+  })
+})
+
+describe('插件页滚动容器', () => {
+  it('标题和筛选栏固定，只有货架列表区域滚动', () => {
+    const pageBlock = extractCssRuleBlock(pluginsPageSource, '.plugins-page')
+    const shellBlock = extractCssRuleBlock(pluginsPageSource, '.plugins-shell')
+    const scrollBlock = extractCssRuleBlock(pluginsPageSource, '.plugins-scroll')
+    const hostBlock = extractCssRuleBlock(mainCss, '.chat-panel.is-plugins .plugins-page')
+    const headerIndex = pluginsPageSource.indexOf('class="plugins-header"')
+    const panesIndex = pluginsPageSource.indexOf('class="plugin-panes"')
+    const scrollIndex = pluginsPageSource.indexOf('class="plugins-scroll"')
+    const marketListIndex = pluginsPageSource.indexOf('aria-label="市场插件"')
+
+    expect(pageBlock).toMatch(/(?:^|;)\s*overflow:\s*hidden\s*;/m)
+    expect(pageBlock).not.toMatch(/(?:^|;)\s*overflow:\s*auto\s*;/m)
+    expect(hostBlock).toMatch(/min-height:\s*0/)
+    expect(hostBlock).toMatch(/(?:^|;)\s*overflow:\s*hidden\s*;/m)
+    expect(hostBlock).not.toMatch(/(?:^|;)\s*overflow:\s*auto\s*;/m)
+    expect(shellBlock).toMatch(/flex-direction:\s*column/)
+    expect(shellBlock).toMatch(/min-height:\s*0/)
+    expect(scrollBlock).toMatch(/min-height:\s*0/)
+    expect(scrollBlock).toMatch(/(?:^|;)\s*overflow:\s*auto\s*;/m)
+    expect(headerIndex).toBeGreaterThan(-1)
+    expect(panesIndex).toBeGreaterThan(headerIndex)
+    expect(scrollIndex).toBeGreaterThan(panesIndex)
+    expect(marketListIndex).toBeGreaterThan(scrollIndex)
   })
 })
 
