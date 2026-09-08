@@ -1,3 +1,4 @@
+import type { HostBrowserChrome } from '../shared/host-browser'
 import {
   AGENT_OPERATION_TYPES,
   type AgentOperationType,
@@ -1405,15 +1406,28 @@ export function createTaskDesktopApi(
       }
       return { ok: true, value: parsed as SubagentActivityPage }
     },
+
     onBrowserPluginOverlay: (listener: (snapshot: BrowserPluginOverlaySnapshot) => void) =>
       subscribe(
         ipcRenderer,
         TASK_PUSH_CHANNELS.browserPluginOverlay,
         listener,
         parseBrowserPluginOverlaySnapshot
-      )
+      ),
+    onBrowserChrome: (listener: (chrome: HostBrowserChrome) => void) =>
+      subscribe(
+        ipcRenderer,
+        TASK_PUSH_CHANNELS.browserChrome,
+        listener,
+        (val: unknown) => val as HostBrowserChrome // For now, simple cast or implement parser
+      ),
+    getBrowserChrome: (taskId: string) => ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getBrowserChrome, taskId) as Promise<DesktopIpcResult<HostBrowserChrome>>,
+    setBrowserOpen: (taskId: string, open: boolean) => ipcRenderer.invoke(TASK_INVOKE_CHANNELS.setBrowserOpen, taskId, open) as Promise<DesktopIpcResult<null>>,
+    userNavigateBrowser: (taskId: string, url: string) => ipcRenderer.invoke(TASK_INVOKE_CHANNELS.userNavigateBrowser, taskId, url) as Promise<DesktopIpcResult<null>>,
+    updateBrowserBounds: (taskId: string, bounds: { x: number; y: number; width: number; height: number }) => ipcRenderer.invoke(TASK_INVOKE_CHANNELS.updateBrowserBounds, taskId, bounds) as Promise<DesktopIpcResult<null>>
   }
 }
+
 
 /** Provider 保持既有请求和响应契约，只收窄底层 ipcRenderer 依赖。 */
 export function createProviderDesktopApi(ipcRenderer: NarrowIpcRenderer): ProviderDesktopApi {

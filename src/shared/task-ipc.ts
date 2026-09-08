@@ -24,6 +24,7 @@ import type {
   TaskHistoryPage,
   TurnHistoryPage
 } from './task-history'
+import type { HostBrowserChrome } from './host-browser'
 
 export const TASK_INVOKE_CHANNELS = {
   list: 'task:list',
@@ -54,12 +55,17 @@ export const TASK_INVOKE_CHANNELS = {
   getAttachmentPreview: 'task:get-attachment-preview',
   getAttachmentImage: 'task:get-attachment-image',
   getChangeMediaPreview: 'task:get-change-media-preview',
-  getSubagentActivity: 'task:get-subagent-activity'
+  getSubagentActivity: 'task:get-subagent-activity',
+  getBrowserChrome: 'task:get-browser-chrome',
+  setBrowserOpen: 'task:set-browser-open',
+  userNavigateBrowser: 'task:user-navigate-browser',
+  updateBrowserBounds: 'task:update-browser-bounds'
 } as const
 
 /** Overlay 快照推送；中性 task:*，不要 grok:*。 */
 export const TASK_PUSH_CHANNELS = {
-  browserPluginOverlay: 'task:browser-plugin-overlay'
+  browserPluginOverlay: 'task:browser-plugin-overlay',
+  browserChrome: 'task:browser-chrome'
 } as const
 
 /**
@@ -233,4 +239,12 @@ export interface TaskDesktopApi {
     shortId: string
   ) => Promise<DesktopIpcResult<SubagentActivityPage>>
   onBrowserPluginOverlay: (listener: (snapshot: BrowserPluginOverlaySnapshot) => void) => () => void
+  onBrowserChrome: (listener: (chrome: HostBrowserChrome) => void) => () => void
+  getBrowserChrome: (taskId: string) => Promise<DesktopIpcResult<HostBrowserChrome>>
+  setBrowserOpen: (taskId: string, open: boolean) => Promise<DesktopIpcResult<null>>
+  userNavigateBrowser: (taskId: string, url: string) => Promise<DesktopIpcResult<null>>
+  updateBrowserBounds: (
+    taskId: string,
+    bounds: { x: number; y: number; width: number; height: number }
+  ) => Promise<DesktopIpcResult<null>>
 }
