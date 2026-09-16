@@ -44,6 +44,71 @@ describe('Overlay Preload 暴露面', () => {
     )
   })
 
+  it('宿主快照保留 pointer；插件路径丢掉 pointer；computer-use 拒收', async () => {
+    await import('./overlay')
+    const api = exposeInMainWorld.mock.calls[0]?.[1] as {
+      onSnapshot: (listener: (snapshot: unknown) => void) => () => void
+    }
+    const listener = vi.fn()
+    api.onSnapshot(listener)
+    const handler = ipcRenderer.on.mock.calls.at(-1)?.[1] as (
+      event: unknown,
+      payload: unknown
+    ) => void
+
+    handler(
+      {},
+      {
+        visible: true,
+        surface: 'host-browser',
+        persistWhenUnfocused: false,
+        pointer: { x: 310, y: 130 },
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        executionId: 'execution-1'
+      }
+    )
+    expect(listener).toHaveBeenCalledWith({
+      visible: true,
+      surface: 'host-browser',
+      persistWhenUnfocused: false,
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      executionId: 'execution-1'
+    })
+
+    listener.mockClear()
+    handler(
+      {},
+      {
+        visible: true,
+        kind: 'browser',
+        pointer: { x: 1, y: 2 },
+        taskId: 'task-1'
+      }
+    )
+    expect(listener).toHaveBeenCalledWith({
+      visible: true,
+      surface: 'browser-plugin',
+      persistWhenUnfocused: false,
+      taskId: 'task-1'
+    })
+    expect(listener.mock.calls[0]?.[0]).not.toHaveProperty('pointer')
+
+    listener.mockClear()
+    handler(
+      {},
+      {
+        visible: true,
+        surface: 'computer-use',
+        persistWhenUnfocused: true,
+        pointer: { x: 1, y: 1 }
+      }
+    )
+    expect(listener).not.toHaveBeenCalled()
+  })
+
   it('上下文隔离关闭时不暴露 API', async () => {
     Object.defineProperty(process, 'contextIsolated', { configurable: true, value: false })
     await expect(import('./overlay')).rejects.toThrow('Agent Studio 需要启用 contextIsolation。')

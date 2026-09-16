@@ -1,12 +1,32 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { AGENT_INVOKE_CHANNELS } from '../shared/agent-ipc'
 import {
-  parseBrowserPluginOverlaySnapshot,
-  type BrowserPluginOverlaySnapshot,
-  type OverlayDesktopApi
-} from '../shared/browser-plugin-overlay'
+  parseAgentPointerSnapshot,
+  type AgentPointerSnapshot
+} from '../shared/agent-pointer-overlay'
+import type { OverlayDesktopApi } from '../shared/browser-plugin-overlay'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import { TASK_PUSH_CHANNELS, TASK_SEND_CHANNELS } from '../shared/task-ipc'
+
+/**
+ * 插件通道常省略 surface / persistWhenUnfocused；缺省按 browser-plugin 理解并丢 pointer。
+ * host-browser 才保留已映射 DIP。computer-use 仍被 parseAgentPointerSnapshot 拒收。
+ */
+function parseOverlayPointerSnapshot(payload: unknown): AgentPointerSnapshot | null {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null
+  const value = payload as Record<string, unknown>
+  // computer-use 本波无 producer，不得改写成插件/宿主 surface
+  if (value.surface === 'computer-use') return null
+  return parseAgentPointerSnapshot({
+    visible: value.visible,
+    surface: value.surface === 'host-browser' ? 'host-browser' : 'browser-plugin',
+    persistWhenUnfocused: value.persistWhenUnfocused === true,
+    taskId: value.taskId,
+    turnId: value.turnId,
+    executionId: value.executionId,
+    pointer: value.pointer
+  })
+}
 
 /**
  * Overlay 只允许订阅快照、调用现有 agent:cancel-turn，以及芯片 hover 穿透切换。
@@ -20,12 +40,12 @@ function exposeOverlayApi(
     throw new Error('Agent Studio 需要启用 contextIsolation。')
   }
 
-  let lastSnapshot: BrowserPluginOverlaySnapshot | null = null
+  let lastSnapshot: AgentPointerSnapshot | null = null
 
   const api: OverlayDesktopApi = {
     onSnapshot(listener) {
       const handler = (_event: unknown, payload: unknown): void => {
-        const snapshot = parseBrowserPluginOverlaySnapshot(payload)
+        const snapshot = parseOverlayPointerSnapshot(payload)
         if (!snapshot) return
         lastSnapshot = snapshot
         listener(snapshot)

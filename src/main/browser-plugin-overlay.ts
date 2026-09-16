@@ -200,12 +200,16 @@ export class BrowserPluginOverlaySession {
   getSnapshot(): BrowserPluginOverlaySnapshot {
     if (this.hostPointer) {
       const execution = this.execution
+      const executionActive = Boolean(execution && ACTIVE_EXECUTION_STATES.has(execution.state))
+      // Turn 结束后仍留闲置光标，但不带 executionId，overlay 芯片据此关掉
       return createHostBrowserOverlaySnapshot({
         visible: true,
         pointer: this.hostPointer,
         taskId: this.hostPointerIds.taskId ?? execution?.taskId,
         turnId: this.hostPointerIds.turnId ?? execution?.turnId,
-        executionId: this.hostPointerIds.executionId ?? execution?.executionId
+        executionId: executionActive
+          ? (this.hostPointerIds.executionId ?? execution?.executionId)
+          : undefined
       })
     }
     const execution = this.execution

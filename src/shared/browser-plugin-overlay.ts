@@ -23,9 +23,12 @@ export const BROWSER_PLUGIN_HUD_COPY = SHARED_BROWSER_PLUGIN_HUD_COPY
 
 export const BROWSER_PLUGIN_OVERLAY_STOP_LABEL = '停止浏览器控制'
 
-/** Overlay 独立 preload 只暴露快照、停止和芯片 hover；禁止注入完整 window.agent。 */
+/**
+ * Overlay 独立 preload 只暴露快照、停止和芯片 hover；禁止注入完整 window.agent。
+ * 快照用 AgentPointerSnapshot：宿主可带 pointer，插件路径仍无针。
+ */
 export interface OverlayDesktopApi {
-  onSnapshot: (listener: (snapshot: BrowserPluginOverlaySnapshot) => void) => () => void
+  onSnapshot: (listener: (snapshot: AgentPointerSnapshot) => void) => () => void
   cancelTurn: () => Promise<DesktopIpcResult<void>>
   /** 芯片悬停时主进程暂时接收点击；离开后恢复穿透。 */
   setChipHover: (hovered: boolean) => void

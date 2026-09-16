@@ -154,6 +154,20 @@ describe('overlay 源码纪律', () => {
     expect(indexSource).not.toContain('grok:browser')
   })
 
+  it('OverlayApp 按 surface 显示宿主 HUD，光标仍仅 pointer 挂载', () => {
+    const overlayApp = readFileSync(join(overlayDir, 'OverlayApp.vue'), 'utf8')
+    const overlayPreload = readFileSync(join(mainDir, '../preload/overlay.ts'), 'utf8')
+    expect(overlayApp).toContain('Grok 正在使用内置浏览器')
+    expect(overlayApp).toContain('resolveAgentPointerHudCopy')
+    expect(overlayApp).toContain('v-if="snapshot.pointer"')
+    expect(overlayApp).toContain('v-if="hudCopy"')
+    expect(overlayApp).toContain('180ms')
+    expect(overlayApp).toContain('prefers-reduced-motion')
+    expect(overlayApp).not.toMatch(/CGEvent|Accessibility/)
+    expect(overlayPreload).toContain('parseAgentPointerSnapshot')
+    expect(overlayPreload).not.toMatch(/CGEvent|Accessibility/)
+  })
+
   it('macOS 关主窗不拆 overlay host；activate 按主窗重建，host 跟 app 退出走', () => {
     const indexSource = readFileSync(join(mainDir, 'index.ts'), 'utf8')
     const closedStart = indexSource.indexOf("mainWindow.on('closed'")
@@ -387,6 +401,38 @@ describe('宿主 host-browser 指针', () => {
     host.clearHostBrowserPointer()
     const hidden = publishToMain.mock.calls.at(-1)?.[0] as { pointer?: unknown }
     expect(hidden?.pointer).toBeUndefined()
+  })
+
+  it('Turn 结束后宿主闲置光标保留 pointer，但不带可停止的 executionId', () => {
+    const session = new BrowserPluginOverlaySession()
+    session.acceptExecutionSnapshot(runningExecution)
+    session.acceptHostBrowserPointer({
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      executionId: 'execution-1'
+    })
+    expect(session.getSnapshot().executionId).toBe('execution-1')
+
+    session.acceptExecutionSnapshot({
+      ...runningExecution,
+      executionRevision: 2,
+      execution: runningExecution.execution
+        ? {
+            ...runningExecution.execution,
+            state: 'cancelled',
+            endedAt: '2026-09-07T00:00:01.000Z',
+            reason: 'runtime-cancelled',
+            cancelRequestedAt: '2026-09-07T00:00:01.000Z'
+          }
+        : null
+    })
+    const idle = session.getSnapshot()
+    expect(idle.visible).toBe(true)
+    expect(idle.surface).toBe('host-browser')
+    expect(idle.pointer).toEqual({ x: 310, y: 130 })
+    expect(idle.executionId).toBeUndefined()
+    expect(idle).not.toHaveProperty('executionId')
   })
 
   it('切换 Task 后省略宿主 pointer', () => {

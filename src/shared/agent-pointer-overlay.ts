@@ -184,7 +184,9 @@ export function parseAgentPointerSnapshot(value: unknown): AgentPointerSnapshot 
   })
 }
 
-/** 无 pointer 时不得在 overlay DOM 留下移动光标节点。 */
+/** 无 pointer 或非宿主 surface 时不得在 overlay DOM 留下移动光标节点。 */
 export function shouldRenderAgentPointerCursor(snapshot: AgentPointerSnapshot): boolean {
-  return snapshot.visible === true && snapshot.pointer != null
+  return (
+    snapshot.visible === true && snapshot.pointer != null && snapshot.surface === 'host-browser'
+  )
 }

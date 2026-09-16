@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
-  BROWSER_PLUGIN_HUD_COPY,
-  type BrowserPluginOverlaySnapshot,
-  type OverlayDesktopApi
-} from '../../../shared/browser-plugin-overlay'
+  resolveAgentPointerHudCopy,
+  type AgentPointerSnapshot
+} from '../../../shared/agent-pointer-overlay'
+import type { OverlayDesktopApi } from '../../../shared/browser-plugin-overlay'
 
-const snapshot = ref<BrowserPluginOverlaySnapshot>({ visible: false, kind: 'browser' })
+const snapshot = ref<AgentPointerSnapshot>({
+  visible: false,
+  surface: 'browser-plugin',
+  persistWhenUnfocused: false
+})
 const cancelError = ref('')
 let stopListening: (() => void) | undefined
 
@@ -18,11 +22,42 @@ function setChipHover(hovered: boolean): void {
   overlayApi()?.setChipHover(hovered)
 }
 
+/**
+ * 芯片只在 overlayVisible && turnActive 时出现。
+ * 插件：visible 即进行中（Turn 结束会隐藏 overlay）。
+ * 宿主：有可停止的 execution 三元组才算进行中；闲置光标只留 pointer。
+ * 进行中宿主句为「Grok 正在使用内置浏览器」。
+ */
+function isTurnActive(next: AgentPointerSnapshot): boolean {
+  if (!next.visible) return false
+  if (next.surface === 'host-browser') {
+    return Boolean(next.executionId && next.taskId && next.turnId)
+  }
+  return true
+}
+
+const hudCopy = computed(() =>
+  resolveAgentPointerHudCopy({
+    surface: snapshot.value.surface,
+    overlayVisible: snapshot.value.visible,
+    turnActive: isTurnActive(snapshot.value),
+    takeoverCopy: null
+  })
+)
+
+/** 芯片 aria-label 跟 surface 走；停止仍走 agent:cancel-turn。 */
+const stopAriaLabel = computed(() =>
+  snapshot.value.surface === 'host-browser' ? '停止内置浏览器控制' : '停止浏览器控制'
+)
+
 onMounted(() => {
   stopListening = overlayApi()?.onSnapshot((next) => {
     snapshot.value = next
     if (!next.visible) {
       cancelError.value = ''
+    }
+    // 闲置光标无芯片时必须恢复穿透，避免悬停状态把桌面点击吃掉
+    if (!isTurnActive(next)) {
       setChipHover(false)
     }
   })
@@ -42,19 +77,19 @@ async function cancelTurn(): Promise<void> {
 <template>
   <div class="overlay-root">
     <button
-      v-if="snapshot.visible"
+      v-if="hudCopy"
       type="button"
       class="overlay-stop-chip"
-      aria-label="停止浏览器控制"
+      :aria-label="stopAriaLabel"
       @mouseenter="setChipHover(true)"
       @mouseleave="setChipHover(false)"
       @click="cancelTurn"
     >
-      <span>{{ BROWSER_PLUGIN_HUD_COPY }}</span>
+      <span>{{ hudCopy }}</span>
       <span class="overlay-stop-action">停止</span>
     </button>
     <p v-if="cancelError" class="overlay-error" role="alert">{{ cancelError }}</p>
-    <!-- 仅当冻结键投影出屏幕 DIP 才挂光标节点；当前 pointer 恒缺省，DOM 里不会出现移动光标。 -->
+    <!-- 仅当快照带已映射 overlay DIP 才挂光标节点；插件路径 pointer 恒缺省。 -->
     <div
       v-if="snapshot.pointer"
       class="overlay-cursor"
@@ -155,7 +190,7 @@ body,
   border: 2px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 35%, transparent);
   pointer-events: none;
-  transition: transform 120ms ease-out;
+  transition: transform 180ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
