@@ -129,6 +129,8 @@ function createFixture(): {
     profile,
     applied: true
   }))
+  const getHostBrowserSettings = vi.fn(async () => ({ enabled: true }))
+  const setHostBrowserEnabled = vi.fn(async (enabled: boolean) => ({ enabled }))
   const listHooks = vi.fn(async () => [hookSummary])
   const listMcpServers = vi.fn(async () => [])
   const upsertMcpServer = vi.fn(async () => ({
@@ -174,6 +176,8 @@ function createFixture(): {
     setMemoryEnabled,
     getGrokSandbox,
     setGrokSandbox,
+    getHostBrowserSettings,
+    setHostBrowserEnabled,
     listHooks,
     listMcpServers,
     upsertMcpServer,

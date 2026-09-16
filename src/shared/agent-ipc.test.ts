@@ -82,6 +82,8 @@ describe('桌面 IPC 静态契约', () => {
       'app:set-memory-enabled',
       'app:get-grok-sandbox',
       'app:set-grok-sandbox',
+      'app:get-host-browser-settings',
+      'app:set-host-browser-enabled',
       'app:list-hooks',
       'app:list-mcp-servers',
       'app:upsert-mcp-server',
@@ -122,7 +124,12 @@ describe('桌面 IPC 静态契约', () => {
       'task:get-attachment-image',
       'task:get-change-media-preview',
       'task:get-subagent-activity',
+      'task:get-browser-chrome',
+      'task:set-browser-open',
+      'task:user-navigate-browser',
+      'task:update-browser-bounds',
       'task:browser-plugin-overlay',
+      'task:browser-chrome',
       'task:browser-plugin-overlay-chip-hover'
     ])
   })

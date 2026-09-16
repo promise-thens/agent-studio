@@ -102,6 +102,13 @@ function readBound(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) ? value : null
 }
 
+/** Preload 只收 enabled 布尔，丢掉其它键。 */
+export function parseHostBrowserEnabledState(value: unknown): { enabled: boolean } | null {
+  if (!isPlainRecord(value)) return null
+  if (value.enabled !== true && value.enabled !== false) return null
+  return { enabled: value.enabled }
+}
+
 /** 宿主浏览器 MCP 工具名。不在此表的一律拒绝，避免 evaluate / CDP 通用入口混进来。 */
 export const HOST_BROWSER_ACTION_NAMES = [
   'browser_navigate',

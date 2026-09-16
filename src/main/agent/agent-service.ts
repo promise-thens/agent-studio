@@ -111,9 +111,13 @@ export interface AgentServiceOptions {
   onTaskRuntimeState?: (task: AgentTaskRuntimeState) => void
   /** 公开问答卡 DTO；主进程生成 questionId 后才允许进入 Renderer。 */
   onQuestion?: (request: AgentQuestionRequest) => void
-  onQuestionCancelled?: (request: Pick<AgentQuestionRequest, 'questionId' | 'taskId' | 'turnId'>) => void
-  /** 创建 / 恢复 session 时注入已校验的 MCP 描述；缺省为空。 */
-  getSessionMcpServers?: () => Promise<AgentRuntimeMcpServer[]> | AgentRuntimeMcpServer[]
+  onQuestionCancelled?: (
+    request: Pick<AgentQuestionRequest, 'questionId' | 'taskId' | 'turnId'>
+  ) => void
+  /** 创建 / 恢复 session 时注入已校验的 MCP 描述；缺省为空。taskId 用于绑定宿主浏览器 socket。 */
+  getSessionMcpServers?: (
+    taskId: string
+  ) => Promise<AgentRuntimeMcpServer[]> | AgentRuntimeMcpServer[]
   /** 共享记忆树等 Runtime 笔记根；缺省为空，写入会被当成项目外逃逸。 */
   getTrustedExternalRoots?: () => Promise<string[]> | string[]
   attachmentInbox?: TaskAttachmentInbox
@@ -352,7 +356,7 @@ export class AgentService {
           this.adapter.createSession({
             workspace: validatedWorkspace,
             taskId,
-            mcpServers: await this.resolveMcpServers()
+            mcpServers: await this.resolveMcpServers(taskId)
           })
         )
         this.assertOperationLeaseCurrent(lease)
@@ -824,10 +828,10 @@ export class AgentService {
     const activeTurn = this.executionController.getActiveTurn()
     return Boolean(
       activeTurn &&
-        activeTurn.taskId === request.taskId &&
-        activeTurn.turnId === request.turnId &&
-        activeTurn.runtimeSessionId === request.runtimeSessionId &&
-        task.activeTurnId === request.turnId
+      activeTurn.taskId === request.taskId &&
+      activeTurn.turnId === request.turnId &&
+      activeTurn.runtimeSessionId === request.runtimeSessionId &&
+      task.activeTurnId === request.turnId
     )
   }
 
@@ -843,7 +847,11 @@ export class AgentService {
         continue
       }
       this.runtimeQuestionRequests.delete(questionId)
-      this.onQuestionCancelled?.({ questionId, taskId: cancellation.taskId, turnId: cancellation.turnId })
+      this.onQuestionCancelled?.({
+        questionId,
+        taskId: cancellation.taskId,
+        turnId: cancellation.turnId
+      })
       return
     }
   }
@@ -894,7 +902,11 @@ export class AgentService {
     if (event.kind !== 'turn-complete') return
 
     for (const [questionId, pending] of this.runtimeQuestionRequests) {
-      if (pending.publicRequest.taskId !== event.taskId || pending.publicRequest.turnId !== event.turnId) continue
+      if (
+        pending.publicRequest.taskId !== event.taskId ||
+        pending.publicRequest.turnId !== event.turnId
+      )
+        continue
       this.runtimeQuestionRequests.delete(questionId)
       // 必须先解开 Adapter Promise；只撤 Renderer 卡会留下无 ext-out 的悬挂 Ask。
       this.adapter.respondQuestion?.(pending.runtimeRequest.requestId, { action: 'cancel' })
@@ -1198,7 +1210,11 @@ export class AgentService {
     let resumeError: unknown
     if (canResume) {
       try {
-        await this.adapter.resumeSession(task.session, task.taskId, await this.resolveMcpServers())
+        await this.adapter.resumeSession(
+          task.session,
+          task.taskId,
+          await this.resolveMcpServers(task.taskId)
+        )
         this.assertOperationLeaseCurrent(lease)
         if (!this.canCommitEnter(generation)) return undefined
         this.selectedTaskId = task.taskId
@@ -1219,7 +1235,11 @@ export class AgentService {
         throw normalizeServiceError(resumeError)
       }
       try {
-        await this.adapter.loadSession(task.session, task.taskId, await this.resolveMcpServers())
+        await this.adapter.loadSession(
+          task.session,
+          task.taskId,
+          await this.resolveMcpServers(task.taskId)
+        )
         this.assertOperationLeaseCurrent(lease)
         if (!this.canCommitEnter(generation)) return undefined
         this.selectedTaskId = task.taskId
@@ -1366,7 +1386,7 @@ export class AgentService {
       this.adapter.createSession({
         workspace: task.workspace,
         taskId: task.taskId,
-        mcpServers: await this.resolveMcpServers(),
+        mcpServers: await this.resolveMcpServers(task.taskId),
         // resume 失败后开新 session 必须带 yoloMode；仅快照为 true 时才传该键。
         ...(task.takeoverEnabled === true ? { takeoverEnabled: true } : {})
       })
@@ -1393,8 +1413,8 @@ export class AgentService {
     }
   }
 
-  private async resolveMcpServers(): Promise<AgentRuntimeMcpServer[]> {
-    return (await this.getSessionMcpServers?.()) ?? []
+  private async resolveMcpServers(taskId: string): Promise<AgentRuntimeMcpServer[]> {
+    return (await this.getSessionMcpServers?.(taskId)) ?? []
   }
 
   private isTaskSessionActive(task: AgentTaskRecord): boolean {

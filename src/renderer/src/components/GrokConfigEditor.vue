@@ -13,6 +13,11 @@ import {
   resolveSandboxPickerTitle,
   resolveSandboxSelectValue
 } from '../grok-sandbox-settings'
+import {
+  HOST_BROWSER_SETTING_HINT,
+  HOST_BROWSER_SETTING_TITLE,
+  resolveHostBrowserSettingTitle
+} from '../host-browser-settings'
 
 const props = withDefaults(
   defineProps<{
@@ -35,6 +40,16 @@ const parseError = ref('')
 const cursorOffset = ref(0)
 const textarea = ref<HTMLTextAreaElement | null>(null)
 const sandbox = useGrokSandboxSettings()
+const hostBrowserEnabled = ref(true)
+const hostBrowserSaving = ref(false)
+const hostBrowserError = ref('')
+const hostBrowserStatus = ref('')
+const hostBrowserDisabled = computed(
+  () => props.runtimeBusy || hostBrowserSaving.value || sandbox.saving.value || saving.value
+)
+const hostBrowserTitle = computed(() =>
+  resolveHostBrowserSettingTitle({ runtimeBusy: props.runtimeBusy })
+)
 
 const dirty = computed(() => text.value !== savedText.value)
 const sandboxDisabled = computed(
@@ -79,11 +94,42 @@ async function loadConfig(): Promise<void> {
     text.value = document.text
     savedText.value = document.text
     await sandbox.load()
+    await loadHostBrowserSetting()
     loadState.value = 'ready'
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error)
     loadState.value = 'error'
     await sandbox.load()
+    await loadHostBrowserSetting()
+  }
+}
+
+async function loadHostBrowserSetting(): Promise<void> {
+  try {
+    const state = unwrapDesktopIpcResult(await window.app.getHostBrowserSettings())
+    hostBrowserEnabled.value = state.enabled
+    hostBrowserError.value = ''
+  } catch (error) {
+    hostBrowserError.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
+/** 必须等主进程确认后才改 checkbox，禁止先乐观显示已关闭。 */
+async function onHostBrowserToggle(event: Event): Promise<void> {
+  const target = event.target
+  if (!(target instanceof HTMLInputElement) || hostBrowserDisabled.value) return
+  const next = target.checked
+  hostBrowserSaving.value = true
+  hostBrowserError.value = ''
+  hostBrowserStatus.value = ''
+  try {
+    const state = unwrapDesktopIpcResult(await window.app.setHostBrowserEnabled(next))
+    hostBrowserEnabled.value = state.enabled
+    hostBrowserStatus.value = '已保存。下一 session 生效。'
+  } catch (error) {
+    hostBrowserError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    hostBrowserSaving.value = false
   }
 }
 
@@ -216,6 +262,26 @@ onMounted(() => {
         <p v-else-if="sandbox.statusMessage.value" class="success" role="status">
           {{ sandbox.statusMessage.value }}
         </p>
+      </fieldset>
+      <fieldset class="sandbox-field" :disabled="hostBrowserDisabled">
+        <legend id="host-browser-setting-title">{{ HOST_BROWSER_SETTING_TITLE }}</legend>
+        <p id="host-browser-setting-hint">{{ HOST_BROWSER_SETTING_HINT }}</p>
+        <label class="sandbox-select-row" for="host-browser-enabled">
+          <input
+            id="host-browser-enabled"
+            type="checkbox"
+            :checked="hostBrowserEnabled"
+            :disabled="hostBrowserDisabled"
+            :title="hostBrowserTitle"
+            :aria-label="HOST_BROWSER_SETTING_TITLE"
+            aria-describedby="host-browser-setting-hint"
+            @change="onHostBrowserToggle"
+          />
+          <span class="sandbox-select-label">注入宿主浏览器 MCP</span>
+        </label>
+        <p v-if="hostBrowserSaving" class="sandbox-status" role="status">正在保存…</p>
+        <p v-else-if="hostBrowserError" class="error" role="alert">{{ hostBrowserError }}</p>
+        <p v-else-if="hostBrowserStatus" class="success" role="status">{{ hostBrowserStatus }}</p>
       </fieldset>
       <div class="config-body">
         <div class="editor-column">

@@ -4,6 +4,7 @@ import {
   type AppGrokConfigDocument,
   type AppGrokSandboxApplyResult,
   type AppGrokSandboxState,
+  type AppHostBrowserSettings,
   type AppPluginEnabledState
 } from '../shared/app-ipc'
 import type { GrokHookSummary } from '../shared/grok-hook'
@@ -64,6 +65,8 @@ export interface AppIpcDependencies {
   setMemoryEnabled: (enabled: boolean) => Promise<GrokMemoryEnabledState>
   getGrokSandbox: () => Promise<AppGrokSandboxState>
   setGrokSandbox: (profile: GrokSandboxProfile) => Promise<AppGrokSandboxApplyResult>
+  getHostBrowserSettings: () => Promise<AppHostBrowserSettings> | AppHostBrowserSettings
+  setHostBrowserEnabled: (enabled: boolean) => Promise<AppHostBrowserSettings>
   listHooks: () => Promise<GrokHookSummary[]>
   listMcpServers: (projectId?: string) => Promise<McpServerSummary[]>
   upsertMcpServer: (input: McpServerInput) => Promise<McpServerSummary>
@@ -280,6 +283,17 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
       throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
     }
     return dependencies.setGrokSandbox(profile)
+  })
+  register(APP_INVOKE_CHANNELS.getHostBrowserSettings, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.getHostBrowserSettings()
+  })
+  register(APP_INVOKE_CHANNELS.setHostBrowserEnabled, (args) => {
+    const request = readRequest(args, ['enabled'])
+    if (request.enabled !== true && request.enabled !== false) {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    return dependencies.setHostBrowserEnabled(request.enabled)
   })
   /**
    * 只读扫描 App grok-home/hooks。无参；Renderer 不得指定路径或要求执行钩子。

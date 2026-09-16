@@ -31,6 +31,8 @@ export const APP_INVOKE_CHANNELS = {
   setMemoryEnabled: 'app:set-memory-enabled',
   getGrokSandbox: 'app:get-grok-sandbox',
   setGrokSandbox: 'app:set-grok-sandbox',
+  getHostBrowserSettings: 'app:get-host-browser-settings',
+  setHostBrowserEnabled: 'app:set-host-browser-enabled',
   listHooks: 'app:list-hooks',
   listMcpServers: 'app:list-mcp-servers',
   upsertMcpServer: 'app:upsert-mcp-server',
@@ -101,6 +103,10 @@ export interface AppGrokSandboxApplyResult {
   applied: boolean
 }
 
+export interface AppHostBrowserSettings {
+  enabled: boolean
+}
+
 export interface AppListMcpServersRequest {
   projectId?: string
 }
@@ -162,6 +168,8 @@ export interface AppDesktopApi {
   setGrokSandbox: (
     profile: GrokSandboxProfile
   ) => Promise<DesktopIpcResult<AppGrokSandboxApplyResult>>
+  getHostBrowserSettings: () => Promise<DesktopIpcResult<AppHostBrowserSettings>>
+  setHostBrowserEnabled: (enabled: boolean) => Promise<DesktopIpcResult<AppHostBrowserSettings>>
   /** 列出 App 专属 grok-home/hooks 脱敏摘要，不回传 command / url / 绝对路径。 */
   listHooks: () => Promise<DesktopIpcResult<GrokHookSummary[]>>
   listMcpServers: (projectId?: string) => Promise<DesktopIpcResult<McpServerSummary[]>>

@@ -26,6 +26,12 @@ import {
   HostBrowserService,
   type HostBrowserPerformContext
 } from './browser/host-browser-service'
+import { appendHostBrowserMcpServer } from './browser/host-browser-mcp'
+import {
+  HostBrowserMcpHost,
+  resolveHostBrowserMcpScriptPath
+} from './browser/host-browser-mcp-host'
+import { HostBrowserSettingsStore } from './browser/host-browser-settings'
 import { APP_PUSH_CHANNELS } from '../shared/app-ipc'
 import { sanitizeExternalHref } from '../shared/external-href'
 import { TAKEOVER_CONTROL_TURN_KIND } from '../shared/task-takeover'
@@ -147,6 +153,8 @@ let artifactRegistry: ArtifactRegistry | null = null
 let artifactContentService: ArtifactContentService | null = null
 let browserPluginOverlayHost: BrowserPluginOverlayHost | null = null
 let hostBrowserService: HostBrowserService | null = null
+let hostBrowserSettingsStore: HostBrowserSettingsStore | null = null
+let hostBrowserMcpHost: HostBrowserMcpHost | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -269,6 +277,22 @@ async function initializeServices(
     }
   })
   await providerStore.initialize()
+  hostBrowserSettingsStore = new HostBrowserSettingsStore({ userDataPath: app.getPath('userData') })
+  await hostBrowserSettingsStore.initialize()
+  hostBrowserMcpHost = new HostBrowserMcpHost({
+    userDataPath: app.getPath('userData'),
+    getEnabled: () => hostBrowserSettingsStore?.isEnabled() !== false,
+    getExecPath: () => process.execPath,
+    getScriptPath: () => resolveHostBrowserMcpScriptPath(__dirname),
+    getPathEnv: () => process.env.PATH,
+    perform: async (taskId, action) => {
+      const browser = hostBrowserService
+      if (!browser) {
+        return { ok: false, code: 'unavailable', message: '内置浏览器尚未初始化。' }
+      }
+      return browser.perform(taskId, action)
+    }
+  })
   appearanceController = new AppearanceController({
     store: new AppearanceStore({ userDataPath: app.getPath('userData') }),
     nativeTheme: createNativeThemeAdapter()
@@ -613,8 +637,13 @@ async function initializeServices(
     permissionBroker: requirePermissionBroker(),
     taskExecutor,
     operationGate,
-    getSessionMcpServers: async () =>
-      toAgentRuntimeMcpServers(await requireMcpServerStore().listEnabledResolved()),
+    getSessionMcpServers: async (taskId) => {
+      const userServers = toAgentRuntimeMcpServers(
+        await requireMcpServerStore().listEnabledResolved()
+      )
+      const injection = (await hostBrowserMcpHost?.prepareForTask(taskId)) ?? null
+      return appendHostBrowserMcpServer(userServers, injection).servers
+    },
     getTrustedExternalRoots: () => requireGrokMemoryStore().listTrustedRoots(),
     attachmentInbox: taskAttachmentInbox ?? undefined,
     onEvent: (event) =>
@@ -958,6 +987,14 @@ function registerIpcHandlers(): void {
         await reloadGrokRuntimeAfterConfigSave(agentService, { allowSessionRebuild: false })
       }
       return { profile, applied: true }
+    },
+    getHostBrowserSettings: () => ({
+      enabled: requireHostBrowserSettingsStore().isEnabled()
+    }),
+    setHostBrowserEnabled: async (enabled) => {
+      assertGrokConfigCanReload()
+      await requireHostBrowserSettingsStore().save(enabled)
+      return { enabled: requireHostBrowserSettingsStore().isEnabled() }
     },
     // 钩子扫描牢笼绑在 userData，不执行钩子，不把 command / url 经 IPC 回传
     listHooks: () => listGrokHooks(app.getPath('userData')),
@@ -1607,6 +1644,11 @@ function requirePermissionBroker(): PermissionBroker {
   return permissionBroker
 }
 
+function requireHostBrowserSettingsStore(): HostBrowserSettingsStore {
+  if (!hostBrowserSettingsStore) throw new Error('内置浏览器设置尚未初始化。')
+  return hostBrowserSettingsStore
+}
+
 /** 内置浏览器动作身份只从 TaskStore 读，MCP 不能自报 project 或 execution root。 */
 function resolveHostBrowserPerformContext(taskId: string): HostBrowserPerformContext | null {
   try {
@@ -1722,6 +1764,8 @@ const appShutdownGate = createAppShutdownGate({
     operationGate?.beginShutdown()
     browserPluginOverlayHost?.destroy()
     browserPluginOverlayHost = null
+    void hostBrowserMcpHost?.close()
+    hostBrowserMcpHost = null
   },
   cancelActiveExecution: async () => {
     const identity = taskExecutor?.getActiveIdentity()

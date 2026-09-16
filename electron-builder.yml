@@ -11,6 +11,7 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+  - out/main/host-browser-mcp-stdio.js
 win:
   executableName: agent-studio
 nsis:

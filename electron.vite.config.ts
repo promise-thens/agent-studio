@@ -22,7 +22,16 @@ function ensureStdoutCursorApis(): void {
 ensureStdoutCursorApis()
 
 export default defineConfig({
-  main: {},
+  main: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          'host-browser-mcp-stdio': resolve('src/main/browser/host-browser-mcp-stdio.ts')
+        }
+      }
+    }
+  },
   preload: {
     build: {
       // 沙箱 Preload 无法 require 第三方包，也不能加载 Rollup 拆出的 ./chunks/*。

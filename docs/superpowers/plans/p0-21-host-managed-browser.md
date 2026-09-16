@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。步骤使用复选框 (`- [ ]`) 跟踪。
 >
-> **状态：** 任务 1 由 P0-19f 打开 `browser` L3。任务 2 与右栏壳代码已落地（用户导航 / bounds / chrome IPC）；开发版 GUI 未走查。任务 3 窄动作引擎已落地（白名单动作 + Broker；CDP 方法白名单；无 MCP 注入）。任务 4–5、7 未做。后退/前进/刷新按钮目前禁用。
+> **状态：** 任务 1 由 P0-19f 打开 `browser` L3。任务 2 与右栏壳代码已落地（用户导航 / bounds / chrome IPC）；开发版 GUI 未走查。任务 3 窄动作引擎已落地。任务 4 MCP stdio 注入已落地（`agent-studio-browser`，默认开，下一 session 生效）；任务 5、7 未做。后退/前进/刷新按钮目前禁用。
 >
 > **插入点：** 不挡 [P0-19b](p0-19b-grok-sandbox-profile.md)。实现建议在 19b 空闲重建 session 纪律之后（MCP 注入只发生在 `session/new` / `load` / `resume`）。可与 19c–e 并行。权限层与 [P0-19f](p0-19f-browser-computer-use-surface.md) 共享 `browser` L3：**19f 已打开 `browser`，本计划不得改回 `unsupported`。** 19f 覆盖 **插件自己的浏览器**（置顶 overlay；虚拟鼠标硬验收仍因坐标不可映射开放），不自建第二只 Chrome。`screen` / `clipboard` **不再留给 19f**，改留给后置软件表面 / P3-07。本计划的内置页 **仍不画光标**。本计划取代 [P3-05](p3-05-managed-browser.md) 的第一波共享页面，不依赖 P3-01 Capability Pack。
 
@@ -240,11 +240,11 @@ pnpm exec vitest run src/main/security/permission-policy.test.ts src/shared/host
 
 **涉及范围：** `host-browser-mcp-stdio.ts`、`electron.vite.config.ts`、`agent-service` / `index.ts` 注入。
 
-- [ ] **第 1 步: 最小 MCP stdio 测试**
+- [x] **第 1 步: 最小 MCP stdio 测试**
 
 说明：不引入 `@modelcontextprotocol/sdk`。对 stdin/stdout 跑：`initialize` → `tools/list`（上表工具）→ `tools/call browser_navigate`。无 token 或错误 token 的 socket 连接立即断开。
 
-- [ ] **第 2 步: 打包入口**
+- [x] **第 2 步: 打包入口**
 
 说明：electron-vite 增加独立入口 `src/main/browser/host-browser-mcp-stdio.ts` → `out/main/host-browser-mcp-stdio.js`。注入的 `mcpServers` 项：
 
@@ -264,11 +264,11 @@ pnpm exec vitest run src/main/security/permission-policy.test.ts src/shared/host
 
 `command` 必须是绝对路径。env **只**这三项（外加 MCP 子进程必需的 `PATH` 若 Grok 不继承）。禁止转发模型 Key。名字占用 `agent-studio-browser`；若用户 MCP 撞名，宿主项优先，用户项改报冲突且不静默覆盖。
 
-- [ ] **第 3 步: 注入 create/load/resume**
+- [x] **第 3 步: 注入 create/load/resume**
 
 说明：改 `getSessionMcpServers`：`listEnabledResolved()` 之后 `appendHostBrowserMcpServer(...)`。设置关闭或脚本缺失则不注入，现有用户 MCP 回归不变。测试：`createSession` 在开启时 mcpServers 含该 name；关闭时不含；用户 MCP 仍在。
 
-- [ ] **第 4 步: 空闲开关**
+- [x] **第 4 步: 空闲开关**
 
 说明：设置「使用内置浏览器」默认开。执行中不可改；空闲改完必须走与 19b 相同的「下一 session 生效」文案，不得假装当前 Turn 已有/已无工具。
 

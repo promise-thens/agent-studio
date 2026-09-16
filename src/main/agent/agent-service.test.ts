@@ -1188,6 +1188,33 @@ describe('AgentService Task / Turn 编排', () => {
     expect(adapter.createSession.mock.calls[0]?.[0]).not.toHaveProperty('takeoverEnabled')
   })
 
+  it('createSession 注入 getSessionMcpServers 返回值，并传入 taskId', async () => {
+    const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+    const seen: string[] = []
+    const service = new AgentService(adapter, new TaskExecutionController(), {
+      createId: () => 'task-mcp-1',
+      getSessionMcpServers: (taskId) => {
+        seen.push(taskId ?? '')
+        return [
+          { name: 'docs', transport: 'stdio', command: '/usr/bin/python3', args: [], env: [] },
+          {
+            name: 'agent-studio-browser',
+            transport: 'stdio',
+            command: '/bin/echo',
+            args: ['mcp'],
+            env: []
+          }
+        ]
+      }
+    })
+    await adapter.connect(WORKSPACE)
+    await service.createTask(WORKSPACE)
+    expect(seen).toEqual(['task-mcp-1'])
+    expect(adapter.createSession.mock.calls[0]?.[0]?.mcpServers?.map((server) => server.name)).toEqual(
+      ['docs', 'agent-studio-browser']
+    )
+  })
+
   it('恢复快照接管后，resume 失败重建 session 才传入 takeoverEnabled: true', async () => {
     const userDataPath = await mkdtemp(join(tmpdir(), 'agent-service-takeover-'))
     const projectPath = join(userDataPath, 'project')

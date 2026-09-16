@@ -1,4 +1,8 @@
-import { parseHostBrowserChrome, type HostBrowserChrome } from '../shared/host-browser'
+import {
+  parseHostBrowserChrome,
+  parseHostBrowserEnabledState,
+  type HostBrowserChrome
+} from '../shared/host-browser'
 import {
   AGENT_OPERATION_TYPES,
   type AgentOperationType,
@@ -1011,6 +1015,28 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
         }
       }
       return { ok: true, value: applied }
+    },
+    getHostBrowserSettings: async () => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.getHostBrowserSettings
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const parsed = parseHostBrowserEnabledState(result.value)
+      if (!parsed) {
+        return { ok: false, error: { code: 'operation-failed', message: '内置浏览器设置无效。' } }
+      }
+      return { ok: true, value: parsed }
+    },
+    setHostBrowserEnabled: async (enabled) => {
+      const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.setHostBrowserEnabled, {
+        enabled
+      })) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const parsed = parseHostBrowserEnabledState(result.value)
+      if (!parsed) {
+        return { ok: false, error: { code: 'operation-failed', message: '内置浏览器设置无效。' } }
+      }
+      return { ok: true, value: parsed }
     },
     // Preload 再 parse：丢掉 command / url / 绝对路径，坏项静默剔除而不是整表失败
     listHooks: async () => {
