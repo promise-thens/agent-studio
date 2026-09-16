@@ -19,11 +19,30 @@ export const HOST_BROWSER_CDP_METHODS = [
 
 const ALLOWED_CDP = new Set<string>(HOST_BROWSER_CDP_METHODS)
 const ACTION_NAME_SET = new Set<string>(HOST_BROWSER_ACTION_NAMES)
-const MAX_SNAPSHOT_NODES = 80
+const MAX_SNAPSHOT_NODES = 150
 const MAX_SNAPSHOT_NAME_CHARS = 200
 const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 const SINGLE_TAB_ID = 'tab-1'
+/** 弹窗角色：其可见子孙必须压过页面上成片的导航节点，否则关不掉对话框。 */
+const DIALOG_AX_ROLES = new Set(['dialog', 'alertdialog'])
+/** 可交互角色；无名 button 也收。link 同属此集合，截断时再排到控件后面。 */
+const INTERACTIVE_AX_ROLES = new Set([
+  'button',
+  'link',
+  'textbox',
+  'searchbox',
+  'combobox',
+  'checkbox',
+  'radio',
+  'slider',
+  'tab',
+  'menuitem',
+  'switch',
+  'listbox',
+  'option',
+  'spinbutton'
+])
 
 export type HostBrowserActionErrorCode =
   | 'unknown-action'
@@ -48,8 +67,8 @@ export type HostBrowserActionData =
   | { kind: 'navigated'; url: string }
   | { kind: 'snapshot'; nodes: HostBrowserSnapshotNode[]; truncated: boolean }
   | { kind: 'screenshot'; mimeType: 'image/png'; bytes: Buffer }
-  | { kind: 'clicked' }
-  | { kind: 'typed' }
+  | { kind: 'clicked'; viewportX: number; viewportY: number }
+  | { kind: 'typed'; viewportX?: number; viewportY?: number }
   | { kind: 'scrolled' }
   | { kind: 'tabs'; tabs: Array<{ tabId: string; title: string; origin: string }> }
   | { kind: 'ok' }
@@ -224,7 +243,8 @@ export class HostBrowserActionEngine {
       })
       if (!dispatched.ok) return dispatched
     }
-    return ok({ kind: 'clicked' })
+    // viewport 点只给主进程画 overlay；MCP 序列化路径必须剥掉。
+    return ok({ kind: 'clicked', viewportX: point.x, viewportY: point.y })
   }
 
   private async type(ref: string, text: string, submit: boolean): Promise<HostBrowserActionResult> {
@@ -234,6 +254,11 @@ export class HostBrowserActionEngine {
       backendNodeId: target.record.backendDOMNodeId
     })
     if (!focused.ok) return focused
+    // 取四边形失败不阻断输入；没有点就无法给 overlay 映射。
+    const quads = await sendHostBrowserCdp(this.driver, 'DOM.getContentQuads', {
+      backendNodeId: target.record.backendDOMNodeId
+    })
+    const point = quads.ok ? quadCenter(quads.value) : null
     const inserted = await sendHostBrowserCdp(this.driver, 'Input.insertText', { text })
     if (!inserted.ok) return inserted
     if (submit) {
@@ -248,7 +273,7 @@ export class HostBrowserActionEngine {
         if (!key.ok) return key
       }
     }
-    return ok({ kind: 'typed' })
+    return ok(point ? { kind: 'typed', viewportX: point.x, viewportY: point.y } : { kind: 'typed' })
   }
 
   private async scroll(
@@ -305,36 +330,90 @@ function classifyParseFailure(raw: unknown): HostBrowserActionResult {
   return fail('invalid-input', '动作参数无效。')
 }
 
+/**
+ * 把 CDP AX 树收成 snapshot 清单。
+ * 先收 dialog/alertdialog 子树（含无名关闭按钮），再收可交互控件，最后才是其余可见节点。
+ * 热搜 link 经常远超 150 上限，所以同属可交互时控件（textbox/button 等）仍压过 link。
+ */
 function flattenAxTree(value: unknown): {
   nodes: Array<HostBrowserSnapshotNode & { backendDOMNodeId?: number }>
   truncated: boolean
 } {
   const rawNodes = isRecord(value) && Array.isArray(value.nodes) ? value.nodes : []
-  const collected: Array<HostBrowserSnapshotNode & { backendDOMNodeId?: number }> = []
-  let truncated = false
-  for (const entry of rawNodes) {
-    if (!isRecord(entry) || entry.ignored === true) continue
+  const records = rawNodes.filter(isRecord)
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const entry of records) {
+    if (typeof entry.nodeId === 'string' && entry.nodeId) {
+      byId.set(entry.nodeId, entry)
+    }
+  }
+
+  const dialogSeen = new Set<Record<string, unknown>>()
+  const dialogOrder: Record<string, unknown>[] = []
+  for (const entry of records) {
+    if (!DIALOG_AX_ROLES.has(axString(entry.role))) continue
+    collectDialogSubtree(entry, byId, dialogSeen, dialogOrder, new Set())
+  }
+
+  const interactiveControls: Record<string, unknown>[] = []
+  const interactiveLinks: Record<string, unknown>[] = []
+  const rest: Record<string, unknown>[] = []
+  for (const entry of records) {
+    if (entry.ignored === true || dialogSeen.has(entry)) continue
     const role = axString(entry.role) || 'generic'
-    const name = truncateName(axString(entry.name))
-    if (axString(entry.name).length > MAX_SNAPSHOT_NAME_CHARS) truncated = true
+    if (role === 'link') interactiveLinks.push(entry)
+    else if (INTERACTIVE_AX_ROLES.has(role)) interactiveControls.push(entry)
+    else rest.push(entry)
+  }
+
+  const ranked = [...dialogOrder, ...interactiveControls, ...interactiveLinks, ...rest]
+  const selected = ranked.slice(0, MAX_SNAPSHOT_NODES)
+  let truncated = ranked.length > selected.length
+  const nodes = selected.map((entry, index) => {
+    const role = axString(entry.role) || 'generic'
+    const rawName = axString(entry.name)
+    if (rawName.length > MAX_SNAPSHOT_NAME_CHARS) truncated = true
     const backendDOMNodeId =
       typeof entry.backendDOMNodeId === 'number' && Number.isSafeInteger(entry.backendDOMNodeId)
         ? entry.backendDOMNodeId
         : undefined
-    collected.push({
-      ref: `e${collected.length + 1}`,
+    return {
+      ref: `e${index + 1}`,
       role,
-      name,
+      name: truncateName(rawName),
       tag: role,
       backendDOMNodeId
-    })
-    if (collected.length >= MAX_SNAPSHOT_NODES) {
-      truncated = true
-      break
     }
+  })
+  if (countVisibleAxNodes(rawNodes) > nodes.length) truncated = true
+  return { nodes, truncated }
+}
+
+/**
+ * 沿 childIds 走弹窗子树。ignored 节点不进清单，但仍继续往下找可见关闭按钮。
+ */
+function collectDialogSubtree(
+  entry: Record<string, unknown>,
+  byId: Map<string, Record<string, unknown>>,
+  seen: Set<Record<string, unknown>>,
+  order: Record<string, unknown>[],
+  visiting: Set<string>
+): void {
+  const id = typeof entry.nodeId === 'string' ? entry.nodeId : ''
+  if (id) {
+    if (visiting.has(id)) return
+    visiting.add(id)
   }
-  if (countVisibleAxNodes(rawNodes) > collected.length) truncated = true
-  return { nodes: collected, truncated }
+  if (entry.ignored !== true && !seen.has(entry)) {
+    seen.add(entry)
+    order.push(entry)
+  }
+  const childIds = Array.isArray(entry.childIds) ? entry.childIds : []
+  for (const childId of childIds) {
+    if (typeof childId !== 'string') continue
+    const child = byId.get(childId)
+    if (child) collectDialogSubtree(child, byId, seen, order, visiting)
+  }
 }
 
 function countVisibleAxNodes(nodes: unknown[]): number {

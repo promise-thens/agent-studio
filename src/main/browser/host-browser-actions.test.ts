@@ -15,6 +15,7 @@ function axNode(
     role?: string
     name?: string
     backendDOMNodeId?: number
+    childIds?: string[]
   } = {}
 ): Record<string, unknown> {
   return {
@@ -22,7 +23,8 @@ function axNode(
     ignored: options.ignored === true,
     role: { type: 'role', value: options.role ?? 'generic' },
     name: { type: 'computedString', value: options.name ?? '' },
-    backendDOMNodeId: options.backendDOMNodeId ?? Number(nodeId)
+    backendDOMNodeId: options.backendDOMNodeId ?? Number(nodeId),
+    ...(options.childIds ? { childIds: options.childIds } : {})
   }
 }
 
@@ -193,7 +195,7 @@ describe('HostBrowserActionEngine', () => {
   it('snapshot 超长截断，不把忽略节点或超长 name 原样送出', async () => {
     const nodes = [
       axNode('0', { ignored: true, name: 'x'.repeat(4000) }),
-      ...Array.from({ length: 120 }, (_, index) =>
+      ...Array.from({ length: 180 }, (_, index) =>
         axNode(String(index + 1), {
           role: 'link',
           name: `item-${index + 1}-${'n'.repeat(300)}`,
@@ -208,10 +210,53 @@ describe('HostBrowserActionEngine', () => {
     expect(snapshot.ok).toBe(true)
     if (!snapshot.ok || snapshot.data.kind !== 'snapshot') throw new Error('需要 snapshot')
     expect(snapshot.data.truncated).toBe(true)
-    expect(snapshot.data.nodes).toHaveLength(80)
+    expect(snapshot.data.nodes).toHaveLength(150)
     expect(snapshot.data.nodes[0]?.name.length).toBeLessThanOrEqual(200)
     expect(snapshot.data.nodes.some((node) => node.name.length > 200)).toBe(false)
     expect(JSON.stringify(snapshot)).not.toContain('x'.repeat(4000))
+  })
+
+  it('热搜 link 占满名额时仍保留末尾搜索框', async () => {
+    const nodes = [
+      ...Array.from({ length: 200 }, (_, index) =>
+        axNode(String(index + 1), {
+          role: 'link',
+          name: `热搜${index + 1}`,
+          backendDOMNodeId: index + 10
+        })
+      ),
+      axNode('201', { role: 'textbox', name: '搜索', backendDOMNodeId: 999 })
+    ]
+    const snapshot = await new HostBrowserActionEngine(
+      createDriver({ url: 'https://example.com/', axNodes: nodes })
+    ).perform({ name: 'browser_snapshot' })
+    expect(snapshot.ok).toBe(true)
+    if (!snapshot.ok || snapshot.data.kind !== 'snapshot') throw new Error('需要 snapshot')
+    expect(snapshot.data.truncated).toBe(true)
+    expect(snapshot.data.nodes.length).toBeLessThanOrEqual(150)
+    expect(
+      snapshot.data.nodes.some((node) => node.role === 'textbox' && node.name === '搜索')
+    ).toBe(true)
+  })
+
+  it('alertdialog 子树里的无名 button 排在清单前部', async () => {
+    const nodes = [
+      ...Array.from({ length: 40 }, (_, index) =>
+        axNode(`nav-${index}`, { role: 'link', name: `热搜${index + 1}` })
+      ),
+      axNode('dlg', { role: 'alertdialog', name: '提示', childIds: ['close'] }),
+      axNode('close', { role: 'button', name: '', backendDOMNodeId: 9001 })
+    ]
+    const snapshot = await new HostBrowserActionEngine(
+      createDriver({ url: 'https://example.com/', axNodes: nodes })
+    ).perform({ name: 'browser_snapshot' })
+    expect(snapshot.ok).toBe(true)
+    if (!snapshot.ok || snapshot.data.kind !== 'snapshot') throw new Error('需要 snapshot')
+    const buttonIndex = snapshot.data.nodes.findIndex(
+      (node) => node.role === 'button' && node.name === ''
+    )
+    expect(buttonIndex).toBeGreaterThanOrEqual(0)
+    expect(buttonIndex).toBeLessThan(2)
   })
 
   it('screenshot 只接受 png 魔数，拒绝 jpeg 伪装', async () => {
@@ -245,6 +290,21 @@ describe('HostBrowserActionEngine', () => {
     expect(driver.cdpMethods).toContain('Input.dispatchMouseEvent')
   })
 
+  it('click 成功后主进程结果带 viewport 点', async () => {
+    const driver = createDriver({ url: 'https://example.com/' })
+    const engine = new HostBrowserActionEngine(driver)
+    const snapshot = await engine.perform({ name: 'browser_snapshot' })
+    if (!snapshot.ok || snapshot.data.kind !== 'snapshot') throw new Error('需要 snapshot')
+    const clicked = await engine.perform({
+      name: 'browser_click',
+      arguments: { ref: snapshot.data.nodes[0]?.ref }
+    })
+    expect(clicked.ok).toBe(true)
+    if (!clicked.ok || clicked.data.kind !== 'clicked') throw new Error('需要 clicked')
+    expect(clicked.data.viewportX).toBe(10)
+    expect(clicked.data.viewportY).toBe(10)
+  })
+
   it('navigate 只 load http(s)；type 成功也不回写输入明文', async () => {
     const driver = createDriver()
     const engine = new HostBrowserActionEngine(driver)
@@ -262,6 +322,9 @@ describe('HostBrowserActionEngine', () => {
       arguments: { ref: snapshot.data.nodes[0]?.ref, text: 's3cret-token', submit: true }
     })
     expect(typed.ok).toBe(true)
+    if (!typed.ok || typed.data.kind !== 'typed') throw new Error('需要 typed')
+    expect(typed.data.viewportX).toBe(10)
+    expect(typed.data.viewportY).toBe(10)
     expect(JSON.stringify(typed)).not.toContain('s3cret-token')
     expect(driver.cdpMethods).toContain('Input.insertText')
     expect(driver.cdpMethods).toContain('Input.dispatchKeyEvent')

@@ -190,7 +190,21 @@ function toCallResult(value: unknown): { content: unknown[]; isError?: true } {
       ]
     }
   }
-  return { content: [{ type: 'text', text: JSON.stringify(value) }] }
+  return { content: [{ type: 'text', text: JSON.stringify(omitViewportCoordinates(value)) }] }
+}
+
+/**
+ * MCP 文本不得出现 viewport 坐标，避免进模型上下文、Timeline 或日志。
+ */
+function omitViewportCoordinates(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(omitViewportCoordinates)
+  if (!isRecord(value)) return value
+  const next: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'viewportX' || key === 'viewportY') continue
+    next[key] = omitViewportCoordinates(item)
+  }
+  return next
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -161,6 +161,37 @@ describe('host-browser MCP stdio', () => {
     expect(calls).toEqual([{ name: 'browser_navigate', args: { url: 'https://example.com' } }])
     expect(called.result?.isError).not.toBe(true)
   })
+
+  it('tools/call 不得把 viewport 坐标写进 MCP 回包', async () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const stop = runHostBrowserMcpStdio({
+      stdin,
+      stdout,
+      callTool: async () => ({
+        ok: true,
+        data: { kind: 'clicked', viewportX: 10, viewportY: 10 }
+      })
+    })
+    stdin.write(
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'browser_click', arguments: { ref: 'e1' } }
+      })}\n`
+    )
+    const lines = await readLines(stdout, 1)
+    stop()
+    const raw = lines[0] ?? ''
+    expect(raw).not.toContain('viewportX')
+    expect(raw).not.toContain('viewportY')
+    const called = JSON.parse(raw) as {
+      result?: { isError?: boolean; content?: Array<{ text?: string }> }
+    }
+    expect(called.result?.isError).not.toBe(true)
+    expect(called.result?.content?.[0]?.text).toContain('clicked')
+  })
 })
 
 describe('HostBrowserMcpGateway', () => {
