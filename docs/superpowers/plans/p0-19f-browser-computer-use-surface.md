@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。步骤使用复选框 (`- [ ]`) 跟踪。
 >
-> **状态：** 任务 1–5 代码已落地。任务 6 overlay 窗口与停止芯片已落地，**虚拟鼠标硬验收未过**（ACP 指针键 not-observed；`click_at` 为 viewport-css，不可映射到 overlay 屏幕 DIP；未发明光标）。任务 7 自动验证已过；**开发版 GUI 未走查**。`screen` / `clipboard` 仍 deny。不得宣称计划完成。2026-09-07 产品对齐：**本计划只做插件操作浏览器**；**虚拟鼠标是硬验收**；点桌面软件 / `screen` / `clipboard` 后置到软件表面 / P3-07。方案 A 置顶 HUD 光标，不注入系统鼠标（方案 B / P3-07）。
+> **状态：** 任务 1–5 代码已落地。任务 6 overlay 窗口与停止芯片已落地，**虚拟鼠标硬验收未过**（ACP 指针键 not-observed；`click_at` 为 viewport-css，不可映射到 overlay 屏幕 DIP；未发明光标）。任务 7 自动验证已过；**开发版 GUI 未走查**。`screen` / `clipboard` 仍 deny。不得宣称计划完成。2026-09-07 产品对齐：**本计划只做插件操作浏览器**；**虚拟鼠标是硬验收**；点桌面软件 / `screen` / `clipboard` 后置到软件表面 / P3-07。方案 A 置顶 HUD 光标，不注入系统鼠标（方案 B / P3-07）。**2026-09-16：** 插件仍不画光标（`projectBrowserPluginPointer` 恒 `undefined`）。宿主内置页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md)，不是本计划验收项；21a 开发版 GUI 未走查，不得借 21a 宣称本计划虚拟鼠标已完成。
 >
 > **插入点：** [P0-19](p0-19-grok-host-capability-polish.md) 插件浏览器表面。前置：P0-10E 能安装市场插件；GACP-03 不得把 `browser` 放进「本任务写文件」grant。
 >
@@ -73,8 +73,9 @@
 
 | 计划 | 关系 |
 | --- | --- |
-| P0-21 | 宿主右栏内置页。共享 `browser` L3 原则。谁先改策略谁打开 `browser`；后到者不得改回 `unsupported`。虚拟光标在本计划的插件 overlay，**不**画在 WebContentsView 上。 |
-| P3-07 | 真控系统鼠标、点任意软件。后置。 |
+| P0-21 | 宿主右栏内置页。共享 `browser` L3 原则。谁先改策略谁打开 `browser`；后到者不得改回 `unsupported`。插件虚拟光标仍在本计划 overlay 且因坐标不可映射不画；宿主页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) 的同一扇 overlay（`surface=host-browser`），不画进 WebContentsView。 |
+| P0-21a | 宿主内置页 snapshot + overlay 指针。插件路径继续丢 pointer。不得把 21a 标成本计划虚拟鼠标完成。 |
+| P3-07 | 真控系统鼠标、点任意软件。后置。消费 `agent-pointer-overlay`，不自建光标窗。 |
 | 以后的软件表面 | 打开 `screen` / `clipboard`、Computer Use 类插件。未立项，不在本文件实现。 |
 
 `browser` 策略与 P0-21 对齐，避免两份计划互撕：
@@ -91,7 +92,7 @@
 - 不做 macOS Computer Use Helper，不注入系统鼠标（P3-07 / 方案 B）。
 - 不打开 `screen` / `clipboard`。
 - 不为每个网站做桌面内嵌登录浏览器（共享页走 P0-21）。
-- 不把虚拟光标画进 P0-21 的 WebContentsView。
+- 不把虚拟光标画进 P0-21 的 WebContentsView。宿主页 overlay 光标由 P0-21a 负责；本计划插件路径仍不画 pointer。
 - 不实现 `get_command_or_subagent_output` 轮询器，不把插件输出写进 Inspector「终端」。
 - 不把 overlay 做成第二条 Task 或第二条 Runtime。
 - 不把 chrome-devtools 接到 P0-21 视图的调试端口。
@@ -834,7 +835,7 @@ git diff --check
 
 - [x] **第 3 步: 文档**
 
-同步 `AGENTS.md` / `CLAUDE.md` 第 15 节、roadmap、P0-19 程序索引、P0-21 交叉引用、product-vision §7.2 / §7.3。P0-21 写明：插件虚拟鼠标在 19f；内置页仍不画光标；`screen` / `clipboard` 不再「留给 19f」，改留给后置软件表面 / P3-07。
+同步 `AGENTS.md` / `CLAUDE.md` 第 15 节、roadmap、P0-19 程序索引、P0-21 交叉引用、product-vision §7.2 / §7.3。P0-21 写明：插件虚拟鼠标在 19f 且仍不画；宿主页软件光标走 21a overlay；`screen` / `clipboard` 不再「留给 19f」，改留给后置软件表面 / P3-07。
 
 ## 验收标准
 

@@ -8,7 +8,7 @@
 
 **核心数据流：** Capability 请求窗口/屏幕读取或输入操作；Broker 检查系统权限、目标应用、操作风险和授权；Helper 执行最小动作并返回摘要事件。
 
-**约束与边界：** 不绕过 macOS 辅助功能/屏幕录制授权；不默认全屏连续录制、不读剪贴板全文、不后台常驻；只在用户可见状态运行。
+**约束与边界：** 不绕过 macOS 辅助功能/屏幕录制授权；不默认全屏连续录制、不读剪贴板全文、不后台常驻；只在用户可见状态运行。软件光标消费 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) 的 `agent-pointer-overlay`（`surface=computer-use`），把 AX frame 映射成同一套 overlay DIP，**不得自建第二扇光标窗**。本计划仍后置；不得宣称任意 App Computer Use 已完成。
 
 **主要风险：** 屏幕与输入操作不可预测且难撤销；首期动作白名单、目标应用确认、节流、紧急停止、前台可见提示与失败即停。
 
@@ -22,7 +22,7 @@
 - 依赖 P3-02；仅在产品确认首期支持 macOS 后实施。
 
 **文件范围：**
-- 新增 `apps/macos-helper/` 或受控原生模块、`src/main/capability/computer-use/`、IPC 协议和测试；更新 Manifest。
+- 新增 `apps/macos-helper/` 或受控原生模块、`src/main/capability/computer-use/`、IPC 协议和测试；更新 Manifest。光标 UI 消费 `src/shared/agent-pointer-overlay.ts` 与现有 P0-19f overlay 窗，不新开全屏光标窗。`computer-use` surface 仅本计划成为 producer 后才允许写入 pointer。
 
 **安全策略：**
 - 安全是与操作风险匹配的护栏：低风险只读操作可在任务范围授权；写入与命令需展示目标和影响；删除、外发数据、登录态、屏幕和剪贴板始终显式确认。
