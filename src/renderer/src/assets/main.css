@@ -1375,6 +1375,283 @@ button:disabled {
   font-size: 11px;
 }
 
+/* ==========================================================================
+   现代 Agent 过程胶囊卡片 (Modern Agent Activity Capsule)
+   将连续过程聚合为紧凑圆润胶囊，彻底消除长竖线糖葫芦与刷屏的“已完成”文字
+   ========================================================================== */
+
+.activity-capsule {
+  position: relative;
+  min-width: 0;
+  margin: 6px 0;
+  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--surface-2) 75%, transparent);
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    border-radius 160ms ease;
+}
+
+.activity-capsule:hover {
+  background: color-mix(in srgb, var(--surface-3) 65%, transparent);
+  border-color: color-mix(in srgb, var(--border-strong) 75%, transparent);
+}
+
+/* 展开态转变为内容卡片 */
+.activity-capsule[data-expanded='true'] {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-1) 85%, transparent);
+  border-color: color-mix(in srgb, var(--border-strong) 65%, transparent);
+}
+
+/* 进行中态微弱主题光晕 */
+.activity-capsule[data-status='in_progress'] {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+/* 胶囊头部栏：32px 紧凑高度 */
+.activity-capsule-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12.5px;
+  line-height: 1;
+}
+
+.activity-capsule-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* 左侧微图标区 */
+.activity-capsule-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+}
+
+.activity-capsule-check-icon {
+  width: 13px;
+  height: 13px;
+  color: color-mix(in srgb, var(--accent) 88%, white);
+}
+
+.activity-capsule-spinner {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 850ms linear infinite;
+}
+
+.activity-capsule-dot.failed {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.activity-capsule-dot.neutral {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-3) 70%, transparent);
+}
+
+/* 胶囊主文案 */
+.activity-capsule-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-capsule-title {
+  color: var(--text-2);
+  font-weight: 550;
+}
+
+.activity-capsule-subtitle {
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.activity-capsule-active-title {
+  color: var(--text-1);
+  font-weight: 550;
+}
+
+.activity-capsule-duration {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.activity-capsule-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* 展开微箭头 */
+.activity-capsule-caret {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--text-3);
+  border-bottom: 1.5px solid var(--text-3);
+  transform: rotate(-45deg);
+  transition: transform 150ms ease;
+  margin-left: auto;
+}
+
+.activity-capsule[data-expanded='true'] .activity-capsule-caret {
+  transform: rotate(45deg) translate(-1px, -1px);
+}
+
+/* 展开内联列表 */
+.activity-capsule-body {
+  padding: 6px 10px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+
+.activity-capsule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 单个内联动作条目 */
+.activity-capsule-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 24px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  transition: background 120ms ease;
+}
+
+.activity-capsule-item:hover {
+  background: color-mix(in srgb, var(--surface-3) 45%, transparent);
+}
+
+.activity-capsule-item-bullet {
+  flex: 0 0 4px;
+  width: 4px;
+  height: 4px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text-3) 70%, transparent);
+}
+
+.activity-capsule-item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-capsule-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+}
+
+.activity-capsule-item-main.has-detail {
+  cursor: pointer;
+}
+
+.activity-capsule-item-label {
+  color: var(--text-2);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-capsule-item-view-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+.activity-capsule-tag {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--surface-3) 80%, transparent);
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+
+.activity-capsule-item-warning {
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.activity-capsule-item-failed {
+  color: var(--danger);
+  font-size: 11px;
+  margin-left: auto;
+}
+
+.activity-capsule-item-running {
+  color: var(--accent);
+  font-size: 11px;
+  margin-left: auto;
+}
+
+/* 详情与代码输出块 */
+.activity-capsule-detail-text,
+.activity-capsule-detail-code {
+  margin: 4px 0 2px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-2) 90%, black);
+  border: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.activity-capsule-detail-code {
+  max-height: 160px;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.activity-capsule-files-list {
+  margin: 4px 0 2px;
+  padding: 4px 10px;
+  list-style: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
 .conversation-turn .task-result-review,
 .conversation-turn .task-change-card {
   width: 100%;

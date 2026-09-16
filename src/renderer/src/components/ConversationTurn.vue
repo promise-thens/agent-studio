@@ -28,6 +28,8 @@ import QuestionPrompt from './QuestionPrompt.vue'
 import PlanChecklist from './PlanChecklist.vue'
 import SubagentCard from './SubagentCard.vue'
 import ToolRow from './ToolRow.vue'
+import { groupConversationBlocks } from '../conversation-activity-capsule'
+import ActivityCapsule from './ActivityCapsule.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -87,6 +89,19 @@ const blocks = computed(() => {
       block.kind !== 'permission' &&
       block.kind !== 'plan'
   )
+})
+
+/**
+ * 实际用于视图渲染的块序列。
+ * 在主对话流（variant === 'conversation'）下，连续的中间过程（思考、工具、权限审计）自动聚合成胶囊卡片；
+ * 在检查器模式（variant === 'inspector'）下保留原有的独立细粒度节点。
+ */
+const displayBlocks = computed(() => {
+  if (props.variant !== 'conversation') return blocks.value
+  return groupConversationBlocks(blocks.value, {
+    isTurnActive: props.active,
+    clockTick: effectiveClockTick.value
+  })
 })
 
 const localClockTick = ref(props.clockTick || Date.now())
@@ -184,7 +199,10 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
       </div>
     </header>
 
-    <template v-for="block in blocks" :key="block.nodeId">
+    <template v-for="block in displayBlocks" :key="block.nodeId">
+      <!-- 方案 1：现代 Agent 过程胶囊卡片（包含连续思考、工具调用与静默审计） -->
+      <ActivityCapsule v-if="block.kind === 'activity-capsule'" :capsule="block" :active="active" />
+
       <div v-if="block.kind === 'user'" class="conversation-user" data-kind="user">
         <p v-if="block.text">{{ block.text }}</p>
         <ConversationMedia

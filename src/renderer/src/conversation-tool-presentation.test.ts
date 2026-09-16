@@ -77,6 +77,99 @@ describe('工具行标题人话化', () => {
       detail: 'rg -n foo'
     })
   })
+
+  it('宿主浏览器 MCP 工具人话化展示并把具体参数收进详情', () => {
+    // 1. 点击操作与参数
+    expect(presentToolTitle('agent-studio-browser__browser_click `{"ref": "e1"}`')).toEqual({
+      label: '点击页面',
+      detail: '{"ref": "e1"}'
+    })
+    expect(presentToolTitle('agent-studio-browser__browser_click')).toEqual({
+      label: '点击页面'
+    })
+    expect(presentToolTitle('browser_click')).toEqual({
+      label: '点击页面'
+    })
+
+    // 2. 页面快照与截图
+    expect(presentToolTitle('agent-studio-browser__browser_snapshot')).toEqual({
+      label: '页面快照'
+    })
+    expect(presentToolTitle('agent-studio-browser__browser_screenshot')).toEqual({
+      label: '页面截图'
+    })
+    expect(presentToolTitle('browser_snapshot')).toEqual({
+      label: '页面快照'
+    })
+
+    // 3. 打开网页导航与滚动、输入
+    expect(presentToolTitle('agent-studio-browser__browser_navigate https://example.com')).toEqual({
+      label: '打开网页',
+      detail: 'https://example.com'
+    })
+    expect(
+      presentToolTitle('agent-studio-browser__browser_scroll `{"direction": "down"}`')
+    ).toEqual({
+      label: '滚动页面',
+      detail: '{"direction": "down"}'
+    })
+
+    // 4. 截断的 browser__ 或 agent-studio-browser__ 前缀
+    expect(presentToolTitle('browser__')).toEqual({
+      label: '浏览器操作'
+    })
+    expect(presentToolTitle('agent-studio-browser__')).toEqual({
+      label: '浏览器操作'
+    })
+  })
+
+  it('通用 MCP 工具友好去除服务名前缀并将常用动词转为中文', () => {
+    // 文件操作
+    expect(presentToolTitle('filesystem__read_file package.json')).toEqual({
+      label: '读取文件',
+      detail: 'package.json'
+    })
+    expect(presentToolTitle('filesystem__write_file `src/auth.ts`')).toEqual({
+      label: '写入文件',
+      detail: 'src/auth.ts'
+    })
+
+    // 协作与通用方法
+    expect(presentToolTitle('github__create_issue `{"title": "bug"}`')).toEqual({
+      label: '创建 Issue',
+      detail: '{"title": "bug"}'
+    })
+    expect(presentToolTitle('custom_service__track_event')).toEqual({
+      label: 'track_event'
+    })
+    expect(presentToolTitle('custom_service__track_event payload')).toEqual({
+      label: 'track_event',
+      detail: 'payload'
+    })
+
+    // 截断的通用 MCP
+    expect(presentToolTitle('my_server__')).toEqual({
+      label: 'my_server 工具'
+    })
+  })
+
+  it('类似 foo|bar|baz 的纯正则/关键字搜索标注为「搜索 "xxx"」', () => {
+    // 典型中文业务词汇
+    expect(presentToolTitle('资质|attachment|附件')).toEqual({
+      label: '搜索 "资质|attachment|附件"'
+    })
+
+    // 常用多词检索
+    expect(presentToolTitle('foo|bar|baz')).toEqual({
+      label: '搜索 "foo|bar|baz"'
+    })
+
+    // 超长搜索模式截断展示并将全量收进 detail
+    const longPattern = 'apple|banana|orange|watermelon|pineapple|strawberry|blueberry'
+    const presented = presentToolTitle(longPattern)
+    expect(presented.label).toMatch(/^搜索 "apple\|banana\|.*\.\.\."$/)
+    expect(presented.detail).toBe(longPattern)
+  })
 })
 
 describe('工具行折叠皮肤', () => {
