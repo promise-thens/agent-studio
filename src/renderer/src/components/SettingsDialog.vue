@@ -3,6 +3,7 @@ import { nextTick, onMounted, ref } from 'vue'
 import {
   PhBrain as Brain,
   PhCode as Code,
+  PhGlobe as Globe,
   PhPalette as Palette,
   PhPlugsConnected as PlugsConnected,
   PhWebhooksLogo as WebhooksLogo,
@@ -18,6 +19,7 @@ import type {
 import { APPEARANCE_OPTIONS, SETTINGS_SECTIONS, type SettingsSection } from '../settings-dialog'
 import GrokConfigEditor from './GrokConfigEditor.vue'
 import GrokHooksPanel from './GrokHooksPanel.vue'
+import HostBrowserSettingsPanel from './HostBrowserSettingsPanel.vue'
 import MemorySettingsPanel from './MemorySettingsPanel.vue'
 import ProviderOnboarding from './ProviderOnboarding.vue'
 
@@ -66,6 +68,7 @@ function sectionIcon(id: SettingsSection): typeof Palette {
   if (id === 'appearance') return Palette
   if (id === 'memory') return Brain
   if (id === 'grok-config') return Code
+  if (id === 'browser') return Globe
   if (id === 'hooks') return WebhooksLogo
   return PlugsConnected
 }
@@ -171,6 +174,7 @@ function sectionIcon(id: SettingsSection): typeof Palette {
             :runtime-busy="runtimeBusy"
             @dirty="paneDirty = $event"
           />
+          <HostBrowserSettingsPanel v-else-if="section === 'browser'" :runtime-busy="runtimeBusy" />
           <GrokHooksPanel v-else-if="section === 'hooks'" />
         </div>
       </div>

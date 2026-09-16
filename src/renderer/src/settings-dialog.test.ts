@@ -25,6 +25,7 @@ describe('设置弹窗与外观应用', () => {
     expect(resolveSettingsSection('grok-config')).toBe('grok-config')
     expect(resolveSettingsSection('memory')).toBe('memory')
     expect(resolveSettingsSection('hooks')).toBe('hooks')
+    expect(resolveSettingsSection('browser')).toBe('browser')
     expect(resolveSettingsSection('mcp')).toBe(DEFAULT_SETTINGS_SECTION)
     expect(resolveSettingsSection('fonts')).toBe(DEFAULT_SETTINGS_SECTION)
     expect(settingsSource).not.toContain("section === 'mcp'")
@@ -69,12 +70,17 @@ describe('设置弹窗与外观应用', () => {
     expect(settingsSource).not.toContain('#f4efe6')
   })
 
-  it('侧栏在 Grok 配置后单独开 Hooks 页，不并进 grok-config', () => {
+  it('侧栏在 Grok 配置后单独开浏览器页，不并进 grok-config', () => {
+    const grokConfigSource = readFileSync(
+      join(rendererDir, 'components/GrokConfigEditor.vue'),
+      'utf8'
+    )
     expect(SETTINGS_SECTIONS.map((section) => section.id)).toEqual([
       'provider',
       'appearance',
       'memory',
       'grok-config',
+      'browser',
       'hooks'
     ])
     expect(SETTINGS_SECTIONS.map((section) => section.label)).toEqual([
@@ -82,11 +88,16 @@ describe('设置弹窗与外观应用', () => {
       '外观',
       '记忆',
       'Grok 配置',
+      '浏览器',
       'Hooks'
     ])
+    expect(settingsSource).toContain("section === 'browser'")
+    expect(settingsSource).toContain('HostBrowserSettingsPanel')
+    expect(settingsSource).toContain('PhGlobe')
     expect(settingsSource).toContain("section === 'hooks'")
     expect(settingsSource).toContain('GrokHooksPanel')
-    expect(settingsSource).toContain('PhWebhooksLogo')
+    expect(grokConfigSource).not.toContain('host-browser-enabled')
+    expect(grokConfigSource).not.toContain('HOST_BROWSER_SETTING_TITLE')
   })
 
   it('供应商页说明生图走同一 Base URL', () => {

@@ -1,3 +1,5 @@
+export const HOST_BROWSER_SETTING_PAGE_TITLE = '浏览器'
+
 export const HOST_BROWSER_SETTING_TITLE = '使用内置浏览器'
 
 export const HOST_BROWSER_SETTING_HINT =
