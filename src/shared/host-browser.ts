@@ -7,6 +7,30 @@ export const HOST_BROWSER_MAX_TITLE_CHARS = 512
 /** Bounds 以 CSS 像素计；超出这个范围视为测量错误而不是超大窗口。 */
 export const HOST_BROWSER_MAX_BOUND = 1_000_000
 
+/**
+ * Retina 上 capturePage 是物理像素，click_xy 是 CSS。
+ * 截图必须缩到这个 viewport，模型按 PNG 点才不会整块偏掉。
+ */
+export function resolveScreenshotViewportCssSize(input: {
+  viewportWidth: number
+  viewportHeight: number
+}): { width: number; height: number } | undefined {
+  const width = input.viewportWidth
+  const height = input.viewportHeight
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return undefined
+  if (width < 1 || height < 1) return undefined
+  if (width > HOST_BROWSER_MAX_BOUND || height > HOST_BROWSER_MAX_BOUND) return undefined
+  return { width: Math.round(width), height: Math.round(height) }
+}
+
+/** 图像素与 viewport CSS 不一致时必须缩放，禁止把 2x PNG 直接交给模型估点。 */
+export function screenshotImageNeedsCssResize(
+  image: { width: number; height: number },
+  viewport: { width: number; height: number }
+): boolean {
+  return image.width !== viewport.width || image.height !== viewport.height
+}
+
 export interface HostBrowserChrome {
   url: string
   title: string
@@ -122,6 +146,8 @@ export const HOST_BROWSER_ACTION_NAMES = [
   'browser_snapshot',
   'browser_screenshot',
   'browser_click',
+  'browser_click_xy',
+  'browser_click_at',
   'browser_type',
   'browser_scroll'
 ] as const
@@ -146,6 +172,7 @@ export type HostBrowserAction =
   | { name: 'browser_snapshot' }
   | { name: 'browser_screenshot' }
   | { name: 'browser_click'; ref: string }
+  | { name: 'browser_click_xy'; x: number; y: number }
   | { name: 'browser_type'; ref: string; text: string; submit?: boolean }
   | { name: 'browser_scroll'; direction: HostBrowserScrollDirection; amount?: number }
 
@@ -190,6 +217,13 @@ export function parseHostBrowserAction(value: unknown): HostBrowserAction | null
       const ref = readBoundedToken(args.ref, HOST_BROWSER_MAX_REF_CHARS)
       return ref ? { name, ref } : null
     }
+    case 'browser_click_xy':
+    case 'browser_click_at': {
+      // click_at 只是 Grok 常猜的别名；内部统一成 click_xy，避免两套坐标动作。
+      const x = readViewportCss(args.x)
+      const y = readViewportCss(args.y)
+      return x !== null && y !== null ? { name: 'browser_click_xy', x, y } : null
+    }
     case 'browser_type': {
       const ref = readBoundedToken(args.ref, HOST_BROWSER_MAX_REF_CHARS)
       if (!ref || typeof args.text !== 'string' || args.text.includes('\0')) return null
@@ -214,6 +248,22 @@ export function parseHostBrowserAction(value: unknown): HostBrowserAction | null
       return { name, direction: args.direction as HostBrowserScrollDirection, amount: args.amount }
     }
   }
+}
+
+/**
+ * 视口 CSS 像素。允许小数（getContentQuads / 截图像素估算），拒绝负数和异常大值。
+ * 字符串数字只收有限值，避免模型把 "240px" 送进来。
+ */
+function readViewportCss(value: unknown): number | null {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < 0 || value > HOST_BROWSER_MAX_BOUND) return null
+    return value
+  }
+  if (typeof value !== 'string' || value.includes('\0') || value.trim() === '') return null
+  if (!/^\d+(\.\d+)?$/.test(value.trim())) return null
+  const next = Number(value)
+  if (!Number.isFinite(next) || next < 0 || next > HOST_BROWSER_MAX_BOUND) return null
+  return next
 }
 
 function readBoundedToken(value: unknown, maxChars: number): string | null {

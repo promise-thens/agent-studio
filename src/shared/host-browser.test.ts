@@ -1,9 +1,14 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   HOST_BROWSER_MAX_URL_CHARS,
   parseHostBrowserBounds,
   parseHostBrowserChrome,
-  parseHostBrowserNavigateUrl
+  parseHostBrowserNavigateUrl,
+  resolveScreenshotViewportCssSize,
+  screenshotImageNeedsCssResize
 } from './host-browser'
 
 describe('parseHostBrowserNavigateUrl', () => {
@@ -80,5 +85,31 @@ describe('parseHostBrowserBounds', () => {
     expect(parseHostBrowserBounds({ x: -1, y: 0, width: 800, height: 600 })).toBeNull()
     expect(parseHostBrowserBounds({ x: 0, y: 0, width: 0, height: 600 })).toBeNull()
     expect(parseHostBrowserBounds({ x: 0, y: 0, width: 800, height: 1_000_001 })).toBeNull()
+  })
+})
+
+describe('screenshot CSS 对齐', () => {
+  it('Retina 物理像素必须缩到 viewport CSS，已对齐则不再缩放', () => {
+    expect(resolveScreenshotViewportCssSize({ viewportWidth: 800, viewportHeight: 600 })).toEqual({
+      width: 800,
+      height: 600
+    })
+    expect(
+      screenshotImageNeedsCssResize({ width: 1600, height: 1200 }, { width: 800, height: 600 })
+    ).toBe(true)
+    expect(
+      screenshotImageNeedsCssResize({ width: 800, height: 600 }, { width: 800, height: 600 })
+    ).toBe(false)
+    expect(
+      resolveScreenshotViewportCssSize({ viewportWidth: 0, viewportHeight: 600 })
+    ).toBeUndefined()
+  })
+
+  it('共享模块不得出现 Buffer，否则 Renderer 加载即白屏', () => {
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'host-browser.ts'),
+      'utf8'
+    )
+    expect(source).not.toMatch(/\bBuffer\b/)
   })
 })

@@ -5,6 +5,7 @@ import {
   parseAgentPointerSnapshot,
   isAgentPointerTurnActive,
   resolveAgentPointerHudCopy,
+  resolveOverlayDisplayBounds,
   shouldRenderAgentPointerCursor,
   HOST_BROWSER_HUD_COPY,
   BROWSER_PLUGIN_HUD_COPY
@@ -50,6 +51,50 @@ describe('mapViewportCssToOverlayDip', () => {
     expect(mapViewportCssToOverlayDip({ ...base, zoomFactor: Number.NaN })).toBeUndefined()
     expect(
       mapViewportCssToOverlayDip({ ...base, zoomFactor: Number.POSITIVE_INFINITY })
+    ).toBeUndefined()
+  })
+
+  it('主窗在副屏时按副屏 overlay 原点映射，不得沿用主屏 (0,0)', () => {
+    const pointer = mapViewportCssToOverlayDip({
+      cssX: 40,
+      cssY: 60,
+      zoomFactor: 1,
+      contentBounds: { x: 2000, y: 80, width: 1200, height: 700 },
+      viewBounds: { x: 200, y: 40, width: 640, height: 640 },
+      overlayBounds: { x: 1920, y: 0, width: 2560, height: 1440 }
+    })
+    expect(pointer).toEqual({ x: 320, y: 180 })
+  })
+})
+
+describe('resolveOverlayDisplayBounds', () => {
+  const primary = { x: 0, y: 0, width: 1440, height: 900 }
+  const secondary = { x: 1920, y: 0, width: 2560, height: 1440 }
+
+  it('主窗大部分落在副屏时覆盖副屏，不得钉死主屏', () => {
+    expect(
+      resolveOverlayDisplayBounds({
+        windowBounds: { x: 2000, y: 80, width: 1200, height: 800 },
+        displays: [primary, secondary]
+      })
+    ).toEqual(secondary)
+  })
+
+  it('无交集时选中心更近的那块屏', () => {
+    expect(
+      resolveOverlayDisplayBounds({
+        windowBounds: { x: 4000, y: 10, width: 100, height: 100 },
+        displays: [primary, secondary]
+      })
+    ).toEqual(secondary)
+  })
+
+  it('没有有效显示器则不发明矩形', () => {
+    expect(
+      resolveOverlayDisplayBounds({
+        windowBounds: { x: 0, y: 0, width: 800, height: 600 },
+        displays: []
+      })
     ).toBeUndefined()
   })
 })

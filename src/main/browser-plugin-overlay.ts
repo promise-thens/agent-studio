@@ -46,6 +46,8 @@ export interface BrowserPluginOverlayHostOptions {
   productionHtmlPath: string
   platform: NodeJS.Platform
   publishToMain: (snapshot: BrowserPluginOverlaySnapshot) => void
+  /** 覆盖主窗所在屏；缺省才回退主屏，避免多显示器把光标钉死在主屏。 */
+  getOverlayBounds?: () => BrowserPluginOverlayWindowBounds
 }
 
 /** 宿主页只提交已映射的 overlay DIP；禁止把 viewport CSS 或插件 rawInput 混进来。 */
@@ -290,6 +292,21 @@ export class BrowserPluginOverlayHost {
   }
 
   /**
+   * 主窗 move/resize/换屏时只搬 overlay 窗，不发明新指针。
+   * remap 仍由 HostBrowserService 用同一套 bounds 重算 DIP。
+   */
+  relayout(): void {
+    const window = this.window
+    if (!window || window.isDestroyed() || !window.isVisible()) return
+    const bounds = this.resolveOverlayBounds()
+    this.session.setDisplayBounds({ width: bounds.width, height: bounds.height })
+    window.setBounds(bounds)
+    if (this.options.platform === 'darwin') {
+      window.setAlwaysOnTop(true, 'screen-saver')
+    }
+  }
+
+  /**
    * 停止芯片 hover 时让窗口接收 click；离开后恢复整窗穿透。
    */
   setChipHover(hovered: boolean): void {
@@ -328,13 +345,30 @@ export class BrowserPluginOverlayHost {
   }
 
   private show(snapshot: BrowserPluginOverlaySnapshot): void {
-    const bounds = screen.getPrimaryDisplay().bounds
+    const bounds = this.resolveOverlayBounds()
     this.session.setDisplayBounds({ width: bounds.width, height: bounds.height })
     const window = this.ensureWindow(bounds)
     window.setBounds(bounds)
     this.applyIgnoreMouseEvents()
     this.sendToOverlay(snapshot)
     if (!window.isVisible()) window.showInactive()
+  }
+
+  /** 优先跟主窗所在屏；没有回调时才用主屏，测试和启动早期都能活。 */
+  private resolveOverlayBounds(): BrowserPluginOverlayWindowBounds {
+    const next = this.options.getOverlayBounds?.()
+    if (
+      next &&
+      Number.isFinite(next.x) &&
+      Number.isFinite(next.y) &&
+      Number.isFinite(next.width) &&
+      Number.isFinite(next.height) &&
+      next.width >= 1 &&
+      next.height >= 1
+    ) {
+      return next
+    }
+    return screen.getPrimaryDisplay().bounds
   }
 
   private hide(snapshot: BrowserPluginOverlaySnapshot): void {

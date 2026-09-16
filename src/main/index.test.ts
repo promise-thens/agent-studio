@@ -400,6 +400,7 @@ vi.mock('electron', () => {
       getPrimaryDisplay: () => ({
         bounds: { x: 0, y: 0, width: 1440, height: 900 }
       }),
+      getAllDisplays: () => [{ bounds: { x: 0, y: 0, width: 1440, height: 900 } }],
       on: vi.fn(),
       removeListener: vi.fn()
     },
@@ -429,7 +430,11 @@ vi.mock('electron', () => {
       createFromBuffer: vi.fn(() => ({
         isEmpty: () => true,
         getSize: () => ({ width: 0, height: 0 }),
-        resize: vi.fn(),
+        resize: vi.fn(() => ({
+          toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+          toJPEG: vi.fn(() => Buffer.alloc(0))
+        })),
+        toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
         toJPEG: vi.fn(() => Buffer.alloc(0))
       }))
     },
@@ -605,7 +610,35 @@ describe('宿主 overlay 指针组装', () => {
     expect(indexSource).toContain('display-metrics-changed')
     expect(indexSource).toContain('remapHostBrowserPointer')
     expect(indexSource).toContain('noteActiveTask')
+    expect(indexSource).toContain('getAllDisplays')
+    expect(indexSource).toContain('resolveOverlayDisplayBounds')
+    expect(indexSource).toContain('getOverlayBounds')
+    expect(indexSource).toContain('relayout')
     expect(indexSource).not.toContain('mapViewportCssToOverlayDip')
+  })
+
+  it('darwin 关主窗后二次启动必须重建窗口，不得只 focus 空窗', () => {
+    const indexSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'index.ts'),
+      'utf8'
+    )
+    const secondInstance = indexSource.match(
+      /app\.on\('second-instance', \(\) => \{[\s\S]*?\n\}\)/
+    )?.[0]
+    expect(secondInstance).toBeTruthy()
+    expect(secondInstance).toContain('createWindow()')
+    expect(secondInstance).not.toMatch(/isDestroyed\(\)\) return/)
+  })
+
+  it('内置浏览器 Broker 组装读取 Task 完全访问，禁止漏掉 takeoverEnabled', () => {
+    const indexSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'index.ts'),
+      'utf8'
+    )
+    expect(indexSource).toContain('takeoverEnabled: task.takeoverEnabled === true')
+    expect(indexSource).toMatch(
+      /authorizeOperation:\s*\(intent,\s*execute,\s*options\)[\s\S]*broker\.authorizeOperation\(intent,\s*execute,\s*options\)/
+    )
   })
 })
 

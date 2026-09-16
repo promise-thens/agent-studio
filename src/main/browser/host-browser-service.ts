@@ -1,4 +1,4 @@
-import { WebContentsView, type BaseWindow } from 'electron'
+import { nativeImage, WebContentsView, type BaseWindow } from 'electron'
 import type { OperationIntent } from '../../shared/agent'
 import {
   mapViewportCssToOverlayDip,
@@ -10,11 +10,16 @@ import {
   parseHostBrowserAction,
   parseHostBrowserBounds,
   parseHostBrowserNavigateUrl,
+  resolveScreenshotViewportCssSize,
   type HostBrowserAction,
   type HostBrowserBounds,
   type HostBrowserChrome
 } from '../../shared/host-browser'
-import type { PermissionAuthorizationResult } from '../security/permission-broker'
+import { alignScreenshotPngToViewportCss } from './host-browser-screenshot'
+import type {
+  AuthorizeOperationOptions,
+  PermissionAuthorizationResult
+} from '../security/permission-broker'
 import type { ResolvedOperationIntent } from '../security/permission-policy'
 import {
   HostBrowserActionEngine,
@@ -31,6 +36,8 @@ export interface HostBrowserPerformContext {
   projectId: string
   environmentId: string
   executionRoot: string
+  /** 当前 Task 完全访问时 Broker 代批，避免内置浏览器 MCP 仍弹 L3 卡。 */
+  takeoverEnabled?: boolean
 }
 
 /** 测试可注入的 guest 端口；生产实现包着 WebContentsView，不把 debugger 句柄交出去。 */
@@ -68,7 +75,8 @@ export interface HostBrowserServiceDependencies {
   resolvePerformContext?: (taskId: string) => HostBrowserPerformContext | null
   authorizeOperation?: <T>(
     intent: OperationIntent,
-    execute: (intent: ResolvedOperationIntent) => T | Promise<T>
+    execute: (intent: ResolvedOperationIntent) => T | Promise<T>,
+    options?: AuthorizeOperationOptions
   ) => Promise<PermissionAuthorizationResult<T>>
   getPointerGeometry?: () => HostBrowserPointerGeometry | null
   acceptHostBrowserPointer?: (input: HostBrowserOverlayPointerNotice) => void
@@ -133,17 +141,21 @@ export class HostBrowserService {
       return { ok: false, code: 'unavailable', message: '权限服务尚未初始化。' }
     }
     const origin = originForAction(action, this.guest?.getURL() ?? '')
-    const authorized = await authorize(createHostBrowserIntent(context, origin), async () => {
-      this.bindProject(context.projectId)
-      const guest = this.ensureGuest(context.projectId)
-      const result = await this.requireEngine(guest).execute(action)
-      if (result.ok && opensPane(action)) {
-        this.wantOpen = true
-        this.syncAttachment()
-        this.emitChrome()
-      }
-      return result
-    })
+    const authorized = await authorize(
+      createHostBrowserIntent(context, origin),
+      async () => {
+        this.bindProject(context.projectId)
+        const guest = this.ensureGuest(context.projectId)
+        const result = await this.requireEngine(guest).execute(action)
+        if (result.ok && opensPane(action)) {
+          this.wantOpen = true
+          this.syncAttachment()
+          this.emitChrome()
+        }
+        return result
+      },
+      { takeoverEnabled: context.takeoverEnabled === true }
+    )
     if (!authorized.ok) {
       return { ok: false, code: 'denied', message: '浏览器操作未获允许。' }
     }
@@ -387,14 +399,15 @@ export function createElectronHostBrowserGuest(projectId: string): HostBrowserGu
       chromeListeners.push(listener)
     },
     createActionDriver() {
-      return createElectronHostBrowserActionDriver(webContents)
+      return createElectronHostBrowserActionDriver(webContents, view)
     }
   }
 }
 
 /** 生产 driver 只暴露白名单动作；debugger 句柄留在闭包里。 */
 function createElectronHostBrowserActionDriver(
-  webContents: Electron.WebContents
+  webContents: Electron.WebContents,
+  view: WebContentsView
 ): HostBrowserActionDriver {
   return {
     getURL() {
@@ -419,9 +432,27 @@ function createElectronHostBrowserActionDriver(
     async reload() {
       webContents.reload()
     },
+    getViewportCssSize() {
+      const bounds = view.getBounds()
+      return { width: bounds.width, height: bounds.height }
+    },
     async capturePng() {
       const image = await webContents.capturePage()
-      return Buffer.from(image.toPNG())
+      const bounds = view.getBounds()
+      const viewport = resolveScreenshotViewportCssSize({
+        viewportWidth: bounds.width,
+        viewportHeight: bounds.height
+      })
+      const png = Buffer.from(image.toPNG())
+      // 以 PNG IHDR 为准：getSize() 在 Retina 上常是 DIP，2x 图会被原样交给模型。
+      return alignScreenshotPngToViewportCss(png, viewport, (bytes, size) =>
+        Buffer.from(
+          nativeImage
+            .createFromBuffer(bytes, { scaleFactor: 1 })
+            .resize({ width: size.width, height: size.height, quality: 'best' })
+            .toPNG()
+        )
+      )
     },
     async sendCdp(method, params) {
       const debuggerSession = webContents.debugger

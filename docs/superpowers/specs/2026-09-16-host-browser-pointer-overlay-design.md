@@ -96,7 +96,7 @@ HUD 文案：
 - 主窗口 `getContentBounds()`（屏幕 DIP）
 - `WebContentsView` 的 bounds（相对 content view）
 - click/type 时 `DOM.getContentQuads` 的视口 CSS 像素
-- overlay 窗 bounds（当前是主屏 `screen.getPrimaryDisplay().bounds`）
+- overlay 窗 bounds（主窗所在屏，由 `resolveOverlayDisplayBounds` 选交集最大的 display；不得钉死 `getPrimaryDisplay`）
 
 映射：
 
@@ -138,7 +138,7 @@ overlayY = screenY - overlayBounds.y
 - 用户自己点页面：软件光标 **不跟随** 用户鼠标。
 - 纯 `browser_navigate`：不移动光标（没有四边形）。
 - 右栏关闭、Task 切换、主窗口失焦/最小化、guest 销毁：隐藏光标。
-- 不做弹簧积分、不做 252px fog lens。圆点沿用现 `.overlay-cursor`。
+- 不做弹簧积分、不做 252px fog lens。光标是准星+圆心，原点对准 click 落点。
 
 ## 7. 数据流
 

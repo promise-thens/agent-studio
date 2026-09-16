@@ -66,7 +66,13 @@ export type HostBrowserSnapshotNode = {
 export type HostBrowserActionData =
   | { kind: 'navigated'; url: string }
   | { kind: 'snapshot'; nodes: HostBrowserSnapshotNode[]; truncated: boolean }
-  | { kind: 'screenshot'; mimeType: 'image/png'; bytes: Buffer }
+  | {
+      kind: 'screenshot'
+      mimeType: 'image/png'
+      bytes: Buffer
+      viewportWidth?: number
+      viewportHeight?: number
+    }
   | { kind: 'clicked'; viewportX: number; viewportY: number }
   | { kind: 'typed'; viewportX?: number; viewportY?: number }
   | { kind: 'scrolled' }
@@ -86,6 +92,8 @@ export interface HostBrowserActionDriver {
   goForward(): Promise<boolean> | boolean
   reload(): Promise<void> | void
   capturePng(): Promise<Buffer>
+  /** 内置页视口 CSS 尺寸；截图与 click_xy 必须用同一套。 */
+  getViewportCssSize(): { width: number; height: number } | null
   sendCdp(method: string, params?: Record<string, unknown>): Promise<unknown>
 }
 
@@ -160,6 +168,8 @@ export class HostBrowserActionEngine {
         return this.screenshot()
       case 'browser_click':
         return this.click(action.ref)
+      case 'browser_click_xy':
+        return this.clickXy(action.x, action.y)
       case 'browser_type':
         return this.type(action.ref, action.text, action.submit === true)
       case 'browser_scroll':
@@ -217,7 +227,15 @@ export class HostBrowserActionEngine {
     if (!isPng(bytes) || bytes.byteLength > MAX_SCREENSHOT_BYTES) {
       return fail('invalid-screenshot', '截图必须是有限大小的 PNG。')
     }
-    return ok({ kind: 'screenshot', mimeType: 'image/png', bytes })
+    const viewport = this.driver.getViewportCssSize()
+    return ok({
+      kind: 'screenshot',
+      mimeType: 'image/png',
+      bytes,
+      ...(viewport && viewport.width >= 1 && viewport.height >= 1
+        ? { viewportWidth: viewport.width, viewportHeight: viewport.height }
+        : {})
+    })
   }
 
   private async click(ref: string): Promise<HostBrowserActionResult> {
@@ -233,18 +251,31 @@ export class HostBrowserActionEngine {
     if (!quads.ok) return quads
     const point = quadCenter(quads.value)
     if (!point) return fail('action-failed', '无法定位页面元素。')
+    return this.dispatchClickAt(point.x, point.y)
+  }
+
+  /**
+   * iframe / 无障碍树截断时模型只能靠截图估点。
+   * 坐标是顶层视口 CSS，与 screenshot 同一空间；禁止借此跑 JS。
+   */
+  private async clickXy(x: number, y: number): Promise<HostBrowserActionResult> {
+    return this.dispatchClickAt(x, y)
+  }
+
+  /** 合成左键单击并把落点交给 overlay；不读系统指针。 */
+  private async dispatchClickAt(x: number, y: number): Promise<HostBrowserActionResult> {
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'] as const) {
       const dispatched = await sendHostBrowserCdp(this.driver, 'Input.dispatchMouseEvent', {
         type,
-        x: point.x,
-        y: point.y,
+        x,
+        y,
         button: 'left',
         clickCount: 1
       })
       if (!dispatched.ok) return dispatched
     }
     // viewport 点只给主进程画 overlay；MCP 序列化路径必须剥掉。
-    return ok({ kind: 'clicked', viewportX: point.x, viewportY: point.y })
+    return ok({ kind: 'clicked', viewportX: x, viewportY: y })
   }
 
   private async type(ref: string, text: string, submit: boolean): Promise<HostBrowserActionResult> {
@@ -326,6 +357,9 @@ function classifyParseFailure(raw: unknown): HostBrowserActionResult {
   }
   if (name === 'browser_click' || name === 'browser_type') {
     return fail('invalid-ref', '页面元素引用无效。')
+  }
+  if (name === 'browser_click_xy' || name === 'browser_click_at') {
+    return fail('invalid-input', '视口坐标无效。')
   }
   return fail('invalid-input', '动作参数无效。')
 }

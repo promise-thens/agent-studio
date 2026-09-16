@@ -127,6 +127,56 @@ export function mapViewportCssToOverlayDip(input: {
   return { x: overlayX, y: overlayY }
 }
 
+function intersectionArea(left: AgentPointerBounds, right: AgentPointerBounds): number {
+  const width = Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x)
+  const height = Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y)
+  if (width <= 0 || height <= 0) return 0
+  return width * height
+}
+
+function centerDistanceSquared(left: AgentPointerBounds, right: AgentPointerBounds): number {
+  const dx = left.x + left.width / 2 - (right.x + right.width / 2)
+  const dy = left.y + left.height / 2 - (right.y + right.height / 2)
+  return dx * dx + dy * dy
+}
+
+function isUsableOverlayBounds(value: AgentPointerBounds): boolean {
+  return (
+    Number.isFinite(value.x) &&
+    Number.isFinite(value.y) &&
+    Number.isFinite(value.width) &&
+    Number.isFinite(value.height) &&
+    value.width >= 1 &&
+    value.height >= 1
+  )
+}
+
+/**
+ * 选主窗交集最大的那块屏覆盖 overlay。
+ * 无交集时用中心距，避免窗口拖到副屏后光标仍钉在主屏。
+ */
+export function resolveOverlayDisplayBounds(input: {
+  windowBounds: AgentPointerBounds
+  displays: readonly AgentPointerBounds[]
+}): AgentPointerBounds | undefined {
+  const usable = input.displays.filter(isUsableOverlayBounds)
+  if (usable.length === 0 || !isUsableOverlayBounds(input.windowBounds)) return undefined
+
+  let best = usable[0]!
+  let bestArea = intersectionArea(input.windowBounds, best)
+  let bestDistance = centerDistanceSquared(input.windowBounds, best)
+  for (const display of usable.slice(1)) {
+    const area = intersectionArea(input.windowBounds, display)
+    const distance = centerDistanceSquared(input.windowBounds, display)
+    if (area > bestArea || (area === 0 && bestArea === 0 && distance < bestDistance)) {
+      best = display
+      bestArea = area
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
   const prototype = Object.getPrototypeOf(value)

@@ -181,7 +181,7 @@ pnpm exec vitest run src/main/browser/host-browser-service.test.ts src/main/brow
 
 - [ ] **Step 3: 接线**
 
-`HostBrowserService.perform` 成功 click/type 后通知 overlay。`index.ts` 在 `BrowserWindow` blur/minimize 和 `setOpen(false)` 时 `clearHostBrowserPointer`。overlay `show` 仍用主屏 bounds。pointer 出 view 矩形则不画。
+`HostBrowserService.perform` 成功 click/type 后通知 overlay。`index.ts` 在 `BrowserWindow` blur/minimize 和 `setOpen(false)` 时 `clearHostBrowserPointer`。overlay `show` / 指针映射用主窗所在屏（`resolveOverlayDisplayBounds`），换屏时 `relayout`。pointer 出 view 矩形则不画。
 
 - [ ] **Step 4: 跑测试确认通过**
 

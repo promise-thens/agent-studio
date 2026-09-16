@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import type { HostBrowserBounds } from '../../shared/host-browser'
 import {
@@ -54,6 +57,7 @@ function createFakeGuest(projectId: string): HostBrowserGuest & {
         goForward: async () => false,
         reload: async () => undefined,
         capturePng: async () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        getViewportCssSize: () => ({ width: 640, height: 640 }),
         sendCdp: async () => ({ nodes: [] })
       }
     }
@@ -231,6 +235,40 @@ describe('HostBrowserService', () => {
       targets: [{ kind: 'origin', value: 'https://example.com' }]
     })
   })
+
+  it('完全访问时把 takeoverEnabled 交给 Broker，不得再弹内置浏览器 L3 卡', async () => {
+    const guest = createFakeGuest('project-a')
+    const optionsSeen: Array<{ takeoverEnabled?: boolean } | undefined> = []
+    const service = new HostBrowserService({
+      createGuest: () => guest,
+      attachGuest: vi.fn(),
+      detachGuest: vi.fn(),
+      resolvePerformContext: () => ({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        projectId: 'project-a',
+        environmentId: 'env-a',
+        executionRoot: process.cwd(),
+        takeoverEnabled: true
+      }),
+      authorizeOperation: async (_intent, execute, options) => {
+        optionsSeen.push(options)
+        return {
+          ok: true,
+          value: await execute(_intent as never),
+          reason: 'auto-allowed',
+          scope: 'once'
+        }
+      }
+    })
+
+    const result = await service.perform('task-1', {
+      name: 'browser_navigate',
+      arguments: { url: 'https://www.baidu.com/' }
+    })
+    expect(result.ok).toBe(true)
+    expect(optionsSeen).toEqual([{ takeoverEnabled: true }])
+  })
 })
 
 /** 与 mapViewportCssToOverlayDip 夹具一致：css(10,10)+zoom1 → overlay(310,130)。 */
@@ -364,6 +402,28 @@ describe('HostBrowserService overlay 指针', () => {
     expect(JSON.stringify(acceptHostBrowserPointer.mock.calls)).not.toContain('viewportX')
   })
 
+  it('成功 click_xy 后同样把 viewport CSS 映射为 overlay DIP', async () => {
+    const { service, acceptHostBrowserPointer, clearHostBrowserPointer } = createPointerService()
+    await service.perform('task-1', {
+      name: 'browser_navigate',
+      arguments: { url: 'https://example.com' }
+    })
+    const result = await service.perform('task-1', {
+      name: 'browser_click_xy',
+      arguments: { x: 10, y: 10 }
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok || result.data.kind !== 'clicked') throw new Error('需要 clicked')
+    expect(result.data.viewportX).toBe(10)
+    expect(result.data.viewportY).toBe(10)
+    expect(acceptHostBrowserPointer).toHaveBeenCalledWith({
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+    expect(clearHostBrowserPointer).not.toHaveBeenCalled()
+  })
+
   it('type 缺少 viewport 点时不画也不清闲置指针', async () => {
     const emptyQuads = { current: false }
     const { service, acceptHostBrowserPointer, clearHostBrowserPointer } = createPointerService({
@@ -449,5 +509,18 @@ describe('HostBrowserService overlay 指针', () => {
     acceptHostBrowserPointer.mockClear()
     service.remapHostBrowserPointer()
     expect(acceptHostBrowserPointer).not.toHaveBeenCalled()
+  })
+})
+
+describe('截图像素对齐纪律', () => {
+  it('capturePng 按 PNG IHDR 缩放，不得用 NativeImage.getSize 当像素', () => {
+    const source = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'host-browser-service.ts'),
+      'utf8'
+    )
+    expect(source).toContain("from './host-browser-screenshot'")
+    expect(source).toContain('alignScreenshotPngToViewportCss')
+    expect(source).toContain('scaleFactor: 1')
+    expect(source).not.toContain('image.getSize()')
   })
 })

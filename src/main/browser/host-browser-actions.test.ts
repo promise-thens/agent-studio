@@ -37,17 +37,20 @@ function createDriver(
 ): HostBrowserActionDriver & {
   loaded: string[]
   cdpMethods: string[]
+  mouseEvents: Array<Record<string, unknown>>
   setUrl(url: string): void
 } {
   let url = options.url ?? 'about:blank'
   const loaded: string[] = []
   const cdpMethods: string[] = []
+  const mouseEvents: Array<Record<string, unknown>> = []
   const axNodes = options.axNodes ?? [
     axNode('1', { role: 'button', name: 'More information', backendDOMNodeId: 11 })
   ]
   return {
     loaded,
     cdpMethods,
+    mouseEvents,
     setUrl(next) {
       url = next
     },
@@ -73,9 +76,12 @@ function createDriver(
     async capturePng() {
       return options.png ?? Buffer.concat([PNG_HEADER, Buffer.from('page')])
     },
+    getViewportCssSize() {
+      return { width: 800, height: 600 }
+    },
     async sendCdp(method, params) {
-      void params
       cdpMethods.push(method)
+      if (method === 'Input.dispatchMouseEvent' && params) mouseEvents.push(params)
       if (method === 'Accessibility.getFullAXTree') return { nodes: axNodes }
       if (method === 'DOM.getContentQuads') return { quads: [[0, 0, 20, 0, 20, 20, 0, 20]] }
       if (
@@ -98,6 +104,12 @@ describe('parseHostBrowserAction', () => {
     expect(parseHostBrowserAction({ name: 'Runtime.evaluate' })).toBeNull()
     expect(
       parseHostBrowserAction({
+        name: 'browser_evaluate',
+        arguments: { expression: 'document.querySelector("button").click()' }
+      })
+    ).toBeNull()
+    expect(
+      parseHostBrowserAction({
         name: 'browser_navigate',
         arguments: { url: 'javascript:alert(1)' }
       })
@@ -118,6 +130,32 @@ describe('parseHostBrowserAction', () => {
       name: 'browser_click',
       ref: 'e1'
     })
+    expect(
+      parseHostBrowserAction({
+        name: 'browser_click_xy',
+        arguments: { x: 120, y: 80 }
+      })
+    ).toEqual({
+      name: 'browser_click_xy',
+      x: 120,
+      y: 80
+    })
+    expect(
+      parseHostBrowserAction({
+        name: 'browser_click_at',
+        arguments: { x: 120, y: 80 }
+      })
+    ).toEqual({
+      name: 'browser_click_xy',
+      x: 120,
+      y: 80
+    })
+    expect(
+      parseHostBrowserAction({
+        name: 'browser_click_xy',
+        arguments: { x: -1, y: 80 }
+      })
+    ).toBeNull()
     expect(
       parseHostBrowserAction({
         name: 'browser_type',
@@ -163,6 +201,13 @@ describe('HostBrowserActionEngine', () => {
     const unknown = await engine.perform({ name: 'evaluate_script' })
     expect(unknown.ok).toBe(false)
     if (!unknown.ok) expect(unknown.code).toBe('unknown-action')
+    const evaluate = await engine.perform({
+      name: 'browser_evaluate',
+      arguments: { expression: '1+1' }
+    })
+    expect(evaluate.ok).toBe(false)
+    if (!evaluate.ok) expect(evaluate.code).toBe('unknown-action')
+    expect(driver.cdpMethods).toEqual([])
     const scripted = await engine.perform({
       name: 'browser_navigate',
       arguments: { url: 'javascript:alert(1)' }
@@ -274,6 +319,8 @@ describe('HostBrowserActionEngine', () => {
     if (!accepted.ok || accepted.data.kind !== 'screenshot') throw new Error('需要 screenshot')
     expect(accepted.data.mimeType).toBe('image/png')
     expect(accepted.data.bytes.subarray(0, 8).equals(PNG_HEADER)).toBe(true)
+    expect(accepted.data.viewportWidth).toBe(800)
+    expect(accepted.data.viewportHeight).toBe(600)
   })
 
   it('合法 click 只走白名单 CDP，不调用 evaluate', async () => {
@@ -303,6 +350,46 @@ describe('HostBrowserActionEngine', () => {
     if (!clicked.ok || clicked.data.kind !== 'clicked') throw new Error('需要 clicked')
     expect(clicked.data.viewportX).toBe(10)
     expect(clicked.data.viewportY).toBe(10)
+  })
+
+  it('click_xy 不依赖 snapshot ref，按视口 CSS 点下去并回传该点', async () => {
+    const driver = createDriver({ url: 'https://example.com/' })
+    const engine = new HostBrowserActionEngine(driver)
+    const clicked = await engine.perform({
+      name: 'browser_click_xy',
+      arguments: { x: 240, y: 96 }
+    })
+    expect(clicked.ok).toBe(true)
+    if (!clicked.ok || clicked.data.kind !== 'clicked') throw new Error('需要 clicked')
+    expect(clicked.data.viewportX).toBe(240)
+    expect(clicked.data.viewportY).toBe(96)
+    expect(driver.cdpMethods).toEqual([
+      'Input.dispatchMouseEvent',
+      'Input.dispatchMouseEvent',
+      'Input.dispatchMouseEvent'
+    ])
+    expect(driver.cdpMethods).not.toContain('Runtime.evaluate')
+    expect(
+      driver.mouseEvents.map((event) => ({ type: event.type, x: event.x, y: event.y }))
+    ).toEqual([
+      { type: 'mouseMoved', x: 240, y: 96 },
+      { type: 'mousePressed', x: 240, y: 96 },
+      { type: 'mouseReleased', x: 240, y: 96 }
+    ])
+  })
+
+  it('click_at 别名走同一条坐标点击，仍不 evaluate', async () => {
+    const driver = createDriver({ url: 'https://example.com/' })
+    const engine = new HostBrowserActionEngine(driver)
+    const clicked = await engine.perform({
+      name: 'browser_click_at',
+      arguments: { x: 10, y: 20 }
+    })
+    expect(clicked.ok).toBe(true)
+    if (!clicked.ok || clicked.data.kind !== 'clicked') throw new Error('需要 clicked')
+    expect(clicked.data.viewportX).toBe(10)
+    expect(clicked.data.viewportY).toBe(20)
+    expect(driver.cdpMethods).not.toContain('Runtime.evaluate')
   })
 
   it('navigate 只 load http(s)；type 成功也不回写输入明文', async () => {

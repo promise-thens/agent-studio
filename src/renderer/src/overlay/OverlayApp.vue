@@ -82,14 +82,20 @@ async function cancelTurn(): Promise<void> {
       <span class="overlay-stop-action">停止</span>
     </button>
     <p v-if="cancelError" class="overlay-error" role="alert">{{ cancelError }}</p>
-    <!-- 仅当快照带已映射 overlay DIP 才挂光标节点；插件路径 pointer 恒缺省。 -->
+    <!-- 原点就是 click 落点；准星+圆心让人看清点在哪，不靠 18px 淡圈猜。 -->
     <div
       v-if="snapshot.pointer"
       class="overlay-cursor"
+      aria-hidden="true"
       :style="{
         transform: `translate(${snapshot.pointer.x}px, ${snapshot.pointer.y}px)`
       }"
-    />
+    >
+      <span class="overlay-cursor-ring" />
+      <span class="overlay-cursor-hair overlay-cursor-hair-x" />
+      <span class="overlay-cursor-hair overlay-cursor-hair-y" />
+      <span class="overlay-cursor-dot" />
+    </div>
   </div>
 </template>
 
@@ -177,13 +183,59 @@ body,
   position: absolute;
   top: 0;
   left: 0;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  border: 2px solid var(--accent);
-  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  width: 0;
+  height: 0;
   pointer-events: none;
   transition: transform 180ms ease-out;
+}
+
+.overlay-cursor-ring {
+  position: absolute;
+  left: -16px;
+  top: -16px;
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 2px #111,
+    0 0 0 3px color-mix(in srgb, #fff 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.overlay-cursor-dot {
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px #fff,
+    0 0 0 2px #111;
+}
+
+.overlay-cursor-hair {
+  position: absolute;
+  background: var(--accent);
+  box-shadow:
+    0 0 0 1px #fff,
+    0 0 0 2px #111;
+}
+
+.overlay-cursor-hair-x {
+  left: -22px;
+  top: -1px;
+  width: 44px;
+  height: 2px;
+}
+
+.overlay-cursor-hair-y {
+  left: -1px;
+  top: -22px;
+  width: 2px;
+  height: 44px;
 }
 
 @media (prefers-reduced-motion: reduce) {

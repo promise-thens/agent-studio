@@ -79,7 +79,7 @@ async function dispatch(
         id,
         result: {
           isError: true,
-          content: [{ type: 'text', text: '不支持该浏览器动作。' }]
+          content: [{ type: 'text', text: unsupportedToolMessage(name) }]
         }
       }
     }
@@ -111,9 +111,42 @@ function toTool(name: (typeof HOST_BROWSER_ACTION_NAMES)[number]): {
 } {
   return {
     name,
-    description: 'Operate the built-in browser the user is looking at in Agent Studio.',
+    description: toolDescription(name),
     inputSchema: toolSchema(name)
   }
+}
+
+/**
+ * 工具说明必须写清坐标空间，否则模型会去调不存在的 evaluate / Playwright 名。
+ */
+function toolDescription(name: (typeof HOST_BROWSER_ACTION_NAMES)[number]): string {
+  if (name === 'browser_click') {
+    return 'Click a node from the latest browser_snapshot by ref. Does not run JavaScript.'
+  }
+  if (name === 'browser_click_xy' || name === 'browser_click_at') {
+    return 'Click the built-in page at viewport CSS coordinates (same space as browser_screenshot). Use when snapshot refs cannot see iframe content. Does not run JavaScript.'
+  }
+  if (name === 'browser_snapshot') {
+    return 'Accessibility snapshot of the built-in page. Cross-origin iframe internals may be missing; then use browser_click_xy.'
+  }
+  if (name === 'browser_screenshot') {
+    return 'PNG screenshot of the built-in page in CSS pixels (same space as browser_click_xy). Text part includes viewportWidth/Height.'
+  }
+  return 'Operate the built-in browser the user is looking at in Agent Studio.'
+}
+
+/** Grok 常猜 evaluate；点名拒绝并指向坐标点击，避免它反复发明脚本工具。 */
+function unsupportedToolMessage(name: string): string {
+  if (
+    name === 'browser_evaluate' ||
+    name === 'evaluate' ||
+    name === 'evaluate_script' ||
+    name === 'Runtime.evaluate' ||
+    name === 'browser_run_javascript'
+  ) {
+    return '内置浏览器不允许执行 JavaScript。请改用 browser_click（snapshot ref）或 browser_click_xy（视口 CSS 坐标）。'
+  }
+  return '不支持该浏览器动作。'
 }
 
 function toolSchema(name: (typeof HOST_BROWSER_ACTION_NAMES)[number]): Record<string, unknown> {
@@ -137,6 +170,17 @@ function toolSchema(name: (typeof HOST_BROWSER_ACTION_NAMES)[number]): Record<st
       type: 'object',
       properties: { ref: { type: 'string' } },
       required: ['ref'],
+      additionalProperties: false
+    }
+  }
+  if (name === 'browser_click_xy' || name === 'browser_click_at') {
+    return {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Viewport CSS X of the built-in page' },
+        y: { type: 'number', description: 'Viewport CSS Y of the built-in page' }
+      },
+      required: ['x', 'y'],
       additionalProperties: false
     }
   }
@@ -180,8 +224,13 @@ function toCallResult(value: unknown): { content: unknown[]; isError?: true } {
     value.data.kind === 'screenshot' &&
     Buffer.isBuffer(value.data.bytes)
   ) {
+    const meta: Record<string, unknown> = { kind: 'screenshot' }
+    if (typeof value.data.viewportWidth === 'number') meta.viewportWidth = value.data.viewportWidth
+    if (typeof value.data.viewportHeight === 'number')
+      meta.viewportHeight = value.data.viewportHeight
     return {
       content: [
+        { type: 'text', text: JSON.stringify(meta) },
         {
           type: 'image',
           mimeType: 'image/png',

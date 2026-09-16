@@ -192,6 +192,97 @@ describe('host-browser MCP stdio', () => {
     expect(called.result?.isError).not.toBe(true)
     expect(called.result?.content?.[0]?.text).toContain('clicked')
   })
+
+  it('screenshot 回包带 viewport CSS 尺寸，供 click_xy 与 PNG 对齐', async () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00])
+    const stop = runHostBrowserMcpStdio({
+      stdin,
+      stdout,
+      callTool: async () => ({
+        ok: true,
+        data: {
+          kind: 'screenshot',
+          mimeType: 'image/png',
+          bytes: png,
+          viewportWidth: 800,
+          viewportHeight: 600
+        }
+      })
+    })
+    stdin.write(
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'browser_screenshot' }
+      })}\n`
+    )
+    const lines = await readLines(stdout, 1)
+    stop()
+    const called = JSON.parse(lines[0] ?? '') as {
+      result?: { content?: Array<{ type?: string; text?: string; mimeType?: string }> }
+    }
+    const text = called.result?.content?.find((part) => part.type === 'text')?.text ?? ''
+    const image = called.result?.content?.find((part) => part.type === 'image')
+    expect(text).toContain('"viewportWidth":800')
+    expect(text).toContain('"viewportHeight":600')
+    expect(text).not.toContain('viewportX')
+    expect(image?.mimeType).toBe('image/png')
+  })
+
+  it('tools/list 广告 browser_click_xy，并接受 click_at 别名', async () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const stop = runHostBrowserMcpStdio({
+      stdin,
+      stdout,
+      callTool: async () => ({ ok: true, data: { kind: 'clicked', viewportX: 8, viewportY: 9 } })
+    })
+    stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })}\n`)
+    const lines = await readLines(stdout, 1)
+    stop()
+    const listed = JSON.parse(lines[0] ?? '{}') as {
+      result?: { tools?: Array<{ name: string }> }
+    }
+    const names = listed.result?.tools?.map((tool) => tool.name) ?? []
+    expect(names).toContain('browser_click_xy')
+    expect(names).toContain('browser_click_at')
+    expect(names).not.toContain('browser_evaluate')
+  })
+
+  it('browser_evaluate 不得当成可执行工具，并提示改用坐标点击', async () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const calls: string[] = []
+    const stop = runHostBrowserMcpStdio({
+      stdin,
+      stdout,
+      callTool: async (name) => {
+        calls.push(name)
+        return { ok: true, data: { kind: 'ok' } }
+      }
+    })
+    stdin.write(
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'browser_evaluate', arguments: { expression: '1' } }
+      })}\n`
+    )
+    const lines = await readLines(stdout, 1)
+    stop()
+    const raw = lines[0] ?? ''
+    const called = JSON.parse(raw) as {
+      result?: { isError?: boolean; content?: Array<{ text?: string }> }
+    }
+    expect(calls).toEqual([])
+    expect(called.result?.isError).toBe(true)
+    expect(called.result?.content?.[0]?.text).toContain('browser_click_xy')
+    expect(raw).not.toContain('document.cookie')
+  })
 })
 
 describe('HostBrowserMcpGateway', () => {

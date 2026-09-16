@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 
 const overlayWindowMocks = vi.hoisted(() => ({
-  windows: [] as Array<{ setIgnoreMouseEvents: ReturnType<typeof vi.fn> }>
+  windows: [] as Array<{
+    setIgnoreMouseEvents: ReturnType<typeof vi.fn>
+    setBounds: ReturnType<typeof vi.fn>
+  }>
 }))
 
 vi.mock('electron', () => {
@@ -35,9 +38,7 @@ vi.mock('electron', () => {
     isVisible(): boolean {
       return true
     }
-    setBounds(): void {
-      // electron mock
-    }
+    setBounds = vi.fn()
     loadURL(): Promise<void> {
       return Promise.resolve()
     }
@@ -162,6 +163,9 @@ describe('overlay 源码纪律', () => {
     expect(overlayApp).toContain('resolveAgentPointerHudCopy')
     expect(overlayApp).toContain('v-if="snapshot.pointer"')
     expect(overlayApp).toContain('v-if="hudCopy"')
+    expect(overlayApp).toContain('overlay-cursor-ring')
+    expect(overlayApp).toContain('overlay-cursor-dot')
+    expect(overlayApp).toContain('overlay-cursor-hair')
     expect(overlayApp).toContain('180ms')
     expect(overlayApp).toContain('prefers-reduced-motion')
     expect(overlayApp).not.toMatch(/CGEvent|Accessibility/)
@@ -376,15 +380,17 @@ describe('宿主 host-browser 指针', () => {
     expect(snapshot.pointer).toEqual({ x: 310, y: 130 })
   })
 
-  it('Host 推送宿主指针后可清针，overlay 仍用主屏 bounds', () => {
+  it('Host 推送宿主指针后可清针，overlay 覆盖主窗所在屏而不是钉死主屏', () => {
     const publishToMain = vi.fn()
     overlayWindowMocks.windows.length = 0
+    const secondary = { x: 1920, y: 0, width: 2560, height: 1440 }
     const host = new BrowserPluginOverlayHost({
       isDev: false,
       preloadPath: '/tmp/overlay.js',
       productionHtmlPath: '/tmp/overlay.html',
       platform: 'darwin',
-      publishToMain
+      publishToMain,
+      getOverlayBounds: () => secondary
     })
     host.acceptHostBrowserPointer({
       pointer: { x: 310, y: 130 },
@@ -398,10 +404,34 @@ describe('宿主 host-browser 指针', () => {
     expect(shown?.surface).toBe('host-browser')
     expect(shown?.pointer).toEqual({ x: 310, y: 130 })
     expect(overlayWindowMocks.windows.length).toBeGreaterThan(0)
+    const window = overlayWindowMocks.windows.at(-1)
+    expect(window?.setBounds).toHaveBeenCalledWith(secondary)
 
     host.clearHostBrowserPointer()
     const hidden = publishToMain.mock.calls.at(-1)?.[0] as { pointer?: unknown }
     expect(hidden?.pointer).toBeUndefined()
+  })
+
+  it('主窗换屏后 relayout 把 overlay 窗搬到新屏', () => {
+    overlayWindowMocks.windows.length = 0
+    let bounds = { x: 0, y: 0, width: 1440, height: 900 }
+    const host = new BrowserPluginOverlayHost({
+      isDev: false,
+      preloadPath: '/tmp/overlay.js',
+      productionHtmlPath: '/tmp/overlay.html',
+      platform: 'darwin',
+      publishToMain: vi.fn(),
+      getOverlayBounds: () => bounds
+    })
+    host.acceptHostBrowserPointer({
+      pointer: { x: 10, y: 10 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+    bounds = { x: 1920, y: 0, width: 2560, height: 1440 }
+    host.relayout()
+    const window = overlayWindowMocks.windows.at(-1)
+    expect(window?.setBounds).toHaveBeenLastCalledWith(bounds)
   })
 
   it('Turn 结束后宿主闲置光标保留 pointer，但不带可停止的 executionId', () => {
@@ -470,8 +500,12 @@ describe('宿主 host-browser 指针', () => {
     expect(indexSource).toContain('display-metrics-changed')
     expect(indexSource).toContain('remapHostBrowserPointer')
     expect(indexSource).toContain('noteActiveTask')
+    expect(indexSource).toContain('getAllDisplays')
+    expect(indexSource).toContain('resolveOverlayDisplayBounds')
+    expect(indexSource).toContain('getOverlayBounds')
     expect(indexSource).not.toContain('mapViewportCssToOverlayDip')
-    expect(overlaySource).toContain('getPrimaryDisplay')
+    expect(overlaySource).toContain('getOverlayBounds')
+    expect(overlaySource).toContain('relayout')
     expect(overlaySource).not.toMatch(/surface:\s*['"]computer-use['"]/)
   })
 })

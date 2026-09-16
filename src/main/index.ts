@@ -19,6 +19,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { electronApp, is, optimizer } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { appearanceWindowBackground, type AppAppearanceState } from '../shared/app-appearance'
+import { resolveOverlayDisplayBounds } from '../shared/agent-pointer-overlay'
 import { AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
 import { TASK_PUSH_CHANNELS } from '../shared/task-ipc'
 import { BrowserPluginOverlayHost } from './browser-plugin-overlay'
@@ -179,6 +180,7 @@ function createWindow(): void {
 
   const remapHostBrowserPointer = (): void => {
     hostBrowserService?.remapHostBrowserPointer()
+    browserPluginOverlayHost?.relayout()
   }
   const forgetHostBrowserPointer = (): void => {
     hostBrowserService?.forgetHostBrowserPointer()
@@ -206,19 +208,20 @@ function createWindow(): void {
     onChromeChange: (chrome) =>
       sendToTrustedRenderer(createRendererTrustOptions(), TASK_PUSH_CHANNELS.browserChrome, chrome),
     resolvePerformContext: (taskId) => resolveHostBrowserPerformContext(taskId),
-    authorizeOperation: (intent, execute) => {
+    // 必须转发 takeoverEnabled：内置浏览器 MCP 不走 ACP request_permission，漏了会在完全访问下仍弹 L3 卡。
+    authorizeOperation: (intent, execute, options) => {
       const broker = permissionBroker
       if (!broker) {
         return Promise.resolve({ ok: false, reason: 'internal-error' })
       }
-      return broker.authorizeOperation(intent, execute)
+      return broker.authorizeOperation(intent, execute, options)
     },
     getPointerGeometry: () => {
       const window = mainWindow
       if (!window || window.isDestroyed()) return null
       return {
         contentBounds: window.getContentBounds(),
-        overlayBounds: screen.getPrimaryDisplay().bounds,
+        overlayBounds: resolveHostWindowOverlayBounds(),
         zoomFactor: 1
       }
     },
@@ -1389,8 +1392,29 @@ function createBrowserPluginOverlayHostInstance(): BrowserPluginOverlayHost {
         createRendererTrustOptions(),
         TASK_PUSH_CHANNELS.browserPluginOverlay,
         snapshot
-      )
+      ),
+    getOverlayBounds: () => resolveHostWindowOverlayBounds()
   })
+}
+
+/**
+ * overlay 窗和指针映射必须用同一块屏。
+ * 主窗拖到副屏后若仍用 getPrimaryDisplay，光标会画在主屏窗外。
+ */
+function resolveHostWindowOverlayBounds(): {
+  x: number
+  y: number
+  width: number
+  height: number
+} {
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return screen.getPrimaryDisplay().bounds
+  return (
+    resolveOverlayDisplayBounds({
+      windowBounds: window.getBounds(),
+      displays: screen.getAllDisplays().map((display) => display.bounds)
+    }) ?? screen.getPrimaryDisplay().bounds
+  )
 }
 
 /** 把 Electron nativeTheme 收成可测适配器，避免 AppearanceController 直接依赖 electron 模块。 */
@@ -1694,7 +1718,8 @@ function resolveHostBrowserPerformContext(taskId: string): HostBrowserPerformCon
       turnId,
       projectId: task.projectId,
       executionRoot: task.environment.rootSnapshot,
-      environmentId: createLocalEnvironmentId(task.projectId, task.environment.rootSnapshot)
+      environmentId: createLocalEnvironmentId(task.projectId, task.environment.rootSnapshot),
+      takeoverEnabled: task.takeoverEnabled === true
     }
   } catch {
     return null
@@ -1733,10 +1758,13 @@ const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
 
 app.on('second-instance', () => {
-  const window = mainWindow
-  if (!window || window.isDestroyed()) return
-  if (window.isMinimized()) window.restore()
-  window.focus()
+  // darwin 关主窗不退出；若这里直接 return，pnpm dev 二次启动会拿到锁失败并立刻退出，看起来像项目起不来。
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.focus()
 })
 
 if (hasSingleInstanceLock)
