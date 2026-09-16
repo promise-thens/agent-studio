@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。步骤使用复选框 (`- [ ]`) 跟踪。
 >
-> **状态：** 任务 1 由 P0-19f 打开 `browser` L3。任务 2 与右栏壳代码已落地（用户导航 / bounds / chrome IPC）；开发版 GUI 未走查。任务 3–5、7 未做。后退/前进/刷新按钮目前禁用。
+> **状态：** 任务 1 由 P0-19f 打开 `browser` L3。任务 2 与右栏壳代码已落地（用户导航 / bounds / chrome IPC）；开发版 GUI 未走查。任务 3 窄动作引擎已落地（白名单动作 + Broker；CDP 方法白名单；无 MCP 注入）。任务 4–5、7 未做。后退/前进/刷新按钮目前禁用。
 >
 > **插入点：** 不挡 [P0-19b](p0-19b-grok-sandbox-profile.md)。实现建议在 19b 空闲重建 session 纪律之后（MCP 注入只发生在 `session/new` / `load` / `resume`）。可与 19c–e 并行。权限层与 [P0-19f](p0-19f-browser-computer-use-surface.md) 共享 `browser` L3：**19f 已打开 `browser`，本计划不得改回 `unsupported`。** 19f 覆盖 **插件自己的浏览器**（置顶 overlay；虚拟鼠标硬验收仍因坐标不可映射开放），不自建第二只 Chrome。`screen` / `clipboard` **不再留给 19f**，改留给后置软件表面 / P3-07。本计划的内置页 **仍不画光标**。本计划取代 [P3-05](p3-05-managed-browser.md) 的第一波共享页面，不依赖 P3-01 Capability Pack。
 
@@ -218,17 +218,19 @@ pnpm exec vitest run src/main/security/permission-policy.test.ts src/shared/host
 
 **涉及范围：** `host-browser-actions.ts` 及测试。
 
-- [ ] **第 1 步: 失败测试**
+- [x] **第 1 步: 失败测试**
 
 说明：未知动作名拒绝；`javascript:` URL 拒绝；`click` 的 ref 不存在或过期拒绝；snapshot 超长截断；screenshot MIME 只能是 png。
 
-- [ ] **第 2 步: 实现动作**
+- [x] **第 2 步: 实现动作**
 
 说明：导航用 `webContents.loadURL`。snapshot 用 `webContents.debugger` **仅** 附加后调用允许的 CDP 方法白名单（例如 `DOM.getDocument` + `DOM.getOuterHTML` 的裁剪方案，或 Accessibility.getFullAXTree），封装成 `{ ref, role, name, tag }[]`，不得把 debugger 句柄或原始 CDP 结果传出模块。screenshot 用 `webContents.capturePage`。click/type：用 snapshot ref 解析为 backend node，再 dispatch 受控事件；失败返回脱敏错误。
 
-- [ ] **第 3 步: 把动作接到 Broker**
+- [x] **第 3 步: 把动作接到 Broker**
 
 说明：`HostBrowserService.perform(taskId, action)` 构造 `OperationIntent`（`initiator: { kind: 'runtime', runtimeId: 'grok' }`），等 Broker 决议后再执行。拒绝或取消则 MCP 侧收到错误，磁盘/页面不变。
+
+已选：所有白名单动作都走 `operationType: 'browser'` + `host-browser:origin:v1`。`browser_tabs_list` 计划写 L0，但现有策略把 browser 固定为 L3；v1 不另开自动放行口，同一 origin 的 task grant 可复用 click/snapshot。
 
 ---
 

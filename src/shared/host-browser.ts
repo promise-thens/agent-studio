@@ -101,3 +101,122 @@ export function parseHostBrowserBounds(value: unknown): HostBrowserBounds | null
 function readBound(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) ? value : null
 }
+
+/** 宿主浏览器 MCP 工具名。不在此表的一律拒绝，避免 evaluate / CDP 通用入口混进来。 */
+export const HOST_BROWSER_ACTION_NAMES = [
+  'browser_navigate',
+  'browser_back',
+  'browser_forward',
+  'browser_reload',
+  'browser_tabs_list',
+  'browser_tabs_select',
+  'browser_tabs_close',
+  'browser_tabs_open',
+  'browser_snapshot',
+  'browser_screenshot',
+  'browser_click',
+  'browser_type',
+  'browser_scroll'
+] as const
+
+export type HostBrowserActionName = (typeof HOST_BROWSER_ACTION_NAMES)[number]
+export type HostBrowserScrollDirection = 'up' | 'down' | 'left' | 'right'
+
+const HOST_BROWSER_MAX_REF_CHARS = 32
+const HOST_BROWSER_MAX_TYPE_CHARS = 4096
+const HOST_BROWSER_MAX_TAB_ID_CHARS = 32
+const HOST_BROWSER_MAX_SCROLL_AMOUNT = 10_000
+
+export type HostBrowserAction =
+  | { name: 'browser_navigate'; url: string }
+  | { name: 'browser_back' }
+  | { name: 'browser_forward' }
+  | { name: 'browser_reload' }
+  | { name: 'browser_tabs_list' }
+  | { name: 'browser_tabs_select'; tabId: string }
+  | { name: 'browser_tabs_close'; tabId: string }
+  | { name: 'browser_tabs_open'; url?: string }
+  | { name: 'browser_snapshot' }
+  | { name: 'browser_screenshot' }
+  | { name: 'browser_click'; ref: string }
+  | { name: 'browser_type'; ref: string; text: string; submit?: boolean }
+  | { name: 'browser_scroll'; direction: HostBrowserScrollDirection; amount?: number }
+
+const HOST_BROWSER_ACTION_NAME_SET = new Set<string>(HOST_BROWSER_ACTION_NAMES)
+const SCROLL_DIRECTIONS = new Set<HostBrowserScrollDirection>(['up', 'down', 'left', 'right'])
+
+/**
+ * MCP tools/call 进入主进程后必须再解析一遍。
+ * 只读 name + arguments；javascript: / 未知工具名返回 null，由引擎区分错误码。
+ */
+export function parseHostBrowserAction(value: unknown): HostBrowserAction | null {
+  if (!isPlainRecord(value) || typeof value.name !== 'string') return null
+  if (!HOST_BROWSER_ACTION_NAME_SET.has(value.name)) return null
+  const args = value.arguments === undefined ? {} : value.arguments
+  if (!isPlainRecord(args)) return null
+  const name = value.name as HostBrowserActionName
+  switch (name) {
+    case 'browser_navigate': {
+      if (typeof args.url !== 'string') return null
+      const url = parseHostBrowserNavigateUrl(args.url)
+      return url ? { name, url } : null
+    }
+    case 'browser_back':
+    case 'browser_forward':
+    case 'browser_reload':
+    case 'browser_tabs_list':
+    case 'browser_snapshot':
+    case 'browser_screenshot':
+      return { name }
+    case 'browser_tabs_select':
+    case 'browser_tabs_close': {
+      const tabId = readBoundedToken(args.tabId, HOST_BROWSER_MAX_TAB_ID_CHARS)
+      return tabId ? { name, tabId } : null
+    }
+    case 'browser_tabs_open': {
+      if (args.url === undefined) return { name }
+      if (typeof args.url !== 'string') return null
+      const url = parseHostBrowserNavigateUrl(args.url)
+      return url ? { name, url } : null
+    }
+    case 'browser_click': {
+      const ref = readBoundedToken(args.ref, HOST_BROWSER_MAX_REF_CHARS)
+      return ref ? { name, ref } : null
+    }
+    case 'browser_type': {
+      const ref = readBoundedToken(args.ref, HOST_BROWSER_MAX_REF_CHARS)
+      if (!ref || typeof args.text !== 'string' || args.text.includes('\0')) return null
+      if (args.text.length > HOST_BROWSER_MAX_TYPE_CHARS) return null
+      if (args.submit !== undefined && args.submit !== true && args.submit !== false) return null
+      return args.submit === true
+        ? { name, ref, text: args.text, submit: true }
+        : { name, ref, text: args.text }
+    }
+    case 'browser_scroll': {
+      if (
+        typeof args.direction !== 'string' ||
+        !SCROLL_DIRECTIONS.has(args.direction as HostBrowserScrollDirection)
+      ) {
+        return null
+      }
+      if (args.amount === undefined) {
+        return { name, direction: args.direction as HostBrowserScrollDirection }
+      }
+      if (typeof args.amount !== 'number' || !Number.isSafeInteger(args.amount)) return null
+      if (args.amount < 1 || args.amount > HOST_BROWSER_MAX_SCROLL_AMOUNT) return null
+      return { name, direction: args.direction as HostBrowserScrollDirection, amount: args.amount }
+    }
+  }
+}
+
+function readBoundedToken(value: unknown, maxChars: number): string | null {
+  if (
+    typeof value !== 'string' ||
+    !value.trim() ||
+    value.includes('\0') ||
+    value.length > maxChars
+  ) {
+    return null
+  }
+  return value
+}

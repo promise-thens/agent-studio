@@ -1,11 +1,32 @@
 import { WebContentsView, type BaseWindow } from 'electron'
+import type { OperationIntent } from '../../shared/agent'
+import { parseBrowserOrigin } from '../../shared/browser-origin'
 import {
+  parseHostBrowserAction,
   parseHostBrowserBounds,
   parseHostBrowserNavigateUrl,
+  type HostBrowserAction,
   type HostBrowserBounds,
   type HostBrowserChrome
 } from '../../shared/host-browser'
+import type { PermissionAuthorizationResult } from '../security/permission-broker'
+import type { ResolvedOperationIntent } from '../security/permission-policy'
+import {
+  HostBrowserActionEngine,
+  rejectUnparsedHostBrowserAction,
+  type HostBrowserActionDriver,
+  type HostBrowserActionResult
+} from './host-browser-actions'
 import { createBrowserPartition, createBrowserWebPreferences } from './host-browser-session'
+
+/** perform 只消费 TaskStore 解析出的身份，禁止 MCP 自报 project / root。 */
+export interface HostBrowserPerformContext {
+  taskId: string
+  turnId: string
+  projectId: string
+  environmentId: string
+  executionRoot: string
+}
 
 /** 测试可注入的 guest 端口；生产实现包着 WebContentsView，不把 debugger 句柄交出去。 */
 export interface HostBrowserGuest {
@@ -18,6 +39,7 @@ export interface HostBrowserGuest {
   setBounds(bounds: HostBrowserBounds): void
   destroy(): void
   onChromeChanged(listener: () => void): void
+  createActionDriver(): HostBrowserActionDriver
 }
 
 export interface HostBrowserServiceDependencies {
@@ -25,6 +47,11 @@ export interface HostBrowserServiceDependencies {
   attachGuest: (guest: HostBrowserGuest) => void
   detachGuest: (guest: HostBrowserGuest) => void
   onChromeChange?: (chrome: HostBrowserChrome) => void
+  resolvePerformContext?: (taskId: string) => HostBrowserPerformContext | null
+  authorizeOperation?: <T>(
+    intent: OperationIntent,
+    execute: (intent: ResolvedOperationIntent) => T | Promise<T>
+  ) => Promise<PermissionAuthorizationResult<T>>
 }
 
 /**
@@ -33,6 +60,7 @@ export interface HostBrowserServiceDependencies {
  */
 export class HostBrowserService {
   private guest: HostBrowserGuest | null = null
+  private engine: HostBrowserActionEngine | null = null
   private currentProjectId: string | null = null
   private bounds: HostBrowserBounds | null = null
   private wantOpen = false
@@ -64,6 +92,38 @@ export class HostBrowserService {
     this.syncAttachment()
     this.emitChrome()
     return this.getChrome()
+  }
+
+  /**
+   * Runtime 动作必须先过 Broker。拒绝时不得 loadURL / 点击，避免 Grok 漏报权限也能改页面。
+   */
+  async perform(taskId: string, raw: unknown): Promise<HostBrowserActionResult> {
+    const action = parseHostBrowserAction(raw)
+    if (!action) return rejectUnparsedHostBrowserAction(raw)
+    const context = this.dependencies.resolvePerformContext?.(taskId) ?? null
+    if (!context || context.taskId !== taskId) {
+      return { ok: false, code: 'unavailable', message: '当前 Task 不可用。' }
+    }
+    const authorize = this.dependencies.authorizeOperation
+    if (!authorize) {
+      return { ok: false, code: 'unavailable', message: '权限服务尚未初始化。' }
+    }
+    const origin = originForAction(action, this.guest?.getURL() ?? '')
+    const authorized = await authorize(createHostBrowserIntent(context, origin), async () => {
+      this.bindProject(context.projectId)
+      const guest = this.ensureGuest(context.projectId)
+      const result = await this.requireEngine(guest).execute(action)
+      if (result.ok && opensPane(action)) {
+        this.wantOpen = true
+        this.syncAttachment()
+        this.emitChrome()
+      }
+      return result
+    })
+    if (!authorized.ok) {
+      return { ok: false, code: 'denied', message: '浏览器操作未获允许。' }
+    }
+    return authorized.value
   }
 
   setOpen(taskId: string, projectId: string, open: boolean): HostBrowserChrome {
@@ -103,7 +163,14 @@ export class HostBrowserService {
     const guest = this.dependencies.createGuest(projectId)
     guest.onChromeChanged(() => this.emitChrome())
     this.guest = guest
+    this.engine = new HostBrowserActionEngine(guest.createActionDriver())
     return guest
+  }
+
+  private requireEngine(guest: HostBrowserGuest): HostBrowserActionEngine {
+    if (this.engine && this.guest === guest) return this.engine
+    this.engine = new HostBrowserActionEngine(guest.createActionDriver())
+    return this.engine
   }
 
   private destroyGuest(): void {
@@ -114,6 +181,7 @@ export class HostBrowserService {
     }
     this.guest.destroy()
     this.guest = null
+    this.engine = null
     this.currentProjectId = null
   }
 
@@ -198,13 +266,58 @@ export function createElectronHostBrowserGuest(projectId: string): HostBrowserGu
     },
     destroy() {
       try {
-        if (!webContents.isDestroyed()) webContents.close()
+        if (!webContents.isDestroyed()) {
+          if (webContents.debugger.isAttached()) webContents.debugger.detach()
+          webContents.close()
+        }
       } catch {
         // 窗口已销毁时 close 会抛，忽略即可。
       }
     },
     onChromeChanged(listener: () => void) {
       chromeListeners.push(listener)
+    },
+    createActionDriver() {
+      return createElectronHostBrowserActionDriver(webContents)
+    }
+  }
+}
+
+/** 生产 driver 只暴露白名单动作；debugger 句柄留在闭包里。 */
+function createElectronHostBrowserActionDriver(
+  webContents: Electron.WebContents
+): HostBrowserActionDriver {
+  return {
+    getURL() {
+      return webContents.getURL()
+    },
+    getTitle() {
+      return webContents.getTitle()
+    },
+    async loadURL(url) {
+      await webContents.loadURL(url)
+    },
+    async goBack() {
+      if (!webContents.navigationHistory.canGoBack()) return false
+      await webContents.navigationHistory.goBack()
+      return true
+    },
+    async goForward() {
+      if (!webContents.navigationHistory.canGoForward()) return false
+      await webContents.navigationHistory.goForward()
+      return true
+    },
+    async reload() {
+      webContents.reload()
+    },
+    async capturePng() {
+      const image = await webContents.capturePage()
+      return Buffer.from(image.toPNG())
+    },
+    async sendCdp(method, params) {
+      const debuggerSession = webContents.debugger
+      if (!debuggerSession.isAttached()) debuggerSession.attach('1.3')
+      return debuggerSession.sendCommand(method, params)
     }
   }
 }
@@ -224,5 +337,39 @@ export function createElectronHostBrowserBindings(
     createGuest: createElectronHostBrowserGuest,
     attachGuest: (guest) => attach(guest, true),
     detachGuest: (guest) => attach(guest, false)
+  }
+}
+
+function originForAction(action: HostBrowserAction, currentUrl: string): string | null {
+  if (action.name === 'browser_navigate') return parseBrowserOrigin(action.url)
+  if (action.name === 'browser_tabs_open' && action.url) return parseBrowserOrigin(action.url)
+  return currentUrl && currentUrl !== 'about:blank' ? parseBrowserOrigin(currentUrl) : null
+}
+
+function opensPane(action: HostBrowserAction): boolean {
+  return action.name === 'browser_navigate' || action.name === 'browser_tabs_open'
+}
+
+function createHostBrowserIntent(
+  context: HostBrowserPerformContext,
+  origin: string | null
+): OperationIntent {
+  return {
+    initiator: { kind: 'runtime', runtimeId: 'grok' },
+    taskId: context.taskId,
+    turnId: context.turnId,
+    projectId: context.projectId,
+    environmentId: context.environmentId,
+    executionRoot: context.executionRoot,
+    operationType: 'browser',
+    targets: origin
+      ? [{ kind: 'origin', value: origin }]
+      : [{ kind: 'unknown', value: '内置浏览器尚未打开可识别的页面。' }],
+    parameterFingerprint: origin ? 'host-browser:origin:v1' : 'host-browser:unknown-origin:v1',
+    title: origin ? `使用内置浏览器访问 ${origin}` : '使用内置浏览器',
+    impact: origin
+      ? `将在内置浏览器中访问 ${origin}。写文件授权不能代替这一步。`
+      : '将在内置浏览器中执行页面动作。写文件授权不能代替这一步。',
+    minimumRisk: 'L3'
   }
 }

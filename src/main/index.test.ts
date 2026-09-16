@@ -364,6 +364,22 @@ vi.mock('electron', () => {
         isLoading: vi.fn(() => false),
         isDestroyed: vi.fn(() => false),
         close: vi.fn(),
+        reload: vi.fn(),
+        capturePage: vi.fn(async () => ({
+          toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+        })),
+        debugger: {
+          isAttached: vi.fn(() => false),
+          attach: vi.fn(),
+          detach: vi.fn(),
+          sendCommand: vi.fn(async () => ({ nodes: [] }))
+        },
+        navigationHistory: {
+          canGoBack: vi.fn(() => false),
+          canGoForward: vi.fn(() => false),
+          goBack: vi.fn(async () => undefined),
+          goForward: vi.fn(async () => undefined)
+        },
         setWindowOpenHandler: vi.fn(),
         session: {
           setPermissionRequestHandler: vi.fn(),

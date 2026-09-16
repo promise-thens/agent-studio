@@ -37,6 +37,20 @@ function createFakeGuest(projectId: string): HostBrowserGuest & {
     },
     onChromeChanged(listener: () => void) {
       guest.attachedListeners.push(listener)
+    },
+    createActionDriver() {
+      return {
+        getURL: () => guest.getURL(),
+        getTitle: () => guest.getTitle(),
+        loadURL: async (next: string) => {
+          guest.loadURL(next)
+        },
+        goBack: async () => false,
+        goForward: async () => false,
+        reload: async () => undefined,
+        capturePng: async () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        sendCdp: async () => ({ nodes: [] })
+      }
     }
   }
   return guest
@@ -108,5 +122,108 @@ describe('HostBrowserService', () => {
     expect(chrome.open).toBe(false)
     expect(detachGuest).toHaveBeenCalledTimes(1)
     expect(guest.destroyed).toBe(false)
+  })
+
+  it('perform 先过 Broker：拒绝时不得 loadURL', async () => {
+    const guest = createFakeGuest('project-a')
+    const service = new HostBrowserService({
+      createGuest: () => guest,
+      attachGuest: vi.fn(),
+      detachGuest: vi.fn(),
+      resolvePerformContext: () => ({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        projectId: 'project-a',
+        environmentId: 'env-a',
+        executionRoot: process.cwd()
+      }),
+      authorizeOperation: async () => ({ ok: false, reason: 'user-denied' })
+    })
+
+    const result = await service.perform('task-1', {
+      name: 'browser_navigate',
+      arguments: { url: 'https://example.com' }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('denied')
+    expect(guest.getURL()).toBe('about:blank')
+  })
+
+  it('perform 允许后才导航，并且打开右栏', async () => {
+    const guest = createFakeGuest('project-a')
+    const service = new HostBrowserService({
+      createGuest: () => guest,
+      attachGuest: vi.fn(),
+      detachGuest: vi.fn(),
+      resolvePerformContext: () => ({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        projectId: 'project-a',
+        environmentId: 'env-a',
+        executionRoot: process.cwd()
+      }),
+      authorizeOperation: async (_intent, execute) => ({
+        ok: true,
+        value: await execute(_intent as never),
+        reason: 'user-allowed',
+        scope: 'once'
+      })
+    })
+
+    const result = await service.perform('task-1', {
+      name: 'browser_navigate',
+      arguments: { url: 'https://example.com/docs' }
+    })
+    expect(result.ok).toBe(true)
+    expect(guest.getURL()).toBe('https://example.com/docs')
+    expect(service.getChrome().open).toBe(true)
+  })
+
+  it('授权意图按 origin 绑定，fingerprint 不含动作名以便 task grant 复用 click', async () => {
+    const guest = createFakeGuest('project-a')
+    const intents: Array<{ targets: unknown; fingerprint: string; type: string }> = []
+    const service = new HostBrowserService({
+      createGuest: () => guest,
+      attachGuest: vi.fn(),
+      detachGuest: vi.fn(),
+      resolvePerformContext: () => ({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        projectId: 'project-a',
+        environmentId: 'env-a',
+        executionRoot: process.cwd()
+      }),
+      authorizeOperation: async (intent, execute) => {
+        intents.push({
+          targets: intent.targets,
+          fingerprint: intent.parameterFingerprint,
+          type: intent.operationType
+        })
+        return {
+          ok: true,
+          value: await execute(intent as never),
+          reason: 'user-allowed',
+          scope: 'task'
+        }
+      }
+    })
+
+    await service.perform('task-1', {
+      name: 'browser_navigate',
+      arguments: { url: 'https://example.com/docs' }
+    })
+    await service.perform('task-1', { name: 'browser_snapshot' })
+
+    expect(intents).toHaveLength(2)
+    expect(intents[0]).toEqual({
+      type: 'browser',
+      fingerprint: 'host-browser:origin:v1',
+      targets: [{ kind: 'origin', value: 'https://example.com' }]
+    })
+    expect(intents[1]).toEqual({
+      type: 'browser',
+      fingerprint: 'host-browser:origin:v1',
+      targets: [{ kind: 'origin', value: 'https://example.com' }]
+    })
   })
 })

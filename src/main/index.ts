@@ -23,7 +23,8 @@ import { TASK_PUSH_CHANNELS } from '../shared/task-ipc'
 import { BrowserPluginOverlayHost } from './browser-plugin-overlay'
 import {
   createElectronHostBrowserBindings,
-  HostBrowserService
+  HostBrowserService,
+  type HostBrowserPerformContext
 } from './browser/host-browser-service'
 import { APP_PUSH_CHANNELS } from '../shared/app-ipc'
 import { sanitizeExternalHref } from '../shared/external-href'
@@ -179,7 +180,15 @@ function createWindow(): void {
   hostBrowserService = new HostBrowserService({
     ...createElectronHostBrowserBindings(() => mainWindow),
     onChromeChange: (chrome) =>
-      sendToTrustedRenderer(createRendererTrustOptions(), TASK_PUSH_CHANNELS.browserChrome, chrome)
+      sendToTrustedRenderer(createRendererTrustOptions(), TASK_PUSH_CHANNELS.browserChrome, chrome),
+    resolvePerformContext: (taskId) => resolveHostBrowserPerformContext(taskId),
+    authorizeOperation: (intent, execute) => {
+      const broker = permissionBroker
+      if (!broker) {
+        return Promise.resolve({ ok: false, reason: 'internal-error' })
+      }
+      return broker.authorizeOperation(intent, execute)
+    }
   })
 
   // 对话 Markdown 外链走 target=_blank；这里再拦一层，避免 javascript: / file: 进系统浏览器。
@@ -1596,6 +1605,25 @@ function requirePermissionAuditStore(): PermissionAuditStore {
 function requirePermissionBroker(): PermissionBroker {
   if (!permissionBroker) throw new Error('权限 Broker 尚未初始化。')
   return permissionBroker
+}
+
+/** 内置浏览器动作身份只从 TaskStore 读，MCP 不能自报 project 或 execution root。 */
+function resolveHostBrowserPerformContext(taskId: string): HostBrowserPerformContext | null {
+  try {
+    const task = requireTaskStore().getTaskRecord(taskId)
+    if (task.environment.kind !== 'local') return null
+    const turnId = task.activeTurnId ?? task.lastTurnId
+    if (!turnId) return null
+    return {
+      taskId: task.taskId,
+      turnId,
+      projectId: task.projectId,
+      executionRoot: task.environment.rootSnapshot,
+      environmentId: createLocalEnvironmentId(task.projectId, task.environment.rootSnapshot)
+    }
+  } catch {
+    return null
+  }
 }
 
 /**
