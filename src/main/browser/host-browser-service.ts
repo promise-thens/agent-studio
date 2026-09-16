@@ -1,5 +1,10 @@
 import { WebContentsView, type BaseWindow } from 'electron'
 import type { OperationIntent } from '../../shared/agent'
+import {
+  mapViewportCssToOverlayDip,
+  type AgentPointer,
+  type AgentPointerBounds
+} from '../../shared/agent-pointer-overlay'
 import { parseBrowserOrigin } from '../../shared/browser-origin'
 import {
   parseHostBrowserAction,
@@ -42,6 +47,19 @@ export interface HostBrowserGuest {
   createActionDriver(): HostBrowserActionDriver
 }
 
+/** 窗口与 overlay 几何由组装层注入；Service 只做 viewport → overlay DIP 映射。 */
+export interface HostBrowserPointerGeometry {
+  contentBounds: AgentPointerBounds
+  overlayBounds: AgentPointerBounds
+  zoomFactor?: number
+}
+
+export interface HostBrowserOverlayPointerNotice {
+  pointer: AgentPointer
+  taskId: string
+  turnId: string
+}
+
 export interface HostBrowserServiceDependencies {
   createGuest: (projectId: string) => HostBrowserGuest
   attachGuest: (guest: HostBrowserGuest) => void
@@ -52,6 +70,9 @@ export interface HostBrowserServiceDependencies {
     intent: OperationIntent,
     execute: (intent: ResolvedOperationIntent) => T | Promise<T>
   ) => Promise<PermissionAuthorizationResult<T>>
+  getPointerGeometry?: () => HostBrowserPointerGeometry | null
+  acceptHostBrowserPointer?: (input: HostBrowserOverlayPointerNotice) => void
+  clearHostBrowserPointer?: () => void
 }
 
 /**
@@ -96,6 +117,7 @@ export class HostBrowserService {
 
   /**
    * Runtime 动作必须先过 Broker。拒绝时不得 loadURL / 点击，避免 Grok 漏报权限也能改页面。
+   * 成功 click/type 后才映射 overlay 指针；坐标不进 chrome 推送或日志。
    */
   async perform(taskId: string, raw: unknown): Promise<HostBrowserActionResult> {
     const action = parseHostBrowserAction(raw)
@@ -123,6 +145,7 @@ export class HostBrowserService {
     if (!authorized.ok) {
       return { ok: false, code: 'denied', message: '浏览器操作未获允许。' }
     }
+    this.publishHostBrowserPointer(context, authorized.value)
     return authorized.value
   }
 
@@ -131,6 +154,7 @@ export class HostBrowserService {
     this.bindProject(projectId)
     this.wantOpen = open
     if (open) this.ensureGuest(projectId)
+    else this.dependencies.clearHostBrowserPointer?.()
     this.syncAttachment()
     this.emitChrome()
     return this.getChrome()
@@ -175,6 +199,7 @@ export class HostBrowserService {
 
   private destroyGuest(): void {
     if (!this.guest) return
+    this.dependencies.clearHostBrowserPointer?.()
     if (this.attached) {
       this.dependencies.detachGuest(this.guest)
       this.attached = false
@@ -183,6 +208,39 @@ export class HostBrowserService {
     this.guest = null
     this.engine = null
     this.currentProjectId = null
+  }
+
+  /**
+   * 成功 click/type 后把 viewport CSS 映射成 overlay DIP。
+   * 缺坐标或映射失败则省略，不得发明光标；type 缺四边形时保持闲置针。
+   * 坐标只交给 overlay，不得写入 chrome 推送、Timeline 或日志。
+   */
+  private publishHostBrowserPointer(
+    context: HostBrowserPerformContext,
+    result: HostBrowserActionResult
+  ): void {
+    if (!result.ok) return
+    const data = result.data
+    if (data.kind !== 'clicked' && data.kind !== 'typed') return
+    if (typeof data.viewportX !== 'number' || typeof data.viewportY !== 'number') return
+    if (!Number.isFinite(data.viewportX) || !Number.isFinite(data.viewportY)) return
+    if (!this.wantOpen || !this.bounds) return
+    const geometry = this.dependencies.getPointerGeometry?.() ?? null
+    if (!geometry) return
+    const pointer = mapViewportCssToOverlayDip({
+      cssX: data.viewportX,
+      cssY: data.viewportY,
+      zoomFactor: geometry.zoomFactor ?? 1,
+      contentBounds: geometry.contentBounds,
+      viewBounds: this.bounds,
+      overlayBounds: geometry.overlayBounds
+    })
+    if (!pointer) return
+    this.dependencies.acceptHostBrowserPointer?.({
+      pointer,
+      taskId: context.taskId,
+      turnId: context.turnId
+    })
   }
 
   /** 没有 bounds 时不挂视图，避免 WebContentsView 盖住整窗或落到 0×0。 */

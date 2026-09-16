@@ -1,6 +1,6 @@
 /**
- * 浏览器插件方案 A overlay：透明置顶、click-through，只画停止芯片。
- * 当前冻结键不能映射到屏幕 DIP，因此不得移动系统指针，也不得发明虚拟光标。
+ * 透明置顶 overlay：插件只画停止芯片；宿主内置页可写入已映射的 overlay DIP。
+ * 插件冻结键不能映射到屏幕 DIP，不得把 rawInput 画到桌面，也不得移动系统指针。
  */
 
 import { BrowserWindow, ipcMain, screen, type BrowserWindowConstructorOptions } from 'electron'
@@ -13,11 +13,13 @@ import type {
 import type { AgentPermissionCancellation } from '../shared/agent-ipc'
 import {
   createBrowserPluginOverlaySnapshot,
+  createHostBrowserOverlaySnapshot,
   projectBrowserPluginPointer,
   shouldRenderBrowserPluginCursor,
   type BrowserPluginOverlaySnapshot,
   type BrowserPluginToolActivity
 } from '../shared/browser-plugin-overlay'
+import type { AgentPointer } from '../shared/agent-pointer-overlay'
 import { TASK_PUSH_CHANNELS, TASK_SEND_CHANNELS } from '../shared/task-ipc'
 import type { TaskExecutionDto, TaskExecutionSnapshot } from '../shared/task-execution'
 import type { RendererTrustOptions } from './security/ipc-sender-validation'
@@ -44,6 +46,14 @@ export interface BrowserPluginOverlayHostOptions {
   productionHtmlPath: string
   platform: NodeJS.Platform
   publishToMain: (snapshot: BrowserPluginOverlaySnapshot) => void
+}
+
+/** 宿主页只提交已映射的 overlay DIP；禁止把 viewport CSS 或插件 rawInput 混进来。 */
+export interface HostBrowserOverlayPointerInput {
+  pointer: AgentPointer
+  taskId?: string
+  turnId?: string
+  executionId?: string
 }
 
 export function shouldRenderMovingOverlayCursor(snapshot: BrowserPluginOverlaySnapshot): boolean {
@@ -96,8 +106,8 @@ export function createBrowserPluginOverlayWindowOptions(input: {
 }
 
 /**
- * 主进程 overlay 可见性：执行中且存在未决 browser L3 或未完成 browser 工具。
- * 写文件 in_progress 单独出现时保持隐藏。
+ * 主进程 overlay 可见性：插件路径仍要求执行中且有未决 L3 / 未完成 browser 工具；
+ * 宿主路径在已映射 pointer 时也可显示闲置光标。写文件 in_progress 单独不得显示。
  */
 export class BrowserPluginOverlaySession {
   private execution: TaskExecutionDto | null = null
@@ -105,6 +115,8 @@ export class BrowserPluginOverlaySession {
   private readonly openBrowserTools = new Map<string, { taskId: string; turnId: string }>()
   private lastRawInput: unknown
   private displayBounds = { width: 1440, height: 900 }
+  private hostPointer: AgentPointer | undefined
+  private hostPointerIds: { taskId?: string; turnId?: string; executionId?: string } = {}
 
   setDisplayBounds(bounds: { width: number; height: number }): void {
     this.displayBounds = bounds
@@ -147,7 +159,45 @@ export class BrowserPluginOverlaySession {
     if (activity.rawInput !== undefined) this.lastRawInput = activity.rawInput
   }
 
+  /**
+   * 宿主 click/type 映射成功后写入闲置针。无效坐标省略，不得发明光标。
+   */
+  acceptHostBrowserPointer(input: HostBrowserOverlayPointerInput): void {
+    const snapshot = createHostBrowserOverlaySnapshot({
+      visible: true,
+      pointer: input.pointer,
+      taskId: input.taskId,
+      turnId: input.turnId,
+      executionId: input.executionId
+    })
+    if (!snapshot.pointer) return
+    this.hostPointer = snapshot.pointer
+    this.hostPointerIds = {
+      taskId: snapshot.taskId,
+      turnId: snapshot.turnId,
+      executionId: snapshot.executionId
+    }
+  }
+
+  /**
+   * 主窗失焦/最小化或右栏关闭必须清针：alwaysOnTop overlay 会把箭头留在别的 App 上。
+   */
+  clearHostBrowserPointer(): void {
+    this.hostPointer = undefined
+    this.hostPointerIds = {}
+  }
+
   getSnapshot(): BrowserPluginOverlaySnapshot {
+    if (this.hostPointer) {
+      const execution = this.execution
+      return createHostBrowserOverlaySnapshot({
+        visible: true,
+        pointer: this.hostPointer,
+        taskId: this.hostPointerIds.taskId ?? execution?.taskId,
+        turnId: this.hostPointerIds.turnId ?? execution?.turnId,
+        executionId: this.hostPointerIds.executionId ?? execution?.executionId
+      })
+    }
     const execution = this.execution
     const executionActive = Boolean(execution && ACTIVE_EXECUTION_STATES.has(execution.state))
     const hasBrowser = this.pendingBrowserApprovals.size > 0 || this.openBrowserTools.size > 0
@@ -207,6 +257,19 @@ export class BrowserPluginOverlayHost {
     this.publish()
   }
 
+  acceptHostBrowserPointer(input: HostBrowserOverlayPointerInput): void {
+    this.session.acceptHostBrowserPointer(input)
+    this.publish()
+  }
+
+  /**
+   * 组装层在主窗 blur/minimize 时调用。alwaysOnTop 窗在失焦后仍会盖住其它 App，必须立刻摘掉光标。
+   */
+  clearHostBrowserPointer(): void {
+    this.session.clearHostBrowserPointer()
+    this.publish()
+  }
+
   /**
    * 停止芯片 hover 时让窗口接收 click；离开后恢复整窗穿透。
    */
@@ -230,6 +293,7 @@ export class BrowserPluginOverlayHost {
   destroy(): void {
     ipcMain.removeListener(TASK_SEND_CHANNELS.browserPluginOverlayChipHover, this.onChipHoverIpc)
     this.chipHovered = false
+    this.session.clearHostBrowserPointer()
     const hidden = createBrowserPluginOverlaySnapshot({ visible: false })
     this.options.publishToMain(hidden)
     this.sendToOverlay(hidden)

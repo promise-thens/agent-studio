@@ -9,6 +9,7 @@ import type { DesktopIpcResult } from './ipc-result'
 import {
   BROWSER_PLUGIN_HUD_COPY as SHARED_BROWSER_PLUGIN_HUD_COPY,
   createAgentPointerSnapshot,
+  parseAgentPointerSnapshot,
   resolveAgentPointerHudCopy,
   shouldRenderAgentPointerCursor,
   type AgentPointer,
@@ -37,11 +38,12 @@ export type BrowserPluginOverlayPointer = AgentPointer
  * Overlay / Composer 共用快照。pointer 缺省表示当前冻结键不可映射，DOM 不得画移动光标。
  * 写文件 in_progress 不得把 visible 置 true。
  * kind 保留给现有插件通道；surface 对齐共享 DTO，缺省时按 browser-plugin 理解。
+ * host-browser 才允许带已映射的 overlay DIP；computer-use 本波不得出现在此通道。
  */
 export interface BrowserPluginOverlaySnapshot {
   visible: boolean
   kind?: 'browser'
-  surface?: 'browser-plugin'
+  surface?: 'browser-plugin' | 'host-browser'
   taskId?: string
   turnId?: string
   executionId?: string
@@ -117,7 +119,6 @@ export function createBrowserPluginOverlaySnapshot(input: {
 function toBrowserPluginOverlaySnapshot(
   shared: AgentPointerSnapshot
 ): BrowserPluginOverlaySnapshot {
-  // 插件通道线格式保持 kind:'browser'，不把 surface/persist 强加进现有消费者
   const snapshot: BrowserPluginOverlaySnapshot = {
     visible: shared.visible,
     kind: 'browser'
@@ -125,8 +126,36 @@ function toBrowserPluginOverlaySnapshot(
   if (shared.taskId) snapshot.taskId = shared.taskId
   if (shared.turnId) snapshot.turnId = shared.turnId
   if (shared.executionId) snapshot.executionId = shared.executionId
-  // 插件通道禁止挂 pointer，即使共享层误带也剥离
+  // 仅宿主页可把已映射 DIP 写进通道；插件线继续省略 surface/persist/pointer
+  if (shared.surface === 'host-browser') {
+    snapshot.surface = 'host-browser'
+    snapshot.persistWhenUnfocused = false
+    if (shared.pointer) snapshot.pointer = shared.pointer
+  }
   return snapshot
+}
+
+/**
+ * 宿主内置页 overlay 快照。persistWhenUnfocused 恒 false，避免 alwaysOnTop 漏到其它 App。
+ */
+export function createHostBrowserOverlaySnapshot(input: {
+  visible: boolean
+  taskId?: string
+  turnId?: string
+  executionId?: string
+  pointer?: BrowserPluginOverlayPointer
+}): BrowserPluginOverlaySnapshot {
+  return toBrowserPluginOverlaySnapshot(
+    createAgentPointerSnapshot({
+      visible: input.visible,
+      surface: 'host-browser',
+      persistWhenUnfocused: false,
+      taskId: input.taskId,
+      turnId: input.turnId,
+      executionId: input.executionId,
+      pointer: input.pointer
+    })
+  )
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -145,16 +174,35 @@ function readOverlayId(value: unknown): string | undefined {
 }
 
 /**
- * Preload 再校验主进程快照：丢掉 runtime 私有键，并拒绝任何 pointer（当前不可映射）。
- * 兼容仅有 kind:'browser' 的旧载荷；surface 缺省按 browser-plugin。
+ * Preload 再校验主进程快照：丢掉 runtime 私有键。
+ * 插件路径拒绝 pointer；宿主 host-browser 可保留有限 DIP；computer-use 拒收。
  */
 export function parseBrowserPluginOverlaySnapshot(
   value: unknown
 ): BrowserPluginOverlaySnapshot | null {
   if (!isPlainRecord(value) || (value.visible !== true && value.visible !== false)) return null
   if (value.kind !== undefined && value.kind !== 'browser') return null
-  if (value.surface !== undefined && value.surface !== 'browser-plugin') return null
-  const snapshot = createBrowserPluginOverlaySnapshot({
+  if (value.surface === 'computer-use') return null
+  if (
+    value.surface !== undefined &&
+    value.surface !== 'browser-plugin' &&
+    value.surface !== 'host-browser'
+  ) {
+    return null
+  }
+  if (value.surface === 'host-browser') {
+    const shared = parseAgentPointerSnapshot({
+      visible: value.visible,
+      surface: 'host-browser',
+      persistWhenUnfocused: false,
+      taskId: value.taskId,
+      turnId: value.turnId,
+      executionId: value.executionId,
+      pointer: value.pointer
+    })
+    return shared ? toBrowserPluginOverlaySnapshot(shared) : null
+  }
+  return createBrowserPluginOverlaySnapshot({
     visible: value.visible,
     taskId: readOverlayId(value.taskId),
     turnId: readOverlayId(value.turnId),
@@ -164,14 +212,13 @@ export function parseBrowserPluginOverlaySnapshot(
         ? projectBrowserPluginPointer(value.pointer, { width: 0, height: 0 })
         : undefined
   })
-  return snapshot
 }
 
 /** 无 pointer 时不得在 overlay DOM 留下移动光标节点。 */
 export function shouldRenderBrowserPluginCursor(snapshot: BrowserPluginOverlaySnapshot): boolean {
   return shouldRenderAgentPointerCursor({
     visible: snapshot.visible,
-    surface: 'browser-plugin',
+    surface: snapshot.surface === 'host-browser' ? 'host-browser' : 'browser-plugin',
     persistWhenUnfocused: snapshot.persistWhenUnfocused === true,
     pointer: snapshot.pointer
   })

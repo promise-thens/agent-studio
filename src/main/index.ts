@@ -8,6 +8,7 @@ import {
   nativeImage,
   nativeTheme,
   safeStorage,
+  screen,
   shell,
   type MenuItemConstructorOptions
 } from 'electron'
@@ -184,6 +185,13 @@ function createWindow(): void {
     mainWindow = null
     if (process.platform !== 'darwin') app.quit()
   })
+  // alwaysOnTop overlay 会把箭头留在别的 App 上，主窗失焦或最小化必须立刻清针。
+  mainWindow.on('blur', () => {
+    browserPluginOverlayHost?.clearHostBrowserPointer()
+  })
+  mainWindow.on('minimize', () => {
+    browserPluginOverlayHost?.clearHostBrowserPointer()
+  })
   hostBrowserService?.destroy()
   hostBrowserService = new HostBrowserService({
     ...createElectronHostBrowserBindings(() => mainWindow),
@@ -196,6 +204,21 @@ function createWindow(): void {
         return Promise.resolve({ ok: false, reason: 'internal-error' })
       }
       return broker.authorizeOperation(intent, execute)
+    },
+    getPointerGeometry: () => {
+      const window = mainWindow
+      if (!window || window.isDestroyed()) return null
+      return {
+        contentBounds: window.getContentBounds(),
+        overlayBounds: screen.getPrimaryDisplay().bounds,
+        zoomFactor: 1
+      }
+    },
+    acceptHostBrowserPointer: (input) => {
+      browserPluginOverlayHost?.acceptHostBrowserPointer(input)
+    },
+    clearHostBrowserPointer: () => {
+      browserPluginOverlayHost?.clearHostBrowserPointer()
     }
   })
 

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { HostBrowserBounds } from '../../shared/host-browser'
 import { HostBrowserService, type HostBrowserGuest } from './host-browser-service'
+import type { HostBrowserActionDriver, HostBrowserActionResult } from './host-browser-actions'
 
 function createFakeGuest(projectId: string): HostBrowserGuest & {
   destroyed: boolean
@@ -225,5 +226,171 @@ describe('HostBrowserService', () => {
       fingerprint: 'host-browser:origin:v1',
       targets: [{ kind: 'origin', value: 'https://example.com' }]
     })
+  })
+})
+
+/** 与 mapViewportCssToOverlayDip 夹具一致：css(10,10)+zoom1 → overlay(310,130)。 */
+const POINTER_CONTENT_BOUNDS = { x: 100, y: 80, width: 1200, height: 700 }
+const POINTER_VIEW_BOUNDS = { x: 200, y: 40, width: 640, height: 640 }
+const POINTER_OVERLAY_BOUNDS = { x: 0, y: 0, width: 1440, height: 900 }
+
+function createClickableGuest(
+  projectId: string,
+  emptyQuads: { current: boolean } = { current: false }
+): HostBrowserGuest & ReturnType<typeof createFakeGuest> {
+  const guest = createFakeGuest(projectId)
+  const baseCreate = guest.createActionDriver.bind(guest)
+  guest.createActionDriver = (): HostBrowserActionDriver => {
+    const driver = baseCreate()
+    return {
+      ...driver,
+      async sendCdp(method: string) {
+        if (method === 'Accessibility.getFullAXTree') {
+          return {
+            nodes: [
+              {
+                nodeId: '1',
+                ignored: false,
+                role: { type: 'role', value: 'button' },
+                name: { type: 'computedString', value: 'Search' },
+                backendDOMNodeId: 11
+              }
+            ]
+          }
+        }
+        if (method === 'DOM.getContentQuads') {
+          return emptyQuads.current ? { quads: [] } : { quads: [[0, 0, 20, 0, 20, 20, 0, 20]] }
+        }
+        return {}
+      }
+    }
+  }
+  return guest
+}
+
+function createPointerService(options?: {
+  geometry?: {
+    contentBounds: HostBrowserBounds
+    overlayBounds: HostBrowserBounds
+    zoomFactor?: number
+  } | null
+  viewBounds?: HostBrowserBounds
+  emptyQuads?: { current: boolean }
+}): {
+  service: HostBrowserService
+  guest: ReturnType<typeof createClickableGuest>
+  acceptHostBrowserPointer: ReturnType<typeof vi.fn>
+  clearHostBrowserPointer: ReturnType<typeof vi.fn>
+  emptyQuads: { current: boolean }
+} {
+  const acceptHostBrowserPointer = vi.fn()
+  const clearHostBrowserPointer = vi.fn()
+  const emptyQuads = options?.emptyQuads ?? { current: false }
+  const guest = createClickableGuest('project-a', emptyQuads)
+  const service = new HostBrowserService({
+    createGuest: () => guest,
+    attachGuest: vi.fn(),
+    detachGuest: vi.fn(),
+    resolvePerformContext: () => ({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      projectId: 'project-a',
+      environmentId: 'env-a',
+      executionRoot: process.cwd()
+    }),
+    authorizeOperation: async (_intent, execute) => ({
+      ok: true,
+      value: await execute(_intent as never),
+      reason: 'user-allowed',
+      scope: 'once'
+    }),
+    getPointerGeometry:
+      options && 'geometry' in options
+        ? () => options.geometry ?? null
+        : () => ({
+            contentBounds: POINTER_CONTENT_BOUNDS,
+            overlayBounds: POINTER_OVERLAY_BOUNDS,
+            zoomFactor: 1
+          }),
+    acceptHostBrowserPointer,
+    clearHostBrowserPointer
+  })
+  service.setOpen('task-1', 'project-a', true)
+  if (options?.viewBounds !== undefined || !options || !('viewBounds' in options)) {
+    service.updateBounds(options?.viewBounds ?? POINTER_VIEW_BOUNDS)
+  }
+  return { service, guest, acceptHostBrowserPointer, clearHostBrowserPointer, emptyQuads }
+}
+
+async function snapshotThenClick(service: HostBrowserService): Promise<HostBrowserActionResult> {
+  await service.perform('task-1', {
+    name: 'browser_navigate',
+    arguments: { url: 'https://example.com' }
+  })
+  await service.perform('task-1', { name: 'browser_snapshot' })
+  return service.perform('task-1', { name: 'browser_click', arguments: { ref: 'e1' } })
+}
+
+describe('HostBrowserService overlay 指针', () => {
+  it('成功 click 后把 viewport CSS 映射为 overlay DIP', async () => {
+    const { service, acceptHostBrowserPointer, clearHostBrowserPointer } = createPointerService()
+    const result = await snapshotThenClick(service)
+    expect(result.ok).toBe(true)
+    if (!result.ok || result.data.kind !== 'clicked') throw new Error('需要 clicked')
+    expect(result.data.viewportX).toBe(10)
+    expect(result.data.viewportY).toBe(10)
+    expect(acceptHostBrowserPointer).toHaveBeenCalledTimes(1)
+    expect(acceptHostBrowserPointer).toHaveBeenCalledWith({
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+    expect(clearHostBrowserPointer).not.toHaveBeenCalled()
+    expect(JSON.stringify(acceptHostBrowserPointer.mock.calls)).not.toContain('viewportX')
+  })
+
+  it('type 缺少 viewport 点时不画也不清闲置指针', async () => {
+    const emptyQuads = { current: false }
+    const { service, acceptHostBrowserPointer, clearHostBrowserPointer } = createPointerService({
+      emptyQuads
+    })
+    await snapshotThenClick(service)
+    expect(acceptHostBrowserPointer).toHaveBeenCalledTimes(1)
+    emptyQuads.current = true
+    const typed = await service.perform('task-1', {
+      name: 'browser_type',
+      arguments: { ref: 'e1', text: 'hello' }
+    })
+    expect(typed.ok).toBe(true)
+    if (!typed.ok || typed.data.kind !== 'typed') throw new Error('需要 typed')
+    expect(typed.data.viewportX).toBeUndefined()
+    expect(acceptHostBrowserPointer).toHaveBeenCalledTimes(1)
+    expect(clearHostBrowserPointer).not.toHaveBeenCalled()
+  })
+
+  it('映射失败或点在 view 外则省略 pointer，不得发明光标', async () => {
+    const { service, acceptHostBrowserPointer } = createPointerService({
+      viewBounds: { x: 0, y: 0, width: 5, height: 5 }
+    })
+    await snapshotThenClick(service)
+    expect(acceptHostBrowserPointer).not.toHaveBeenCalled()
+  })
+
+  it('关闭右栏或销毁 guest 时清针', async () => {
+    const { service, clearHostBrowserPointer } = createPointerService()
+    await snapshotThenClick(service)
+    service.setOpen('task-1', 'project-a', false)
+    expect(clearHostBrowserPointer).toHaveBeenCalledTimes(1)
+    service.destroy()
+    expect(clearHostBrowserPointer).toHaveBeenCalledTimes(2)
+  })
+
+  it('纯 navigate 不移动光标', async () => {
+    const { service, acceptHostBrowserPointer } = createPointerService()
+    await service.perform('task-1', {
+      name: 'browser_navigate',
+      arguments: { url: 'https://example.com' }
+    })
+    expect(acceptHostBrowserPointer).not.toHaveBeenCalled()
   })
 })

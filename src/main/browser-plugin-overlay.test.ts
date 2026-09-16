@@ -289,6 +289,119 @@ describe('overlay 芯片可点', () => {
   })
 })
 
+describe('宿主 host-browser 指针', () => {
+  it('成功映射后快照 surface 为 host-browser，pointer 是 overlay DIP', () => {
+    const session = new BrowserPluginOverlaySession()
+    session.acceptHostBrowserPointer({
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+    const snapshot = session.getSnapshot()
+    expect(snapshot.visible).toBe(true)
+    expect(snapshot.surface).toBe('host-browser')
+    expect(snapshot.pointer).toEqual({ x: 310, y: 130 })
+    expect(snapshot.persistWhenUnfocused).toBe(false)
+    expect(snapshot.taskId).toBe('task-1')
+    expect(shouldRenderMovingOverlayCursor(snapshot)).toBe(true)
+  })
+
+  it('主窗口 blur 或右栏关闭后省略 pointer', () => {
+    const session = new BrowserPluginOverlaySession()
+    session.acceptHostBrowserPointer({
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+    expect(session.getSnapshot().pointer).toEqual({ x: 310, y: 130 })
+
+    session.clearHostBrowserPointer()
+    const cleared = session.getSnapshot()
+    expect(cleared.pointer).toBeUndefined()
+    expect(cleared).not.toHaveProperty('pointer')
+    expect(cleared.visible).toBe(false)
+  })
+
+  it('acceptBrowserTool 的插件 rawInput 仍不得写出 pointer', () => {
+    const session = new BrowserPluginOverlaySession()
+    session.acceptExecutionSnapshot(runningExecution)
+    session.acceptBrowserTool({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      toolCallId: 'tool-1',
+      status: 'in_progress',
+      rawInput: { x: 120, y: 80, coordinate: { x: 12, y: 8 } }
+    })
+    const snapshot = session.getSnapshot()
+    expect(snapshot.visible).toBe(true)
+    expect(snapshot.pointer).toBeUndefined()
+    expect(snapshot.surface).not.toBe('computer-use')
+    expect(
+      projectBrowserPluginPointer({ x: 120, y: 80 }, { width: 1440, height: 900 })
+    ).toBeUndefined()
+  })
+
+  it('插件 rawInput 不得覆盖已映射的宿主 pointer', () => {
+    const session = new BrowserPluginOverlaySession()
+    session.acceptExecutionSnapshot(runningExecution)
+    session.acceptHostBrowserPointer({
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+    session.acceptBrowserTool({
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      toolCallId: 'tool-1',
+      status: 'in_progress',
+      rawInput: { x: 1, y: 2 }
+    })
+    const snapshot = session.getSnapshot()
+    expect(snapshot.surface).toBe('host-browser')
+    expect(snapshot.pointer).toEqual({ x: 310, y: 130 })
+  })
+
+  it('Host 推送宿主指针后可清针，overlay 仍用主屏 bounds', () => {
+    const publishToMain = vi.fn()
+    overlayWindowMocks.windows.length = 0
+    const host = new BrowserPluginOverlayHost({
+      isDev: false,
+      preloadPath: '/tmp/overlay.js',
+      productionHtmlPath: '/tmp/overlay.html',
+      platform: 'darwin',
+      publishToMain
+    })
+    host.acceptHostBrowserPointer({
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+    const shown = publishToMain.mock.calls.at(-1)?.[0] as {
+      surface?: string
+      pointer?: { x: number; y: number }
+    }
+    expect(shown?.surface).toBe('host-browser')
+    expect(shown?.pointer).toEqual({ x: 310, y: 130 })
+    expect(overlayWindowMocks.windows.length).toBeGreaterThan(0)
+
+    host.clearHostBrowserPointer()
+    const hidden = publishToMain.mock.calls.at(-1)?.[0] as { pointer?: unknown }
+    expect(hidden?.pointer).toBeUndefined()
+  })
+
+  it('主窗口失焦/最小化清针，避免 alwaysOnTop 漏到其它 App', () => {
+    const indexSource = readFileSync(join(mainDir, 'index.ts'), 'utf8')
+    const overlaySource = readFileSync(join(mainDir, 'browser-plugin-overlay.ts'), 'utf8')
+    expect(indexSource).toContain("mainWindow.on('blur'")
+    expect(indexSource).toContain("mainWindow.on('minimize'")
+    expect(indexSource).toContain('clearHostBrowserPointer')
+    expect(indexSource).toContain('alwaysOnTop')
+    expect(indexSource).not.toContain('mapViewportCssToOverlayDip')
+    expect(overlaySource).toContain('getPrimaryDisplay')
+    expect(overlaySource).not.toMatch(/surface:\s*['"]computer-use['"]/)
+  })
+})
+
 describe('overlay 窗口构造', () => {
   it('透明置顶窗口覆盖主屏，并声明 click-through', () => {
     const options = createBrowserPluginOverlayWindowOptions({

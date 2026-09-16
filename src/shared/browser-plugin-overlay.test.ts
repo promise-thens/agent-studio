@@ -103,4 +103,24 @@ describe('createBrowserPluginOverlaySnapshot', () => {
       kind: 'browser'
     })
   })
+
+  it('host-browser 通道保留已映射 DIP，插件路径仍剥离 pointer', () => {
+    expect(
+      parseBrowserPluginOverlaySnapshot({
+        visible: true,
+        kind: 'browser',
+        surface: 'host-browser',
+        persistWhenUnfocused: false,
+        pointer: { x: 310, y: 130 },
+        taskId: 'task-1'
+      })
+    ).toEqual({
+      visible: true,
+      kind: 'browser',
+      surface: 'host-browser',
+      persistWhenUnfocused: false,
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1'
+    })
+  })
 })
