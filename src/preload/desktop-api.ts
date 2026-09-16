@@ -1,4 +1,4 @@
-import type { HostBrowserChrome } from '../shared/host-browser'
+import { parseHostBrowserChrome, type HostBrowserChrome } from '../shared/host-browser'
 import {
   AGENT_OPERATION_TYPES,
   type AgentOperationType,
@@ -156,6 +156,18 @@ function readBoundedText(value: unknown, maxBytes: number, allowEmpty = false): 
     return null
   }
   return value
+}
+
+/** Preload 再校验 chrome 快照，丢掉 cookie 或非 http(s) 当前 URL。 */
+function parseHostBrowserChromeResult(
+  result: DesktopIpcResult<unknown>
+): DesktopIpcResult<HostBrowserChrome> {
+  if (!result.ok) return result
+  const parsed = parseHostBrowserChrome(result.value)
+  if (!parsed) {
+    return { ok: false, error: { code: 'operation-failed', message: '浏览器状态无效。' } }
+  }
+  return { ok: true, value: parsed }
 }
 
 function readPermissionText(value: unknown, allowEmpty = false): string | null {
@@ -1415,19 +1427,37 @@ export function createTaskDesktopApi(
         parseBrowserPluginOverlaySnapshot
       ),
     onBrowserChrome: (listener: (chrome: HostBrowserChrome) => void) =>
-      subscribe(
-        ipcRenderer,
-        TASK_PUSH_CHANNELS.browserChrome,
-        listener,
-        (val: unknown) => val as HostBrowserChrome // For now, simple cast or implement parser
-      ),
-    getBrowserChrome: (taskId: string) => ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getBrowserChrome, taskId) as Promise<DesktopIpcResult<HostBrowserChrome>>,
-    setBrowserOpen: (taskId: string, open: boolean) => ipcRenderer.invoke(TASK_INVOKE_CHANNELS.setBrowserOpen, taskId, open) as Promise<DesktopIpcResult<null>>,
-    userNavigateBrowser: (taskId: string, url: string) => ipcRenderer.invoke(TASK_INVOKE_CHANNELS.userNavigateBrowser, taskId, url) as Promise<DesktopIpcResult<null>>,
-    updateBrowserBounds: (taskId: string, bounds: { x: number; y: number; width: number; height: number }) => ipcRenderer.invoke(TASK_INVOKE_CHANNELS.updateBrowserBounds, taskId, bounds) as Promise<DesktopIpcResult<null>>
+      subscribe(ipcRenderer, TASK_PUSH_CHANNELS.browserChrome, listener, parseHostBrowserChrome),
+    getBrowserChrome: async (taskId) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.getBrowserChrome, {
+        taskId
+      })) as DesktopIpcResult<unknown>
+      return parseHostBrowserChromeResult(result)
+    },
+    setBrowserOpen: async (taskId, open) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.setBrowserOpen, {
+        taskId,
+        open
+      })) as DesktopIpcResult<unknown>
+      return parseHostBrowserChromeResult(result)
+    },
+    userNavigateBrowser: async (taskId, url) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.userNavigateBrowser, {
+        taskId,
+        url
+      })) as DesktopIpcResult<unknown>
+      return parseHostBrowserChromeResult(result)
+    },
+    updateBrowserBounds: (taskId, bounds) =>
+      ipcRenderer.invoke(TASK_INVOKE_CHANNELS.updateBrowserBounds, {
+        taskId,
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height
+      }) as Promise<DesktopIpcResult<null>>
   }
 }
-
 
 /** Provider 保持既有请求和响应契约，只收窄底层 ipcRenderer 依赖。 */
 export function createProviderDesktopApi(ipcRenderer: NarrowIpcRenderer): ProviderDesktopApi {

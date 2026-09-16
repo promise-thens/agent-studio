@@ -241,8 +241,8 @@ export interface TaskDesktopApi {
   onBrowserPluginOverlay: (listener: (snapshot: BrowserPluginOverlaySnapshot) => void) => () => void
   onBrowserChrome: (listener: (chrome: HostBrowserChrome) => void) => () => void
   getBrowserChrome: (taskId: string) => Promise<DesktopIpcResult<HostBrowserChrome>>
-  setBrowserOpen: (taskId: string, open: boolean) => Promise<DesktopIpcResult<null>>
-  userNavigateBrowser: (taskId: string, url: string) => Promise<DesktopIpcResult<null>>
+  setBrowserOpen: (taskId: string, open: boolean) => Promise<DesktopIpcResult<HostBrowserChrome>>
+  userNavigateBrowser: (taskId: string, url: string) => Promise<DesktopIpcResult<HostBrowserChrome>>
   updateBrowserBounds: (
     taskId: string,
     bounds: { x: number; y: number; width: number; height: number }

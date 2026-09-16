@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。步骤使用复选框 (`- [ ]`) 跟踪。
 >
-> **状态：** 计划已写（2026-09-04 产品确认）。代码未开工。
+> **状态：** 任务 1 由 P0-19f 打开 `browser` L3。任务 2 与右栏壳代码已落地（用户导航 / bounds / chrome IPC）；开发版 GUI 未走查。任务 3–5、7 未做。后退/前进/刷新按钮目前禁用。
 >
 > **插入点：** 不挡 [P0-19b](p0-19b-grok-sandbox-profile.md)。实现建议在 19b 空闲重建 session 纪律之后（MCP 注入只发生在 `session/new` / `load` / `resume`）。可与 19c–e 并行。权限层与 [P0-19f](p0-19f-browser-computer-use-surface.md) 共享 `browser` L3：**19f 已打开 `browser`，本计划不得改回 `unsupported`。** 19f 覆盖 **插件自己的浏览器**（置顶 overlay；虚拟鼠标硬验收仍因坐标不可映射开放），不自建第二只 Chrome。`screen` / `clipboard` **不再留给 19f**，改留给后置软件表面 / P3-07。本计划的内置页 **仍不画光标**。本计划取代 [P3-05](p3-05-managed-browser.md) 的第一波共享页面，不依赖 P3-01 Capability Pack。
 
@@ -185,19 +185,19 @@ pnpm exec vitest run src/main/security/permission-policy.test.ts src/shared/host
 
 **涉及范围：** `host-browser-session.ts`、`host-browser-service.ts`、窗口 bounds、测试。
 
-- [ ] **第 1 步: 失败测试（session 隔离）**
+- [x] **第 1 步: 失败测试（session 隔离）**
 
 说明：用 Electron 可 mock 的纯逻辑测：partition 名 = `persist:as-browser:${projectId}`；不同 projectId 不同 partition；拒绝空 projectId；`webPreferences` 快照不含 preload / nodeIntegration。
 
-- [ ] **第 2 步: 创建 WebContentsView**
+- [x] **第 2 步: 创建 WebContentsView**
 
 说明：`HostBrowserSession` 由主进程持有。`webPreferences` 固定 sandbox / contextIsolation / 无 preload。`will-navigate`、`setWindowOpenHandler`、`session.setPermissionRequestHandler`、download 默认拒绝。只允许 http/https 顶层导航。
 
-- [ ] **第 3 步: 挂到主窗口并跟随 bounds**
+- [x] **第 3 步: 挂到主窗口并跟随 bounds**
 
 说明：Renderer 只传 `{ x, y, width, height }` 的整数；主进程再校验范围后 `setBounds`。窗口 resize、Task 切换、关闭右栏必须 `removeChildView` 并隐藏，不得留下不可见仍加载的视图。切 Project 销毁旧 session，不得把 A 项目的 cookie 带到 B。
 
-- [ ] **第 4 步: 用户导航 IPC**
+- [x] **第 4 步: 用户导航 IPC**
 
 说明：新增 `TASK_INVOKE_CHANNELS`：
 
@@ -298,7 +298,7 @@ pnpm exec vitest run src/main/security/permission-policy.test.ts src/shared/host
 
 **涉及范围：** `HostBrowserPane.vue`、`useHostBrowser.ts`、`App.vue`、CSS。
 
-- [ ] **第 1 步: 右栏壳**
+- [x] **第 1 步: 右栏壳**
 
 说明：tab 条、后退/前进/刷新、地址栏、关闭。交互控件 `no-drag`。地址栏提交走 `task:user-navigate-browser`。小窗口可变窄，但必须留下对话输入和发送。复用现有颜色变量，不新做一套主题。
 
@@ -306,11 +306,13 @@ pnpm exec vitest run src/main/security/permission-policy.test.ts src/shared/host
 
 说明：第一次 browser 动作被允许，或 chrome 快照 `open` 因 navigate 变为 true 时打开右栏。用户关掉后，同一 Turn 内 Agent 仍可操作（视图可隐藏但仍挂在主进程）；下一 Turn 再 navigate 再次打开。不要做成「关面板 = 拔掉 MCP」。
 
-- [ ] **第 3 步: 与 Inspector 共存**
+- [x] **第 3 步: 与 Inspector 共存**
 
 说明：Inspector 保持 overlay / 右侧吸附。浏览器右栏打开时，工作区变成「对话 | 浏览器」；Inspector 吸附则盖在浏览器上或临时收起浏览器——选一种写进 CSS 并测，禁止三列挤到输入框消失。Changes / Artifacts 审阅加宽逻辑仍只对 Inspector，不要把浏览器当成 Diff 工作区。
 
-- [ ] **第 4 步: reduced-motion 与 a11y**
+已选：浏览器占 Grid 第三列；吸附检查器在右栏打开时改回悬浮，并左移到对话列上，避免 WebContentsView 挡住检查器点击。
+
+- [x] **第 4 步: reduced-motion 与 a11y**
 
 说明：`prefers-reduced-motion` 下右栏不播放滑入。所有图标按钮有 `title` 或 `aria-label`。
 

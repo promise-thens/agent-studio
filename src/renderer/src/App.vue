@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   PhCircleNotch as CircleNotch,
+  PhGlobe as Globe,
   PhSidebarSimple as SidebarSimple,
   PhWarningCircle as WarningCircle
 } from '@phosphor-icons/vue'
@@ -67,6 +68,7 @@ import ProjectSidebar from './components/ProjectSidebar.vue'
 import TaskComposer from './components/TaskComposer.vue'
 import TaskConversation from './components/TaskConversation.vue'
 import TaskHeader from './components/TaskHeader.vue'
+import HostBrowserPane from './components/HostBrowserPane.vue'
 import TaskInspector from './components/TaskInspector.vue'
 import { useRuntimeCapabilities } from './composables/useRuntimeCapabilities'
 import { useTaskArtifacts } from './composables/useTaskArtifacts'
@@ -74,6 +76,7 @@ import { createTaskChangesQueryApi, useTaskChanges } from './composables/useTask
 import { useTaskTimeline } from './composables/useTaskTimeline'
 import { createAttachmentPreviewUrl } from './attachment-preview-url'
 import { useMacosFolderAccess } from './composables/useMacosFolderAccess'
+import { useHostBrowser } from './composables/useHostBrowser'
 import { useTaskWorkbench } from './composables/useTaskWorkbench'
 import {
   evaluateTaskComposerSend,
@@ -203,6 +206,16 @@ const taskTimeline = useTaskTimeline({ manageSubscriptions: false })
 const executionSnapshot = workbench.executionSnapshot
 /** 选中身份来自 workbench；模板可继续用 activeTaskId 别名减少改动。 */
 const activeTaskId = workbench.selectedTaskId
+const {
+  visible: hostBrowserVisible,
+  chrome: hostBrowserChrome,
+  setVisible: setHostBrowserVisible,
+  navigate: navigateHostBrowser,
+  updateBounds: updateHostBrowserBounds
+} = useHostBrowser(activeTaskId)
+const hostBrowserToggleTitle = computed(() =>
+  hostBrowserVisible.value ? '关闭内置浏览器' : '打开内置浏览器'
+)
 const activeExecution = workbench.activeExecution
 const providerSummary = ref<ProviderConfigSummary | null>(null)
 const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
@@ -2139,6 +2152,18 @@ function scrollMessagesToBottom(): void {
         v-if="!showProviderScreen"
         class="icon-button no-drag"
         type="button"
+        :title="hostBrowserToggleTitle"
+        :aria-label="hostBrowserToggleTitle"
+        :aria-pressed="hostBrowserVisible"
+        :disabled="!activeTaskId"
+        @click="setHostBrowserVisible(!hostBrowserVisible)"
+      >
+        <Globe :size="17" />
+      </button>
+      <button
+        v-if="!showProviderScreen"
+        class="icon-button no-drag"
+        type="button"
         data-inspector-toggle
         :title="inspectorToggleTitle"
         :aria-label="inspectorToggleTitle"
@@ -2183,7 +2208,10 @@ function scrollMessagesToBottom(): void {
     <div
       v-else
       class="workspace-layout"
-      :class="{ 'is-inspector-docked': showInspector && inspectorDocked }"
+      :class="{
+        'is-inspector-docked': showInspector && inspectorDocked,
+        'is-browser-open': hostBrowserVisible
+      }"
     >
       <ProjectSidebar
         :projects="workbench.projects.value"
@@ -2341,6 +2369,18 @@ function scrollMessagesToBottom(): void {
           />
         </template>
       </main>
+
+      <HostBrowserPane
+        v-if="hostBrowserVisible && activeTaskId"
+        :visible="hostBrowserVisible"
+        :url="hostBrowserChrome.url"
+        :title="hostBrowserChrome.title"
+        :is-loading="hostBrowserChrome.isLoading"
+        :task-id="activeTaskId"
+        @navigate="navigateHostBrowser"
+        @close="setHostBrowserVisible(false)"
+        @update:bounds="updateHostBrowserBounds"
+      />
 
       <TaskInspector
         :open="showInspector"

@@ -25,6 +25,8 @@ import type { PublicAgentEventPage, SubagentActivityPage } from '../../shared/ta
 import { TASK_INVOKE_CHANNELS } from '../../shared/task-ipc'
 import type { ArtifactContentService } from '../artifact/artifact-content-service'
 import { ArtifactRegistryError, type ArtifactRegistry } from '../artifact/artifact-registry'
+import { registerHostBrowserIpcHandlers } from '../browser/host-browser-ipc'
+import type { HostBrowserService } from '../browser/host-browser-service'
 import { registerTaskAttachmentIpcHandlers } from './task-attachment-ipc'
 import type { TaskAttachmentInbox } from './task-attachment-inbox'
 import type { CommandEvidenceStore } from '../command/command-evidence-store'
@@ -89,6 +91,8 @@ export interface TaskIpcDependencies {
   getSubagentActivity?: (taskId: string, shortId: string) => Promise<SubagentActivityPage>
   getArtifactRegistry?: () => ArtifactRegistry | null
   getArtifactContent?: () => ArtifactContentService | null
+  /** 宿主内置浏览器；未创建窗口前为 null，不得把 WebContents 交给 Renderer。 */
+  getHostBrowser?: () => HostBrowserService | null
 }
 
 function requireHistory(getHistory: TaskIpcDependencies['getHistory']): TaskHistoryIpcRuntime {
@@ -413,6 +417,11 @@ export function registerTaskIpcHandlers(dependencies: TaskIpcDependencies): void
     const reader = dependencies.getSubagentActivity
     if (!reader) return { source: 'missing' as const, tools: [] }
     return reader(taskId, shortId)
+  })
+
+  registerHostBrowserIpcHandlers(register, {
+    getHistory: dependencies.getHistory,
+    getHostBrowser: () => dependencies.getHostBrowser?.() ?? null
   })
 }
 

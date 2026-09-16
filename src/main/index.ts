@@ -21,6 +21,10 @@ import { appearanceWindowBackground, type AppAppearanceState } from '../shared/a
 import { AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
 import { TASK_PUSH_CHANNELS } from '../shared/task-ipc'
 import { BrowserPluginOverlayHost } from './browser-plugin-overlay'
+import {
+  createElectronHostBrowserBindings,
+  HostBrowserService
+} from './browser/host-browser-service'
 import { APP_PUSH_CHANNELS } from '../shared/app-ipc'
 import { sanitizeExternalHref } from '../shared/external-href'
 import { TAKEOVER_CONTROL_TURN_KIND } from '../shared/task-takeover'
@@ -141,6 +145,7 @@ let gitReviewService: GitReviewService | null = null
 let artifactRegistry: ArtifactRegistry | null = null
 let artifactContentService: ArtifactContentService | null = null
 let browserPluginOverlayHost: BrowserPluginOverlayHost | null = null
+let hostBrowserService: HostBrowserService | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -165,8 +170,16 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => mainWindow?.show())
   mainWindow.on('closed', () => {
     // overlay host 跟 app 生命周期走；darwin 关主窗不退出，拆 host 会让停止芯片再也点不到。
+    hostBrowserService?.destroy()
+    hostBrowserService = null
     mainWindow = null
     if (process.platform !== 'darwin') app.quit()
+  })
+  hostBrowserService?.destroy()
+  hostBrowserService = new HostBrowserService({
+    ...createElectronHostBrowserBindings(() => mainWindow),
+    onChromeChange: (chrome) =>
+      sendToTrustedRenderer(createRendererTrustOptions(), TASK_PUSH_CHANNELS.browserChrome, chrome)
   })
 
   // 对话 Markdown 外链走 target=_blank；这里再拦一层，避免 javascript: / file: 进系统浏览器。
@@ -1045,6 +1058,7 @@ function registerIpcHandlers(): void {
       requireTaskChangeMediaPreviewService().getPreview(taskId, path),
     getArtifactRegistry: () => artifactRegistry,
     getArtifactContent: () => artifactContentService,
+    getHostBrowser: () => hostBrowserService,
     getSubagentActivity: async (taskId, shortId) => {
       // 子代理活动只允许绑定当前 Task 私有的父 Runtime session，禁止跨 Task 扫描旧会话。
       const store = taskStore

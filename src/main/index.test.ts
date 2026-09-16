@@ -277,6 +277,15 @@ vi.mock('electron', () => {
       send: vi.fn()
     }
 
+    readonly contentView = {
+      addChildView(): void {
+        return undefined
+      },
+      removeChildView(): void {
+        return undefined
+      }
+    }
+
     constructor(options: unknown) {
       void options
     }
@@ -346,6 +355,25 @@ vi.mock('electron', () => {
       quit: vi.fn()
     },
     BrowserWindow: BrowserWindowMock,
+    WebContentsView: class {
+      readonly webContents = {
+        on: vi.fn(),
+        loadURL: vi.fn(async () => undefined),
+        getURL: vi.fn(() => ''),
+        getTitle: vi.fn(() => ''),
+        isLoading: vi.fn(() => false),
+        isDestroyed: vi.fn(() => false),
+        close: vi.fn(),
+        setWindowOpenHandler: vi.fn(),
+        session: {
+          setPermissionRequestHandler: vi.fn(),
+          on: vi.fn()
+        }
+      }
+      setBounds(): void {
+        return undefined
+      }
+    },
     screen: {
       getPrimaryDisplay: () => ({
         bounds: { x: 0, y: 0, width: 1440, height: 900 }

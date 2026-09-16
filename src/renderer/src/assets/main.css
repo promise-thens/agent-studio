@@ -162,6 +162,25 @@ textarea {
   box-shadow: none;
 }
 
+/* 内置浏览器是工作区右栏，不是 Inspector 标签。 */
+.workspace-layout.is-browser-open {
+  grid-template-columns: 220px minmax(0, 1fr) minmax(280px, 42%);
+}
+
+.workspace-layout.is-browser-open > .host-browser-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * WebContentsView 盖在主 Renderer 之上。检查器若仍贴右边缘，会被 guest 挡住点击。
+ * 右栏打开时把悬浮检查器挪到对话列上。
+ */
+.workspace-layout.is-browser-open > .task-inspector {
+  right: max(292px, calc(42% + 12px));
+}
+
 .provider-screen,
 .provider-loading {
   height: calc(100% - var(--titlebar-height));
@@ -2984,6 +3003,26 @@ button:disabled {
   box-shadow: none;
   resize: none;
   animation: inspector-dock-in 180ms ease;
+}
+
+/* 浏览器占右栏时检查器保持悬浮，避免对话列被挤没。 */
+.workspace-layout.is-browser-open.is-inspector-docked {
+  grid-template-columns: 220px minmax(0, 1fr) minmax(280px, 42%);
+}
+
+.workspace-layout.is-browser-open.is-inspector-docked > .task-inspector {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  bottom: auto;
+  grid-column: auto;
+  width: min(400px, calc(100% - 24px));
+  height: min(560px, calc(100% - 24px));
+  border-width: 1px;
+  border-radius: 12px;
+  box-shadow: 0 18px 48px rgb(2 5 9 / 34%);
+  resize: both;
+  animation: none;
 }
 
 .workspace-layout.is-inspector-docked .inspector-pane-grid {
