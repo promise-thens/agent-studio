@@ -75,6 +75,15 @@ describe('createBrowserPluginOverlaySnapshot', () => {
     expect(shouldRenderBrowserPluginCursor(snapshot)).toBe(false)
   })
 
+  it('即使传入有限坐标也不得写入 pointer（共享层消费后仍冻结）', () => {
+    const snapshot = createBrowserPluginOverlaySnapshot({
+      visible: true,
+      pointer: { x: 120, y: 80 }
+    })
+    expect(snapshot).toEqual({ visible: true, kind: 'browser' })
+    expect(shouldRenderBrowserPluginCursor(snapshot)).toBe(false)
+  })
+
   it('解析时丢掉未知键，缺 pointer 不得补造光标', () => {
     expect(
       parseBrowserPluginOverlaySnapshot({
