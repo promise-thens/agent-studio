@@ -3,6 +3,7 @@ import {
   createAgentPointerSnapshot,
   mapViewportCssToOverlayDip,
   parseAgentPointerSnapshot,
+  isAgentPointerTurnActive,
   resolveAgentPointerHudCopy,
   shouldRenderAgentPointerCursor,
   HOST_BROWSER_HUD_COPY,
@@ -88,6 +89,29 @@ describe('HUD', () => {
         takeoverCopy: null
       })
     ).toBeNull()
+    expect(
+      isAgentPointerTurnActive({
+        visible: true,
+        surface: 'host-browser',
+        taskId: 'task-1',
+        turnId: 'turn-1'
+      })
+    ).toBe(false)
+    expect(
+      isAgentPointerTurnActive({
+        visible: true,
+        surface: 'host-browser',
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        executionId: 'execution-1'
+      })
+    ).toBe(true)
+    expect(
+      isAgentPointerTurnActive({
+        visible: true,
+        surface: 'browser-plugin'
+      })
+    ).toBe(true)
     expect(
       shouldRenderAgentPointerCursor({
         visible: true,

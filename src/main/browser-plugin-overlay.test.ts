@@ -59,7 +59,8 @@ vi.mock('electron', () => {
 import type { AgentPermissionRequest } from '../shared/agent'
 import {
   createBrowserPluginOverlaySnapshot,
-  projectBrowserPluginPointer
+  projectBrowserPluginPointer,
+  resolveBrowserPluginHudCopy
 } from '../shared/browser-plugin-overlay'
 import type { TaskExecutionSnapshot } from '../shared/task-execution'
 import {
@@ -433,6 +434,14 @@ describe('宿主 host-browser 指针', () => {
     expect(idle.pointer).toEqual({ x: 310, y: 130 })
     expect(idle.executionId).toBeUndefined()
     expect(idle).not.toHaveProperty('executionId')
+    expect(
+      resolveBrowserPluginHudCopy({
+        takeoverCopy: null,
+        overlayVisible: idle.visible,
+        surface: idle.surface,
+        turnActive: Boolean(idle.executionId && idle.taskId && idle.turnId)
+      })
+    ).toBeNull()
   })
 
   it('切换 Task 后省略宿主 pointer', () => {

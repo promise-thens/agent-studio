@@ -27,7 +27,10 @@ import {
   type SlashCommandItem
 } from '../slash-command-palette'
 import { resolveTakeoverHudCopy, type TaskPermissionMode } from '../../../shared/task-takeover'
-import { resolveBrowserPluginHudCopy } from '../../../shared/browser-plugin-overlay'
+import {
+  resolveAgentPointerHudCopy,
+  type AgentPointerSurface
+} from '../../../shared/agent-pointer-overlay'
 import { isPlanCommandAdvertised, type ComposerPlanMode } from '../../../shared/session-plan-mode'
 import { resolveComposerPlanStatusCopy, resolveComposerPlanSwitch } from '../composer-plan-mode'
 import type { ComposerContextUsagePresentation } from '../task-composer-actions'
@@ -71,10 +74,14 @@ const props = defineProps<{
   }>
   promptMediaHint?: string | null
   /**
-   * 任务 6 overlay 快照的 visible。写文件进行中必须为 false，避免冒充浏览器句。
-   * 任务 6 接入前 App 可传 false。
+   * overlay 快照的 visible。写文件进行中必须为 false，避免冒充浏览器句。
+   * 不得单独把 visible 当成插件进行中：宿主闲置光标也是 visible。
    */
   overlayVisible?: boolean
+  /** 缺省按浏览器插件理解；宿主闲置/进行中必须显式传 host-browser。 */
+  overlaySurface?: AgentPointerSurface
+  /** 宿主闲置光标为 false；插件 visible 时由 App 标 true。 */
+  overlayTurnActive?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -129,13 +136,15 @@ const takeoverHudCopy = computed(() =>
   })
 )
 /**
- * 与接管共用一条 role=status 停止条：接管句优先，否则才写浏览器插件句。
- * 写文件 in_progress 不得靠 overlayVisible 挤进这根条。
+ * 与接管共用一条 role=status 停止条：接管句优先。
+ * 必须吃 surface + turnActive：宿主闲置光标不得出插件句或宿主进行中句。
  */
 const composerHudCopy = computed(() =>
-  resolveBrowserPluginHudCopy({
-    takeoverCopy: takeoverHudCopy.value,
-    overlayVisible: props.overlayVisible === true
+  resolveAgentPointerHudCopy({
+    surface: props.overlaySurface === 'host-browser' ? 'host-browser' : 'browser-plugin',
+    overlayVisible: props.overlayVisible === true,
+    turnActive: props.overlayTurnActive === true,
+    takeoverCopy: takeoverHudCopy.value
   })
 )
 

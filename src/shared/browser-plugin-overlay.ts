@@ -9,6 +9,7 @@ import type { DesktopIpcResult } from './ipc-result'
 import {
   BROWSER_PLUGIN_HUD_COPY as SHARED_BROWSER_PLUGIN_HUD_COPY,
   createAgentPointerSnapshot,
+  isAgentPointerTurnActive,
   parseAgentPointerSnapshot,
   resolveAgentPointerHudCopy,
   shouldRenderAgentPointerCursor,
@@ -18,6 +19,7 @@ import {
 } from './agent-pointer-overlay'
 
 export type { AgentPointer, AgentPointerSnapshot, AgentPointerSurface }
+export { isAgentPointerTurnActive }
 
 export const BROWSER_PLUGIN_HUD_COPY = SHARED_BROWSER_PLUGIN_HUD_COPY
 
@@ -64,20 +66,28 @@ export interface BrowserPluginToolActivity {
 }
 
 /**
- * 接管文案优先；否则浏览器插件进行中显示本句。写文件进行中返回 null。
+ * 接管文案优先；否则按 surface + turnActive 出停止句。写文件进行中返回 null。
  *
- * 边界：takeoverCopy 非空时即使 overlayVisible 也不得改口成浏览器句。
- * 风险：若把写文件 in_progress 误标 overlayVisible，主窗口会谎称正在用浏览器。
+ * 不得只看 overlayVisible：宿主闲置光标 visible=true 但无 execution 三元组，
+ * 主窗口不得冒充「正在使用浏览器插件」或宿主进行中句。
  */
 export function resolveBrowserPluginHudCopy(input: {
   takeoverCopy: string | null
   overlayVisible: boolean
+  surface?: AgentPointerSurface
+  turnActive?: boolean
 }): string | null {
+  const surface = input.surface === 'host-browser' ? 'host-browser' : 'browser-plugin'
   return resolveAgentPointerHudCopy({
-    surface: 'browser-plugin',
+    surface,
     overlayVisible: input.overlayVisible,
-    // 插件可见即视为进行中；Turn 结束后插件路径会隐藏整扇 overlay
-    turnActive: input.overlayVisible,
+    // 未显式传入时：插件仍把 visible 当进行中；宿主闲置光标不得当成进行中
+    turnActive:
+      input.turnActive ??
+      isAgentPointerTurnActive({
+        visible: input.overlayVisible,
+        surface
+      }),
     takeoverCopy: input.takeoverCopy
   })
 }

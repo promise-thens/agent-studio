@@ -43,7 +43,11 @@ import type {
 import type { ConversationEntryState, DeletionPreview } from '../../shared/task-history'
 import type { TaskAttachmentDescriptor } from '../../shared/task-attachment'
 import type { AgentQuestionRequest } from '../../shared/agent-question'
-import type { BrowserPluginOverlaySnapshot } from '../../shared/browser-plugin-overlay'
+import {
+  isAgentPointerTurnActive,
+  type AgentPointerSurface,
+  type BrowserPluginOverlaySnapshot
+} from '../../shared/browser-plugin-overlay'
 import type { AgentRespondQuestionRequest } from '../../shared/agent-ipc'
 import {
   buildQuestionRespondIpcPayload,
@@ -446,8 +450,10 @@ const activeSidebarTaskId = computed(() =>
 )
 
 const cleanupListeners: Array<() => void> = []
-/** 主进程 overlay 快照的 visible；写文件 in_progress 不会把它打成 true。 */
+/** 主进程 overlay 快照；visible 不等于插件进行中，宿主闲置光标也会 visible。 */
 const browserPluginOverlayVisible = ref(false)
+const browserPluginOverlaySurface = ref<AgentPointerSurface>('browser-plugin')
+const browserPluginOverlayTurnActive = ref(false)
 const acceptAgentEvent = createAgentEventGuard()
 /** 记住已确认的内部控制 Turn，处理终态后的迟到事件时仍保持静默。 */
 const silentControlTurnKeys = new Set<string>()
@@ -990,7 +996,18 @@ onMounted(async () => {
       applySlashCommandSnapshot(snapshot)
     }),
     window.task.onBrowserPluginOverlay((snapshot: BrowserPluginOverlaySnapshot) => {
+      const surface: AgentPointerSurface =
+        snapshot.surface === 'host-browser' ? 'host-browser' : 'browser-plugin'
       browserPluginOverlayVisible.value = snapshot.visible === true
+      browserPluginOverlaySurface.value = surface
+      // 宿主闲置针无 execution 三元组；不得把 visible 当成插件 HUD
+      browserPluginOverlayTurnActive.value = isAgentPointerTurnActive({
+        visible: snapshot.visible === true,
+        surface,
+        taskId: snapshot.taskId,
+        turnId: snapshot.turnId,
+        executionId: snapshot.executionId
+      })
     })
   )
 
@@ -2324,7 +2341,7 @@ function scrollMessagesToBottom(): void {
             @open-plan="openPlanReview"
           />
 
-          <!-- overlay visible 只认主进程快照；写文件 in_progress 不得把这根条变成浏览器句。 -->
+          <!-- HUD 认 surface + turnActive；宿主闲置光标不得出插件句。 -->
           <TaskComposer
             ref="taskComposer"
             :prompt="prompt"
@@ -2351,6 +2368,8 @@ function scrollMessagesToBottom(): void {
             :attachments="composerAttachmentViews"
             :prompt-media-hint="promptMediaHint"
             :overlay-visible="browserPluginOverlayVisible"
+            :overlay-surface="browserPluginOverlaySurface"
+            :overlay-turn-active="browserPluginOverlayTurnActive"
             @update:prompt="prompt = $event"
             @send="sendPrompt"
             @stop="cancelTurn"

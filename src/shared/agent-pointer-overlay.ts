@@ -43,6 +43,24 @@ export const BROWSER_PLUGIN_HUD_COPY = 'Grok 正在使用浏览器插件'
 const MAX_OVERLAY_ID_BYTES = 256
 
 /**
+ * 插件：visible 即进行中（Turn 结束会整扇隐藏）。
+ * 宿主：必须有可停止的 execution 三元组；闲置光标不算进行中。
+ */
+export function isAgentPointerTurnActive(snapshot: {
+  visible: boolean
+  surface: AgentPointerSurface
+  taskId?: string
+  turnId?: string
+  executionId?: string
+}): boolean {
+  if (!snapshot.visible) return false
+  if (snapshot.surface === 'host-browser') {
+    return Boolean(snapshot.executionId && snapshot.taskId && snapshot.turnId)
+  }
+  return true
+}
+
+/**
  * 接管文案优先；进行中才出 surface 专属停止句。
  * 宿主 Turn 结束后可留闲置光标（turnActive=false）但不挂芯片。
  */

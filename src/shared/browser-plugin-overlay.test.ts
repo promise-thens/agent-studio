@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { HOST_BROWSER_HUD_COPY } from './agent-pointer-overlay'
 import {
   BROWSER_PLUGIN_HUD_COPY,
   createBrowserPluginOverlaySnapshot,
@@ -39,6 +40,48 @@ describe('resolveBrowserPluginHudCopy', () => {
       resolveBrowserPluginHudCopy({
         takeoverCopy: null,
         overlayVisible: browserSnapshot.visible
+      })
+    ).toBe(BROWSER_PLUGIN_HUD_COPY)
+  })
+
+  it('host-browser idle snapshot visible:true 不得出插件 HUD', () => {
+    // 闲置宿主针：有光标、无 executionId；主窗口不得冒充插件句或宿主进行中句
+    const idleHost: BrowserPluginOverlaySnapshot = {
+      visible: true,
+      kind: 'browser',
+      surface: 'host-browser',
+      persistWhenUnfocused: false,
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    }
+    expect(idleHost.visible).toBe(true)
+    expect(idleHost.executionId).toBeUndefined()
+    expect(
+      resolveBrowserPluginHudCopy({
+        takeoverCopy: null,
+        overlayVisible: idleHost.visible,
+        surface: idleHost.surface,
+        turnActive: Boolean(idleHost.executionId && idleHost.taskId && idleHost.turnId)
+      })
+    ).toBeNull()
+  })
+
+  it('host-browser 进行中才出内置浏览器句；插件进行中仍用原句', () => {
+    expect(
+      resolveBrowserPluginHudCopy({
+        takeoverCopy: null,
+        overlayVisible: true,
+        surface: 'host-browser',
+        turnActive: true
+      })
+    ).toBe(HOST_BROWSER_HUD_COPY)
+    expect(
+      resolveBrowserPluginHudCopy({
+        takeoverCopy: null,
+        overlayVisible: true,
+        surface: 'browser-plugin',
+        turnActive: true
       })
     ).toBe(BROWSER_PLUGIN_HUD_COPY)
   })

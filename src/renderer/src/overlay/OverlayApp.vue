@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
+  isAgentPointerTurnActive,
   resolveAgentPointerHudCopy,
   type AgentPointerSnapshot
 } from '../../../shared/agent-pointer-overlay'
@@ -28,19 +29,11 @@ function setChipHover(hovered: boolean): void {
  * 宿主：有可停止的 execution 三元组才算进行中；闲置光标只留 pointer。
  * 进行中宿主句为「Grok 正在使用内置浏览器」。
  */
-function isTurnActive(next: AgentPointerSnapshot): boolean {
-  if (!next.visible) return false
-  if (next.surface === 'host-browser') {
-    return Boolean(next.executionId && next.taskId && next.turnId)
-  }
-  return true
-}
-
 const hudCopy = computed(() =>
   resolveAgentPointerHudCopy({
     surface: snapshot.value.surface,
     overlayVisible: snapshot.value.visible,
-    turnActive: isTurnActive(snapshot.value),
+    turnActive: isAgentPointerTurnActive(snapshot.value),
     takeoverCopy: null
   })
 )
@@ -57,7 +50,7 @@ onMounted(() => {
       cancelError.value = ''
     }
     // 闲置光标无芯片时必须恢复穿透，避免悬停状态把桌面点击吃掉
-    if (!isTurnActive(next)) {
+    if (!isAgentPointerTurnActive(next)) {
       setChipHover(false)
     }
   })
