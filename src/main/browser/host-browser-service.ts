@@ -86,6 +86,7 @@ export class HostBrowserService {
   private bounds: HostBrowserBounds | null = null
   private wantOpen = false
   private attached = false
+  private lastViewportCss: { x: number; y: number; taskId: string; turnId: string } | null = null
 
   constructor(private readonly dependencies: HostBrowserServiceDependencies) {}
 
@@ -104,7 +105,7 @@ export class HostBrowserService {
    * projectId 必须来自 Task 历史，禁止再用占位项目名，否则 cookie 会串到错误 partition。
    */
   userNavigate(taskId: string, projectId: string, url: string): HostBrowserChrome {
-    void taskId
+    this.noteActiveTask(taskId)
     const href = parseHostBrowserNavigateUrl(url)
     if (!href) throw new Error('只允许 http(s) 网页地址。')
     this.bindProject(projectId)
@@ -126,6 +127,7 @@ export class HostBrowserService {
     if (!context || context.taskId !== taskId) {
       return { ok: false, code: 'unavailable', message: '当前 Task 不可用。' }
     }
+    this.noteActiveTask(taskId)
     const authorize = this.dependencies.authorizeOperation
     if (!authorize) {
       return { ok: false, code: 'unavailable', message: '权限服务尚未初始化。' }
@@ -150,11 +152,11 @@ export class HostBrowserService {
   }
 
   setOpen(taskId: string, projectId: string, open: boolean): HostBrowserChrome {
-    void taskId
+    this.noteActiveTask(taskId)
     this.bindProject(projectId)
     this.wantOpen = open
     if (open) this.ensureGuest(projectId)
-    else this.dependencies.clearHostBrowserPointer?.()
+    else this.forgetHostBrowserPointer()
     this.syncAttachment()
     this.emitChrome()
     return this.getChrome()
@@ -165,6 +167,43 @@ export class HostBrowserService {
     if (!parsed) return
     this.bounds = parsed
     this.syncAttachment()
+    this.remapHostBrowserPointer()
+  }
+
+  /**
+   * 用上次成功的 viewport CSS 按当前窗口/view 几何重映射。
+   * 几何失效或出 view 矩形则清针，不得把旧 DIP 留在桌面。
+   */
+  remapHostBrowserPointer(): void {
+    const stored = this.lastViewportCss
+    if (!stored) return
+    const pointer = this.mapStoredViewportCss(stored)
+    if (!pointer) {
+      this.forgetHostBrowserPointer()
+      return
+    }
+    this.dependencies.acceptHostBrowserPointer?.({
+      pointer,
+      taskId: stored.taskId,
+      turnId: stored.turnId
+    })
+  }
+
+  /**
+   * Spec §6：切 Task 必须藏针。旧 CSS 也丢掉，避免随后 move/resize 把旧针画回来。
+   */
+  noteActiveTask(taskId: string): void {
+    if (this.lastViewportCss && this.lastViewportCss.taskId !== taskId) {
+      this.forgetHostBrowserPointer()
+    }
+  }
+
+  /**
+   * 失焦/最小化/右栏关闭时丢掉上次 CSS。alwaysOnTop overlay 不能在 remap 时把箭头送回其它 App。
+   */
+  forgetHostBrowserPointer(): void {
+    this.lastViewportCss = null
+    this.dependencies.clearHostBrowserPointer?.()
   }
 
   destroy(): void {
@@ -199,7 +238,7 @@ export class HostBrowserService {
 
   private destroyGuest(): void {
     if (!this.guest) return
-    this.dependencies.clearHostBrowserPointer?.()
+    this.forgetHostBrowserPointer()
     if (this.attached) {
       this.dependencies.detachGuest(this.guest)
       this.attached = false
@@ -224,22 +263,34 @@ export class HostBrowserService {
     if (data.kind !== 'clicked' && data.kind !== 'typed') return
     if (typeof data.viewportX !== 'number' || typeof data.viewportY !== 'number') return
     if (!Number.isFinite(data.viewportX) || !Number.isFinite(data.viewportY)) return
-    if (!this.wantOpen || !this.bounds) return
+    const stored = {
+      x: data.viewportX,
+      y: data.viewportY,
+      taskId: context.taskId,
+      turnId: context.turnId
+    }
+    const pointer = this.mapStoredViewportCss(stored)
+    if (!pointer) return
+    this.lastViewportCss = stored
+    this.dependencies.acceptHostBrowserPointer?.({
+      pointer,
+      taskId: stored.taskId,
+      turnId: stored.turnId
+    })
+  }
+
+  /** 始终从上次 viewport CSS 映射，不能平移上次 DIP，否则窗口一动针就漂。 */
+  private mapStoredViewportCss(stored: { x: number; y: number }): AgentPointer | undefined {
+    if (!this.wantOpen || !this.bounds) return undefined
     const geometry = this.dependencies.getPointerGeometry?.() ?? null
-    if (!geometry) return
-    const pointer = mapViewportCssToOverlayDip({
-      cssX: data.viewportX,
-      cssY: data.viewportY,
+    if (!geometry) return undefined
+    return mapViewportCssToOverlayDip({
+      cssX: stored.x,
+      cssY: stored.y,
       zoomFactor: geometry.zoomFactor ?? 1,
       contentBounds: geometry.contentBounds,
       viewBounds: this.bounds,
       overlayBounds: geometry.overlayBounds
-    })
-    if (!pointer) return
-    this.dependencies.acceptHostBrowserPointer?.({
-      pointer,
-      taskId: context.taskId,
-      turnId: context.turnId
     })
   }
 

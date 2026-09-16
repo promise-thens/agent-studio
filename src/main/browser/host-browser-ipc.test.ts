@@ -10,7 +10,10 @@ const event = {} as TrustedIpcInvokeEvent
 
 function createFixture(options?: { historyAvailable?: boolean; browserAvailable?: boolean }): {
   invoke: <T>(channel: string, request: unknown) => Promise<DesktopIpcResult<T>>
-  browser: Pick<HostBrowserService, 'getChrome' | 'setOpen' | 'userNavigate' | 'updateBounds'>
+  browser: Pick<
+    HostBrowserService,
+    'getChrome' | 'setOpen' | 'userNavigate' | 'updateBounds' | 'noteActiveTask'
+  >
   history: Pick<TaskHistoryIpcRuntime, 'getTaskDetail'>
 } {
   const handlers = new Map<string, DesktopIpcHandler>()
@@ -33,7 +36,8 @@ function createFixture(options?: { historyAvailable?: boolean; browserAvailable?
       isLoading: true,
       open: true
     })),
-    updateBounds: vi.fn()
+    updateBounds: vi.fn(),
+    noteActiveTask: vi.fn()
   }
   const history = {
     getTaskDetail: vi.fn((taskId: string) => {
@@ -156,5 +160,10 @@ describe('宿主浏览器 IPC', () => {
       value: { url: '', title: '', isLoading: false, open: true }
     })
     expect(fixture.browser.setOpen).toHaveBeenCalledWith('task-1', 'project-real', true)
+
+    expect(
+      await fixture.invoke(TASK_INVOKE_CHANNELS.getBrowserChrome, { taskId: 'task-1' })
+    ).toMatchObject({ ok: true })
+    expect(fixture.browser.noteActiveTask).toHaveBeenCalledWith('task-1')
   })
 })

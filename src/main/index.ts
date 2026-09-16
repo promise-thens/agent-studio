@@ -177,21 +177,29 @@ function createWindow(): void {
     }
   })
 
+  const remapHostBrowserPointer = (): void => {
+    hostBrowserService?.remapHostBrowserPointer()
+  }
+  const forgetHostBrowserPointer = (): void => {
+    hostBrowserService?.forgetHostBrowserPointer()
+  }
+
   mainWindow.on('ready-to-show', () => mainWindow?.show())
   mainWindow.on('closed', () => {
     // overlay host 跟 app 生命周期走；darwin 关主窗不退出，拆 host 会让停止芯片再也点不到。
+    screen.removeListener('display-metrics-changed', remapHostBrowserPointer)
     hostBrowserService?.destroy()
     hostBrowserService = null
     mainWindow = null
     if (process.platform !== 'darwin') app.quit()
   })
   // alwaysOnTop overlay 会把箭头留在别的 App 上，主窗失焦或最小化必须立刻清针。
-  mainWindow.on('blur', () => {
-    browserPluginOverlayHost?.clearHostBrowserPointer()
-  })
-  mainWindow.on('minimize', () => {
-    browserPluginOverlayHost?.clearHostBrowserPointer()
-  })
+  mainWindow.on('blur', forgetHostBrowserPointer)
+  mainWindow.on('minimize', forgetHostBrowserPointer)
+  // 只重跑上次 viewport CSS，映射公式留在 Service，不进 IPC handler。
+  mainWindow.on('move', remapHostBrowserPointer)
+  mainWindow.on('resize', remapHostBrowserPointer)
+  screen.on('display-metrics-changed', remapHostBrowserPointer)
   hostBrowserService?.destroy()
   hostBrowserService = new HostBrowserService({
     ...createElectronHostBrowserBindings(() => mainWindow),
@@ -844,6 +852,8 @@ function registerIpcHandlers(): void {
         disconnect: () => service.disconnect(),
         createTask: (projectId) => service.createTask(projectId),
         enterTask: async (taskId) => {
+          hostBrowserService?.noteActiveTask(taskId)
+          browserPluginOverlayHost?.noteActiveTask(taskId)
           const entry = await service.enterTask(taskId)
           await applyTakeoverControlPrompt(service, executor, taskId, true)
           return entry

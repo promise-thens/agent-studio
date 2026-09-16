@@ -28,7 +28,9 @@ export function registerHostBrowserIpcHandlers(
     const request = readRequest(args, ['taskId'])
     const taskId = readText(request, 'taskId')
     requireTaskProjectId(dependencies.getHistory, taskId)
-    return requireHostBrowser(dependencies.getHostBrowser).getChrome()
+    const browser = requireHostBrowser(dependencies.getHostBrowser)
+    browser.noteActiveTask(taskId)
+    return browser.getChrome()
   })
 
   register(TASK_INVOKE_CHANNELS.setBrowserOpen, (args) => {

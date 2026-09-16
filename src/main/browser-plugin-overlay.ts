@@ -123,6 +123,8 @@ export class BrowserPluginOverlaySession {
   }
 
   acceptExecutionSnapshot(snapshot: TaskExecutionSnapshot): void {
+    const nextTaskId = snapshot.execution?.taskId
+    if (nextTaskId) this.noteActiveTask(nextTaskId)
     this.execution = snapshot.execution
     if (!this.execution || !ACTIVE_EXECUTION_STATES.has(this.execution.state)) {
       this.pendingBrowserApprovals.clear()
@@ -185,6 +187,14 @@ export class BrowserPluginOverlaySession {
   clearHostBrowserPointer(): void {
     this.hostPointer = undefined
     this.hostPointerIds = {}
+  }
+
+  /**
+   * Spec §6：切到其它 Task 必须藏针。Turn 结束 execution 变空时不要走这里，闲置针要留着。
+   */
+  noteActiveTask(taskId: string): void {
+    if (!this.hostPointerIds.taskId || this.hostPointerIds.taskId === taskId) return
+    this.clearHostBrowserPointer()
   }
 
   getSnapshot(): BrowserPluginOverlaySnapshot {
@@ -267,6 +277,11 @@ export class BrowserPluginOverlayHost {
    */
   clearHostBrowserPointer(): void {
     this.session.clearHostBrowserPointer()
+    this.publish()
+  }
+
+  noteActiveTask(taskId: string): void {
+    this.session.noteActiveTask(taskId)
     this.publish()
   }
 

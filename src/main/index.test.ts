@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRuntimeStatus } from '../shared/agent'
 import type {
@@ -339,6 +342,9 @@ vi.mock('electron', () => {
     setBounds(): void {
       return undefined
     }
+    getContentBounds(): { x: number; y: number; width: number; height: number } {
+      return { x: 0, y: 0, width: 1440, height: 900 }
+    }
     isVisible(): boolean {
       return false
     }
@@ -393,7 +399,9 @@ vi.mock('electron', () => {
     screen: {
       getPrimaryDisplay: () => ({
         bounds: { x: 0, y: 0, width: 1440, height: 900 }
-      })
+      }),
+      on: vi.fn(),
+      removeListener: vi.fn()
     },
     dialog: {
       showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] })),
@@ -585,6 +593,21 @@ vi.mock('./runtime/grok/grok-plugin-cli', () => ({
 vi.mock('./runtime/grok/grok-marketplace-inventory', () => ({
   listGrokMarketplacePlugins: vi.fn(async () => [])
 }))
+
+describe('宿主 overlay 指针组装', () => {
+  it('窗口几何变化触发 remap，切 Task 清针，映射公式不进 IPC handler', () => {
+    const indexSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'index.ts'),
+      'utf8'
+    )
+    expect(indexSource).toContain("mainWindow.on('move'")
+    expect(indexSource).toContain("mainWindow.on('resize'")
+    expect(indexSource).toContain('display-metrics-changed')
+    expect(indexSource).toContain('remapHostBrowserPointer')
+    expect(indexSource).toContain('noteActiveTask')
+    expect(indexSource).not.toContain('mapViewportCssToOverlayDip')
+  })
+})
 
 describe('Main 删除与权限失效编排', () => {
   beforeAll(async () => {

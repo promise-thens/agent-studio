@@ -389,6 +389,20 @@ describe('宿主 host-browser 指针', () => {
     expect(hidden?.pointer).toBeUndefined()
   })
 
+  it('切换 Task 后省略宿主 pointer', () => {
+    const session = new BrowserPluginOverlaySession()
+    session.acceptHostBrowserPointer({
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+    expect(session.getSnapshot().pointer).toEqual({ x: 310, y: 130 })
+    session.noteActiveTask('task-1')
+    expect(session.getSnapshot().pointer).toEqual({ x: 310, y: 130 })
+    session.noteActiveTask('task-2')
+    expect(session.getSnapshot().pointer).toBeUndefined()
+  })
+
   it('主窗口失焦/最小化清针，避免 alwaysOnTop 漏到其它 App', () => {
     const indexSource = readFileSync(join(mainDir, 'index.ts'), 'utf8')
     const overlaySource = readFileSync(join(mainDir, 'browser-plugin-overlay.ts'), 'utf8')
@@ -396,6 +410,11 @@ describe('宿主 host-browser 指针', () => {
     expect(indexSource).toContain("mainWindow.on('minimize'")
     expect(indexSource).toContain('clearHostBrowserPointer')
     expect(indexSource).toContain('alwaysOnTop')
+    expect(indexSource).toContain("mainWindow.on('move'")
+    expect(indexSource).toContain("mainWindow.on('resize'")
+    expect(indexSource).toContain('display-metrics-changed')
+    expect(indexSource).toContain('remapHostBrowserPointer')
+    expect(indexSource).toContain('noteActiveTask')
     expect(indexSource).not.toContain('mapViewportCssToOverlayDip')
     expect(overlaySource).toContain('getPrimaryDisplay')
     expect(overlaySource).not.toMatch(/surface:\s*['"]computer-use['"]/)

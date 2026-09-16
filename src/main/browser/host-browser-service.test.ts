@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { HostBrowserBounds } from '../../shared/host-browser'
-import { HostBrowserService, type HostBrowserGuest } from './host-browser-service'
+import {
+  HostBrowserService,
+  type HostBrowserGuest,
+  type HostBrowserPointerGeometry
+} from './host-browser-service'
 import type { HostBrowserActionDriver, HostBrowserActionResult } from './host-browser-actions'
 
 function createFakeGuest(projectId: string): HostBrowserGuest & {
@@ -282,10 +286,21 @@ function createPointerService(options?: {
   acceptHostBrowserPointer: ReturnType<typeof vi.fn>
   clearHostBrowserPointer: ReturnType<typeof vi.fn>
   emptyQuads: { current: boolean }
+  geometryBox: { current: HostBrowserPointerGeometry | null }
 } {
   const acceptHostBrowserPointer = vi.fn()
   const clearHostBrowserPointer = vi.fn()
   const emptyQuads = options?.emptyQuads ?? { current: false }
+  const geometryBox: { current: HostBrowserPointerGeometry | null } = {
+    current:
+      options && 'geometry' in options
+        ? (options.geometry ?? null)
+        : {
+            contentBounds: POINTER_CONTENT_BOUNDS,
+            overlayBounds: POINTER_OVERLAY_BOUNDS,
+            zoomFactor: 1
+          }
+  }
   const guest = createClickableGuest('project-a', emptyQuads)
   const service = new HostBrowserService({
     createGuest: () => guest,
@@ -304,14 +319,7 @@ function createPointerService(options?: {
       reason: 'user-allowed',
       scope: 'once'
     }),
-    getPointerGeometry:
-      options && 'geometry' in options
-        ? () => options.geometry ?? null
-        : () => ({
-            contentBounds: POINTER_CONTENT_BOUNDS,
-            overlayBounds: POINTER_OVERLAY_BOUNDS,
-            zoomFactor: 1
-          }),
+    getPointerGeometry: () => geometryBox.current,
     acceptHostBrowserPointer,
     clearHostBrowserPointer
   })
@@ -319,7 +327,14 @@ function createPointerService(options?: {
   if (options?.viewBounds !== undefined || !options || !('viewBounds' in options)) {
     service.updateBounds(options?.viewBounds ?? POINTER_VIEW_BOUNDS)
   }
-  return { service, guest, acceptHostBrowserPointer, clearHostBrowserPointer, emptyQuads }
+  return {
+    service,
+    guest,
+    acceptHostBrowserPointer,
+    clearHostBrowserPointer,
+    emptyQuads,
+    geometryBox
+  }
 }
 
 async function snapshotThenClick(service: HostBrowserService): Promise<HostBrowserActionResult> {
@@ -391,6 +406,48 @@ describe('HostBrowserService overlay 指针', () => {
       name: 'browser_navigate',
       arguments: { url: 'https://example.com' }
     })
+    expect(acceptHostBrowserPointer).not.toHaveBeenCalled()
+  })
+
+  it('同一 CSS 点在 contentBounds 平移后重映射为新 DIP', async () => {
+    const { service, acceptHostBrowserPointer, geometryBox } = createPointerService()
+    await snapshotThenClick(service)
+    expect(acceptHostBrowserPointer).toHaveBeenLastCalledWith({
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+    geometryBox.current = {
+      contentBounds: { x: 150, y: 100, width: 1200, height: 700 },
+      overlayBounds: POINTER_OVERLAY_BOUNDS,
+      zoomFactor: 1
+    }
+    service.remapHostBrowserPointer()
+    expect(acceptHostBrowserPointer).toHaveBeenLastCalledWith({
+      pointer: { x: 360, y: 150 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+  })
+
+  it('几何变化后点落在 view 外则清针，不得留下旧 DIP', async () => {
+    const { service, acceptHostBrowserPointer, clearHostBrowserPointer } = createPointerService()
+    await snapshotThenClick(service)
+    expect(acceptHostBrowserPointer).toHaveBeenCalledTimes(1)
+    service.updateBounds({ x: 0, y: 0, width: 5, height: 5 })
+    expect(clearHostBrowserPointer).toHaveBeenCalled()
+    acceptHostBrowserPointer.mockClear()
+    service.remapHostBrowserPointer()
+    expect(acceptHostBrowserPointer).not.toHaveBeenCalled()
+  })
+
+  it('切换 Task 后清针，remap 不得把旧针画回来', async () => {
+    const { service, acceptHostBrowserPointer, clearHostBrowserPointer } = createPointerService()
+    await snapshotThenClick(service)
+    service.noteActiveTask('task-2')
+    expect(clearHostBrowserPointer).toHaveBeenCalled()
+    acceptHostBrowserPointer.mockClear()
+    service.remapHostBrowserPointer()
     expect(acceptHostBrowserPointer).not.toHaveBeenCalled()
   })
 })
