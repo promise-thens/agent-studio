@@ -67,6 +67,17 @@ export function registerHostBrowserIpcHandlers(
     requireHostBrowser(dependencies.getHostBrowser).updateBounds(bounds)
     return null
   })
+
+  register(TASK_INVOKE_CHANNELS.userActBrowser, (args) => {
+    const request = readRequest(args, ['taskId', 'action'])
+    const taskId = readText(request, 'taskId')
+    requireTaskProjectId(dependencies.getHistory, taskId)
+    const action = readText(request, 'action')
+    if (action !== 'back' && action !== 'forward' && action !== 'reload' && action !== 'stop') {
+      throw new DesktopIpcFailure('invalid-input', '无效的浏览器动作。')
+    }
+    return requireHostBrowser(dependencies.getHostBrowser).userAct(taskId, action)
+  })
 }
 
 function requireHostBrowser(getHostBrowser: () => HostBrowserService | null): HostBrowserService {

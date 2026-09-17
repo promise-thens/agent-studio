@@ -52,6 +52,12 @@ export interface HostBrowserGuest {
   destroy(): void
   onChromeChanged(listener: () => void): void
   createActionDriver(): HostBrowserActionDriver
+  canGoBack?(): boolean
+  canGoForward?(): boolean
+  goBack?(): Promise<boolean> | boolean
+  goForward?(): Promise<boolean> | boolean
+  reload?(): void
+  stop?(): void
 }
 
 /** 窗口与 overlay 几何由组装层注入；Service 只做 viewport → overlay DIP 映射。 */
@@ -100,12 +106,30 @@ export class HostBrowserService {
 
   getChrome(): HostBrowserChrome {
     const url = this.guest?.getURL() ?? ''
-    return {
+    const chrome: HostBrowserChrome = {
       url: url === 'about:blank' ? '' : url,
       title: this.guest?.getTitle() ?? '',
       isLoading: this.guest?.isLoading() ?? false,
       open: this.wantOpen
     }
+    if (this.guest?.canGoBack?.()) chrome.canGoBack = true
+    if (this.guest?.canGoForward?.()) chrome.canGoForward = true
+    return chrome
+  }
+
+  /**
+   * 用户直接点击内置浏览器后退、前进、刷新或停止。
+   */
+  userAct(taskId: string, action: 'back' | 'forward' | 'reload' | 'stop'): HostBrowserChrome {
+    this.noteActiveTask(taskId)
+    if (this.guest) {
+      if (action === 'back') void this.guest.goBack?.()
+      else if (action === 'forward') void this.guest.goForward?.()
+      else if (action === 'reload') this.guest.reload?.()
+      else if (action === 'stop') this.guest.stop?.()
+    }
+    this.emitChrome()
+    return this.getChrome()
   }
 
   /**
@@ -400,6 +424,32 @@ export function createElectronHostBrowserGuest(projectId: string): HostBrowserGu
     },
     createActionDriver() {
       return createElectronHostBrowserActionDriver(webContents, view)
+    },
+    canGoBack() {
+      return !webContents.isDestroyed() && webContents.navigationHistory.canGoBack()
+    },
+    canGoForward() {
+      return !webContents.isDestroyed() && webContents.navigationHistory.canGoForward()
+    },
+    async goBack() {
+      if (!webContents.isDestroyed() && webContents.navigationHistory.canGoBack()) {
+        await webContents.navigationHistory.goBack()
+        return true
+      }
+      return false
+    },
+    async goForward() {
+      if (!webContents.isDestroyed() && webContents.navigationHistory.canGoForward()) {
+        await webContents.navigationHistory.goForward()
+        return true
+      }
+      return false
+    },
+    reload() {
+      if (!webContents.isDestroyed()) webContents.reload()
+    },
+    stop() {
+      if (!webContents.isDestroyed()) webContents.stop()
     }
   }
 }
@@ -469,15 +519,27 @@ export function createElectronHostBrowserBindings(
   const attach = (guest: HostBrowserGuest, add: boolean): void => {
     const window = getWindow()
     const view = guest.nativeView
-    if (!window || !view) return
-    if (add) window.contentView.addChildView(view)
-    else window.contentView.removeChildView(view)
+    // closed 时 JS 包装还在，C++ 窗口/View 已没了；只判断真值会继续 removeChildView 并变成主进程未捕获异常。
+    if (!window || window.isDestroyed() || !view) return
+    try {
+      if (add) window.contentView.addChildView(view)
+      else window.contentView.removeChildView(view)
+    } catch (error) {
+      // isDestroyed 与 contentView 拆毁存在竞态；已销毁不得冒泡，其它错误仍抛出。
+      if (window.isDestroyed() || isDestroyedNativeObjectError(error)) return
+      throw error
+    }
   }
   return {
     createGuest: createElectronHostBrowserGuest,
     attachGuest: (guest) => attach(guest, true),
     detachGuest: (guest) => attach(guest, false)
   }
+}
+
+/** Electron 在原生对象已释放后抛 TypeError: Object has been destroyed。 */
+function isDestroyedNativeObjectError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('has been destroyed')
 }
 
 function originForAction(action: HostBrowserAction, currentUrl: string): string | null {

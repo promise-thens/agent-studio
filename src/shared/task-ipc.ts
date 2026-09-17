@@ -59,7 +59,9 @@ export const TASK_INVOKE_CHANNELS = {
   getBrowserChrome: 'task:get-browser-chrome',
   setBrowserOpen: 'task:set-browser-open',
   userNavigateBrowser: 'task:user-navigate-browser',
-  updateBrowserBounds: 'task:update-browser-bounds'
+  updateBrowserBounds: 'task:update-browser-bounds',
+  /** 用户点击内置浏览器后退/前进/刷新/停止 */
+  userActBrowser: 'task:user-act-browser'
 } as const
 
 /** Overlay 快照推送；中性 task:*，不要 grok:*。 */
@@ -247,4 +249,9 @@ export interface TaskDesktopApi {
     taskId: string,
     bounds: { x: number; y: number; width: number; height: number }
   ) => Promise<DesktopIpcResult<null>>
+  /** 用户操作内置浏览器动作（后退/前进/刷新/停止） */
+  userActBrowser: (
+    taskId: string,
+    action: 'back' | 'forward' | 'reload' | 'stop'
+  ) => Promise<DesktopIpcResult<HostBrowserChrome>>
 }

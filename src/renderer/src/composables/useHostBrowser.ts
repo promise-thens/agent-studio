@@ -31,6 +31,11 @@ export function useHostBrowser(taskIdRef: MaybeRef<string | undefined | null>): 
   setVisible: (open: boolean) => Promise<void>
   navigate: (url: string) => Promise<void>
   updateBounds: (bounds: HostBrowserBounds) => Promise<void>
+  act: (action: 'back' | 'forward' | 'reload' | 'stop') => Promise<void>
+  goBack: () => Promise<void>
+  goForward: () => Promise<void>
+  reload: () => Promise<void>
+  stop: () => Promise<void>
 } {
   const visible = ref(false)
   const chrome = ref<HostBrowserChrome>({ ...EMPTY_CHROME })
@@ -97,11 +102,29 @@ export function useHostBrowser(taskIdRef: MaybeRef<string | undefined | null>): 
     await window.task.updateBrowserBounds(taskId, bounds)
   }
 
+  /** 用户直接操作后退、前进、刷新或停止 */
+  async function act(action: 'back' | 'forward' | 'reload' | 'stop'): Promise<void> {
+    const taskId = unref(taskIdRef)
+    if (!taskId) return
+    const result = await window.task.userActBrowser(taskId, action)
+    if (result.ok) applyChrome(result.value)
+  }
+
+  const goBack = (): Promise<void> => act('back')
+  const goForward = (): Promise<void> => act('forward')
+  const reload = (): Promise<void> => act('reload')
+  const stop = (): Promise<void> => act('stop')
+
   return {
     visible: readonly(visible),
     chrome: readonly(chrome),
     setVisible,
     navigate,
-    updateBounds
+    updateBounds,
+    act,
+    goBack,
+    goForward,
+    reload,
+    stop
   }
 }

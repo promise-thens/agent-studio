@@ -49,10 +49,7 @@ import {
   type BrowserPluginOverlaySnapshot
 } from '../../shared/browser-plugin-overlay'
 import type { AgentRespondQuestionRequest } from '../../shared/agent-ipc'
-import {
-  buildQuestionRespondIpcPayload,
-  gateQuestionRespond
-} from './question-respond'
+import { buildQuestionRespondIpcPayload, gateQuestionRespond } from './question-respond'
 import {
   createAgentEventGuard,
   createAgentMessageKey,
@@ -85,10 +82,9 @@ import { useTaskWorkbench } from './composables/useTaskWorkbench'
 import {
   evaluateTaskComposerSend,
   isForeignExecutionBlockingSend,
-  pickLatestContextUsage,
+  presentComposerContextUsage,
   resolveCancelTurnRequest,
   resolveComposerChrome,
-  resolveComposerContextUsagePresentation,
   resolveStopButtonAriaLabel,
   resolveStopButtonTitle,
   resolveTaskHeaderFacts,
@@ -215,11 +211,48 @@ const {
   chrome: hostBrowserChrome,
   setVisible: setHostBrowserVisible,
   navigate: navigateHostBrowser,
-  updateBounds: updateHostBrowserBounds
+  updateBounds: updateHostBrowserBounds,
+  act: actHostBrowser
 } = useHostBrowser(activeTaskId)
+
+const DEFAULT_HOST_BROWSER_WIDTH = 480
+const MIN_HOST_BROWSER_WIDTH = 320
+
+function readInitialHostBrowserWidth(): number {
+  try {
+    const raw = localStorage.getItem('agent-studio:host-browser-width')
+    if (raw) {
+      const parsed = Number.parseInt(raw, 10)
+      if (Number.isFinite(parsed) && parsed >= MIN_HOST_BROWSER_WIDTH) return parsed
+    }
+  } catch {
+    // 忽略本地存储异常
+  }
+  return DEFAULT_HOST_BROWSER_WIDTH
+}
+
+/** 宿主内置浏览器面板宽度（支持随意拖拽调整与记忆持久化） */
+const hostBrowserWidth = ref(readInitialHostBrowserWidth())
+
+function handleHostBrowserWidthChange(newWidth: number): void {
+  hostBrowserWidth.value = newWidth
+  try {
+    localStorage.setItem('agent-studio:host-browser-width', String(newWidth))
+  } catch {
+    // 忽略本地存储异常
+  }
+}
 const hostBrowserToggleTitle = computed(() =>
   hostBrowserVisible.value ? '关闭内置浏览器' : '打开内置浏览器'
 )
+
+/**
+ * 切换内置浏览器显示状态
+ * 浏览器与检查器可以同时存在，互不遮挡（检查器自动在中间对话列右上角避让右侧浏览器）
+ */
+async function toggleHostBrowser(): Promise<void> {
+  await setHostBrowserVisible(!hostBrowserVisible.value)
+}
 const activeExecution = workbench.activeExecution
 const providerSummary = ref<ProviderConfigSummary | null>(null)
 const providerBootState = ref<'loading' | 'needs-provider' | 'ready'>('loading')
@@ -238,6 +271,24 @@ const historyConfirmation = ref<{
   preview?: DeletionPreview
 } | null>(null)
 const historyConfirmationPending = ref(false)
+
+/** 全屏模态弹窗（设置弹窗、删除确认）打开期间挂起内置浏览器原生视图，关闭后恢复，防止原生 View 遮挡模态框右上角关闭按钮及表单交互。 */
+const hasBlockingModal = computed(() =>
+  Boolean(showSettingsDialog.value || historyConfirmation.value)
+)
+let resumeHostBrowserAfterModal = false
+
+watch(hasBlockingModal, async (blocking) => {
+  if (blocking) {
+    if (hostBrowserVisible.value) {
+      resumeHostBrowserAfterModal = true
+      await setHostBrowserVisible(false)
+    }
+  } else if (resumeHostBrowserAfterModal) {
+    resumeHostBrowserAfterModal = false
+    await setHostBrowserVisible(true)
+  }
+})
 const folderNotice = ref<{ title: string; description: string } | null>(null)
 const conversationEntry = ref<ConversationEntryState | null>(null)
 let conversationEnterGeneration = 0
@@ -288,8 +339,8 @@ const permissionResponsePending = computed(() =>
 const questionQueue = ref<AgentQuestionRequest[]>([])
 const question = computed(() => questionQueue.value[0] ?? null)
 const respondingQuestion = ref<string | null>(null)
-const questionResponsePending = computed(
-  () => Boolean(question.value && respondingQuestion.value === question.value.questionId)
+const questionResponsePending = computed(() =>
+  Boolean(question.value && respondingQuestion.value === question.value.questionId)
 )
 let permissionExpiryTimer: ReturnType<typeof setTimeout> | null = null
 /** 检查器默认关上；悬浮时覆盖右侧，吸附时才进入第三列。 */
@@ -635,7 +686,7 @@ const composerChrome = computed(() =>
 )
 const composerAction = computed(() => composerChrome.value.action)
 const composerContextUsage = computed(() =>
-  resolveComposerContextUsagePresentation(pickLatestContextUsage(taskTimeline.activeTimeline.value))
+  presentComposerContextUsage(taskTimeline.activeTimeline.value)
 )
 const promptMediaHint = computed(() =>
   status.value.promptMedia && status.value.promptMedia.image === false
@@ -1755,8 +1806,7 @@ async function respondPermission(decision: AgentPermissionDecision): Promise<voi
 /** 问答按 arrival 顺序展示；每张卡只允许对应的 questionId 在途，避免重复提交。 */
 async function respondQuestion(event: AgentRespondQuestionRequest): Promise<void> {
   // 卡片自带公开身份。队列 miss 也必须转发——吞掉 submit 会造成无 ext-out。
-  const queued =
-    questionQueue.value.find((item) => item.questionId === event.questionId) ?? null
+  const queued = questionQueue.value.find((item) => item.questionId === event.questionId) ?? null
   const gate = gateQuestionRespond({
     event,
     queued,
@@ -1790,9 +1840,7 @@ async function respondQuestion(event: AgentRespondQuestionRequest): Promise<void
         [event.taskId]: 'normal'
       }
     }
-    questionQueue.value = questionQueue.value.filter(
-      (item) => item.questionId !== event.questionId
-    )
+    questionQueue.value = questionQueue.value.filter((item) => item.questionId !== event.questionId)
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
   } finally {
@@ -2165,30 +2213,30 @@ function scrollMessagesToBottom(): void {
         <BrandMark :size="16" />
         <span>Agent Studio</span>
       </div>
-      <button
-        v-if="!showProviderScreen"
-        class="icon-button no-drag"
-        type="button"
-        :title="hostBrowserToggleTitle"
-        :aria-label="hostBrowserToggleTitle"
-        :aria-pressed="hostBrowserVisible"
-        :disabled="!activeTaskId"
-        @click="setHostBrowserVisible(!hostBrowserVisible)"
-      >
-        <Globe :size="17" />
-      </button>
-      <button
-        v-if="!showProviderScreen"
-        class="icon-button no-drag"
-        type="button"
-        data-inspector-toggle
-        :title="inspectorToggleTitle"
-        :aria-label="inspectorToggleTitle"
-        :aria-pressed="showInspector"
-        @click="toggleInspector"
-      >
-        <SidebarSimple :size="17" />
-      </button>
+      <div v-if="!showProviderScreen" class="titlebar-actions no-drag">
+        <button
+          class="icon-button no-drag"
+          type="button"
+          :title="hostBrowserToggleTitle"
+          :aria-label="hostBrowserToggleTitle"
+          :aria-pressed="hostBrowserVisible"
+          :disabled="!activeTaskId"
+          @click="toggleHostBrowser"
+        >
+          <Globe :size="17" />
+        </button>
+        <button
+          class="icon-button no-drag"
+          type="button"
+          data-inspector-toggle
+          :title="inspectorToggleTitle"
+          :aria-label="inspectorToggleTitle"
+          :aria-pressed="showInspector"
+          @click="toggleInspector"
+        >
+          <SidebarSimple :size="17" />
+        </button>
+      </div>
     </header>
 
     <Transition name="runtime-notice">
@@ -2229,6 +2277,7 @@ function scrollMessagesToBottom(): void {
         'is-inspector-docked': showInspector && inspectorDocked,
         'is-browser-open': hostBrowserVisible
       }"
+      :style="hostBrowserVisible ? { '--host-browser-width': `${hostBrowserWidth}px` } : undefined"
     >
       <ProjectSidebar
         :projects="workbench.projects.value"
@@ -2395,14 +2444,19 @@ function scrollMessagesToBottom(): void {
         :url="hostBrowserChrome.url"
         :title="hostBrowserChrome.title"
         :is-loading="hostBrowserChrome.isLoading"
+        :can-go-back="Boolean(hostBrowserChrome.canGoBack)"
+        :can-go-forward="Boolean(hostBrowserChrome.canGoForward)"
         :task-id="activeTaskId"
         @navigate="navigateHostBrowser"
+        @act="actHostBrowser"
         @close="setHostBrowserVisible(false)"
         @update:bounds="updateHostBrowserBounds"
+        @update:width="handleHostBrowserWidthChange"
       />
 
       <TaskInspector
         :open="showInspector"
+        :right-offset="hostBrowserVisible ? hostBrowserWidth : 0"
         :active-tab="inspectorTab"
         :docked="inspectorDocked"
         :task-id="activeTaskId"

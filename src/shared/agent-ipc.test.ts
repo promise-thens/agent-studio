@@ -128,6 +128,7 @@ describe('桌面 IPC 静态契约', () => {
       'task:set-browser-open',
       'task:user-navigate-browser',
       'task:update-browser-bounds',
+      'task:user-act-browser',
       'task:browser-plugin-overlay',
       'task:browser-chrome',
       'task:browser-plugin-overlay-chip-hover'

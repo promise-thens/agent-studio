@@ -36,6 +36,10 @@ export interface HostBrowserChrome {
   title: string
   isLoading: boolean
   open: boolean
+  /** 当前页面历史是否支持后退 */
+  canGoBack?: boolean
+  /** 当前页面历史是否支持前进 */
+  canGoForward?: boolean
 }
 
 export interface HostBrowserBounds {
@@ -92,12 +96,15 @@ export function parseHostBrowserChrome(value: unknown): HostBrowserChrome | null
   const url = parseChromeUrl(value.url)
   const title = parseChromeTitle(value.title)
   if (url === null || title === null) return null
-  return {
+  const chrome: HostBrowserChrome = {
     url,
     title,
     isLoading: value.isLoading,
     open: value.open
   }
+  if (value.canGoBack === true) chrome.canGoBack = true
+  if (value.canGoForward === true) chrome.canGoForward = true
+  return chrome
 }
 
 /**

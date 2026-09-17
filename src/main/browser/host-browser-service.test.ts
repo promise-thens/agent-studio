@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import type { HostBrowserBounds } from '../../shared/host-browser'
 import {
+  createElectronHostBrowserBindings,
   HostBrowserService,
   type HostBrowserGuest,
   type HostBrowserPointerGeometry
@@ -509,6 +510,86 @@ describe('HostBrowserService overlay 指针', () => {
     acceptHostBrowserPointer.mockClear()
     service.remapHostBrowserPointer()
     expect(acceptHostBrowserPointer).not.toHaveBeenCalled()
+  })
+})
+
+describe('createElectronHostBrowserBindings', () => {
+  it('窗口已销毁时 detach 不得碰 contentView', () => {
+    const removeChildView = vi.fn(() => {
+      throw new TypeError('Object has been destroyed')
+    })
+    const window = {
+      isDestroyed: () => true,
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView
+      }
+    }
+    const bindings = createElectronHostBrowserBindings(() => window as never)
+    const guest = Object.assign(createFakeGuest('project-a'), { nativeView: { id: 'view-a' } })
+    expect(() => bindings.detachGuest(guest)).not.toThrow()
+    expect(removeChildView).not.toHaveBeenCalled()
+  })
+
+  it('主窗 closed 后销毁已挂载 guest 不得抛 Object has been destroyed', () => {
+    let destroyed = false
+    const addChildView = vi.fn()
+    const removeChildView = vi.fn(() => {
+      if (destroyed) throw new TypeError('Object has been destroyed')
+    })
+    const window = {
+      isDestroyed: () => destroyed,
+      contentView: { addChildView, removeChildView }
+    }
+    const bindings = createElectronHostBrowserBindings(() => window as never)
+    const guest = Object.assign(createFakeGuest('project-a'), { nativeView: { id: 'view-a' } })
+    const service = new HostBrowserService({
+      createGuest: () => guest,
+      attachGuest: bindings.attachGuest,
+      detachGuest: bindings.detachGuest
+    })
+
+    service.userNavigate('task-1', 'project-a', 'https://example.com')
+    service.updateBounds({ x: 100, y: 40, width: 480, height: 720 })
+    expect(addChildView).toHaveBeenCalledTimes(1)
+
+    destroyed = true
+    expect(() => service.destroy()).not.toThrow()
+    expect(guest.destroyed).toBe(true)
+    expect(removeChildView).not.toHaveBeenCalled()
+  })
+
+  it('removeChildView 在销毁竞态下抛错时 detach 必须吞掉', () => {
+    const removeChildView = vi.fn(() => {
+      throw new TypeError('Object has been destroyed')
+    })
+    const window = {
+      isDestroyed: () => false,
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView
+      }
+    }
+    const bindings = createElectronHostBrowserBindings(() => window as never)
+    const guest = Object.assign(createFakeGuest('project-a'), { nativeView: { id: 'view-a' } })
+    expect(() => bindings.detachGuest(guest)).not.toThrow()
+    expect(removeChildView).toHaveBeenCalledTimes(1)
+  })
+
+  it('detach 遇到其它错误仍要抛出', () => {
+    const removeChildView = vi.fn(() => {
+      throw new Error('contentView missing')
+    })
+    const window = {
+      isDestroyed: () => false,
+      contentView: {
+        addChildView: vi.fn(),
+        removeChildView
+      }
+    }
+    const bindings = createElectronHostBrowserBindings(() => window as never)
+    const guest = Object.assign(createFakeGuest('project-a'), { nativeView: { id: 'view-a' } })
+    expect(() => bindings.detachGuest(guest)).toThrow('contentView missing')
   })
 })
 

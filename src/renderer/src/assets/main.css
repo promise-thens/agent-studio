@@ -40,18 +40,47 @@
   opacity: 0.9;
 }
 
-.titlebar > .icon-button {
+.titlebar-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
   justify-self: end;
   margin-right: 14px;
+}
+
+.titlebar-actions > .icon-button,
+.titlebar > .icon-button {
+  justify-self: end;
   width: 32px;
   height: 32px;
   border-radius: var(--radius-chip);
   color: var(--text-3);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
 }
 
-.titlebar > .icon-button:hover {
+.titlebar-actions > .icon-button:hover:not(:disabled),
+.titlebar > .icon-button:hover:not(:disabled) {
   color: var(--text-1);
   background: color-mix(in srgb, var(--surface-3) 80%, transparent);
+}
+
+.titlebar-actions > .icon-button:disabled,
+.titlebar > .icon-button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.titlebar-actions > .icon-button[aria-pressed='true'] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 /* Runtime 连接失败统一从顶部提醒，避免错误文本堆进对话区；保留轻量重试入口。 */
@@ -99,7 +128,9 @@
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
-  transition: background 140ms ease, color 140ms ease;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
 }
 
 .runtime-notice__retry:hover {
@@ -109,7 +140,9 @@
 
 .runtime-notice-enter-active,
 .runtime-notice-leave-active {
-  transition: opacity 180ms ease, transform 180ms ease;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
 }
 
 .runtime-notice-enter-from,
@@ -162,23 +195,24 @@ textarea {
   box-shadow: none;
 }
 
-/* 内置浏览器是工作区右栏，不是 Inspector 标签。 */
+/* 内置浏览器是工作区右栏，不是 Inspector 标签；支持通过 --host-browser-width 动态拖拽调整宽度。 */
 .workspace-layout.is-browser-open {
-  grid-template-columns: 220px minmax(0, 1fr) minmax(280px, 42%);
+  grid-template-columns: 220px minmax(0, 1fr) var(--host-browser-width, minmax(280px, 42%));
 }
 
 .workspace-layout.is-browser-open > .host-browser-pane {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 
 /*
- * WebContentsView 盖在主 Renderer 之上。检查器若仍贴右边缘，会被 guest 挡住点击。
- * 右栏打开时把悬浮检查器挪到对话列上。
+ * 内置浏览器与检查器可以同时存在。
+ * 当右栏打开浏览器时，检查器悬浮在中间对话列内，右侧留出浏览器空间，绝不遮挡右侧网页。
  */
 .workspace-layout.is-browser-open > .task-inspector {
-  right: max(292px, calc(42% + 12px));
+  max-width: calc(100% - var(--host-browser-width, 480px) - 24px);
 }
 
 .provider-screen,
@@ -994,6 +1028,116 @@ button:disabled {
 
 .tool-row[data-status='completed'] .tool-row-status {
   color: color-mix(in srgb, var(--success) 76%, var(--text-3));
+}
+
+.conversation-edit-diff {
+  min-width: 0;
+  margin: 4px 0 10px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
+}
+
+.conversation-edit-diff-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.conversation-edit-diff-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-edit-diff-stat {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.conversation-edit-diff-add {
+  color: color-mix(in srgb, var(--success) 72%, var(--text-1));
+}
+
+.conversation-edit-diff-del {
+  color: color-mix(in srgb, var(--danger) 72%, var(--text-1));
+}
+
+.conversation-edit-diff-path {
+  margin: 0;
+  padding: 6px 10px 0;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.conversation-edit-diff-banner {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.conversation-edit-diff-hunks {
+  overflow: auto;
+  max-height: min(50vh, 420px);
+  padding: 4px 0 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.conversation-edit-diff-gap {
+  padding: 4px 10px 4px 52px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.conversation-edit-line {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  min-width: 100%;
+}
+
+.conversation-edit-gutter {
+  padding: 0 8px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+
+.conversation-edit-text {
+  min-width: 0;
+  padding: 0 10px 0 4px;
+  color: var(--text-1);
+  white-space: pre;
+}
+
+.conversation-edit-line[data-kind='add'] {
+  color: color-mix(in srgb, var(--success) 42%, var(--text-1));
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+.conversation-edit-line[data-kind='del'] {
+  color: color-mix(in srgb, var(--danger) 42%, var(--text-1));
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.conversation-edit-line[data-kind='add'] .conversation-edit-text,
+.conversation-edit-line[data-kind='del'] .conversation-edit-text {
+  color: inherit;
 }
 
 .tool-row[data-status='in_progress'] .tool-row-status,
@@ -3070,7 +3214,8 @@ button:disabled {
   z-index: 8;
   display: flex;
   width: min(400px, calc(100% - 24px));
-  height: min(560px, calc(100% - 24px));
+  height: min(560px, calc(100% - var(--composer-height, 100px) - 24px));
+  max-height: calc(100% - var(--composer-height, 100px) - 24px);
   min-width: 280px;
   flex-direction: column;
   overflow: hidden;
@@ -3082,10 +3227,11 @@ button:disabled {
   resize: both;
 }
 
-/* 变更标签加宽，仍是悬浮卡。 */
+/* 变更标签加宽，仍是悬浮卡。限制最大高度避让底部输入框，杜绝重叠截断。 */
 .workspace-layout > .task-inspector.is-review-workspace:not(.is-expanded) {
   width: min(720px, calc(100% - 24px));
-  height: min(640px, calc(100% - 24px));
+  height: min(640px, calc(100% - var(--composer-height, 100px) - 24px));
+  max-height: calc(100% - var(--composer-height, 100px) - 24px);
   min-width: 420px;
 }
 
@@ -3093,6 +3239,13 @@ button:disabled {
 .workspace-layout > .task-inspector.is-split:not(.is-expanded) {
   width: min(860px, calc(100% - 24px));
   min-width: 600px;
+}
+
+/* 全屏专注审阅与审阅工作区提升层级至 15，彻底覆盖底层输入框（z-index: 9），杜绝幽灵穿透；
+   同时保持严格低于系统断连提示（z-index: 20）与全局确认模态。 */
+.workspace-layout > .task-inspector.is-expanded,
+.workspace-layout > .task-inspector.is-review-workspace {
+  z-index: 15;
 }
 
 .workspace-layout > .task-inspector.is-expanded {
@@ -3282,24 +3435,23 @@ button:disabled {
   animation: inspector-dock-in 180ms ease;
 }
 
-/* 浏览器占右栏时检查器保持悬浮，避免对话列被挤没。 */
+/* 浏览器占右栏且检查器开启吸附时，检查器优雅悬浮在对话列右上角，避让右侧浏览器。 */
 .workspace-layout.is-browser-open.is-inspector-docked {
-  grid-template-columns: 220px minmax(0, 1fr) minmax(280px, 42%);
+  grid-template-columns: 220px minmax(0, 1fr) var(--host-browser-width, minmax(280px, 42%));
 }
 
 .workspace-layout.is-browser-open.is-inspector-docked > .task-inspector {
   position: absolute;
   top: 12px;
-  right: 12px;
+  right: calc(var(--host-browser-width, 480px) + 12px);
   bottom: auto;
   grid-column: auto;
-  width: min(400px, calc(100% - 24px));
-  height: min(560px, calc(100% - 24px));
+  width: min(400px, calc(100% - var(--host-browser-width, 480px) - 24px));
+  height: min(560px, calc(100% - var(--composer-height, 100px) - 24px));
+  max-height: calc(100% - var(--composer-height, 100px) - 24px);
   border-width: 1px;
   border-radius: 12px;
   box-shadow: 0 18px 48px rgb(2 5 9 / 34%);
-  resize: both;
-  animation: none;
 }
 
 .workspace-layout.is-inspector-docked .inspector-pane-grid {
@@ -4780,4 +4932,142 @@ button:disabled {
 /* Markdown 由右侧阅读区统一滚动，避免正文块再嵌套一条滚动条。 */
 .artifact-markdown-body {
   overflow: visible;
+}
+
+/* 未验证文件与未能完整审阅：紧凑胶囊折叠样式，默认不占 Diff 垂直空间 */
+.changes-unverified.changes-unverified-compact {
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius-soft);
+  background: color-mix(in srgb, var(--surface-1) 85%, transparent);
+}
+
+.changes-unverified-details {
+  width: 100%;
+}
+
+.changes-unverified-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 2px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+}
+
+.changes-unverified-summary::-webkit-details-marker {
+  display: none;
+}
+
+.changes-unverified-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+
+.changes-unverified-pill strong {
+  color: var(--text-1);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.changes-unverified-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+  color: var(--text-1);
+}
+
+.changes-unverified-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.changes-unverified-list {
+  margin: 4px 0 6px;
+  padding-left: 1.4em;
+  max-height: 96px;
+  overflow-y: auto;
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.changes-unverified-list li {
+  line-height: 1.6;
+}
+
+/* 回退上一轮：底部抽屉折叠栏样式，默认收起，有动作时展开 */
+.changes-restore.changes-restore-drawer {
+  padding: 0 10px 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: var(--radius-soft);
+  background: color-mix(in srgb, var(--surface-1) 85%, transparent);
+}
+
+.changes-restore-details {
+  width: 100%;
+}
+
+.changes-restore-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 2px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+}
+
+.changes-restore-summary::-webkit-details-marker {
+  display: none;
+}
+
+.changes-restore-summary-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-1);
+}
+
+.changes-restore-summary-title strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.changes-restore-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.changes-restore-toggle-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.changes-restore-body {
+  padding: 6px 0 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+}
+
+.changes-restore-drawer .turn-rewind-card {
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+}
+
+.changes-restore-drawer .turn-rewind-card-title {
+  display: none; /* 抽屉触发头已包含标题，避免卡片内部重复 */
 }

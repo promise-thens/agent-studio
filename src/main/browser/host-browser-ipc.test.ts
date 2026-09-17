@@ -12,7 +12,7 @@ function createFixture(options?: { historyAvailable?: boolean; browserAvailable?
   invoke: <T>(channel: string, request: unknown) => Promise<DesktopIpcResult<T>>
   browser: Pick<
     HostBrowserService,
-    'getChrome' | 'setOpen' | 'userNavigate' | 'updateBounds' | 'noteActiveTask'
+    'getChrome' | 'setOpen' | 'userNavigate' | 'updateBounds' | 'noteActiveTask' | 'userAct'
   >
   history: Pick<TaskHistoryIpcRuntime, 'getTaskDetail'>
 } {
@@ -37,7 +37,15 @@ function createFixture(options?: { historyAvailable?: boolean; browserAvailable?
       open: true
     })),
     updateBounds: vi.fn(),
-    noteActiveTask: vi.fn()
+    noteActiveTask: vi.fn(),
+    userAct: vi.fn(() => ({
+      url: 'https://example.com/',
+      title: 'Example',
+      isLoading: false,
+      open: true,
+      canGoBack: true,
+      canGoForward: false
+    }))
   }
   const history = {
     getTaskDetail: vi.fn((taskId: string) => {
@@ -165,5 +173,24 @@ describe('宿主浏览器 IPC', () => {
       await fixture.invoke(TASK_INVOKE_CHANNELS.getBrowserChrome, { taskId: 'task-1' })
     ).toMatchObject({ ok: true })
     expect(fixture.browser.noteActiveTask).toHaveBeenCalledWith('task-1')
+  })
+
+  it('用户操作后退/前进/刷新动作，校验参数并调用 userAct', async () => {
+    const fixture = createFixture()
+    const result = await fixture.invoke(TASK_INVOKE_CHANNELS.userActBrowser, {
+      taskId: 'task-1',
+      action: 'back'
+    })
+    expect(result).toMatchObject({
+      ok: true,
+      value: { canGoBack: true, open: true }
+    })
+    expect(fixture.browser.userAct).toHaveBeenCalledWith('task-1', 'back')
+
+    const invalid = await fixture.invoke(TASK_INVOKE_CHANNELS.userActBrowser, {
+      taskId: 'task-1',
+      action: 'invalid-action'
+    })
+    expect(invalid).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
   })
 })

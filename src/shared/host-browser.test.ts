@@ -71,6 +71,43 @@ describe('parseHostBrowserChrome', () => {
     ).toBeNull()
     expect(parseHostBrowserChrome(null)).toBeNull()
   })
+
+  it('正确解析并保留 canGoBack 与 canGoForward 历史导航状态', () => {
+    expect(
+      parseHostBrowserChrome({
+        url: 'https://example.com/',
+        title: 'Example',
+        isLoading: false,
+        open: true,
+        canGoBack: true,
+        canGoForward: false
+      })
+    ).toEqual({
+      url: 'https://example.com/',
+      title: 'Example',
+      isLoading: false,
+      open: true,
+      canGoBack: true
+    })
+
+    expect(
+      parseHostBrowserChrome({
+        url: 'https://example.com/',
+        title: 'Example',
+        isLoading: false,
+        open: true,
+        canGoBack: true,
+        canGoForward: true
+      })
+    ).toEqual({
+      url: 'https://example.com/',
+      title: 'Example',
+      isLoading: false,
+      open: true,
+      canGoBack: true,
+      canGoForward: true
+    })
+  })
 })
 
 describe('parseHostBrowserBounds', () => {
