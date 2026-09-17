@@ -38,6 +38,8 @@ const props = withDefaults(
     artifactsController?: TaskArtifactsController | null
     advertisedCommands?: readonly { name: string }[]
     rewindBusy?: boolean
+    /** 右侧避让宽度（如内置浏览器打开时的宽度），使检查器悬浮在中间对话列内，不遮挡右侧网页 */
+    rightOffset?: number
   }>(),
   {
     docked: false,
@@ -51,7 +53,8 @@ const props = withDefaults(
     changesController: null,
     artifactsController: null,
     advertisedCommands: () => [],
-    rewindBusy: false
+    rewindBusy: false,
+    rightOffset: 0
   }
 )
 
@@ -90,10 +93,14 @@ const cardStyle = computed(() => {
 
 function readViewport(): { width: number; height: number } {
   const parent = cardRef.value?.offsetParent
-  if (parent instanceof HTMLElement) {
-    return { width: parent.clientWidth, height: parent.clientHeight }
-  }
-  return { width: window.innerWidth, height: window.innerHeight }
+  const baseWidth = parent instanceof HTMLElement ? parent.clientWidth : window.innerWidth
+  const baseHeight = parent instanceof HTMLElement ? parent.clientHeight : window.innerHeight
+  // 扣除右侧避让宽度（如内置浏览器占用的宽度），使 Inspector 局限在中间对话列内，绝不遮挡右侧浏览器
+  const effectiveWidth = Math.max(320, baseWidth - (props.rightOffset ?? 0))
+  // 全屏展开态独占工作区，拉满整个高度，不需要避让底部输入框；只有普通悬浮态才扣除底部输入框高度，避免拖拽重叠
+  const effectiveBottomOffset = expanded.value ? 0 : 100
+  const effectiveHeight = Math.max(320, baseHeight - effectiveBottomOffset)
+  return { width: effectiveWidth, height: effectiveHeight }
 }
 
 function readCardSize(): { width: number; height: number } {
@@ -310,6 +317,15 @@ watch(currentTab, () => {
   if (!props.open) return
   void nextTick(clampCurrent)
 })
+
+watch(
+  () => props.rightOffset,
+  () => {
+    if (props.open && !props.docked) {
+      void nextTick(clampCurrent)
+    }
+  }
+)
 
 onMounted(() => {
   window.addEventListener('resize', onWindowResize)

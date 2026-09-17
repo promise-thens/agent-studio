@@ -65,6 +65,16 @@ const {
   confirmTurnRewind
 } = props.controller
 
+/** 回退抽屉展开状态，默认收起，有预览或错误时自动展开。 */
+const restoreDrawerOpen = ref(false)
+
+watch(
+  () => Boolean(restorePreview.value || restoreError.value),
+  (shouldOpen) => {
+    if (shouldOpen) restoreDrawerOpen.value = true
+  }
+)
+
 const fileFilter = ref('')
 const collapsedFolderIds = ref(new Set<string>())
 const summary = computed(() => (changeSet.value ? presentChangeSetSummary(changeSet.value) : null))
@@ -301,33 +311,85 @@ function onConfirmRewind(selection: TurnRewindSelection): void {
         <p v-else class="changes-muted changes-diff-empty" role="status">选择一个文件查看差异。</p>
       </div>
 
-      <section v-if="unverifiedPaths.length" class="changes-unverified" aria-label="未验证文件">
-        <h3>未验证文件</h3>
-        <ul>
-          <li v-for="path in unverifiedPaths" :key="path">{{ path }}</li>
-        </ul>
+      <!-- 未验证文件：收纳为紧凑胶囊，默认折叠，避免大块空白 -->
+      <section
+        v-if="unverifiedPaths.length"
+        class="changes-unverified changes-unverified-compact"
+        aria-label="未验证文件"
+      >
+        <details class="changes-unverified-details">
+          <summary class="changes-unverified-summary">
+            <span class="changes-unverified-pill">
+              <span class="changes-unverified-badge">ℹ️ {{ unverifiedPaths.length }}</span>
+              <strong>未验证文件</strong>
+            </span>
+            <span class="changes-unverified-hint">点击展开清单</span>
+          </summary>
+          <ul class="changes-unverified-list">
+            <li v-for="path in unverifiedPaths" :key="path">{{ path }}</li>
+          </ul>
+        </details>
       </section>
       <p v-else-if="readiness.kind === 'incomplete'" class="changes-muted" role="status">
         变更读取不完整，无法确认哪些文件未经验证。
       </p>
 
-      <section v-if="incompletePaths.length" class="changes-unverified" aria-label="未能完整审阅">
-        <h3>未能完整审阅</h3>
-        <ul>
-          <li v-for="path in incompletePaths" :key="path">{{ path }}</li>
-        </ul>
+      <!-- 未能完整审阅：收纳为紧凑胶囊，默认折叠，保留原有无障碍与测试标签 -->
+      <section
+        v-if="incompletePaths.length"
+        class="changes-unverified changes-unverified-compact"
+        aria-label="未能完整审阅"
+      >
+        <details class="changes-unverified-details">
+          <summary class="changes-unverified-summary">
+            <span class="changes-unverified-pill">
+              <span class="changes-unverified-badge">⚠️ {{ incompletePaths.length }}</span>
+              <strong>未能完整审阅</strong>
+            </span>
+            <span class="changes-unverified-hint">点击展开清单</span>
+          </summary>
+          <ul class="changes-unverified-list">
+            <li v-for="path in incompletePaths" :key="path">{{ path }}</li>
+          </ul>
+        </details>
       </section>
 
-      <section v-if="showRestoreSection" class="changes-restore" aria-label="回退上一轮">
-        <p v-if="restoreMessage" class="changes-muted" role="status">{{ restoreMessage }}</p>
-        <p v-if="restoreError" class="changes-risk" role="alert">{{ restoreError }}</p>
-        <TurnRewindCard
-          :preview="rewindPreview"
-          :restore-busy="restoreBusy"
-          @preview-files="openRestorePreview()"
-          @confirm="onConfirmRewind"
-          @cancel-files="cancelRestorePreview()"
-        />
+      <!-- 回退上一轮：收纳为底部精致抽屉折叠栏，默认收起，保留 aria-label="回退上一轮" -->
+      <section
+        v-if="showRestoreSection"
+        class="changes-restore changes-restore-drawer"
+        aria-label="回退上一轮"
+      >
+        <details
+          :open="restoreDrawerOpen"
+          class="changes-restore-details"
+          @toggle="restoreDrawerOpen = ($event.target as HTMLDetailsElement).open"
+        >
+          <summary class="changes-restore-summary">
+            <div class="changes-restore-summary-title">
+              <span class="changes-restore-icon">↩</span>
+              <strong>回退上一轮</strong>
+              <span v-if="restoreMessage" class="changes-muted" role="status">{{
+                restoreMessage
+              }}</span>
+              <span v-if="restoreError" class="changes-risk" role="alert">{{ restoreError }}</span>
+            </div>
+            <span class="changes-restore-toggle-hint">{{
+              restoreDrawerOpen ? '收起' : canRestore ? '展开回退选项' : '查看状态'
+            }}</span>
+          </summary>
+          <div class="changes-restore-body">
+            <p v-if="restoreMessage" class="changes-muted" role="status">{{ restoreMessage }}</p>
+            <p v-if="restoreError" class="changes-risk" role="alert">{{ restoreError }}</p>
+            <TurnRewindCard
+              :preview="rewindPreview"
+              :restore-busy="restoreBusy"
+              @preview-files="openRestorePreview()"
+              @confirm="onConfirmRewind"
+              @cancel-files="cancelRestorePreview()"
+            />
+          </div>
+        </details>
       </section>
     </template>
   </section>

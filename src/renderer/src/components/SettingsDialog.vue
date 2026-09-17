@@ -185,6 +185,8 @@ function sectionIcon(id: SettingsSection): typeof Palette {
 <style scoped>
 .settings-backdrop {
   z-index: 24;
+  /* 模态遮罩禁止原生窗口拖拽捕获，确保点击事件顺畅直达渲染层 */
+  -webkit-app-region: no-drag;
 }
 
 .settings-dialog {
@@ -197,6 +199,8 @@ function sectionIcon(id: SettingsSection): typeof Palette {
   border-radius: var(--radius-panel);
   background: var(--surface-1);
   box-shadow: 0 28px 80px rgb(0 0 0 / 40%);
+  /* 弹窗主体确保不可拖拽 */
+  -webkit-app-region: no-drag;
 }
 
 .settings-dialog-header {
@@ -206,6 +210,13 @@ function sectionIcon(id: SettingsSection): typeof Palette {
   justify-content: space-between;
   padding: 14px 16px 12px 20px;
   border-bottom: 1px solid var(--border);
+  /* 弹窗顶栏及其关闭按钮彻底脱离原生拖动捕获，确保右上角关闭按钮点击灵敏 */
+  -webkit-app-region: no-drag;
+}
+
+.settings-dialog-header .icon-button {
+  -webkit-app-region: no-drag;
+  cursor: pointer;
 }
 
 .settings-dialog-header h2 {
