@@ -92,7 +92,7 @@ function getMergedFileList(item: CapsuleInnerBlock): readonly string[] {
         </template>
         <template v-else>
           <span class="activity-capsule-title">
-            已执行 {{ capsule.totalCount }} 项操作
+            {{ capsule.status === 'cancelled' ? '已停止' : `已执行 ${capsule.totalCount} 项操作` }}
             <span v-if="capsule.actionsSummary.length" class="activity-capsule-subtitle">
               （{{ capsule.actionsSummary.join('、') }}）
             </span>

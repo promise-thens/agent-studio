@@ -28,6 +28,7 @@ import QuestionPrompt from './QuestionPrompt.vue'
 import PlanChecklist from './PlanChecklist.vue'
 import SubagentCard from './SubagentCard.vue'
 import ToolRow from './ToolRow.vue'
+import ConversationEditDiff from './ConversationEditDiff.vue'
 import { groupConversationBlocks } from '../conversation-activity-capsule'
 import ActivityCapsule from './ActivityCapsule.vue'
 
@@ -100,6 +101,9 @@ const displayBlocks = computed(() => {
   if (props.variant !== 'conversation') return blocks.value
   return groupConversationBlocks(blocks.value, {
     isTurnActive: props.active,
+    turnStatus: props.turn.status,
+    waitingForUser:
+      Boolean(props.permission) || Boolean(props.question) || props.hasPendingQuestion,
     clockTick: effectiveClockTick.value
   })
 })
@@ -154,7 +158,8 @@ const activityHint = computed(() =>
   resolveConversationActivityHint({
     waitingForEvent: waitingForEvent.value,
     hasPendingQuestion: Boolean(props.question) || props.hasPendingQuestion,
-    currentStepLabel: currentStepLabel.value
+    currentStepLabel: currentStepLabel.value,
+    turnStatus: props.turn.status
   })
 )
 const activeThoughtNodeId = computed(
@@ -253,6 +258,14 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
         </summary>
         <PlanChecklist :entries="block.entries" :active="block.defaultExpanded" />
       </details>
+
+      <ConversationEditDiff
+        v-else-if="block.kind === 'tool' && block.editDiffs?.length"
+        :label="block.label"
+        :status="block.status"
+        :edits="block.editDiffs"
+        :warning="block.warning"
+      />
 
       <ToolRow
         v-else-if="block.kind === 'tool'"

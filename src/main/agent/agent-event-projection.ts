@@ -6,6 +6,7 @@ import type {
   AgentUsage
 } from '../../shared/agent'
 import type { PublicAgentDiffReviewReference, PublicAgentEvent } from '../../shared/agent-event'
+import { buildPublicEditDiffs } from '../../shared/edit-hunks'
 
 const MAX_PUBLIC_DIFF_PATHS = 20
 const MAX_PUBLIC_DIFF_PATH_BYTES = 4 * 1024
@@ -13,7 +14,8 @@ const MAX_PUBLIC_SHORT_TEXT_BYTES = 4 * 1024
 
 /**
  * 把 Main 内部事件投影为 Renderer 公开 DTO。
- * 这里逐字段构造，禁止 runtimeSessionId、Diff 正文和未来未知字段穿透 IPC。
+ * 这里逐字段构造，禁止 runtimeSessionId、完整 Diff 快照和未来未知字段穿透 IPC。
+ * 对话预览只带限长 hunk（edits），不含 AgentDiff.before/after。
  */
 export function projectPublicAgentEvent(
   event: AgentEvent,
@@ -82,13 +84,16 @@ export function projectPublicAgentEvent(
           status: entry.status
         }))
       }
-    case 'diff':
+    case 'diff': {
+      const edits = buildPublicEditDiffs(event.diffs, { redactText })
       return {
         ...base,
         kind: 'diff',
         references: event.diffs.map((diff) => projectDiffReference(diff, redactText)),
+        ...(edits.length ? { edits } : {}),
         ...(event.toolCallId ? { toolCallId: redactText(event.toolCallId) } : {})
       }
+    }
     case 'usage':
       return { ...base, kind: 'usage', usage: copyUsage(event.usage) }
     case 'turn-complete':

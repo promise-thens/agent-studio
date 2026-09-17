@@ -7,7 +7,7 @@ import type {
   AgentToolStatus,
   AgentTurnUsage
 } from '../../shared/agent'
-import type { PublicAgentEvent } from '../../shared/agent-event'
+import type { PublicAgentEditDiff, PublicAgentEvent } from '../../shared/agent-event'
 import type { CommandExecutionEvidence, ValidationOutcome } from '../../shared/command'
 import { deriveValidationResult } from '../../shared/command'
 import type { TaskExecutionSnapshot, TaskExecutionState } from '../../shared/task-execution'
@@ -87,6 +87,11 @@ export interface TaskTimelineFacts {
   commandEvidenceListTruncated?: true
   commandEvidencePersistIncomplete?: true
   integrityIssuesByKey: Record<string, TimelineIntegrityIssue>
+  /**
+   * 已确认的内部控制 Turn。execution 快照结束后仍要隐藏，
+   * 否则只剩实时事件的接管轮会露出「用户指令不可用」。
+   */
+  hiddenControlTurnIds: Record<string, true>
 }
 
 export type TaskTimelineFactAction =
@@ -95,6 +100,7 @@ export type TaskTimelineFactAction =
   | { type: 'turns/upsert'; turns: readonly TurnHistoryRecord[] }
   | { type: 'events/ingest-public'; events: readonly PublicAgentEvent[] }
   | { type: 'permission-audits/merge'; audits: readonly PermissionAuditRecord[] }
+  | { type: 'control-turn/hide'; turnId: string }
   | {
       type: 'command-evidence/replace'
       evidences: readonly CommandExecutionEvidence[]
@@ -165,6 +171,8 @@ export interface TimelineToolNode extends TimelineNodeBase {
   firstObservedAt?: string
   lastObservedAt?: string
   command?: TimelineCommandEvidenceView
+  /** 本次工具调用的对话内 hunk 预览；没有可展示 diff 时缺省。 */
+  editDiffs?: PublicAgentEditDiff[]
 }
 
 /** 子 Agent 根：parentId 孩子，或结构化 `[subagent:` spawn 行。 */
@@ -322,7 +330,8 @@ export function createTaskTimelineFacts(taskId: string): TaskTimelineFacts {
     task: { kind: 'empty' },
     turnsById: {},
     commandEvidenceById: {},
-    integrityIssuesByKey: {}
+    integrityIssuesByKey: {},
+    hiddenControlTurnIds: {}
   }
 }
 
@@ -352,6 +361,12 @@ export function reduceTaskTimelineFacts(
       })
     const turn = ensureTurn(next, action.admission.turnId)
     turn.admission ??= structuredClone(action.admission)
+    rememberHiddenControlTurn(next, action.admission)
+    return next
+  }
+  if (action.type === 'control-turn/hide') {
+    next.hiddenControlTurnIds ??= {}
+    next.hiddenControlTurnIds[action.turnId] = true
     return next
   }
   if (action.type === 'turns/upsert') {
@@ -369,6 +384,7 @@ export function reduceTaskTimelineFacts(
         'turn-revision-conflict',
         record.turnId
       )
+      rememberHiddenControlTurn(next, record)
     }
     return next
   }
@@ -404,7 +420,9 @@ export function selectTaskTimeline(
   context: TimelineSelectorContext
 ): TaskTimelineViewModel {
   const turns = Object.values(facts.turnsById)
-    .filter((turn) => !isHiddenControlTurn(turn, context.executionSnapshot))
+    .filter(
+      (turn) => !isHiddenControlTurn(turn, context.executionSnapshot, facts.hiddenControlTurnIds)
+    )
     .map((turn) => selectTurnTimeline(turn, context, facts))
     .sort(
       (left, right) =>
@@ -423,12 +441,14 @@ export function selectTaskTimeline(
 /** 过滤历史标记和实时执行快照中的内部控制 Turn，避免它们生成普通 Timeline 卡片。 */
 function isHiddenControlTurn(
   turn: TimelineTurnFacts,
-  executionSnapshot: TimelineSelectorContext['executionSnapshot']
+  executionSnapshot: TimelineSelectorContext['executionSnapshot'],
+  hiddenControlTurnIds: Record<string, true> = {}
 ): boolean {
+  if (hiddenControlTurnIds[turn.turnId]) return true
   const record = turn.record.kind === 'accepted' ? turn.record.value : undefined
   if (
     isTakeoverControlTurn({
-      turnKind: record?.turnKind,
+      turnKind: record?.turnKind ?? turn.admission?.turnKind,
       promptDisplayText: record?.promptDisplayText ?? turn.admission?.promptDisplayText
     })
   ) {
@@ -523,7 +543,7 @@ function projectNodes(
   // 调用方通常已在 selector 层过滤；这里再守一层，防止未来复用时泄露内部 Turn。
   if (
     isTakeoverControlTurn({
-      turnKind: record?.turnKind,
+      turnKind: record?.turnKind ?? turn.admission?.turnKind,
       promptDisplayText: record?.promptDisplayText ?? turn.admission?.promptDisplayText
     })
   ) {
@@ -550,6 +570,7 @@ function projectNodes(
       }
     | undefined
   const tools = new Map<string, TimelineToolNode>()
+  const pendingEditDiffs = new Map<string, PublicAgentEditDiff[]>()
   for (const event of events) {
     const base = {
       taskId: event.taskId,
@@ -649,10 +670,22 @@ function projectNodes(
         }
         const matched = matchCommandEvidence(commands, event.toolCallId)
         if (matched) node.command = toCommandEvidenceView(matched)
+        const pending = pendingEditDiffs.get(key)
+        if (pending?.length) {
+          node.editDiffs = pending
+          pendingEditDiffs.delete(key)
+        }
         tools.set(key, node)
         nodes.push(node)
       }
     } else if (event.kind === 'diff') {
+      if (event.edits?.length && event.toolCallId) {
+        const toolKey = `${event.taskId}:${event.turnId}:tool:${event.toolCallId}`
+        const existingTool = tools.get(toolKey)
+        const edits = structuredClone(event.edits)
+        if (existingTool) existingTool.editDiffs = edits
+        else pendingEditDiffs.set(toolKey, edits)
+      }
       for (const [index, reference] of event.references.entries())
         nodes.push({
           ...base,
@@ -1096,6 +1129,16 @@ function dedupeCommandViews(views: TimelineCommandEvidenceView[]): TimelineComma
     unique.push(view)
   }
   return unique
+}
+
+/** 接管控制 Turn 一旦被 admission、历史记录或 execution 快照确认，就永久排除出普通对话。 */
+function rememberHiddenControlTurn(
+  state: TaskTimelineFacts,
+  input: { turnId: string; turnKind?: string; promptDisplayText?: string }
+): void {
+  if (!isTakeoverControlTurn(input)) return
+  state.hiddenControlTurnIds ??= {}
+  state.hiddenControlTurnIds[input.turnId] = true
 }
 
 function ensureTurn(state: TaskTimelineFacts, turnId: string): TimelineTurnFacts {

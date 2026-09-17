@@ -3,6 +3,10 @@ import type { PublicAgentEvent } from '../../../shared/agent-event'
 import type { CommandExecutionEvidence } from '../../../shared/command'
 import type { TaskExecutionSnapshot } from '../../../shared/task-execution'
 import type { PublicAgentEventPage } from '../../../shared/task-ipc'
+import {
+  GROK_TAKEOVER_CONTROL_PROMPT,
+  TAKEOVER_CONTROL_TURN_KIND
+} from '../../../shared/task-takeover'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import { createTaskExecutionConsumer } from '../task-execution-consumer'
 import {
@@ -168,7 +172,21 @@ export function useTaskTimeline(options: UseTaskTimelineOptions): TaskTimelineCo
 
   function acceptExecutionSnapshot(snapshot: TaskExecutionSnapshot): void {
     // 执行快照常从 Vue ref 流入，必须先 toRaw，否则 structuredClone 会抛 DataCloneError。
-    if (!disposed) executionSnapshot.value = structuredClone(toRaw(snapshot))
+    if (disposed) return
+    executionSnapshot.value = structuredClone(toRaw(snapshot))
+    const execution = toRaw(executionSnapshot.value).execution
+    // 记住接管控制 Turn：快照结束后事件还在，不写入 hide/admission 就会露出「用户指令不可用」。
+    if (execution?.turnKind !== TAKEOVER_CONTROL_TURN_KIND) return
+    dispatch(execution.taskId, { type: 'control-turn/hide', turnId: execution.turnId })
+    acceptAdmission({
+      taskId: execution.taskId,
+      turnId: execution.turnId,
+      executionId: execution.executionId,
+      promptDisplayText: GROK_TAKEOVER_CONTROL_PROMPT,
+      turnKind: TAKEOVER_CONTROL_TURN_KIND,
+      model: { ...toRaw(execution.model) },
+      acceptedAt: execution.acceptedAt
+    })
   }
 
   function hydrateHistory(

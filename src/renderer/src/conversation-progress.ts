@@ -87,6 +87,7 @@ export function resolveConversationActivityHint(input: {
   waitingForEvent: boolean
   hasPendingQuestion: boolean
   currentStepLabel: string
+  turnStatus?: TurnTimelineViewModel['status']
 }): string {
   if (
     input.hasPendingQuestion ||
@@ -95,6 +96,13 @@ export function resolveConversationActivityHint(input: {
     return '等待你的回答'
   }
   if (input.waitingForEvent) return '等待 Runtime 新事件'
+  const terminal =
+    input.turnStatus === 'completed' ||
+    input.turnStatus === 'failed' ||
+    input.turnStatus === 'cancelled' ||
+    input.turnStatus === 'interrupted'
+  // 终态空轮不要假装还在「准备执行」，否则页眉右侧会一直停在占位句。
+  if (terminal && input.currentStepLabel === '准备执行') return ''
   return input.currentStepLabel
 }
 
@@ -123,7 +131,13 @@ export function conversationStatusLabel(status: TurnTimelineViewModel['status'])
 
 /** 从已投影节点中找出用户真正关心的“当前在做什么”。 */
 export function resolveConversationStep(nodes: readonly TaskTimelineNode[]): string {
+  // 静默授权被 reducer 排到所有事件之后，不能抢走计划和工具的当前步骤。
+  let fallbackAudit: string | undefined
   for (const node of [...nodes].reverse()) {
+    if (node.kind === 'permission-audit') {
+      fallbackAudit ??= '记录权限决定'
+      continue
+    }
     if (node.kind === 'tool') return node.title || '执行工具'
     if (node.kind === 'agent-group') return node.title || '执行子任务'
     if (node.kind === 'plan') {
@@ -131,9 +145,8 @@ export function resolveConversationStep(nodes: readonly TaskTimelineNode[]): str
       return `执行计划 · ${completed}/${node.entries.length}`
     }
     if (node.kind === 'thought' && node.text.trim()) return '思考中'
-    if (node.kind === 'permission-audit') return '记录权限决定'
     if (node.kind === 'error') return '处理错误'
     if (node.kind === 'message' && node.text.trim()) return '生成回复'
   }
-  return '准备执行'
+  return fallbackAudit ?? '准备执行'
 }

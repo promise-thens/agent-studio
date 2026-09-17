@@ -4,6 +4,7 @@
  * 彻底消除垂直糖葫芦串与重复刷屏的“已完成”标签。
  */
 
+import type { TaskExecutionState } from '../../shared/task-execution'
 import type {
   ConversationBlock,
   ConversationPermissionAuditBlock,
@@ -43,11 +44,28 @@ export interface ConversationActivityCapsuleBlock {
 export type GroupedConversationBlock =
   Exclude<ConversationBlock, CapsuleInnerBlock> | ConversationActivityCapsuleBlock
 
+/** 聚合胶囊时需要的 Turn 级上下文；缺省按历史回放处理。 */
+export interface GroupConversationBlocksOptions {
+  isTurnActive?: boolean
+  /** 与 Timeline Turn 状态对齐；停止/等待时不得把末尾胶囊钉在进行中。 */
+  turnStatus?: TaskExecutionState | 'pending'
+  /** 审批卡或问答卡贴在当前 Turn 时，过程已经停下来等用户。 */
+  waitingForUser?: boolean
+  clockTick?: number
+}
+
+const STOPPED_TURN_STATES = new Set<TaskExecutionState | 'pending'>([
+  'cancelling',
+  'cancelled',
+  'interrupted'
+])
+
 /**
  * 判断是否属于应当收入胶囊的中间执行过程节点。
  * 包含思考、工具执行、静默权限审计等过程节点；正文消息、计划看板、独立子任务与审批卡保持顶级展现。
  */
 export function isCapsuleProcessBlock(block: ConversationBlock): block is CapsuleInnerBlock {
+  if (block.kind === 'tool' && block.editDiffs?.length) return false
   return block.kind === 'thought' || block.kind === 'tool' || block.kind === 'permission-audit'
 }
 
@@ -78,7 +96,7 @@ export function extractCapsuleActionVerb(block: CapsuleInnerBlock): string {
  */
 export function groupConversationBlocks(
   blocks: readonly ConversationBlock[],
-  options?: { isTurnActive?: boolean; clockTick?: number }
+  options?: GroupConversationBlocksOptions
 ): GroupedConversationBlock[] {
   const result: GroupedConversationBlock[] = []
   let currentRun: CapsuleInnerBlock[] = []
@@ -108,27 +126,13 @@ export function groupConversationBlocks(
  */
 function buildActivityCapsule(
   items: CapsuleInnerBlock[],
-  options?: { isTurnActive?: boolean; clockTick?: number; isLastRun?: boolean }
+  options?: GroupConversationBlocksOptions & { isLastRun?: boolean }
 ): ConversationActivityCapsuleBlock {
   const first = items[0]
   const last = items[items.length - 1]
   const nodeId = `capsule:${first.nodeId}:${last.nodeId}`
 
-  // 1. 综合状态判定
-  let status: CapsuleStatus = 'completed'
-  const hasFailed = items.some((item) => item.kind === 'tool' && item.status === 'failed')
-  const hasRunning = items.some(
-    (item) => item.kind === 'tool' && (item.status === 'in_progress' || item.status === 'pending')
-  )
-  const hasCancelled = items.some((item) => item.kind === 'tool' && item.status === 'cancelled')
-
-  if (hasFailed) {
-    status = 'failed'
-  } else if (hasRunning || (options?.isTurnActive && options.isLastRun)) {
-    status = 'in_progress'
-  } else if (hasCancelled) {
-    status = 'cancelled'
-  }
+  const status = resolveCapsuleStatus(items, last, options)
 
   // 2. 统计实际操作总次数与核心动作去重
   let totalCount = 0
@@ -166,17 +170,8 @@ function buildActivityCapsule(
   const durationSuffix = durationLabel ? ` · 耗时 ${durationLabel}` : ''
   const summary = `已执行 ${totalCount} 项操作（${actionsPreview}）${durationSuffix}`
 
-  // 6. 进行中短文案
-  let activeStepLabel: string | undefined
-  if (status === 'in_progress') {
-    if (last.kind === 'thought') {
-      activeStepLabel = '正在思考...'
-    } else if (last.kind === 'tool') {
-      activeStepLabel = `正在操作 · ${last.label}`
-    } else {
-      activeStepLabel = '正在执行操作...'
-    }
-  }
+  // 6. 进行中短文案：跟真实还在跑的工具/思考，不跟尾巴上的静默授权
+  const activeStepLabel = resolveCapsuleActiveStepLabel(status, items, last)
 
   return {
     kind: 'activity-capsule',
@@ -189,4 +184,58 @@ function buildActivityCapsule(
     actionsSummary,
     totalCount
   }
+}
+
+/**
+ * 胶囊状态只跟 Turn 终态和真实还在跑的工具。
+ * 停止后 ACP 可能不补工具终态；静默授权也总排在队尾——这两类都不能把卡片钉在进行中。
+ */
+function resolveCapsuleStatus(
+  items: readonly CapsuleInnerBlock[],
+  last: CapsuleInnerBlock,
+  options?: GroupConversationBlocksOptions & { isLastRun?: boolean }
+): CapsuleStatus {
+  const hasFailed = items.some((item) => item.kind === 'tool' && item.status === 'failed')
+  const hasRunning = items.some(
+    (item) => item.kind === 'tool' && (item.status === 'in_progress' || item.status === 'pending')
+  )
+  const hasCancelled = items.some((item) => item.kind === 'tool' && item.status === 'cancelled')
+  const stopped = Boolean(options?.turnStatus && STOPPED_TURN_STATES.has(options.turnStatus))
+  const waiting = options?.waitingForUser === true || options?.turnStatus === 'waiting-permission'
+  const live = isLiveCapsuleTurn(options)
+
+  if (hasFailed) return 'failed'
+  if (stopped) return 'cancelled'
+  if (hasRunning && !waiting && live) return 'in_progress'
+  if (hasCancelled) return 'cancelled'
+  if (live && options?.isLastRun && !waiting && last.kind !== 'permission-audit') {
+    return 'in_progress'
+  }
+  return 'completed'
+}
+
+/** 只有排队/运行中的 Turn 才允许胶囊保持进行中；终态和停止中一律收束。 */
+function isLiveCapsuleTurn(options?: GroupConversationBlocksOptions): boolean {
+  if (options?.turnStatus) {
+    return options.turnStatus === 'running' || options.turnStatus === 'queued'
+  }
+  return options?.isTurnActive === true
+}
+
+/** 进行中文案优先取还在跑的工具；队尾审计不得覆盖成「正在执行操作...」。 */
+function resolveCapsuleActiveStepLabel(
+  status: CapsuleStatus,
+  items: readonly CapsuleInnerBlock[],
+  last: CapsuleInnerBlock
+): string | undefined {
+  if (status !== 'in_progress') return undefined
+  const runningTool = [...items]
+    .reverse()
+    .find(
+      (item) => item.kind === 'tool' && (item.status === 'in_progress' || item.status === 'pending')
+    )
+  if (runningTool?.kind === 'tool') return `正在操作 · ${runningTool.label}`
+  if (last.kind === 'thought') return '正在思考...'
+  if (last.kind === 'tool') return `正在操作 · ${last.label}`
+  return '正在执行操作...'
 }

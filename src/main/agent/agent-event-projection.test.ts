@@ -73,7 +73,7 @@ describe('projectPublicAgentEvent', () => {
     expect(JSON.stringify(projected)).not.toContain('file:///')
   })
 
-  it('Diff 只生成有限审阅摘要，不公开正文', () => {
+  it('Diff 投影限长 hunk，不把 snapshot 整段 before/after 交给 Renderer', () => {
     const event: AgentEvent = {
       ...BASE_EVENT,
       kind: 'diff',
@@ -119,11 +119,47 @@ describe('projectPublicAgentEvent', () => {
           reason: 'git-review-not-implemented'
         }
       ],
+      edits: [
+        {
+          path: 'src/example.ts',
+          added: 1,
+          deleted: 1,
+          hunks: [
+            [
+              { kind: 'del', text: 'const secret = "before"', oldLine: 1 },
+              { kind: 'add', text: 'const secret = "after"', newLine: 1 }
+            ]
+          ]
+        }
+      ],
       toolCallId: 'tool-1'
     })
-    expect(JSON.stringify(projected)).not.toContain('before')
-    expect(JSON.stringify(projected)).not.toContain('after')
+    expect(JSON.stringify(projected)).not.toContain('"format"')
     expect(JSON.stringify(projected)).not.toContain('fake patch body')
+    expect(projected).not.toHaveProperty('diffs')
+  })
+
+  it('Diff hunk 行文本走脱敏，密钥不得出现在公开事件里', () => {
+    const event: AgentEvent = {
+      ...BASE_EVENT,
+      kind: 'diff',
+      diffs: [
+        {
+          format: 'snapshot',
+          path: 'src/auth.ts',
+          before: 'token = fake-secret',
+          after: 'token = rotated'
+        }
+      ],
+      toolCallId: 'tool-secret'
+    }
+
+    const projected = projectPublicAgentEvent(event, (text) =>
+      text.replaceAll('fake-secret', '[REDACTED]')
+    )
+
+    expect(JSON.stringify(projected)).not.toContain('fake-secret')
+    expect(JSON.stringify(projected)).toContain('[REDACTED]')
   })
 
   it('工具事件无 parentId 时形状不变，未知键与 parentToolCallId 丢弃', () => {

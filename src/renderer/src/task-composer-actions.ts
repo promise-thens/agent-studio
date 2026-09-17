@@ -187,9 +187,10 @@ export interface ComposerContextUsagePresentation {
 }
 
 /** 把 token 数收成 Composer 能放下的短标签，不改真实 used/limit。 */
-export function formatContextUsageCount(value: number): string {
-  if (!Number.isFinite(value) || value < 0) return '0'
+export function formatContextUsageCount(value: number, peerLimit = 0): string {
+  if (!Number.isFinite(value) || value < 0) return peerLimit >= 1000 ? '0k' : '0'
   const amount = Math.round(value)
+  if (amount === 0 && peerLimit >= 1000) return '0k'
   if (amount < 1000) return String(amount)
   if (amount < 1_000_000) {
     const thousands = amount / 1000
@@ -216,12 +217,57 @@ export function resolveComposerContextUsagePresentation(
   const percentLabel = `${percentage}%`
   return {
     label,
-    compactLabel: `${formatContextUsageCount(usage.usedTokens)} / ${formatContextUsageCount(usage.limitTokens)}`,
+    compactLabel: `${formatContextUsageCount(usage.usedTokens, usage.limitTokens)} / ${formatContextUsageCount(usage.limitTokens)}`,
     percentage,
     percentLabel,
     title: `上下文用量：${usage.usedTokens}/${usage.limitTokens} tokens（${percentLabel}）`,
     ariaLabel: `上下文已使用 ${usage.usedTokens} / ${usage.limitTokens} tokens，占 ${percentLabel}`
   }
+}
+
+const COMPOSER_CONTEXT_TERMINAL_STATUSES = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'interrupted'
+])
+
+/** 新 session 第一轮往往还没有 signals.json，不能把花片整颗藏到第二次发送。 */
+function pendingComposerContextUsagePresentation(): ComposerContextUsagePresentation {
+  return {
+    label: '0',
+    compactLabel: '0k',
+    percentage: 0,
+    percentLabel: '0%',
+    title: '上下文用量：0 tokens',
+    ariaLabel: '上下文已使用 0 tokens'
+  }
+}
+
+/**
+ * 新对话第一次发送时 signals 经常还不存在，Composer 仍要露出 0k。
+ * 若已有窗口上限但首轮未结束，只把 used 显示成 0，避免把记忆基线当成用户消耗。
+ */
+export function presentComposerContextUsage(
+  timeline:
+    | {
+        turns: readonly {
+          status?: string
+          usage: { contextSamples: readonly AgentContextUsage[] }
+        }[]
+      }
+    | null
+    | undefined
+): ComposerContextUsagePresentation | null {
+  if (!timeline?.turns.length) return null
+  const usage = pickLatestContextUsage(timeline)
+  if (!usage) return pendingComposerContextUsagePresentation()
+  const hasFinishedTurn = timeline.turns.some(
+    (turn) => turn.status != null && COMPOSER_CONTEXT_TERMINAL_STATUSES.has(turn.status)
+  )
+  return resolveComposerContextUsagePresentation(
+    hasFinishedTurn ? usage : { ...usage, usedTokens: 0 }
+  )
 }
 
 /** 从最近一轮往前找最后一条可展示的上下文用量。 */

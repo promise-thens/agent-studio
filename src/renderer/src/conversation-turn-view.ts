@@ -6,6 +6,7 @@ import type {
   AgentToolStatus,
   AgentTurnUsage
 } from '../../shared/agent'
+import type { PublicAgentEditDiff } from '../../shared/agent-event'
 import type { CommandExecutionStatus } from '../../shared/command'
 import {
   presentCommandEvidenceInconsistency,
@@ -80,6 +81,8 @@ export interface ConversationToolBlock {
   detail?: string
   /** 标题与退出事实冲突时主列可见，不得只藏在折叠详情里。 */
   warning?: string
+  /** 本次编辑的红绿 hunk；有值时主列展开 diff 卡，不进过程胶囊。 */
+  editDiffs?: PublicAgentEditDiff[]
 }
 
 export interface ConversationSubagentBlock {
@@ -649,7 +652,8 @@ function toToolBlock(tools: TimelineToolNode[]): ConversationToolBlock {
     ...(detail ? { detail } : {}),
     ...(warning ? { warning } : {}),
     ...(isReadToolTitle(first.title) ? { mergedReadCount: 1 } : {}),
-    ...(first.execution === 'background' ? { execution: 'background' as const } : {})
+    ...(first.execution === 'background' ? { execution: 'background' as const } : {}),
+    ...(first.editDiffs?.length ? { editDiffs: first.editDiffs } : {})
   }
 }
 

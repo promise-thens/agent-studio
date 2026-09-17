@@ -63,7 +63,7 @@ const props = defineProps<{
   /** 仅 Grok Runtime 可在未广告命令时启用受控 Plan 路径。 */
   planAvailable?: boolean
   setPlanMode: (mode: ComposerPlanMode) => Promise<void>
-  /** Runtime 上报的上下文用量；没数据时不传或传空，模板藏起来。 */
+  /** Runtime 上报的上下文用量；有对话 Turn 时即使还没快照也会先给 0k。 */
   contextUsage?: ComposerContextUsagePresentation | null
   runtimeCommands?: AgentAvailableCommand[]
   attachments?: Array<{

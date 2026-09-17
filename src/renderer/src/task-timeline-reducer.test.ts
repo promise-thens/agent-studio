@@ -266,6 +266,55 @@ describe('Task Timeline reducer', () => {
     expect(selectTaskTimeline(state, { executionSnapshot: liveSnapshot }).turns).toEqual([])
   })
 
+  it('仅有实时事件的接管控制 Turn 在 execution 结束后仍隐藏，不得露出用户指令不可用', () => {
+    const withEvents = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+      type: 'events/ingest-public',
+      events: [
+        {
+          ...BASE,
+          turnId: 'turn-live-control',
+          sequence: 1,
+          kind: 'agent-message',
+          text: 'always-approve enabled'
+        }
+      ]
+    })
+    const idle = { executorEpoch: 'epoch-1', executionRevision: 3, execution: null }
+    expect(selectTaskTimeline(withEvents, { executionSnapshot: idle }).turns[0]).toMatchObject({
+      turnId: 'turn-live-control',
+      prompt: '用户指令不可用',
+      status: 'pending'
+    })
+
+    const hidden = reduceTaskTimelineFacts(withEvents, {
+      type: 'control-turn/hide',
+      turnId: 'turn-live-control'
+    })
+    const view = selectTaskTimeline(hidden, { executionSnapshot: idle })
+    expect(view.turns).toEqual([])
+    expect(JSON.stringify(view)).not.toContain('用户指令不可用')
+    expect(JSON.stringify(view)).not.toContain('always-approve')
+  })
+
+  it('admission.turnKind 在 execution 清空后仍把接管控制 Turn 排除出普通 Timeline', () => {
+    const state = reduceTaskTimelineFacts(createTaskTimelineFacts('task-1'), {
+      type: 'turn/admitted',
+      admission: {
+        taskId: 'task-1',
+        turnId: 'turn-live-control',
+        executionId: 'execution-1',
+        promptDisplayText: '后台控制命令',
+        turnKind: TAKEOVER_CONTROL_TURN_KIND,
+        model: { modelId: 'model-1' },
+        acceptedAt: '2026-08-18T00:00:00.000Z'
+      }
+    })
+    const view = selectTaskTimeline(state, {
+      executionSnapshot: { executorEpoch: 'epoch-1', executionRevision: 4, execution: null }
+    })
+    expect(view.turns).toEqual([])
+  })
+
   it('权限审计按 auditId 幂等归并，不产生可操作审批', () => {
     const audit: PermissionAuditRecord = {
       auditId: 'audit-1',
@@ -1159,6 +1208,69 @@ describe('工具节点 execution 后台标记', () => {
       kind: 'tool',
       status: 'in_progress',
       execution: 'background'
+    })
+  })
+
+  it('diff 事件按 toolCallId 把 edits 挂到对应工具节点', () => {
+    const hunks = [
+      [
+        { kind: 'del' as const, text: 'old', oldLine: 1 },
+        { kind: 'add' as const, text: 'new', newLine: 1 }
+      ]
+    ]
+    const tool = timelineNodes([
+      toolCall(1, 'edit-1', '写入 src/auth.ts', 'completed'),
+      {
+        ...BASE,
+        sequence: 2,
+        kind: 'diff',
+        toolCallId: 'edit-1',
+        references: [
+          {
+            kind: 'diff-review',
+            availability: 'unavailable',
+            changedPathCount: 1,
+            pathSummaries: ['src/auth.ts'],
+            reason: 'git-review-not-implemented'
+          }
+        ],
+        edits: [{ path: 'src/auth.ts', added: 1, deleted: 1, hunks }]
+      }
+    ]).find((node) => node.kind === 'tool')
+
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      toolCallId: 'edit-1',
+      editDiffs: [{ path: 'src/auth.ts', added: 1, deleted: 1, hunks }]
+    })
+  })
+
+  it('diff 先于 tool-call 到达时，工具出现后仍能补上 edits', () => {
+    const hunks = [[{ kind: 'add' as const, text: 'hello', newLine: 1 }]]
+    const tool = timelineNodes([
+      {
+        ...BASE,
+        sequence: 1,
+        kind: 'diff',
+        toolCallId: 'edit-2',
+        references: [
+          {
+            kind: 'diff-review',
+            availability: 'unavailable',
+            changedPathCount: 1,
+            pathSummaries: ['src/new.ts'],
+            reason: 'git-review-not-implemented'
+          }
+        ],
+        edits: [{ path: 'src/new.ts', added: 1, deleted: 0, hunks }]
+      },
+      toolCall(2, 'edit-2', '写入 src/new.ts', 'completed')
+    ]).find((node) => node.kind === 'tool')
+
+    expect(tool).toMatchObject({
+      kind: 'tool',
+      toolCallId: 'edit-2',
+      editDiffs: [{ path: 'src/new.ts', added: 1, deleted: 0, hunks }]
     })
   })
 })

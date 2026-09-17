@@ -315,6 +315,87 @@ describe('窄 Preload API', () => {
     expect(JSON.stringify(listener.mock.calls)).not.toContain('fake-secret')
   })
 
+  it('Agent 事件推送重建限长 edits hunk，丢弃 snapshot 正文和未知字段', () => {
+    const ipcRenderer = createIpcRenderer()
+    const agent = createAgentDesktopApi(ipcRenderer)
+    const listener = vi.fn()
+    agent.onEvent(listener)
+    const eventHandler = ipcRenderer.on.mock.calls[0]?.[1]
+
+    eventHandler?.(
+      { hidden: 'electron-event' },
+      {
+        runtimeId: 'grok',
+        capabilityState: 'native',
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        sequence: 2,
+        observedAt: '2026-08-18T00:00:00.000Z',
+        kind: 'diff',
+        references: [
+          {
+            kind: 'diff-review',
+            availability: 'unavailable',
+            changedPathCount: 1,
+            pathSummaries: ['src/example.ts'],
+            reason: 'git-review-not-implemented'
+          }
+        ],
+        edits: [
+          {
+            path: 'src/example.ts',
+            added: 1,
+            deleted: 1,
+            hunks: [
+              [
+                { kind: 'del', text: 'old', oldLine: 1, extra: 'drop-me' },
+                { kind: 'add', text: 'new', newLine: 1 }
+              ]
+            ],
+            rawBefore: 'private-before'
+          }
+        ],
+        toolCallId: 'tool-1',
+        diffs: [{ before: 'private-before', after: 'private-after' }]
+      }
+    )
+
+    expect(listener).toHaveBeenCalledWith({
+      runtimeId: 'grok',
+      capabilityState: 'native',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      sequence: 2,
+      observedAt: '2026-08-18T00:00:00.000Z',
+      kind: 'diff',
+      references: [
+        {
+          kind: 'diff-review',
+          availability: 'unavailable',
+          changedPathCount: 1,
+          pathSummaries: ['src/example.ts'],
+          reason: 'git-review-not-implemented'
+        }
+      ],
+      edits: [
+        {
+          path: 'src/example.ts',
+          added: 1,
+          deleted: 1,
+          hunks: [
+            [
+              { kind: 'del', text: 'old', oldLine: 1 },
+              { kind: 'add', text: 'new', newLine: 1 }
+            ]
+          ]
+        }
+      ],
+      toolCallId: 'tool-1'
+    })
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('private-before')
+    expect(JSON.stringify(listener.mock.calls)).not.toContain('drop-me')
+  })
+
   it('附件事件只重建 inbox 引用，缺字段或非图片类型时拒绝', () => {
     const ipcRenderer = createIpcRenderer()
     const agent = createAgentDesktopApi(ipcRenderer)

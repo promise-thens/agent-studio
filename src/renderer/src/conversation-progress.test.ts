@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { TaskTimelineNode } from './task-timeline-reducer'
 import {
   conversationTurnDurationMs,
   formatConversationActivityAge,
@@ -8,6 +9,64 @@ import {
   resolveConversationActivityHint,
   resolveConversationStep
 } from './conversation-progress'
+
+function toolNode(
+  title: string,
+  status: 'completed' | 'in_progress' = 'completed'
+): TaskTimelineNode {
+  return {
+    nodeId: `tool-${title}`,
+    taskId: 'task-1',
+    turnId: 'turn-1',
+    source: 'agent-event',
+    kind: 'tool',
+    toolCallId: `tool-${title}`,
+    title,
+    status
+  }
+}
+
+function planNode(completed = 0, total = 2): TaskTimelineNode {
+  return {
+    nodeId: 'plan',
+    taskId: 'task-1',
+    turnId: 'turn-1',
+    source: 'agent-event',
+    kind: 'plan',
+    entries: Array.from({ length: total }, (_, index) => ({
+      content: `步骤 ${index + 1}`,
+      priority: 'medium' as const,
+      status: index < completed ? ('completed' as const) : ('pending' as const)
+    }))
+  }
+}
+
+function auditNode(): TaskTimelineNode {
+  return {
+    nodeId: 'audit',
+    taskId: 'task-1',
+    turnId: 'turn-1',
+    source: 'permission-audit',
+    kind: 'permission-audit',
+    foldedCount: 4,
+    summary: '已自动允许 4 次未知操作',
+    audit: {
+      auditId: 'a1',
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      projectId: 'project-1',
+      environmentId: 'local:test',
+      initiator: 'runtime',
+      operationType: 'read-project',
+      risk: 'L0',
+      targetSummaries: [],
+      title: '读取',
+      impact: '',
+      reason: 'auto-allowed',
+      createdAt: '2026-09-02T00:00:04.000Z'
+    }
+  }
+}
 
 const baseTurn = {
   status: 'running' as const,
@@ -98,5 +157,35 @@ describe('conversation progress', () => {
         currentStepLabel: '列目录'
       })
     ).toBe('等待 Runtime 新事件')
+  })
+
+  it('静默授权排在事件后面时，步骤仍显示计划和工具，而不是记录权限决定', () => {
+    expect(resolveConversationStep([planNode(0, 3), auditNode()])).toBe('执行计划 · 0/3')
+    expect(resolveConversationStep([toolNode('列目录'), planNode(1, 2), auditNode()])).toBe(
+      '执行计划 · 1/2'
+    )
+    expect(resolveConversationStep([toolNode('打开网页', 'in_progress'), auditNode()])).toBe(
+      '打开网页'
+    )
+    expect(resolveConversationStep([auditNode()])).toBe('记录权限决定')
+  })
+
+  it('终态且没有真实步骤时，不把「准备执行」当成当前动作', () => {
+    expect(
+      resolveConversationActivityHint({
+        waitingForEvent: false,
+        hasPendingQuestion: false,
+        currentStepLabel: '准备执行',
+        turnStatus: 'completed'
+      })
+    ).toBe('')
+    expect(
+      resolveConversationActivityHint({
+        waitingForEvent: false,
+        hasPendingQuestion: false,
+        currentStepLabel: '打开网页',
+        turnStatus: 'cancelled'
+      })
+    ).toBe('打开网页')
   })
 })

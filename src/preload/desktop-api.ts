@@ -16,6 +16,8 @@ import {
 } from '../shared/agent-available-command'
 import type {
   PublicAgentDiffReviewReference,
+  PublicAgentEditDiff,
+  PublicAgentEditHunkLine,
   PublicAgentEvent,
   PublicAgentEventBase
 } from '../shared/agent-event'
@@ -108,6 +110,9 @@ const MAX_EVENT_FIELD_BYTES = 4 * 1024
 const MAX_EVENT_PLAN_ENTRIES = 100
 const MAX_EVENT_REVIEW_REFERENCES = 20
 const MAX_EVENT_REVIEW_PATHS = 20
+const MAX_EVENT_EDIT_DIFFS = 20
+const MAX_EVENT_EDIT_HUNKS = 80
+const MAX_EVENT_EDIT_LINES = 200
 const AGENT_RUNTIME_IDS = ['grok', 'codex'] as const
 const AGENT_CAPABILITY_STATES = ['native', 'simulated', 'experimental', 'unsupported'] as const
 const AGENT_TOOL_STATUSES = ['pending', 'in_progress', 'completed', 'failed', 'cancelled'] as const
@@ -336,7 +341,7 @@ function parseTaskRuntimeState(payload: unknown): AgentTaskRuntimeState | null {
   }
 }
 
-/** Agent 事件 Push 逐字段重建，防止 Main 私有身份、Diff 正文或未知字段进入 Renderer。 */
+/** Agent 事件 Push 逐字段重建，防止 Main 私有身份、完整 Diff 快照或未知字段进入 Renderer。 */
 function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
   if (!isPlainRecord(payload)) return null
   const base = parsePublicAgentEventBase(payload)
@@ -431,10 +436,13 @@ function parsePublicAgentEvent(payload: unknown): PublicAgentEvent | null {
       const references = payload.references.map(parseDiffReviewReference)
       const toolCallId = readOptionalEventText(payload.toolCallId)
       if (references.some((reference) => reference === null) || toolCallId === null) return null
+      const edits = parsePublicEditDiffs(payload.edits)
+      if (edits === null) return null
       return {
         ...base,
         kind: 'diff',
         references: references as PublicAgentDiffReviewReference[],
+        ...(edits.length ? { edits } : {}),
         ...(toolCallId === undefined ? {} : { toolCallId })
       }
     }
@@ -564,6 +572,101 @@ function parseDiffReviewReference(value: unknown): PublicAgentDiffReviewReferenc
     pathSummaries: pathSummaries as string[],
     reason: value.reason as PublicAgentDiffReviewReference['reason']
   }
+}
+
+/**
+ * 只重建对话预览 hunk。缺省视为没有预览；非法形状整条 diff 事件拒绝，
+ * 避免半截 snapshot 或未知字段混进 Renderer。
+ */
+function parsePublicEditDiffs(value: unknown): PublicAgentEditDiff[] | null {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > MAX_EVENT_EDIT_DIFFS) return null
+  const edits: PublicAgentEditDiff[] = []
+  let bodyBytes = 0
+  let hunkCount = 0
+  for (const item of value) {
+    const parsed = parsePublicEditDiff(item)
+    if (!parsed) return null
+    hunkCount += parsed.hunks.length
+    if (hunkCount > MAX_EVENT_EDIT_HUNKS) return null
+    for (const hunk of parsed.hunks) {
+      for (const line of hunk) {
+        bodyBytes += new TextEncoder().encode(line.text).length
+        if (bodyBytes > MAX_EVENT_STREAM_BYTES) return null
+      }
+    }
+    edits.push(parsed)
+  }
+  return edits
+}
+
+function parsePublicEditDiff(value: unknown): PublicAgentEditDiff | null {
+  if (
+    !isPlainRecord(value) ||
+    !Number.isSafeInteger(value.added) ||
+    (value.added as number) < 0 ||
+    !Number.isSafeInteger(value.deleted) ||
+    (value.deleted as number) < 0 ||
+    !Array.isArray(value.hunks) ||
+    (value.truncated !== undefined && value.truncated !== true) ||
+    (value.unavailable !== undefined &&
+      value.unavailable !== 'binary' &&
+      value.unavailable !== 'empty')
+  ) {
+    return null
+  }
+  const path = readBoundedText(value.path, MAX_EVENT_FIELD_BYTES, true)
+  if (path === null) return null
+  let lineCount = 0
+  const hunks: PublicAgentEditHunkLine[][] = []
+  for (const hunk of value.hunks) {
+    if (!Array.isArray(hunk)) return null
+    const lines: PublicAgentEditHunkLine[] = []
+    for (const line of hunk) {
+      lineCount += 1
+      if (lineCount > MAX_EVENT_EDIT_LINES) return null
+      const parsed = parsePublicEditHunkLine(line)
+      if (!parsed) return null
+      lines.push(parsed)
+    }
+    if (lines.length) hunks.push(lines)
+  }
+  return {
+    path,
+    added: value.added as number,
+    deleted: value.deleted as number,
+    hunks,
+    ...(value.truncated === true ? { truncated: true as const } : {}),
+    ...(value.unavailable === 'binary' || value.unavailable === 'empty'
+      ? { unavailable: value.unavailable }
+      : {})
+  }
+}
+
+function parsePublicEditHunkLine(value: unknown): PublicAgentEditHunkLine | null {
+  if (
+    !isPlainRecord(value) ||
+    (value.kind !== 'ctx' && value.kind !== 'add' && value.kind !== 'del')
+  ) {
+    return null
+  }
+  const text = readBoundedText(value.text, MAX_EVENT_FIELD_BYTES, true)
+  if (text === null) return null
+  const oldLine = readOptionalLineNumber(value.oldLine)
+  const newLine = readOptionalLineNumber(value.newLine)
+  if (oldLine === null || newLine === null) return null
+  return {
+    kind: value.kind,
+    text,
+    ...(oldLine === undefined ? {} : { oldLine }),
+    ...(newLine === undefined ? {} : { newLine })
+  }
+}
+
+function readOptionalLineNumber(value: unknown): number | undefined | null {
+  if (value === undefined) return undefined
+  if (!Number.isSafeInteger(value) || (value as number) < 1) return null
+  return value as number
 }
 
 function parseAgentUsage(
@@ -1481,7 +1584,14 @@ export function createTaskDesktopApi(
         y: bounds.y,
         width: bounds.width,
         height: bounds.height
-      }) as Promise<DesktopIpcResult<null>>
+      }) as Promise<DesktopIpcResult<null>>,
+    userActBrowser: async (taskId, action) => {
+      const result = (await ipcRenderer.invoke(TASK_INVOKE_CHANNELS.userActBrowser, {
+        taskId,
+        action
+      })) as DesktopIpcResult<unknown>
+      return parseHostBrowserChromeResult(result)
+    }
   }
 }
 

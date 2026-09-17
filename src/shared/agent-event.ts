@@ -78,7 +78,7 @@ export type PublicAgentPlanEvent = PublicAgentEventBase & {
   entries: AgentPlanEntry[]
 }
 
-/** P0-12 尚未提供 Diff 审阅服务时，Timeline 只展示有限摘要和不可用原因。 */
+/** 结果审阅仍用路径摘要计数；对话红绿行走 edits，不再把正文藏成 unavailable。 */
 export interface PublicAgentDiffReviewReference {
   kind: 'diff-review'
   availability: 'unavailable'
@@ -87,9 +87,30 @@ export interface PublicAgentDiffReviewReference {
   reason: 'git-review-not-implemented' | 'source-unavailable' | 'history-truncated'
 }
 
+export type PublicAgentEditHunkLineKind = 'ctx' | 'add' | 'del'
+
+/** 对话内一次编辑的一行。正文已限长，不含完整文件快照。 */
+export interface PublicAgentEditHunkLine {
+  kind: PublicAgentEditHunkLineKind
+  text: string
+  oldLine?: number
+  newLine?: number
+}
+
+export interface PublicAgentEditDiff {
+  path: string
+  added: number
+  deleted: number
+  truncated?: true
+  unavailable?: 'binary' | 'empty'
+  hunks: PublicAgentEditHunkLine[][]
+}
+
 export type PublicAgentDiffEvent = PublicAgentEventBase & {
   kind: 'diff'
   references: PublicAgentDiffReviewReference[]
+  /** 有可展示 hunk 才带上；缺省表示这次没有对话内预览。 */
+  edits?: PublicAgentEditDiff[]
   toolCallId?: string
 }
 

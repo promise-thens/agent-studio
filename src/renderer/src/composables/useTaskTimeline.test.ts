@@ -8,6 +8,7 @@ import type {
   TaskHistoryDetail,
   TurnHistoryRecord
 } from '../../../shared/task-history'
+import { TAKEOVER_CONTROL_TURN_KIND } from '../../../shared/task-takeover'
 import { useTaskTimeline } from './useTaskTimeline'
 
 const event: PublicAgentEvent = {
@@ -201,6 +202,46 @@ describe('useTaskTimeline', () => {
         expect.objectContaining({ kind: 'message', text: 'hello' })
       ])
     )
+  })
+
+  it('接管控制 execution 结束后仍隐藏该 Turn，不得露出用户指令不可用', async () => {
+    const controller = useTaskTimeline({ manageSubscriptions: false })
+    controller.setActiveTask('task-1')
+    controller.acceptLiveEvent({
+      ...event,
+      turnId: 'turn-control',
+      text: 'always-approve enabled'
+    })
+    await Promise.resolve()
+    expect(controller.activeTimeline.value?.turns[0]?.prompt).toBe('用户指令不可用')
+
+    controller.acceptExecutionSnapshot({
+      executorEpoch: 'epoch-1',
+      executionRevision: 1,
+      execution: {
+        executionId: 'execution-control',
+        taskId: 'task-1',
+        turnId: 'turn-control',
+        projectId: 'project-1',
+        runtimeId: 'grok',
+        model: { modelId: 'grok-4.6' },
+        environment: { kind: 'local', version: 1, environmentId: 'local:test' },
+        state: 'running',
+        acceptedAt: '2026-08-18T00:00:00.000Z',
+        stateChangedAt: '2026-08-18T00:00:01.000Z',
+        dispatchedAt: '2026-08-18T00:00:01.000Z',
+        turnKind: TAKEOVER_CONTROL_TURN_KIND
+      }
+    })
+    expect(controller.activeTimeline.value?.turns).toEqual([])
+
+    controller.acceptExecutionSnapshot({
+      executorEpoch: 'epoch-1',
+      executionRevision: 2,
+      execution: null
+    })
+    expect(controller.activeTimeline.value?.turns).toEqual([])
+    expect(JSON.stringify(controller.activeTimeline.value)).not.toContain('用户指令不可用')
   })
 
   it('从响应式历史记录水合时保留 Timeline 和用户提示', () => {

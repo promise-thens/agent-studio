@@ -178,6 +178,26 @@ describe('对话块投影', () => {
     expect(toolBlocks[1]).not.toHaveProperty('execution')
   })
 
+  it('工具节点上的 editDiffs 进入对话块，供主列渲染本次红绿行', () => {
+    const hunks = [
+      [
+        { kind: 'del' as const, text: 'old', oldLine: 1 },
+        { kind: 'add' as const, text: 'new', newLine: 1 }
+      ]
+    ]
+    const write = tool('write-1', '写入 src/auth.ts')
+    write.editDiffs = [{ path: 'src/auth.ts', added: 1, deleted: 1, hunks }]
+    const block = projectConversationTurn(turn('completed', [write])).find(
+      (item) => item.kind === 'tool'
+    )
+
+    expect(block).toMatchObject({
+      kind: 'tool',
+      label: '写入 src/auth.ts',
+      editDiffs: [{ path: 'src/auth.ts', added: 1, deleted: 1, hunks }]
+    })
+  })
+
   it('toToolBlock 从 first 节点拷贝 execution=background，合并读取块没有该键', () => {
     const background = projectConversationTurn(
       turn('running', [

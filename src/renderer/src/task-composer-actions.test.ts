@@ -6,6 +6,7 @@ import {
   evaluateTaskComposerSend,
   isForeignExecutionBlockingSend,
   pickLatestContextUsage,
+  presentComposerContextUsage,
   resolveCancelTurnRequest,
   resolveComposerAction,
   resolveComposerChrome,
@@ -244,6 +245,70 @@ describe('发送与停止身份', () => {
     ).toMatchObject({
       compactLabel: '24.3k / 500k',
       percentLabel: '4.9%'
+    })
+  })
+
+  it('新对话已有 Turn 但还没有用量快照时，Composer 仍显示 0k，不等第二次发送', () => {
+    expect(presentComposerContextUsage(null)).toBeNull()
+    expect(presentComposerContextUsage({ turns: [] })).toBeNull()
+    expect(
+      presentComposerContextUsage({
+        turns: [{ status: 'running', usage: { contextSamples: [] } }]
+      })
+    ).toMatchObject({
+      compactLabel: '0k',
+      label: '0',
+      percentage: 0
+    })
+    expect(
+      presentComposerContextUsage({
+        turns: [{ status: 'completed', usage: { contextSamples: [] } }]
+      })?.compactLabel
+    ).toBe('0k')
+  })
+
+  it('新对话首轮尚未完成时，Composer 把基线 used 显示成 0k，只保留窗口上限', () => {
+    const baseline = {
+      scope: 'context' as const,
+      usedTokens: 142000,
+      limitTokens: 500000
+    }
+    expect(
+      presentComposerContextUsage({
+        turns: [
+          {
+            status: 'running',
+            usage: { contextSamples: [baseline] }
+          }
+        ]
+      })
+    ).toMatchObject({
+      compactLabel: '0k / 500k',
+      label: '0/500000',
+      percentage: 0
+    })
+    expect(
+      presentComposerContextUsage({
+        turns: [
+          {
+            status: 'pending',
+            usage: { contextSamples: [baseline] }
+          }
+        ]
+      })?.compactLabel
+    ).toBe('0k / 500k')
+    expect(
+      presentComposerContextUsage({
+        turns: [
+          {
+            status: 'completed',
+            usage: { contextSamples: [baseline] }
+          }
+        ]
+      })
+    ).toMatchObject({
+      compactLabel: '142k / 500k',
+      label: '142000/500000'
     })
   })
 })
