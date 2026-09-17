@@ -5,6 +5,7 @@ import {
   type HostBrowserAction,
   type HostBrowserActionName
 } from '../../shared/host-browser'
+import { readPngPixelSize } from './host-browser-screenshot'
 
 /** 允许附加后调用的 CDP 方法。禁止 evaluate、读 cookie、任意 DOM 序列化。 */
 export const HOST_BROWSER_CDP_METHODS = [
@@ -43,6 +44,8 @@ const INTERACTIVE_AX_ROLES = new Set([
   'option',
   'spinbutton'
 ])
+/** 打开的下拉/菜单必须压过页面上成片的按钮，否则 option 进不了 150 上限。 */
+const POPUP_AX_ROLES = new Set(['option', 'listbox', 'menu', 'menuitem'])
 
 export type HostBrowserActionErrorCode =
   | 'unknown-action'
@@ -61,11 +64,22 @@ export type HostBrowserSnapshotNode = {
   role: string
   name: string
   tag: string
+  /** 视口 CSS 可点盒；取不到 quad 时省略，节点仍保留。 */
+  x?: number
+  y?: number
+  width?: number
+  height?: number
 }
 
 export type HostBrowserActionData =
   | { kind: 'navigated'; url: string }
-  | { kind: 'snapshot'; nodes: HostBrowserSnapshotNode[]; truncated: boolean }
+  | {
+      kind: 'snapshot'
+      nodes: HostBrowserSnapshotNode[]
+      truncated: boolean
+      viewportWidth?: number
+      viewportHeight?: number
+    }
   | {
       kind: 'screenshot'
       mimeType: 'image/png'
@@ -92,8 +106,9 @@ export interface HostBrowserActionDriver {
   goForward(): Promise<boolean> | boolean
   reload(): Promise<void> | void
   capturePng(): Promise<Buffer>
-  /** 内置页视口 CSS 尺寸；截图与 click_xy 必须用同一套。 */
-  getViewportCssSize(): { width: number; height: number } | null
+  /** 内置页视口 CSS 尺寸；截图与 click_xy 必须用同一套。允许异步读取 layoutMetrics。 */
+  getViewportCssSize():
+    { width: number; height: number } | null | Promise<{ width: number; height: number } | null>
   sendCdp(method: string, params?: Record<string, unknown>): Promise<unknown>
 }
 
@@ -129,6 +144,8 @@ export async function sendHostBrowserCdp(
 export class HostBrowserActionEngine {
   private readonly refs = new Map<string, SnapshotRefRecord>()
   private snapshotUrl = ''
+  /** 最近一次交给模型的 PNG 像素；click_xy 只允许按这个尺寸折到 CSS，禁止猜 0~1000。 */
+  private lastScreenshotPixels: { width: number; height: number } | null = null
 
   constructor(private readonly driver: HostBrowserActionDriver) {}
 
@@ -210,11 +227,58 @@ export class HostBrowserActionEngine {
         this.refs.set(node.ref, { backendDOMNodeId: node.backendDOMNodeId, pageUrl })
       }
     }
+    const viewport = await this.viewportCssSize()
+    const publicNodes = await this.attachSnapshotBoxes(nodes, viewport)
     return ok({
       kind: 'snapshot',
       truncated,
-      nodes: nodes.map(({ ref, role, name, tag }) => ({ ref, role, name, tag }))
+      ...(viewport ? { viewportWidth: viewport.width, viewportHeight: viewport.height } : {}),
+      nodes: publicNodes
     })
+  }
+
+  /**
+   * 给 snapshot 节点补视口 CSS 框，让模型选 ref 而不是猜像素。
+   * 点击仍现场取 quad；这里的框只给模型看，过期了也不拿来 dispatch。
+   * 单个节点失败就省略框，不能让整张 snapshot 垮掉。
+   */
+  private async attachSnapshotBoxes(
+    nodes: Array<HostBrowserSnapshotNode & { backendDOMNodeId?: number }>,
+    viewport: { width: number; height: number } | null
+  ): Promise<HostBrowserSnapshotNode[]> {
+    const publicNodes: HostBrowserSnapshotNode[] = []
+    // CDP 没有批处理 getContentQuads；8 路封顶，避免 150 次全串行把 snapshot 拖成秒级。
+    const concurrency = 8
+    for (let start = 0; start < nodes.length; start += concurrency) {
+      const batch = nodes.slice(start, start + concurrency)
+      const boxed = await Promise.all(batch.map((node) => this.boxSnapshotNode(node, viewport)))
+      publicNodes.push(...boxed)
+    }
+    return publicNodes
+  }
+
+  private async boxSnapshotNode(
+    node: HostBrowserSnapshotNode & { backendDOMNodeId?: number },
+    viewport: { width: number; height: number } | null
+  ): Promise<HostBrowserSnapshotNode> {
+    const publicNode: HostBrowserSnapshotNode = {
+      ref: node.ref,
+      role: node.role,
+      name: node.name,
+      tag: node.tag
+    }
+    if (node.backendDOMNodeId === undefined) return publicNode
+    const quads = await sendHostBrowserCdp(this.driver, 'DOM.getContentQuads', {
+      backendNodeId: node.backendDOMNodeId
+    })
+    if (!quads.ok) return publicNode
+    const box = resolveHostBrowserClickableBox(quads.value, viewport)
+    if (!box) return publicNode
+    publicNode.x = box.x
+    publicNode.y = box.y
+    publicNode.width = box.width
+    publicNode.height = box.height
+    return publicNode
   }
 
   private async screenshot(): Promise<HostBrowserActionResult> {
@@ -227,14 +291,13 @@ export class HostBrowserActionEngine {
     if (!isPng(bytes) || bytes.byteLength > MAX_SCREENSHOT_BYTES) {
       return fail('invalid-screenshot', '截图必须是有限大小的 PNG。')
     }
-    const viewport = this.driver.getViewportCssSize()
+    const viewport = await this.viewportCssSize()
+    this.lastScreenshotPixels = readPngPixelSize(bytes) ?? null
     return ok({
       kind: 'screenshot',
       mimeType: 'image/png',
       bytes,
-      ...(viewport && viewport.width >= 1 && viewport.height >= 1
-        ? { viewportWidth: viewport.width, viewportHeight: viewport.height }
-        : {})
+      ...(viewport ? { viewportWidth: viewport.width, viewportHeight: viewport.height } : {})
     })
   }
 
@@ -245,21 +308,43 @@ export class HostBrowserActionEngine {
       backendNodeId: target.record.backendDOMNodeId
     })
     if (!scrolled.ok) return scrolled
-    const quads = await sendHostBrowserCdp(this.driver, 'DOM.getContentQuads', {
-      backendNodeId: target.record.backendDOMNodeId
-    })
-    if (!quads.ok) return quads
-    const point = quadCenter(quads.value)
+    const viewport = await this.viewportCssSize()
+    let point: { x: number; y: number } | null = null
+    // 滚动后立刻取 quad 可能还在半路；可见点进视口就停，避免固定 36ms 不够也不要空等。
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) await sleep(16 * attempt)
+      const quads = await sendHostBrowserCdp(this.driver, 'DOM.getContentQuads', {
+        backendNodeId: target.record.backendDOMNodeId
+      })
+      if (!quads.ok) return quads
+      point = resolveHostBrowserClickablePoint(quads.value, viewport)
+      if (point && isHostBrowserPointInViewport(point, viewport)) break
+    }
     if (!point) return fail('action-failed', '无法定位页面元素。')
     return this.dispatchClickAt(point.x, point.y)
   }
 
   /**
    * iframe / 无障碍树截断时模型只能靠截图估点。
-   * 坐标是顶层视口 CSS，与 screenshot 同一空间；禁止借此跑 JS。
+   * 坐标是顶层视口 CSS，与 screenshot 同一空间；禁止借此跑 JS，也禁止猜 0~1000。
    */
   private async clickXy(x: number, y: number): Promise<HostBrowserActionResult> {
-    return this.dispatchClickAt(x, y)
+    const viewport = await this.viewportCssSize()
+    const pixels = this.lastScreenshotPixels
+    let targetX = x
+    let targetY = y
+    // 只在「模型看到的 PNG」和当前 CSS 视口不一致时折算，例如 Retina 漏缩。
+    if (
+      viewport &&
+      pixels &&
+      pixels.width > 0 &&
+      pixels.height > 0 &&
+      (pixels.width !== viewport.width || pixels.height !== viewport.height)
+    ) {
+      targetX = (x / pixels.width) * viewport.width
+      targetY = (y / pixels.height) * viewport.height
+    }
+    return this.dispatchClickAt(targetX, targetY)
   }
 
   /** 合成左键单击并把落点交给 overlay；不读系统指针。 */
@@ -269,8 +354,13 @@ export class HostBrowserActionEngine {
         type,
         x,
         y,
-        button: 'left',
-        clickCount: 1
+        ...(type === 'mouseMoved'
+          ? {}
+          : {
+              button: 'left',
+              buttons: type === 'mousePressed' ? 1 : 0,
+              clickCount: 1
+            })
       })
       if (!dispatched.ok) return dispatched
     }
@@ -289,7 +379,8 @@ export class HostBrowserActionEngine {
     const quads = await sendHostBrowserCdp(this.driver, 'DOM.getContentQuads', {
       backendNodeId: target.record.backendDOMNodeId
     })
-    const point = quads.ok ? quadCenter(quads.value) : null
+    const viewport = await this.viewportCssSize()
+    const point = quads.ok ? resolveHostBrowserClickablePoint(quads.value, viewport) : null
     const inserted = await sendHostBrowserCdp(this.driver, 'Input.insertText', { text })
     if (!inserted.ok) return inserted
     if (submit) {
@@ -340,6 +431,14 @@ export class HostBrowserActionEngine {
   private clearRefs(): void {
     this.refs.clear()
     this.snapshotUrl = ''
+    this.lastScreenshotPixels = null
+  }
+
+  /** 统一 await，兼容测试里的同步 getViewportCssSize。 */
+  private async viewportCssSize(): Promise<{ width: number; height: number } | null> {
+    const viewport = await this.driver.getViewportCssSize()
+    if (!viewport || viewport.width < 1 || viewport.height < 1) return null
+    return viewport
   }
 }
 
@@ -367,7 +466,8 @@ function classifyParseFailure(raw: unknown): HostBrowserActionResult {
 /**
  * 把 CDP AX 树收成 snapshot 清单。
  * 先收 dialog/alertdialog 子树（含无名关闭按钮），再收可交互控件，最后才是其余可见节点。
- * 热搜 link 经常远超 150 上限，所以同属可交互时控件（textbox/button 等）仍压过 link。
+ * 热搜 link 经常远超上限，所以同属可交互时控件（textbox/button 等）仍压过 link。
+ * 有可交互节点时不再用 generic rest 把名额填满，减少模型读树时间。
  */
 function flattenAxTree(value: unknown): {
   nodes: Array<HostBrowserSnapshotNode & { backendDOMNodeId?: number }>
@@ -389,18 +489,22 @@ function flattenAxTree(value: unknown): {
     collectDialogSubtree(entry, byId, dialogSeen, dialogOrder, new Set())
   }
 
+  const popupControls: Record<string, unknown>[] = []
   const interactiveControls: Record<string, unknown>[] = []
   const interactiveLinks: Record<string, unknown>[] = []
   const rest: Record<string, unknown>[] = []
   for (const entry of records) {
     if (entry.ignored === true || dialogSeen.has(entry)) continue
     const role = axString(entry.role) || 'generic'
-    if (role === 'link') interactiveLinks.push(entry)
+    if (POPUP_AX_ROLES.has(role)) popupControls.push(entry)
+    else if (role === 'link') interactiveLinks.push(entry)
     else if (INTERACTIVE_AX_ROLES.has(role)) interactiveControls.push(entry)
     else rest.push(entry)
   }
 
-  const ranked = [...dialogOrder, ...interactiveControls, ...interactiveLinks, ...rest]
+  // 不把 generic 文本节点填满 150：模型读树会变慢。没有可交互节点时才退回 rest。
+  const preferred = [...dialogOrder, ...popupControls, ...interactiveControls, ...interactiveLinks]
+  const ranked = preferred.length > 0 ? preferred : rest
   const selected = ranked.slice(0, MAX_SNAPSHOT_NODES)
   let truncated = ranked.length > selected.length
   const nodes = selected.map((entry, index) => {
@@ -468,15 +572,112 @@ function axString(value: unknown): string {
   return ''
 }
 
-function quadCenter(value: unknown): { x: number; y: number } | null {
+type HostBrowserQuadBox = { minX: number; minY: number; maxX: number; maxY: number }
+
+function parseHostBrowserQuadBoxes(value: unknown): HostBrowserQuadBox[] {
   const quads = isRecord(value) && Array.isArray(value.quads) ? value.quads : []
-  const quad = quads[0]
-  if (!Array.isArray(quad) || quad.length < 8) return null
-  const numbers = quad.slice(0, 8).map((item) => (typeof item === 'number' ? item : Number.NaN))
-  if (numbers.some((item) => !Number.isFinite(item))) return null
-  const x = (numbers[0]! + numbers[2]! + numbers[4]! + numbers[6]!) / 4
-  const y = (numbers[1]! + numbers[3]! + numbers[5]! + numbers[7]!) / 4
-  return { x, y }
+  const boxes: HostBrowserQuadBox[] = []
+  for (const quad of quads) {
+    if (!Array.isArray(quad) || quad.length < 8) continue
+    const numbers = quad.slice(0, 8).map((item) => (typeof item === 'number' ? item : Number.NaN))
+    if (numbers.some((item) => !Number.isFinite(item))) continue
+    const xs = [numbers[0]!, numbers[2]!, numbers[4]!, numbers[6]!]
+    const ys = [numbers[1]!, numbers[3]!, numbers[5]!, numbers[7]!]
+    boxes.push({
+      minX: Math.min(...xs),
+      minY: Math.min(...ys),
+      maxX: Math.max(...xs),
+      maxY: Math.max(...ys)
+    })
+  }
+  return boxes
+}
+
+function intersectHostBrowserQuadBox(
+  box: HostBrowserQuadBox,
+  viewport: HostBrowserQuadBox
+): HostBrowserQuadBox | null {
+  const minX = Math.max(box.minX, viewport.minX)
+  const minY = Math.max(box.minY, viewport.minY)
+  const maxX = Math.min(box.maxX, viewport.maxX)
+  const maxY = Math.min(box.maxY, viewport.maxY)
+  if (maxX - minX < 2 || maxY - minY < 2) return null
+  return { minX, minY, maxX, maxY }
+}
+
+function hostBrowserQuadBoxCenter(box: HostBrowserQuadBox): { x: number; y: number } {
+  return { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2 }
+}
+
+function hostBrowserQuadBoxArea(box: HostBrowserQuadBox): number {
+  return Math.max(0, box.maxX - box.minX) * Math.max(0, box.maxY - box.minY)
+}
+
+/**
+ * 从 content quads 选出真正可点的 CSS 点。
+ * 不用最大面积：侧栏父级外壳中心会落在两项夹缝。优先第一个足够小的可见盒。
+ */
+function pickHostBrowserClickableBox(
+  value: unknown,
+  viewport?: { width: number; height: number } | null
+): HostBrowserQuadBox | null {
+  const boxes = parseHostBrowserQuadBoxes(value)
+  if (boxes.length === 0) return null
+  const view: HostBrowserQuadBox | null =
+    viewport && viewport.width > 0 && viewport.height > 0
+      ? { minX: 0, minY: 0, maxX: viewport.width, maxY: viewport.height }
+      : null
+
+  const visible: HostBrowserQuadBox[] = []
+  for (const box of boxes) {
+    const vis = view ? intersectHostBrowserQuadBox(box, view) : box
+    if (vis) visible.push(vis)
+  }
+  if (visible.length === 0) return boxes[0]!
+
+  const viewportArea = view ? hostBrowserQuadBoxArea(view) : Number.POSITIVE_INFINITY
+  const compact = visible.filter((box) => hostBrowserQuadBoxArea(box) <= viewportArea * 0.45)
+  return (compact.length > 0 ? compact : visible)[0]!
+}
+
+/** snapshot 给模型看的可点盒；和 click(ref) 用同一套选取规则。 */
+export function resolveHostBrowserClickableBox(
+  value: unknown,
+  viewport?: { width: number; height: number } | null
+): { x: number; y: number; width: number; height: number } | null {
+  const chosen = pickHostBrowserClickableBox(value, viewport)
+  if (!chosen) return null
+  return {
+    x: roundCss(chosen.minX),
+    y: roundCss(chosen.minY),
+    width: roundCss(chosen.maxX - chosen.minX),
+    height: roundCss(chosen.maxY - chosen.minY)
+  }
+}
+
+export function resolveHostBrowserClickablePoint(
+  value: unknown,
+  viewport?: { width: number; height: number } | null
+): { x: number; y: number } | null {
+  const chosen = pickHostBrowserClickableBox(value, viewport)
+  if (!chosen) return null
+  return hostBrowserQuadBoxCenter(chosen)
+}
+
+function roundCss(value: number): number {
+  return Math.round(value)
+}
+
+export function isHostBrowserPointInViewport(
+  point: { x: number; y: number },
+  viewport: { width: number; height: number } | null
+): boolean {
+  if (!viewport) return true
+  return point.x >= 0 && point.y >= 0 && point.x <= viewport.width && point.y <= viewport.height
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function isPng(bytes: Buffer): boolean {

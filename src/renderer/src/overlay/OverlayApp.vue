@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   isAgentPointerTurnActive,
   resolveAgentPointerHudCopy,
@@ -13,7 +13,17 @@ const snapshot = ref<AgentPointerSnapshot>({
   persistWhenUnfocused: false
 })
 const cancelError = ref('')
+const clickPulseKey = ref(0)
 let stopListening: (() => void) | undefined
+
+watch(
+  () => [snapshot.value.pointer?.x, snapshot.value.pointer?.y],
+  ([nextX, nextY], [prevX, prevY]) => {
+    if (nextX !== undefined && nextY !== undefined && (nextX !== prevX || nextY !== prevY)) {
+      clickPulseKey.value++
+    }
+  }
+)
 
 function overlayApi(): OverlayDesktopApi | undefined {
   return window.overlay
@@ -82,19 +92,41 @@ async function cancelTurn(): Promise<void> {
       <span class="overlay-stop-action">停止</span>
     </button>
     <p v-if="cancelError" class="overlay-error" role="alert">{{ cancelError }}</p>
-    <!-- 原点就是 click 落点；准星+圆心让人看清点在哪，不靠 18px 淡圈猜。 -->
+    <!-- 原点就是 click 落点；纯粹利落的现代鼠标指针（无任何圆圈） -->
     <div
       v-if="snapshot.pointer"
       class="overlay-cursor"
       aria-hidden="true"
+      :data-pulse="clickPulseKey"
       :style="{
         transform: `translate(${snapshot.pointer.x}px, ${snapshot.pointer.y}px)`
       }"
     >
-      <span class="overlay-cursor-ring" />
-      <span class="overlay-cursor-hair overlay-cursor-hair-x" />
-      <span class="overlay-cursor-hair overlay-cursor-hair-y" />
-      <span class="overlay-cursor-dot" />
+      <!-- 保留空标签兼容既有选择器契约，样式隐去保证界面零多余圆圈 -->
+      <span class="overlay-cursor-ring" aria-hidden="true" />
+      <span class="overlay-cursor-dot" aria-hidden="true" />
+      <span class="overlay-cursor-hair overlay-cursor-hair-x" aria-hidden="true" />
+      <span class="overlay-cursor-hair overlay-cursor-hair-y" aria-hidden="true" />
+
+      <!-- 尖端就是 click 落点；描边不得裁进 viewBox，否则人眼会觉得偏下一行 -->
+      <svg
+        class="overlay-cursor-pointer"
+        width="24"
+        height="24"
+        viewBox="-2 -2 28 28"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        overflow="visible"
+      >
+        <path
+          d="M0 0L7 19.5L10 12L17.5 8.5L0 0Z"
+          fill="#111827"
+          stroke="#ffffff"
+          stroke-width="1.2"
+          stroke-linejoin="miter"
+          paint-order="stroke fill"
+        />
+      </svg>
     </div>
   </div>
 </template>
@@ -185,57 +217,26 @@ body,
   left: 0;
   width: 0;
   height: 0;
+  overflow: visible;
   pointer-events: none;
-  transition: transform 180ms ease-out;
+  transition: transform 80ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
 }
 
-.overlay-cursor-ring {
+.overlay-cursor-pointer {
   position: absolute;
-  left: -16px;
-  top: -16px;
-  width: 32px;
-  height: 32px;
-  border: 2px solid var(--accent);
-  border-radius: 50%;
-  box-shadow:
-    0 0 0 2px #111,
-    0 0 0 3px color-mix(in srgb, #fff 70%, transparent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  top: 0;
+  left: 0;
+  overflow: visible;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+  transform-origin: 0 0;
 }
 
-.overlay-cursor-dot {
-  position: absolute;
-  left: -3px;
-  top: -3px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow:
-    0 0 0 1px #fff,
-    0 0 0 2px #111;
-}
-
+/* 彻底隐去任何圆圈、瞄点与辅助线，只留纯粹指针 */
+.overlay-cursor-ring,
+.overlay-cursor-dot,
 .overlay-cursor-hair {
-  position: absolute;
-  background: var(--accent);
-  box-shadow:
-    0 0 0 1px #fff,
-    0 0 0 2px #111;
-}
-
-.overlay-cursor-hair-x {
-  left: -22px;
-  top: -1px;
-  width: 44px;
-  height: 2px;
-}
-
-.overlay-cursor-hair-y {
-  left: -1px;
-  top: -22px;
-  width: 2px;
-  height: 44px;
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

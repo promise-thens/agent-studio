@@ -121,16 +121,16 @@ function toTool(name: (typeof HOST_BROWSER_ACTION_NAMES)[number]): {
  */
 function toolDescription(name: (typeof HOST_BROWSER_ACTION_NAMES)[number]): string {
   if (name === 'browser_click') {
-    return 'Click a node from the latest browser_snapshot by ref. Does not run JavaScript.'
+    return 'Click a snapshot node by ref. If the node has x,y,width,height, always use this instead of click_xy. Does not run JavaScript.'
   }
   if (name === 'browser_click_xy' || name === 'browser_click_at') {
-    return 'Click the built-in page at viewport CSS coordinates (same space as browser_screenshot). Use when snapshot refs cannot see iframe content. Does not run JavaScript.'
+    return 'Last-resort click at latest screenshot PNG pixels (1 pixel = 1 CSS). Only iframe/canvas or when snapshot has no option. Do not OCR, do not use Python/PIL, do not use 0-1000. Does not run JavaScript.'
   }
   if (name === 'browser_snapshot') {
-    return 'Accessibility snapshot of the built-in page. Cross-origin iframe internals may be missing; then use browser_click_xy.'
+    return 'Accessibility snapshot with viewport CSS box x,y,width,height. After opening a dropdown or dialog, snapshot again then browser_click(ref). Prefer this over screenshot. Cross-origin iframe internals may be missing.'
   }
   if (name === 'browser_screenshot') {
-    return 'PNG screenshot of the built-in page in CSS pixels (same space as browser_click_xy). Text part includes viewportWidth/Height.'
+    return 'PNG of the built-in page (CSS pixels). Confirm once after a batch, do not screenshot every step, do not compute click coordinates from the image. Text includes viewportWidth/Height.'
   }
   return 'Operate the built-in browser the user is looking at in Agent Studio.'
 }
@@ -144,7 +144,7 @@ function unsupportedToolMessage(name: string): string {
     name === 'Runtime.evaluate' ||
     name === 'browser_run_javascript'
   ) {
-    return '内置浏览器不允许执行 JavaScript。请改用 browser_click（snapshot ref）或 browser_click_xy（视口 CSS 坐标）。'
+    return '内置浏览器不允许执行 JavaScript。请优先 browser_click（snapshot ref，看节点 x/y/width/height），iframe 再 browser_click_xy。'
   }
   return '不支持该浏览器动作。'
 }
@@ -177,8 +177,16 @@ function toolSchema(name: (typeof HOST_BROWSER_ACTION_NAMES)[number]): Record<st
     return {
       type: 'object',
       properties: {
-        x: { type: 'number', description: 'Viewport CSS X of the built-in page' },
-        y: { type: 'number', description: 'Viewport CSS Y of the built-in page' }
+        x: {
+          type: 'number',
+          description:
+            'Viewport CSS X of the built-in page (0 <= x <= viewportWidth). Do not use normalized 0-1000 or global desktop coordinates.'
+        },
+        y: {
+          type: 'number',
+          description:
+            'Viewport CSS Y of the built-in page (0 <= y <= viewportHeight). Do not use normalized 0-1000 or global desktop coordinates.'
+        }
       },
       required: ['x', 'y'],
       additionalProperties: false

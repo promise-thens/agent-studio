@@ -7,6 +7,7 @@ import {
 } from '../../shared/agent-pointer-overlay'
 import { parseBrowserOrigin } from '../../shared/browser-origin'
 import {
+  parseCssViewportFromLayoutMetrics,
   parseHostBrowserAction,
   parseHostBrowserBounds,
   parseHostBrowserNavigateUrl,
@@ -483,16 +484,11 @@ function createElectronHostBrowserActionDriver(
       webContents.reload()
     },
     getViewportCssSize() {
-      const bounds = view.getBounds()
-      return { width: bounds.width, height: bounds.height }
+      return readGuestCssViewport(webContents, view)
     },
     async capturePng() {
       const image = await webContents.capturePage()
-      const bounds = view.getBounds()
-      const viewport = resolveScreenshotViewportCssSize({
-        viewportWidth: bounds.width,
-        viewportHeight: bounds.height
-      })
+      const viewport = (await readGuestCssViewport(webContents, view)) ?? undefined
       const png = Buffer.from(image.toPNG())
       // 以 PNG IHDR 为准：getSize() 在 Retina 上常是 DIP，2x 图会被原样交给模型。
       return alignScreenshotPngToViewportCss(png, viewport, (bytes, size) =>
@@ -510,6 +506,31 @@ function createElectronHostBrowserActionDriver(
       return debuggerSession.sendCommand(method, params)
     }
   }
+}
+
+/**
+ * 截图和 click_xy 必须问页面 CSS 视口。View DIP 在有滚动条或 visual viewport 时会对不齐。
+ * debugger 失败时才退回 bounds，不能把整条点击打断。
+ */
+async function readGuestCssViewport(
+  webContents: Electron.WebContents,
+  view: WebContentsView
+): Promise<{ width: number; height: number } | null> {
+  const bounds = view.getBounds()
+  const fallback = resolveScreenshotViewportCssSize({
+    viewportWidth: bounds.width,
+    viewportHeight: bounds.height
+  })
+  try {
+    const debuggerSession = webContents.debugger
+    if (!debuggerSession.isAttached()) debuggerSession.attach('1.3')
+    const metrics = await debuggerSession.sendCommand('Page.getLayoutMetrics')
+    const css = parseCssViewportFromLayoutMetrics(metrics)
+    if (css) return css
+  } catch {
+    // 页面未就绪或 debugger 不可用时退回 View 尺寸
+  }
+  return fallback ?? null
 }
 
 /** 把 guest 挂到当前主窗口 contentView；窗口已销毁则丢弃。 */

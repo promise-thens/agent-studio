@@ -356,6 +356,7 @@ vi.mock('electron', () => {
       whenReady: vi.fn(() => mocks.ready),
       on: vi.fn(),
       getPath: vi.fn(() => '/tmp/agent-studio-index-test'),
+      setPath: vi.fn(),
       getVersion: vi.fn(() => '0.1.0'),
       isPackaged: false,
       quit: vi.fn()
@@ -614,7 +615,14 @@ describe('宿主 overlay 指针组装', () => {
     expect(indexSource).toContain('resolveOverlayDisplayBounds')
     expect(indexSource).toContain('getOverlayBounds')
     expect(indexSource).toContain('relayout')
+    expect(indexSource).toContain('ensurePointerOverlayLayout')
+    expect(indexSource).toContain('ensureHostBrowserGrokSkill')
     expect(indexSource).not.toContain('mapViewportCssToOverlayDip')
+    const geometryFn = indexSource.match(
+      /getPointerGeometry: \(\) => \{[\s\S]*?acceptHostBrowserPointer/
+    )?.[0]
+    expect(geometryFn).toContain('zoomFactor: 1')
+    expect(geometryFn).not.toContain('getZoomFactor')
   })
 
   it('darwin 关主窗后二次启动必须重建窗口，不得只 focus 空窗', () => {
@@ -628,6 +636,25 @@ describe('宿主 overlay 指针组装', () => {
     expect(secondInstance).toBeTruthy()
     expect(secondInstance).toContain('createWindow()')
     expect(secondInstance).not.toMatch(/isDestroyed\(\)\) return/)
+  })
+
+  it('未打包 userData 必须在单实例锁之前与安装包错开，E2E 临时目录不得再改', () => {
+    const indexSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'index.ts'),
+      'utf8'
+    )
+    const lockIndex = indexSource.indexOf('app.requestSingleInstanceLock()')
+    const setPathMatch = indexSource.match(
+      /app\.setPath\(\s*'userData',\s*resolveDesktopUserDataPath\(/
+    )
+    expect(lockIndex).toBeGreaterThan(0)
+    expect(setPathMatch?.index).toBeGreaterThan(0)
+    expect(setPathMatch?.index).toBeLessThan(lockIndex)
+    expect(indexSource).toContain("from './desktop-user-data'")
+    expect(indexSource).toContain(
+      'hasIsolatedBootstrap: Boolean(controlledAcpE2e || gacp01Observe)'
+    )
+    expect(indexSource).toContain('packaged: app.isPackaged')
   })
 
   it('内置浏览器 Broker 组装读取 Task 完全访问，禁止漏掉 takeoverEnabled', () => {

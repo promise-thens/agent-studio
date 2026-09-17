@@ -1,8 +1,12 @@
 # P3-06 Chrome Native Bridge 实施计划
 
 > **致执行者：** 优先按任务顺序逐项落地，并在每个任务完成后做业务逻辑验证。步骤使用复选框 (`- [ ]`) 语法进行跟踪。
+>
+> **产品硬验收（2026-09-17）：** 配套浏览器扩展 + 可映射几何 + overlay 光标，见 [Computer Use 开发文档](../specs/2026-09-17-computer-use-development.md) §1.1 / §1.5 / 阶段 0b。扩展不上报屏幕 DIP 就不得发明光标；上报了就必须画针。
 
 **优先级：** P3 / 权重 3（连接用户现有标签页）
+
+**排期：** 2026-09-17 提为 **下一开发项**（Computer Use 阶段 0b）。
 
 **目标：** 通过 Chrome Extension 与 Native Messaging 让用户主动共享单个标签页，而非读取 Chrome Profile 或全浏览器数据。
 

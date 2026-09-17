@@ -1,6 +1,8 @@
 # P3-07 macOS Computer Use Helper 实施计划
 
 > **致执行者：** 优先按任务顺序逐项落地，并在每个任务完成后做业务逻辑验证。步骤使用复选框 (`- [ ]`) 语法进行跟踪。
+>
+> **详细开发说明书（下一任务必读）：** [2026-09-17-computer-use-development.md](../specs/2026-09-17-computer-use-development.md)。按 Codex 方式：Helper 持有几何，模型只报编号；禁止 OCR 主路径；光标消费已有 overlay，不自建第二扇窗。产品五条 MUST（插件光标、任意 App、失败即停、速度预算、配套扩展）以该说明书 §1 为准。
 
 **优先级：** P3 / 权重 3（高权限原生能力）
 
@@ -8,7 +10,7 @@
 
 **核心数据流：** Capability 请求窗口/屏幕读取或输入操作；Broker 检查系统权限、目标应用、操作风险和授权；Helper 执行最小动作并返回摘要事件。
 
-**约束与边界：** 不绕过 macOS 辅助功能/屏幕录制授权；不默认全屏连续录制、不读剪贴板全文、不后台常驻；只在用户可见状态运行。软件光标消费 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) 的 `agent-pointer-overlay`（`surface=computer-use`），把 AX frame 映射成同一套 overlay DIP，**不得自建第二扇光标窗**。本计划仍后置；不得宣称任意 App Computer Use 已完成。
+**约束与边界：** 不绕过 macOS 辅助功能/屏幕录制授权；不默认全屏连续录制、不读剪贴板全文、不后台常驻；只在用户可见状态运行。软件光标消费 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) 的 `agent-pointer-overlay`（`surface=computer-use`），把 AX frame 映射成同一套 overlay DIP，**不得自建第二扇光标窗**。本计划紧随配套扩展开工，不再后置；未授权、未做完说明书五条 MUST 前，不得宣称任意 App Computer Use 已完成。
 
 **主要风险：** 屏幕与输入操作不可预测且难撤销；首期动作白名单、目标应用确认、节流、紧急停止、前台可见提示与失败即停。
 

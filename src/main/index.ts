@@ -74,6 +74,7 @@ import {
   resolveGacp01ObserveBootstrap,
   type Gacp01ObserveBootstrap
 } from './e2e/gacp01-observe-bootstrap'
+import { resolveDesktopUserDataPath } from './desktop-user-data'
 import { createGrokAcpFileObserver } from './runtime/grok/grok-acp-protocol-observer'
 import { readGrokSubagentSessionActivity } from './runtime/grok/grok-subagent-session-activity'
 import type { DesktopIpcMain } from './ipc-types'
@@ -90,6 +91,7 @@ import { createStudioMenuTemplate, type StudioMenuItem } from './application-men
 import { isRuntimePluginId, type RuntimePluginStatus } from '../shared/runtime-plugin'
 import { clearGrokProviderConfig, getManagedGrokHome } from './provider/grok-provider-config'
 import { GrokHomeConfigController } from './runtime/grok/grok-home-config-controller'
+import { ensureHostBrowserGrokSkill } from './runtime/grok/host-browser-grok-skill'
 import { GrokMemoryStore } from './runtime/grok/grok-memory-store'
 import { McpServerStore } from './mcp/mcp-server-store'
 import { toAgentRuntimeMcpServers } from './mcp/mcp-server-to-acp'
@@ -221,7 +223,10 @@ function createWindow(): void {
       if (!window || window.isDestroyed()) return null
       return {
         contentBounds: window.getContentBounds(),
-        overlayBounds: resolveHostWindowOverlayBounds(),
+        overlayBounds:
+          browserPluginOverlayHost?.ensurePointerOverlayLayout() ??
+          resolveHostWindowOverlayBounds(),
+        // guest 页面 zoom 恒为 1。主窗 Cmd+/- 不能拿来除 CSS，否则光标和点击分家。
         zoomFactor: 1
       }
     },
@@ -421,6 +426,7 @@ async function initializeServices(
   grokHomeConfig = new GrokHomeConfigController(grokHome)
   grokMemoryStore = new GrokMemoryStore(grokHome)
   await grokMemoryStore.ensureShare().catch(() => undefined)
+  await ensureHostBrowserGrokSkill(grokHome).catch(() => undefined)
   mcpServerStore = new McpServerStore({
     userDataPath: app.getPath('userData'),
     grokHome,
@@ -1753,6 +1759,16 @@ try {
   app.exit(1)
   throw new Error('隔离 Electron 启动配置无效。')
 }
+
+// 必须在单实例锁之前完成；未打包与安装包共用 userData 时，后开的进程会立刻 quit。
+app.setPath(
+  'userData',
+  resolveDesktopUserDataPath({
+    packaged: app.isPackaged,
+    currentUserData: app.getPath('userData'),
+    hasIsolatedBootstrap: Boolean(controlledAcpE2e || gacp01Observe)
+  })
+)
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()

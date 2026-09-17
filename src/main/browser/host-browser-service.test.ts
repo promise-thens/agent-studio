@@ -602,6 +602,8 @@ describe('截图像素对齐纪律', () => {
     expect(source).toContain("from './host-browser-screenshot'")
     expect(source).toContain('alignScreenshotPngToViewportCss')
     expect(source).toContain('scaleFactor: 1')
+    expect(source).toContain('Page.getLayoutMetrics')
+    expect(source).toContain('parseCssViewportFromLayoutMetrics')
     expect(source).not.toContain('image.getSize()')
   })
 })

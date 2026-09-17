@@ -193,6 +193,58 @@ describe('host-browser MCP stdio', () => {
     expect(called.result?.content?.[0]?.text).toContain('clicked')
   })
 
+  it('snapshot 的 CSS bbox 可以进 MCP，click 的 viewportX 仍必须剥掉', async () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const stop = runHostBrowserMcpStdio({
+      stdin,
+      stdout,
+      callTool: async () => ({
+        ok: true,
+        data: {
+          kind: 'snapshot',
+          truncated: false,
+          viewportWidth: 800,
+          viewportHeight: 600,
+          nodes: [
+            {
+              ref: 'e1',
+              role: 'option',
+              name: '杭州华燃工程建设有限公司',
+              tag: 'option',
+              x: 40,
+              y: 80,
+              width: 160,
+              height: 40
+            }
+          ]
+        }
+      })
+    })
+    stdin.write(
+      `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'browser_snapshot', arguments: {} }
+      })}
+`
+    )
+    const lines = await readLines(stdout, 1)
+    stop()
+    const raw = lines[0] ?? ''
+    expect(raw).not.toContain('viewportX')
+    const called = JSON.parse(raw) as {
+      result?: { content?: Array<{ text?: string }> }
+    }
+    const payload = called.result?.content?.[0]?.text ?? ''
+    expect(payload).toContain('"x":40')
+    expect(payload).toContain('"y":80')
+    expect(payload).toContain('"width":160')
+    expect(payload).toContain('"height":40')
+    expect(payload).toContain('"ref":"e1"')
+  })
+
   it('screenshot 回包带 viewport CSS 尺寸，供 click_xy 与 PNG 对齐', async () => {
     const stdin = new PassThrough()
     const stdout = new PassThrough()
@@ -230,6 +282,30 @@ describe('host-browser MCP stdio', () => {
     expect(text).toContain('"viewportHeight":600')
     expect(text).not.toContain('viewportX')
     expect(image?.mimeType).toBe('image/png')
+  })
+
+  it('tools/list 把 snapshot 框和 click 主路径写进说明，禁止当 OCR', async () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const stop = runHostBrowserMcpStdio({
+      stdin,
+      stdout,
+      callTool: async () => ({ ok: true, data: { kind: 'ok' } })
+    })
+    stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' })}\n`)
+    const lines = await readLines(stdout, 1)
+    stop()
+    const listed = JSON.parse(lines[0] ?? '{}') as {
+      result?: { tools?: Array<{ name: string; description?: string }> }
+    }
+    const byName = new Map(
+      (listed.result?.tools ?? []).map((tool) => [tool.name, tool.description ?? ''])
+    )
+    expect(byName.get('browser_snapshot')).toContain('x,y,width,height')
+    expect(byName.get('browser_click')).toContain('instead of click_xy')
+    expect(byName.get('browser_click_xy')).toContain('Last-resort')
+    expect(byName.get('browser_click_xy')).toContain('Python/PIL')
+    expect(byName.get('browser_screenshot')).toContain('do not screenshot every step')
   })
 
   it('tools/list 广告 browser_click_xy，并接受 click_at 别名', async () => {

@@ -31,6 +31,31 @@ export function screenshotImageNeedsCssResize(
   return image.width !== viewport.width || image.height !== viewport.height
 }
 
+/**
+ * 从 CDP Page.getLayoutMetrics 取出 CSS 视口。
+ * 优先 cssVisualViewport，避免把设备像素或 View DIP 当成 click/截图空间。
+ */
+export function parseCssViewportFromLayoutMetrics(
+  metrics: unknown
+): { width: number; height: number } | undefined {
+  if (!isPlainRecord(metrics)) return undefined
+  const sources = [
+    metrics.cssVisualViewport,
+    metrics.cssLayoutViewport,
+    metrics.visualViewport,
+    metrics.layoutViewport
+  ]
+  for (const source of sources) {
+    if (!isPlainRecord(source)) continue
+    const parsed = resolveScreenshotViewportCssSize({
+      viewportWidth: typeof source.clientWidth === 'number' ? source.clientWidth : Number.NaN,
+      viewportHeight: typeof source.clientHeight === 'number' ? source.clientHeight : Number.NaN
+    })
+    if (parsed) return parsed
+  }
+  return undefined
+}
+
 export interface HostBrowserChrome {
   url: string
   title: string

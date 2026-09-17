@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   HOST_BROWSER_MAX_URL_CHARS,
+  parseCssViewportFromLayoutMetrics,
   parseHostBrowserBounds,
   parseHostBrowserChrome,
   parseHostBrowserNavigateUrl,
@@ -140,6 +141,16 @@ describe('screenshot CSS 对齐', () => {
     expect(
       resolveScreenshotViewportCssSize({ viewportWidth: 0, viewportHeight: 600 })
     ).toBeUndefined()
+  })
+
+  it('layoutMetrics 优先 CSS visual viewport，不拿设备像素冒充 click 空间', () => {
+    expect(
+      parseCssViewportFromLayoutMetrics({
+        cssVisualViewport: { clientWidth: 640, clientHeight: 900 },
+        visualViewport: { clientWidth: 1280, clientHeight: 1800 }
+      })
+    ).toEqual({ width: 640, height: 900 })
+    expect(parseCssViewportFromLayoutMetrics({ layoutViewport: { pageX: 0 } })).toBeUndefined()
   })
 
   it('共享模块不得出现 Buffer，否则 Renderer 加载即白屏', () => {

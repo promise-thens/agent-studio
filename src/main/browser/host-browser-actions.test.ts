@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { parseHostBrowserAction } from '../../shared/host-browser'
 import {
   HostBrowserActionEngine,
+  resolveHostBrowserClickableBox,
+  resolveHostBrowserClickablePoint,
   sendHostBrowserCdp,
   type HostBrowserActionDriver
 } from './host-browser-actions'
@@ -33,6 +35,8 @@ function createDriver(
     url?: string
     axNodes?: Record<string, unknown>[]
     png?: Buffer
+    viewport?: { width: number; height: number }
+    quadsFactory?: () => { quads: number[][] }
   } = {}
 ): HostBrowserActionDriver & {
   loaded: string[]
@@ -47,6 +51,7 @@ function createDriver(
   const axNodes = options.axNodes ?? [
     axNode('1', { role: 'button', name: 'More information', backendDOMNodeId: 11 })
   ]
+  const viewport = options.viewport ?? { width: 800, height: 600 }
   return {
     loaded,
     cdpMethods,
@@ -77,13 +82,15 @@ function createDriver(
       return options.png ?? Buffer.concat([PNG_HEADER, Buffer.from('page')])
     },
     getViewportCssSize() {
-      return { width: 800, height: 600 }
+      return viewport
     },
     async sendCdp(method, params) {
       cdpMethods.push(method)
       if (method === 'Input.dispatchMouseEvent' && params) mouseEvents.push(params)
       if (method === 'Accessibility.getFullAXTree') return { nodes: axNodes }
-      if (method === 'DOM.getContentQuads') return { quads: [[0, 0, 20, 0, 20, 20, 0, 20]] }
+      if (method === 'DOM.getContentQuads') {
+        return options.quadsFactory?.() ?? { quads: [[0, 0, 20, 0, 20, 20, 0, 20]] }
+      }
       if (
         method === 'DOM.focus' ||
         method === 'DOM.scrollIntoViewIfNeeded' ||
@@ -259,6 +266,7 @@ describe('HostBrowserActionEngine', () => {
     expect(snapshot.data.nodes[0]?.name.length).toBeLessThanOrEqual(200)
     expect(snapshot.data.nodes.some((node) => node.name.length > 200)).toBe(false)
     expect(JSON.stringify(snapshot)).not.toContain('x'.repeat(4000))
+    expect(JSON.stringify(snapshot.data.nodes)).not.toContain('backendDOMNodeId')
   })
 
   it('热搜 link 占满名额时仍保留末尾搜索框', async () => {
@@ -392,6 +400,156 @@ describe('HostBrowserActionEngine', () => {
     expect(driver.cdpMethods).not.toContain('Runtime.evaluate')
   })
 
+  it('click_xy 略越界不得当成 0-1000 折算', async () => {
+    const driver = createDriver({
+      url: 'https://example.com/',
+      viewport: { width: 600, height: 900 }
+    })
+    const clicked = await new HostBrowserActionEngine(driver).perform({
+      name: 'browser_click_xy',
+      arguments: { x: 300, y: 920 }
+    })
+    expect(clicked.ok).toBe(true)
+    if (!clicked.ok || clicked.data.kind !== 'clicked') throw new Error('需要 clicked')
+    expect(clicked.data.viewportX).toBe(300)
+    expect(clicked.data.viewportY).toBe(920)
+    expect(driver.mouseEvents.map((event) => ({ x: event.x, y: event.y }))).toEqual([
+      { x: 300, y: 920 },
+      { x: 300, y: 920 },
+      { x: 300, y: 920 }
+    ])
+  })
+
+  it('click_xy 只在最近截图像素与视口不一致时按 PNG 折到 CSS', async () => {
+    const retina = pngIhdr(1600, 1200)
+    const driver = createDriver({
+      url: 'https://example.com/',
+      png: retina,
+      viewport: { width: 800, height: 600 }
+    })
+    const engine = new HostBrowserActionEngine(driver)
+    const shot = await engine.perform({ name: 'browser_screenshot' })
+    expect(shot.ok).toBe(true)
+    const clicked = await engine.perform({
+      name: 'browser_click_xy',
+      arguments: { x: 800, y: 600 }
+    })
+    expect(clicked.ok).toBe(true)
+    if (!clicked.ok || clicked.data.kind !== 'clicked') throw new Error('需要 clicked')
+    expect(clicked.data.viewportX).toBe(400)
+    expect(clicked.data.viewportY).toBe(300)
+  })
+
+  it('ref 点击跳过占满视口的外壳，点第一个紧凑可见盒中心', async () => {
+    const driver = createDriver({
+      url: 'https://example.com/',
+      viewport: { width: 800, height: 600 },
+      quadsFactory: () => ({
+        quads: [
+          [0, 0, 800, 0, 800, 600, 0, 600],
+          [40, 80, 200, 80, 200, 120, 40, 120]
+        ]
+      })
+    })
+    const engine = new HostBrowserActionEngine(driver)
+    const snapshot = await engine.perform({ name: 'browser_snapshot' })
+    if (!snapshot.ok || snapshot.data.kind !== 'snapshot') throw new Error('需要 snapshot')
+    const clicked = await engine.perform({
+      name: 'browser_click',
+      arguments: { ref: snapshot.data.nodes[0]?.ref }
+    })
+    expect(clicked.ok).toBe(true)
+    if (!clicked.ok || clicked.data.kind !== 'clicked') throw new Error('需要 clicked')
+    expect(clicked.data.viewportX).toBe(120)
+    expect(clicked.data.viewportY).toBe(100)
+  })
+
+  it('有可交互节点时不把 generic rest 填进 snapshot', async () => {
+    const nodes = [
+      axNode('g1', { role: 'generic', name: '一大段说明文字' }),
+      axNode('g2', { role: 'generic', name: '页脚' }),
+      axNode('b1', { role: 'button', name: '新增', backendDOMNodeId: 9 })
+    ]
+    const snapshot = await new HostBrowserActionEngine(
+      createDriver({ url: 'https://example.com/', axNodes: nodes })
+    ).perform({ name: 'browser_snapshot' })
+    expect(snapshot.ok).toBe(true)
+    if (!snapshot.ok || snapshot.data.kind !== 'snapshot') throw new Error('需要 snapshot')
+    expect(snapshot.data.nodes.map((node) => node.role)).toEqual(['button'])
+    expect(snapshot.data.nodes[0]?.name).toBe('新增')
+  })
+
+  it('snapshot 节点带视口 CSS bbox，和可点盒一致', async () => {
+    const snapshot = await new HostBrowserActionEngine(
+      createDriver({ url: 'https://example.com/' })
+    ).perform({ name: 'browser_snapshot' })
+    expect(snapshot.ok).toBe(true)
+    if (!snapshot.ok || snapshot.data.kind !== 'snapshot') throw new Error('需要 snapshot')
+    expect(snapshot.data.nodes[0]).toMatchObject({
+      ref: 'e1',
+      role: 'button',
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20
+    })
+  })
+
+  it('snapshot 跳过占满视口的外壳，框落在紧凑可见盒上', async () => {
+    const snapshot = await new HostBrowserActionEngine(
+      createDriver({
+        url: 'https://example.com/',
+        viewport: { width: 800, height: 600 },
+        quadsFactory: () => ({
+          quads: [
+            [0, 0, 800, 0, 800, 600, 0, 600],
+            [40, 80, 200, 80, 200, 120, 40, 120]
+          ]
+        })
+      })
+    ).perform({ name: 'browser_snapshot' })
+    expect(snapshot.ok).toBe(true)
+    if (!snapshot.ok || snapshot.data.kind !== 'snapshot') throw new Error('需要 snapshot')
+    expect(snapshot.data.nodes[0]).toMatchObject({ x: 40, y: 80, width: 160, height: 40 })
+  })
+
+  it('取不到 quad 时节点仍在，只是没有 bbox', async () => {
+    const snapshot = await new HostBrowserActionEngine(
+      createDriver({
+        url: 'https://example.com/',
+        quadsFactory: () => ({ quads: [] })
+      })
+    ).perform({ name: 'browser_snapshot' })
+    expect(snapshot.ok).toBe(true)
+    if (!snapshot.ok || snapshot.data.kind !== 'snapshot') throw new Error('需要 snapshot')
+    expect(snapshot.data.nodes[0]?.ref).toBe('e1')
+    expect(snapshot.data.nodes[0]?.x).toBeUndefined()
+    expect(snapshot.data.nodes[0]?.width).toBeUndefined()
+  })
+
+  it('打开的 option 必须压过成片按钮，避免下拉项进不了 snapshot', async () => {
+    const nodes = [
+      ...Array.from({ length: 160 }, (_, index) =>
+        axNode(String(index + 1), {
+          role: 'button',
+          name: `按钮${index + 1}`,
+          backendDOMNodeId: index + 10
+        })
+      ),
+      axNode('opt', { role: 'option', name: '杭州华燃工程建设有限公司', backendDOMNodeId: 9001 })
+    ]
+    const snapshot = await new HostBrowserActionEngine(
+      createDriver({ url: 'https://example.com/', axNodes: nodes })
+    ).perform({ name: 'browser_snapshot' })
+    expect(snapshot.ok).toBe(true)
+    if (!snapshot.ok || snapshot.data.kind !== 'snapshot') throw new Error('需要 snapshot')
+    expect(
+      snapshot.data.nodes.some(
+        (node) => node.role === 'option' && node.name === '杭州华燃工程建设有限公司'
+      )
+    ).toBe(true)
+  })
+
   it('navigate 只 load http(s)；type 成功也不回写输入明文', async () => {
     const driver = createDriver()
     const engine = new HostBrowserActionEngine(driver)
@@ -417,3 +575,41 @@ describe('HostBrowserActionEngine', () => {
     expect(driver.cdpMethods).toContain('Input.dispatchKeyEvent')
   })
 })
+
+describe('resolveHostBrowserClickablePoint', () => {
+  it('可见交集优先，不选最大面积外壳，也不把视口外点贴到 16px 内边', () => {
+    const quads = {
+      quads: [
+        [0, 0, 800, 0, 800, 600, 0, 600],
+        [40, 80, 200, 80, 200, 120, 40, 120]
+      ]
+    }
+    expect(resolveHostBrowserClickableBox(quads, { width: 800, height: 600 })).toEqual({
+      x: 40,
+      y: 80,
+      width: 160,
+      height: 40
+    })
+    expect(resolveHostBrowserClickablePoint(quads, { width: 800, height: 600 })).toEqual({
+      x: 120,
+      y: 100
+    })
+    expect(
+      resolveHostBrowserClickablePoint(
+        { quads: [[0, 0, 20, 0, 20, 20, 0, 20]] },
+        { width: 800, height: 600 }
+      )
+    ).toEqual({ x: 10, y: 10 })
+  })
+})
+
+/** 只写签名和 IHDR 宽高，足够测像素读取。 */
+function pngIhdr(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(24)
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
+  bytes.writeUInt32BE(13, 8)
+  bytes.write('IHDR', 12)
+  bytes.writeUInt32BE(width, 16)
+  bytes.writeUInt32BE(height, 20)
+  return bytes
+}

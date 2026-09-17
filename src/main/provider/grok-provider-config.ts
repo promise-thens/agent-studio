@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { ProviderRuntimeConfig } from './provider-config-store'
 import { AGENT_STUDIO_MODEL_ALIAS } from '../runtime/grok/grok-acp-dialect'
 import { GrokHomeConfigController, hasTomlTable } from '../runtime/grok/grok-home-config-controller'
+import { ensureHostBrowserGrokSkill } from '../runtime/grok/host-browser-grok-skill'
 import { splitTomlTables } from '../runtime/grok/grok-config-merge'
 import { ensureSharedGrokMemory, getUserGrokMemoryDir } from '../runtime/grok/grok-shared-memory'
 
@@ -72,6 +73,7 @@ export async function writeGrokProviderConfig(
   const grokHome = getManagedGrokHome(userDataPath)
   await fs.mkdir(grokHome, { recursive: true, mode: 0o700 })
   await chmodBestEffort(grokHome, 0o700)
+  await ensureHostBrowserGrokSkill(grokHome)
   await ensureSharedGrokMemory({
     grokHome,
     userMemoryDir: options.userMemoryDir ?? getUserGrokMemoryDir()

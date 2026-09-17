@@ -314,6 +314,8 @@ Computer Use 建议作为独立原生 Helper 和插件能力运行。
 
 **2026-09-16：** 宿主内置页软件光标底座已由 [P0-21a](superpowers/plans/p0-21a-host-browser-pointer-and-snapshot.md) 落地到同一扇 overlay（`agent-pointer-overlay`，预留 `computer-use` surface）。自动验证见 21a 任务 5；开发版 GUI 未走查。插件虚拟鼠标仍因观察阻塞未画出。P3-07 Helper 后置，消费该 overlay，不自建光标窗。不得宣称任意 App Computer Use 已完成。
 
+**2026-09-17：** Computer Use **提为下一开发项**。说明书 [2026-09-17-computer-use-development.md](superpowers/specs/2026-09-17-computer-use-development.md)。先配套 Chrome 扩展+光标（P3-06），再 macOS Helper 点任意 App（P3-07）。合同仍是几何主人+模型报编号；OCR 不是主路径。五条 MUST 未完成前不得宣称已和 Codex 一样。
+
 macOS 首期可以基于公开系统能力实现：
 
 - Accessibility / AXUIElement；
@@ -590,7 +592,7 @@ P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService �
 ### 2026-08-31
 
 - 先打磨一个 Runtime：Grok Build。P1-06～08 多 Provider 与 P2 Codex 搁置；现有单 Provider 设置保留。
-- P3 提前指把 Grok 已有能力摊到桌面（Plan、子 Agent、少打断权限、Sandbox、rewind、Hooks、后台命令、浏览器插件的审批、截图与虚拟鼠标），不是先做桌面自建 Computer Use Helper。点桌面软件仍后置。P0-19f 插件虚拟鼠标硬验收仍开放；宿主内置页软件光标走 P0-21a overlay（代码已落地，GUI 未走查）。`screen` / `clipboard` 留给后置软件表面 / P3-07。
+- P3 里 Grok 宿主表面（Plan / 子 Agent / 权限 / Sandbox 等）已摊开。**2026-09-17 起 Computer Use 不再后置**：下一开发项是配套浏览器扩展+光标，然后 macOS Helper。P0-19f 货架插件仍不许用不可映射坐标发明光标；配套扩展上报屏幕 DIP 后必须画针。
 - 完全接管要写：当前 Task 显式确认后走 Grok always-approve；默认询问；不静默 yolo、不写全局 config。确认后零确认卡：Grok 再问也由桌面代批 allow-once，午休期间不能卡死。少打断询问模式仍走桌面 Task grant。见 [p0-19g-task-takeover-always-approve.md](superpowers/plans/p0-19g-task-takeover-always-approve.md)。
 - 程序计划见 [p0-19-grok-host-capability-polish.md](superpowers/plans/p0-19-grok-host-capability-polish.md)。
 - P0-10C 至 P0-13 开发版走查暂时可以通过，不挡 P0-19 新能力开工；未走查不得标成 GUI 已过。

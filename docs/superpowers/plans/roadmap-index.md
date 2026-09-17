@@ -6,7 +6,9 @@
 >
 > **2026-08-20 产品确认：** 桌面是 Grok Build 的 ACP Client，不自己当 Agent。MCP / Skills / 记忆 / 插件由 Grok 执行，工作台负责可视化与配置。P2 Codex 与 P4 多大脑暂缓，计划文件保留。
 >
-> **2026-08-31 产品确认：** 先打磨一个 Runtime（Grok）。P1-06～08 与 P2 搁置；现有单 Provider 设置保留。P3 提前指摊开 Grok 已有能力（Plan / 子 Agent / 少打断权限 / Sandbox / rewind / Hooks / 后台命令 / 浏览器插件表面），不是开工桌面自建 Computer Use Helper。当前主线：[P0-19](p0-19-grok-host-capability-polish.md)。
+> **2026-08-31 产品确认：** 先打磨一个 Runtime（Grok）。P1-06～08 与 P2 搁置；现有单 Provider 设置保留。
+>
+> **2026-09-17：** Computer Use 提为下一开发项。说明书 [2026-09-17-computer-use-development.md](../specs/2026-09-17-computer-use-development.md)。先 [P3-06](p3-06-chrome-native-bridge.md) 配套扩展+光标，再 [P3-07](p3-07-macos-computer-use-helper.md) 任意 App Helper。P0-19 GUI 走查不挡开工。
 
 ## 使用规则
 
@@ -101,7 +103,7 @@
 | 9 | [P0-19h](p0-19h-context-usage-signals-bridge.md) | 3 | Grok signals 上下文用量桥接 | 代码已落地；开发版 GUI 待走查 | 现有 Usage 事件链；不改 Renderer |
 | 后 | [P0-21](p0-21-host-managed-browser.md) | 4 | 宿主内置浏览器（Codex 式共享页） | 任务 2–4 代码已落地；内置页允许软件光标（21a overlay）；任务 5 HUD 消费 21a overlay；开发版 GUI 未走查 | 不挡 19b；取代 P3-05 第一波共享页 |
 | 后 | [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) | 4 | 内置页指针 overlay 与可交互 snapshot | 任务 1–4 代码已落地；任务 5 文档+自动验证以本任务命令为准；GUI 未走查；不得宣称任意 App Computer Use | P0-21 任务 2–4；复用 19f overlay 窗；插件 pointer 仍冻结 |
-| 后 | P3-06～07 | 3 | Chrome 桥 / macOS Helper | 后置。P3-07 消费 `agent-pointer-overlay`，不自建光标窗 | P0-21 之后仍缺用户 Chrome / 系统 GUI 再评估 |
+| 下 | P3-06～07 | 3 | Chrome 配套扩展+光标 / macOS Helper | **下一开发项**（不再后置）。说明书 [CU 开发文档](../specs/2026-09-17-computer-use-development.md)。P3-07 消费 `agent-pointer-overlay`，不自建光标窗 | 内置页 bbox/ref 已有；扩展必须上报屏幕 DIP 才能画针 |
 
 P0-14 Worktree 仍是 P0-B，可与 GACP-06 并行，不挡本表。
 
@@ -156,7 +158,9 @@ P2-01、P2-02 先完成 account-backed Codex 的独立状态、账号、Thread/T
 
 > 2026-08-31：浏览器插件表面见 P0-19f。
 > **2026-09-04：** Codex 式宿主内置浏览器（共享页、Agent 操作同一只视图）见 [P0-21](p0-21-host-managed-browser.md)，取代 P3-05 第一波。
-> **2026-09-07：** P0-19f 收成「插件操作浏览器 + 虚拟鼠标」；点桌面软件 / `screen` / `clipboard` 后置到软件表面 / P3-07，**不再留给 19f**。P3-01 Capability Pack、P3-06 Chrome 桥、P3-07 Helper 仍后置。文件编辑器另开计划，尚未立项。
+> **2026-09-07：** P0-19f 收成「插件操作浏览器 + 虚拟鼠标」；点桌面软件 / `screen` / `clipboard` 不留给 19f。
+>
+> **2026-09-17：** P3-06 / P3-07 **提前为下一开发项**。P3-01 Capability Pack 仍可后置，不挡 0b 配套扩展用现有 browser L3。文件编辑器另开计划，尚未立项。
 > **2026-09-07 走查快照：** P0-19f 自动验证已过；虚拟鼠标与开发版 GUI 未过。插件虚拟鼠标只在 19f。
 > **2026-09-16：** [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) 代码已落地（可交互 snapshot + 宿主 overlay 软件光标）；自动验证以 21a 任务 5 命令为准；开发版 GUI 未走查。插件仍不画光标。P3-07 消费 `agent-pointer-overlay`，不自建光标窗。不得宣称任意 App Computer Use / P0-19f 插件虚拟鼠标 / P3-07 完成。
 
@@ -169,8 +173,8 @@ P3 统一沿用 `Manifest / ActionDescriptor → Registry → Executor → Permi
 | 03   |    3 | [高级项目体检与自动化入口](p3-03-project-health-and-git-review.md)               | 待开始 | P0-A、P3-01、P3-02         |
 | 04   |    4 | [MCP 与 Skills Host](p3-04-mcp-and-skills-host.md)                               | 待开始 | P3-01、P3-02；Grok 的 `mcpServers` 注入已由 P0-10D 负责，本计划不抢 |
 | 05   |    3 | [应用内受管浏览器](p3-05-managed-browser.md)                                     | 被 P0-21 取代，不开工 | 见 [P0-21](p0-21-host-managed-browser.md) |
-| 06   |    3 | [Chrome Native Bridge](p3-06-chrome-native-bridge.md)                            | 待开始 | P3-02、P0-21 权限模型      |
-| 07   |    3 | [macOS Computer Use Helper](p3-07-macos-computer-use-helper.md)                  | 待开始；消费 `agent-pointer-overlay`，不自建光标窗 | P3-02、产品确认 macOS 范围 |
+| 06   |    3 | [Chrome Native Bridge](p3-06-chrome-native-bridge.md)                            | **下一开发项**（阶段 0b）：配套扩展 + Native Host + 插件光标 | 现有 browser L3 / origin；扩展必须上报窗 DIP |
+| 07   |    3 | [macOS Computer Use Helper](p3-07-macos-computer-use-helper.md)                  | 紧随 0b：任意 App + `elementIndex`。消费 `agent-pointer-overlay`，不自建光标窗。[CU 说明书](../specs/2026-09-17-computer-use-development.md) | 辅助功能/屏幕录制授权；P3-06 光标合同可并行设计 |
 
 ## P4：多大脑协作（暂缓，依赖 P2）
 

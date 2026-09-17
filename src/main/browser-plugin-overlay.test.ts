@@ -7,6 +7,9 @@ const overlayWindowMocks = vi.hoisted(() => ({
   windows: [] as Array<{
     setIgnoreMouseEvents: ReturnType<typeof vi.fn>
     setBounds: ReturnType<typeof vi.fn>
+    getBounds: () => { x: number; y: number; width: number; height: number }
+    placedBounds: { x: number; y: number; width: number; height: number }
+    osShiftY: number
   }>
 }))
 
@@ -38,7 +41,14 @@ vi.mock('electron', () => {
     isVisible(): boolean {
       return true
     }
-    setBounds = vi.fn()
+    osShiftY = 0
+    placedBounds = { x: 0, y: 0, width: 1440, height: 900 }
+    setBounds = vi.fn((next: { x: number; y: number; width: number; height: number }) => {
+      this.placedBounds = { ...next, y: next.y + this.osShiftY }
+    })
+    getBounds(): { x: number; y: number; width: number; height: number } {
+      return this.placedBounds
+    }
     loadURL(): Promise<void> {
       return Promise.resolve()
     }
@@ -166,7 +176,7 @@ describe('overlay 源码纪律', () => {
     expect(overlayApp).toContain('overlay-cursor-ring')
     expect(overlayApp).toContain('overlay-cursor-dot')
     expect(overlayApp).toContain('overlay-cursor-hair')
-    expect(overlayApp).toContain('180ms')
+    expect(overlayApp).toContain('80ms')
     expect(overlayApp).toContain('prefers-reduced-motion')
     expect(overlayApp).not.toMatch(/CGEvent|Accessibility/)
     expect(overlayPreload).toContain('parseAgentPointerSnapshot')
@@ -406,10 +416,31 @@ describe('宿主 host-browser 指针', () => {
     expect(overlayWindowMocks.windows.length).toBeGreaterThan(0)
     const window = overlayWindowMocks.windows.at(-1)
     expect(window?.setBounds).toHaveBeenCalledWith(secondary)
+    expect(window?.getBounds()).toEqual(secondary)
 
     host.clearHostBrowserPointer()
     const hidden = publishToMain.mock.calls.at(-1)?.[0] as { pointer?: unknown }
     expect(hidden?.pointer).toBeUndefined()
+  })
+
+  it('ensurePointerOverlayLayout 回读落地后的 bounds，而不是只信 setBounds 入参', () => {
+    overlayWindowMocks.windows.length = 0
+    const requested = { x: 0, y: 0, width: 1440, height: 900 }
+    const host = new BrowserPluginOverlayHost({
+      isDev: false,
+      preloadPath: '/tmp/overlay.js',
+      productionHtmlPath: '/tmp/overlay.html',
+      platform: 'darwin',
+      publishToMain: vi.fn(),
+      getOverlayBounds: () => requested
+    })
+    const placed = host.ensurePointerOverlayLayout()
+    const window = overlayWindowMocks.windows.at(-1)
+    expect(window?.setBounds).toHaveBeenCalledWith(requested)
+    expect(placed).toEqual(requested)
+    if (!window) throw new Error('需要 overlay 窗')
+    window.osShiftY = 25
+    expect(host.ensurePointerOverlayLayout()).toEqual({ x: 0, y: 25, width: 1440, height: 900 })
   })
 
   it('主窗换屏后 relayout 把 overlay 窗搬到新屏', () => {

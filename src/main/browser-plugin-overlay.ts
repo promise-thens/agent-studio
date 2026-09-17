@@ -292,6 +292,24 @@ export class BrowserPluginOverlayHost {
   }
 
   /**
+   * 映射必须用 overlay 窗落地后的真实 bounds。
+   * macOS 可能把透明窗从 display.bounds 挤进 workArea，不回读就会整块偏下。
+   */
+  ensurePointerOverlayLayout(): BrowserPluginOverlayWindowBounds {
+    const bounds = this.resolveOverlayBounds()
+    const window = this.ensureWindow(bounds)
+    window.setBounds(bounds)
+    const placed = window.getBounds()
+    this.session.setDisplayBounds({ width: placed.width, height: placed.height })
+    return {
+      x: placed.x,
+      y: placed.y,
+      width: placed.width,
+      height: placed.height
+    }
+  }
+
+  /**
    * 主窗 move/resize/换屏时只搬 overlay 窗，不发明新指针。
    * remap 仍由 HostBrowserService 用同一套 bounds 重算 DIP。
    */
