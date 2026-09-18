@@ -35,6 +35,7 @@ import {
   resolveHostBrowserMcpScriptPath
 } from './browser/host-browser-mcp-host'
 import { HostBrowserSettingsStore } from './browser/host-browser-settings'
+import { ChromeNativeHost } from './browser/chrome/native-host'
 import {
   createBrowserPartition,
   mapHostBrowserClearDataKindsToStorages,
@@ -165,6 +166,7 @@ let browserPluginOverlayHost: BrowserPluginOverlayHost | null = null
 let hostBrowserService: HostBrowserService | null = null
 let hostBrowserSettingsStore: HostBrowserSettingsStore | null = null
 let hostBrowserMcpHost: HostBrowserMcpHost | null = null
+let chromeNativeHost: ChromeNativeHost | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -711,6 +713,20 @@ async function initializeServices(
     onQuestionCancelled: (request) =>
       sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.questionCancelled, request)
   })
+  // cookieSyncEnabled 由 Native Host 读完整 settings；关同步即停写 Cookie。
+  chromeNativeHost = new ChromeNativeHost({
+    userDataPath: app.getPath('userData'),
+    getSettings: () => requireHostBrowserSettingsStore().getSettings(),
+    getProjectId: () => resolveSelectedHostBrowserProjectId(),
+    setCookie: async (partition, details) => {
+      await session.fromPartition(partition).cookies.set(details)
+    }
+  })
+  try {
+    await chromeNativeHost.start()
+  } catch (error) {
+    console.error(`[Agent Studio] Chrome Native Host 启动失败：${redactSensitiveError(error)}`)
+  }
 }
 
 /** 与 Adapter 同源：~/.grok/bin/grok 存在则用之，否则 PATH 上的 grok。不改 Adapter.resolveBinary。 */
@@ -1065,16 +1081,7 @@ function registerIpcHandlers(): void {
      * 没有 Task 就 invalid-state；禁止收 Renderer 传来的 partition 名或路径。
      */
     clearHostBrowserData: async (kinds) => {
-      const selectedTaskId = agentService?.getSelectedTaskId() ?? null
-      let projectId: string | null = null
-      if (selectedTaskId) {
-        try {
-          projectId = requireTaskStore().getTaskRecord(selectedTaskId).projectId
-        } catch {
-          projectId = null
-        }
-      }
-      projectId = resolveHostBrowserClearProjectId(selectedTaskId, projectId)
+      const projectId = resolveSelectedHostBrowserProjectId()
       if (!projectId) {
         throw new DesktopIpcFailure('invalid-state', '没有可清理的内置浏览器会话。')
       }
@@ -1756,6 +1763,23 @@ function requireHostBrowserSettingsStore(): HostBrowserSettingsStore {
   return hostBrowserSettingsStore
 }
 
+/**
+ * Cookie 同步与清数据共用：只认当前选中 Task 的 projectId。
+ * 没有 Task 就拒绝写入，避免落到 defaultSession 或去读磁盘 Chrome Profile。
+ */
+function resolveSelectedHostBrowserProjectId(): string | null {
+  const selectedTaskId = agentService?.getSelectedTaskId() ?? null
+  let projectId: string | null = null
+  if (selectedTaskId) {
+    try {
+      projectId = requireTaskStore().getTaskRecord(selectedTaskId).projectId
+    } catch {
+      projectId = null
+    }
+  }
+  return resolveHostBrowserClearProjectId(selectedTaskId, projectId)
+}
+
 /** 内置浏览器动作身份只从 TaskStore 读，MCP 不能自报 project 或 execution root。 */
 function resolveHostBrowserPerformContext(taskId: string): HostBrowserPerformContext | null {
   try {
@@ -1887,6 +1911,8 @@ const appShutdownGate = createAppShutdownGate({
     browserPluginOverlayHost = null
     void hostBrowserMcpHost?.close()
     hostBrowserMcpHost = null
+    void chromeNativeHost?.close()
+    chromeNativeHost = null
   },
   cancelActiveExecution: async () => {
     const identity = taskExecutor?.getActiveIdentity()

@@ -651,12 +651,14 @@ describe('宿主 overlay 指针组装', () => {
       /clearHostBrowserData: async \(kinds\) => \{[\s\S]*?\n {4}\},/
     )?.[0]
     expect(clearFn).toBeTruthy()
-    expect(clearFn).toContain('getSelectedTaskId')
+    expect(clearFn).toContain('resolveSelectedHostBrowserProjectId')
     expect(clearFn).toContain('没有可清理的内置浏览器会话。')
     expect(clearFn).toContain('session.fromPartition(createBrowserPartition(projectId))')
     expect(clearFn).toContain('clearStorageData')
     expect(clearFn).toContain('kinds')
     expect(clearFn).not.toContain('async () => undefined')
+    expect(indexSource).toContain('getSelectedTaskId')
+    expect(indexSource).toContain('resolveHostBrowserClearProjectId')
   })
 
   it('darwin 关主窗后二次启动必须重建窗口，不得只 focus 空窗', () => {
@@ -703,6 +705,24 @@ describe('宿主 overlay 指针组装', () => {
     expect(indexSource).toMatch(
       /authorizeOperation:\s*\(intent,\s*execute,\s*options\)[\s\S]*broker\.authorizeOperation\(intent,\s*execute,\s*\{/
     )
+  })
+
+  it('app ready 后启动 Chrome Native Host，Cookie 写入当前 project partition，不读磁盘 Profile', () => {
+    const indexSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'index.ts'),
+      'utf8'
+    )
+    expect(indexSource).toContain("from './browser/chrome/native-host'")
+    expect(indexSource).toContain('new ChromeNativeHost')
+    expect(indexSource).toContain('chromeNativeHost.start')
+    expect(indexSource).toContain('chromeNativeHost?.close')
+    expect(indexSource).toContain('session.fromPartition(createBrowserPartition')
+    expect(indexSource).toContain('cookies.set')
+    expect(indexSource).toContain('cookieSyncEnabled')
+    expect(indexSource).toContain('resolveHostBrowserClearProjectId')
+    expect(indexSource).not.toContain('Google/Chrome/Default')
+    expect(indexSource).not.toContain('Default/Cookies')
+    expect(indexSource).not.toContain('src/main/capability')
   })
 })
 
