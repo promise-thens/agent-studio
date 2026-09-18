@@ -298,13 +298,13 @@ Capability Manifest / ActionDescriptor
 
 建议分阶段实现：
 
-1. **宿主内置浏览器（2026-09-04 已确认，计划 [P0-21](superpowers/plans/p0-21-host-managed-browser.md)）：** Electron `WebContentsView` + 独立 Project Profile。用户在工作区右栏看见真实页面；Grok 经注入的窄动作 MCP 操作同一只视图。不读用户 Chrome Profile，不把任意 CDP 交给 Agent。
-2. 通过 Chrome Extension 和 Native Messaging 连接用户现有 Chrome（P3-06，后置）；
-3. 由用户主动选择标签页，并按网站或会话授予权限。
+1. **宿主内置浏览器（2026-09-04 已确认，计划 [P0-21](superpowers/plans/p0-21-host-managed-browser.md)）：** Electron `WebContentsView` + 独立 Project Profile。用户在工作区右栏看见真实页面；Grok 经注入的窄动作 MCP 操作同一只视图。Agent 需要调试时自己打开右栏并新建/导航标签。总开关打开后浏览/下载/上传/调试出厂始终允许。
+2. **独立浏览器设置页（对标 ChatGPT Browser Use，通用型默认开放）：** 总开关、链接打开位置、历史/下载/密码（内置 partition）、站点权限、智能体权限（出厂始终允许）、配套扩展、完整 CDP（出厂开）、谨慎模式（出厂关）。当前单开关不算完成。设置用来关，不是用来拦。
+3. **配套扩展装上即同步并连接（P3-06，下一开发项）：** 经 Native Messaging 把 Chrome 扩展 API 能提供的 Cookie / 登录态写入内置 partition，并允许操作真实 Chrome 窗口、画光标。不是每次请用户交出某个标签，也不是按站点出厂白名单。登录态走扩展 API，不解析磁盘 Profile。
 
 Grok 插件自己的浏览器（chrome-devtools、browser-use、tinyfish）仍走插件表面与 L3 审批（P0-19f），不得再开第二只无头 Chrome 冒充「内置浏览器」。插件虚拟鼠标只在 19f 的置顶 overlay，**仍不画**（ACP 指针键 not-observed、`click_at` 为 viewport-css）。宿主内置页软件光标走 [P0-21a](superpowers/plans/p0-21a-host-browser-pointer-and-snapshot.md) 的同一扇 overlay（`surface=host-browser`），不画进 WebContentsView；代码已落地，开发版 GUI 未走查，不得宣称内置页光标可用。19f 已落地 browser L3、截图 Artifact 与停止条。点桌面软件不是 P0-19f。
 
-不能通过直接读取用户 Chrome Profile 的方式绕过浏览器权限或复用登录状态。
+复用登录态必须走配套扩展 API + Native Host，不解析磁盘 Chrome Profile。这是开放通道，不是禁止 Agent 使用用户已登录的站。
 
 ### 7.3 Computer Use
 
@@ -314,7 +314,7 @@ Computer Use 建议作为独立原生 Helper 和插件能力运行。
 
 **2026-09-16：** 宿主内置页软件光标底座已由 [P0-21a](superpowers/plans/p0-21a-host-browser-pointer-and-snapshot.md) 落地到同一扇 overlay（`agent-pointer-overlay`，预留 `computer-use` surface）。自动验证见 21a 任务 5；开发版 GUI 未走查。插件虚拟鼠标仍因观察阻塞未画出。P3-07 Helper 后置，消费该 overlay，不自建光标窗。不得宣称任意 App Computer Use 已完成。
 
-**2026-09-17：** Computer Use **提为下一开发项**。说明书 [2026-09-17-computer-use-development.md](superpowers/specs/2026-09-17-computer-use-development.md)。先配套 Chrome 扩展+光标（P3-06），再 macOS Helper 点任意 App（P3-07）。合同仍是几何主人+模型报编号；OCR 不是主路径。五条 MUST 未完成前不得宣称已和 Codex 一样。
+**2026-09-17：** Computer Use **提为下一开发项**。说明书 [2026-09-17-computer-use-development.md](superpowers/specs/2026-09-17-computer-use-development.md)。P3-06 先做独立设置页 + 扩展装上即同步并连接 + Agent 自己开标签（出厂开放）。然后 P3-07 Helper 点任意 App。合同仍是几何主人+模型报编号；OCR 不是主路径。五条 MUST 未完成前不得宣称已和 Codex 一样。
 
 macOS 首期可以基于公开系统能力实现：
 
@@ -592,7 +592,7 @@ P1-01 至 P1-05 已有单 Provider 实现基线，需要在新的 AgentService �
 ### 2026-08-31
 
 - 先打磨一个 Runtime：Grok Build。P1-06～08 多 Provider 与 P2 Codex 搁置；现有单 Provider 设置保留。
-- P3 里 Grok 宿主表面（Plan / 子 Agent / 权限 / Sandbox 等）已摊开。**2026-09-17 起 Computer Use 不再后置**：下一开发项是配套浏览器扩展+光标，然后 macOS Helper。P0-19f 货架插件仍不许用不可映射坐标发明光标；配套扩展上报屏幕 DIP 后必须画针。
+- P3 里 Grok 宿主表面（Plan / 子 Agent / 权限 / Sandbox 等）已摊开。**2026-09-17 起 Computer Use 不再后置**：下一开发项是独立浏览器设置页 + 配套扩展装上即同步并连接，然后 macOS Helper。P0-19f 货架插件仍不许用不可映射坐标发明光标；扩展已连并上报屏幕 DIP 后必须画针。出厂不按站点上锁。
 - 完全接管要写：当前 Task 显式确认后走 Grok always-approve；默认询问；不静默 yolo、不写全局 config。确认后零确认卡：Grok 再问也由桌面代批 allow-once，午休期间不能卡死。少打断询问模式仍走桌面 Task grant。见 [p0-19g-task-takeover-always-approve.md](superpowers/plans/p0-19g-task-takeover-always-approve.md)。
 - 程序计划见 [p0-19-grok-host-capability-polish.md](superpowers/plans/p0-19-grok-host-capability-polish.md)。
 - P0-10C 至 P0-13 开发版走查暂时可以通过，不挡 P0-19 新能力开工；未走查不得标成 GUI 已过。
