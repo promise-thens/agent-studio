@@ -625,6 +625,30 @@ describe('宿主 overlay 指针组装', () => {
     expect(geometryFn).not.toContain('getZoomFactor')
   })
 
+  it('内置浏览器 get 回完整设置，补丁先 merge 再 saveSettings，总开关才拦 busy', () => {
+    const indexSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'index.ts'),
+      'utf8'
+    )
+    expect(indexSource).toContain(
+      'getHostBrowserSettings: () => requireHostBrowserSettingsStore().getSettings()'
+    )
+    const enabledFn = indexSource.match(
+      /setHostBrowserEnabled: async \(enabled\) => \{[\s\S]*?\n {4}\},/
+    )?.[0]
+    expect(enabledFn).toContain('assertGrokConfigCanReload')
+    expect(enabledFn).toContain('.save(enabled)')
+    expect(enabledFn).toContain('.getSettings()')
+    const settingsFn = indexSource.match(
+      /setHostBrowserSettings: async \(patch\) => \{[\s\S]*?\n {4}\},/
+    )?.[0]
+    expect(settingsFn).toBeTruthy()
+    expect(settingsFn).toContain('getSettings()')
+    expect(settingsFn).toContain('saveSettings')
+    expect(settingsFn).not.toContain('assertGrokConfigCanReload')
+    expect(indexSource).toContain('clearHostBrowserData:')
+  })
+
   it('darwin 关主窗后二次启动必须重建窗口，不得只 focus 空窗', () => {
     const indexSource = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), 'index.ts'),

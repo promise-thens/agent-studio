@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { APP_INVOKE_CHANNELS } from '../shared/app-ipc'
 import type { GrokHookSummary } from '../shared/grok-hook'
+import { DEFAULT_HOST_BROWSER_SETTINGS, type HostBrowserSettings } from '../shared/host-browser'
 import type { DesktopIpcResult } from '../shared/ipc-result'
 import type { MarketplacePluginSummary } from '../shared/runtime-marketplace-plugin'
 import type { RuntimePluginDetail, RuntimePluginSummary } from '../shared/runtime-plugin'
@@ -71,6 +72,8 @@ function createFixture(): {
   openMacosFilesPrivacySettings: ReturnType<typeof vi.fn>
   getGrokSandbox: ReturnType<typeof vi.fn>
   setGrokSandbox: ReturnType<typeof vi.fn>
+  setHostBrowserSettings: ReturnType<typeof vi.fn>
+  clearHostBrowserData: ReturnType<typeof vi.fn>
   listHooks: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<DesktopIpcResult<T>>
 } {
@@ -129,8 +132,18 @@ function createFixture(): {
     profile,
     applied: true
   }))
-  const getHostBrowserSettings = vi.fn(async () => ({ enabled: true }))
-  const setHostBrowserEnabled = vi.fn(async (enabled: boolean) => ({ enabled }))
+  const getHostBrowserSettings = vi.fn(async () => ({ ...DEFAULT_HOST_BROWSER_SETTINGS }))
+  const setHostBrowserEnabled = vi.fn(async (enabled: boolean) => ({
+    ...DEFAULT_HOST_BROWSER_SETTINGS,
+    enabled
+  }))
+  const setHostBrowserSettings = vi.fn(
+    async (patch: Partial<Omit<HostBrowserSettings, 'enabled'>>) => ({
+      ...DEFAULT_HOST_BROWSER_SETTINGS,
+      ...patch
+    })
+  )
+  const clearHostBrowserData = vi.fn(async () => undefined)
   const listHooks = vi.fn(async () => [hookSummary])
   const listMcpServers = vi.fn(async () => [])
   const upsertMcpServer = vi.fn(async () => ({
@@ -178,6 +191,8 @@ function createFixture(): {
     setGrokSandbox,
     getHostBrowserSettings,
     setHostBrowserEnabled,
+    setHostBrowserSettings,
+    clearHostBrowserData,
     listHooks,
     listMcpServers,
     upsertMcpServer,
@@ -211,6 +226,8 @@ function createFixture(): {
     openMacosFilesPrivacySettings,
     getGrokSandbox,
     setGrokSandbox,
+    setHostBrowserSettings,
+    clearHostBrowserData,
     listHooks,
     invoke
   }
@@ -594,6 +611,87 @@ describe('App IPC Handler', () => {
       await fixture.invoke(APP_INVOKE_CHANNELS.getGrokSandbox, { profile: 'off' })
     ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
     expect(fixture.setGrokSandbox).toHaveBeenCalledTimes(1)
+  })
+
+  it('读写完整内置浏览器设置，拒绝 enabled 补丁和非法黑名单', async () => {
+    const fixture = createFixture()
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.getHostBrowserSettings)).toEqual({
+      ok: true,
+      value: DEFAULT_HOST_BROWSER_SETTINGS
+    })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setHostBrowserEnabled, { enabled: false })
+    ).toEqual({
+      ok: true,
+      value: { ...DEFAULT_HOST_BROWSER_SETTINGS, enabled: false }
+    })
+
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setHostBrowserSettings, { showFullUrl: true })
+    ).toEqual({
+      ok: true,
+      value: { ...DEFAULT_HOST_BROWSER_SETTINGS, showFullUrl: true }
+    })
+    expect(fixture.setHostBrowserSettings).toHaveBeenCalledWith({ showFullUrl: true })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setHostBrowserSettings, {
+        showFullUrl: true,
+        cookie: 'secret'
+      })
+    ).toEqual({
+      ok: true,
+      value: { ...DEFAULT_HOST_BROWSER_SETTINGS, showFullUrl: true }
+    })
+    expect(fixture.setHostBrowserSettings).toHaveBeenLastCalledWith({ showFullUrl: true })
+
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setHostBrowserSettings, { enabled: false })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setHostBrowserSettings, {
+        enabled: true,
+        showFullUrl: true
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.setHostBrowserSettings, {
+        syncBlacklist: ['not-an-origin']
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.setHostBrowserSettings).toHaveBeenCalledTimes(2)
+  })
+
+  it('清除浏览数据只接受 1–4 个白名单 kinds', async () => {
+    const fixture = createFixture()
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.clearHostBrowserData, {
+        kinds: ['cookies', 'cache', 'history', 'downloads']
+      })
+    ).toEqual({ ok: true, value: null })
+    expect(fixture.clearHostBrowserData).toHaveBeenCalledWith([
+      'cookies',
+      'cache',
+      'history',
+      'downloads'
+    ])
+
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.clearHostBrowserData, { kinds: [] })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.clearHostBrowserData, { kinds: ['files'] })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.clearHostBrowserData, {
+        kinds: ['cookies', 'files']
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.clearHostBrowserData, {
+        kinds: ['cookies', 'cache', 'history', 'downloads', 'cookies']
+      })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(fixture.clearHostBrowserData).toHaveBeenCalledTimes(1)
   })
 
   it('钩子列表无参返回摘要，拒绝未知字段', async () => {

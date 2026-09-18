@@ -1,7 +1,8 @@
 import {
   parseHostBrowserChrome,
-  parseHostBrowserEnabledState,
-  type HostBrowserChrome
+  parseHostBrowserSettings,
+  type HostBrowserChrome,
+  type HostBrowserSettings
 } from '../shared/host-browser'
 import {
   AGENT_OPERATION_TYPES,
@@ -165,6 +166,20 @@ function readBoundedText(value: unknown, maxBytes: number, allowEmpty = false): 
     return null
   }
   return value
+}
+
+/**
+ * Preload 再 parse 完整偏好：未知键丢掉，Cookie 明文不得进 Renderer。
+ */
+function parseHostBrowserSettingsResult(
+  result: DesktopIpcResult<unknown>
+): DesktopIpcResult<HostBrowserSettings> {
+  if (!result.ok) return result
+  const parsed = parseHostBrowserSettings(result.value)
+  if (!parsed) {
+    return { ok: false, error: { code: 'operation-failed', message: '内置浏览器设置无效。' } }
+  }
+  return { ok: true, value: parsed }
 }
 
 /** Preload 再校验 chrome 快照，丢掉 cookie 或非 http(s) 当前 URL。 */
@@ -1123,24 +1138,25 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
       const result = (await ipcRenderer.invoke(
         APP_INVOKE_CHANNELS.getHostBrowserSettings
       )) as DesktopIpcResult<unknown>
-      if (!result.ok) return result
-      const parsed = parseHostBrowserEnabledState(result.value)
-      if (!parsed) {
-        return { ok: false, error: { code: 'operation-failed', message: '内置浏览器设置无效。' } }
-      }
-      return { ok: true, value: parsed }
+      return parseHostBrowserSettingsResult(result)
     },
     setHostBrowserEnabled: async (enabled) => {
       const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.setHostBrowserEnabled, {
         enabled
       })) as DesktopIpcResult<unknown>
-      if (!result.ok) return result
-      const parsed = parseHostBrowserEnabledState(result.value)
-      if (!parsed) {
-        return { ok: false, error: { code: 'operation-failed', message: '内置浏览器设置无效。' } }
-      }
-      return { ok: true, value: parsed }
+      return parseHostBrowserSettingsResult(result)
     },
+    setHostBrowserSettings: async (patch) => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.setHostBrowserSettings,
+        patch
+      )) as DesktopIpcResult<unknown>
+      return parseHostBrowserSettingsResult(result)
+    },
+    clearHostBrowserData: async (kinds) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.clearHostBrowserData, { kinds }) as ReturnType<
+        AppDesktopApi['clearHostBrowserData']
+      >,
     // Preload 再 parse：丢掉 command / url / 绝对路径，坏项静默剔除而不是整表失败
     listHooks: async () => {
       const result = (await ipcRenderer.invoke(

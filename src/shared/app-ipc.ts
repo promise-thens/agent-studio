@@ -34,6 +34,8 @@ export const APP_INVOKE_CHANNELS = {
   setGrokSandbox: 'app:set-grok-sandbox',
   getHostBrowserSettings: 'app:get-host-browser-settings',
   setHostBrowserEnabled: 'app:set-host-browser-enabled',
+  setHostBrowserSettings: 'app:set-host-browser-settings',
+  clearHostBrowserData: 'app:clear-host-browser-data',
   listHooks: 'app:list-hooks',
   listMcpServers: 'app:list-mcp-servers',
   upsertMcpServer: 'app:upsert-mcp-server',
@@ -107,6 +109,11 @@ export interface AppGrokSandboxApplyResult {
 /** 完整内置浏览器偏好；Renderer 不得从中拿到 Cookie 明文。 */
 export type AppHostBrowserSettings = HostBrowserSettings
 
+/** 只清内置 partition；kinds 必须是 cookies/cache/history/downloads 子集。 */
+export interface AppClearHostBrowserDataRequest {
+  kinds: Array<'cookies' | 'cache' | 'history' | 'downloads'>
+}
+
 export interface AppListMcpServersRequest {
   projectId?: string
 }
@@ -170,6 +177,14 @@ export interface AppDesktopApi {
   ) => Promise<DesktopIpcResult<AppGrokSandboxApplyResult>>
   getHostBrowserSettings: () => Promise<DesktopIpcResult<AppHostBrowserSettings>>
   setHostBrowserEnabled: (enabled: boolean) => Promise<DesktopIpcResult<AppHostBrowserSettings>>
+  /** 只收非总开关补丁；含 enabled 由主进程拒绝，避免保存其它字段时把能力关掉。 */
+  setHostBrowserSettings: (
+    patch: Partial<Omit<HostBrowserSettings, 'enabled'>>
+  ) => Promise<DesktopIpcResult<AppHostBrowserSettings>>
+  /** 只清内置 persist:as-browser partition，不得指向用户 Chrome。 */
+  clearHostBrowserData: (
+    kinds: AppClearHostBrowserDataRequest['kinds']
+  ) => Promise<DesktopIpcResult<null>>
   /** 列出 App 专属 grok-home/hooks 脱敏摘要，不回传 command / url / 绝对路径。 */
   listHooks: () => Promise<DesktopIpcResult<GrokHookSummary[]>>
   listMcpServers: (projectId?: string) => Promise<DesktopIpcResult<McpServerSummary[]>>

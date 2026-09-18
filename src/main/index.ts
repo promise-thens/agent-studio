@@ -1030,14 +1030,29 @@ function registerIpcHandlers(): void {
       }
       return { profile, applied: true }
     },
-    getHostBrowserSettings: () => ({
-      enabled: requireHostBrowserSettingsStore().isEnabled()
-    }),
+    getHostBrowserSettings: () => requireHostBrowserSettingsStore().getSettings(),
+    /**
+     * 总开关。busy 时拒绝，避免执行中把 MCP/右栏关掉而旧进程仍按旧偏好跑。
+     */
     setHostBrowserEnabled: async (enabled) => {
       assertGrokConfigCanReload()
       await requireHostBrowserSettingsStore().save(enabled)
-      return { enabled: requireHostBrowserSettingsStore().isEnabled() }
+      return requireHostBrowserSettingsStore().getSettings()
     },
+    /**
+     * 非总开关字段执行中可改。必须先 merge 再 saveSettings：
+     * saveSettings 对缺字段填出厂默认，半份对象会把用户黑名单冲掉。
+     */
+    setHostBrowserSettings: async (patch) => {
+      const store = requireHostBrowserSettingsStore()
+      const current = store.getSettings()
+      return store.saveSettings({ ...current, ...patch })
+    },
+    /**
+     * 占位：Task 4 才擦 persist:as-browser partition，不得碰用户 Chrome。
+     * 本任务只接 IPC 校验后的 kinds。
+     */
+    clearHostBrowserData: async () => undefined,
     // 钩子扫描牢笼绑在 userData，不执行钩子，不把 command / url 经 IPC 回传
     listHooks: () => listGrokHooks(app.getPath('userData')),
     listMcpServers: async (projectId) => {

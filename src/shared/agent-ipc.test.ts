@@ -84,6 +84,8 @@ describe('桌面 IPC 静态契约', () => {
       'app:set-grok-sandbox',
       'app:get-host-browser-settings',
       'app:set-host-browser-enabled',
+      'app:set-host-browser-settings',
+      'app:clear-host-browser-data',
       'app:list-hooks',
       'app:list-mcp-servers',
       'app:upsert-mcp-server',
