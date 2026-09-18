@@ -2,6 +2,7 @@ import { describe, expect, it, vi, type Mock } from 'vitest'
 import { reactive } from 'vue'
 import { AGENT_INVOKE_CHANNELS, AGENT_PUSH_CHANNELS } from '../shared/agent-ipc'
 import { APP_INVOKE_CHANNELS, APP_PUSH_CHANNELS } from '../shared/app-ipc'
+import { DEFAULT_HOST_BROWSER_SETTINGS } from '../shared/host-browser'
 import { TASK_INVOKE_CHANNELS } from '../shared/task-ipc'
 import {
   createAgentDesktopApi,
@@ -809,6 +810,68 @@ describe('窄 Preload API', () => {
       [APP_INVOKE_CHANNELS.setGrokSandbox, { profile: 'workspace' }],
       [APP_INVOKE_CHANNELS.setGrokSandbox, { profile: 'strict' }],
       [APP_INVOKE_CHANNELS.getGrokSandbox]
+    ])
+  })
+
+  it('内置浏览器设置走固定 channel，解析完整对象并丢掉未知键', async () => {
+    const ipcRenderer = createIpcRenderer()
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { ...DEFAULT_HOST_BROWSER_SETTINGS, cookie: 'secret' }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { ...DEFAULT_HOST_BROWSER_SETTINGS, enabled: false }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { ...DEFAULT_HOST_BROWSER_SETTINGS, showFullUrl: true }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({ ok: true, value: { enabled: 'yes' } })
+    ipcRenderer.invoke.mockResolvedValueOnce({ ok: true, value: null })
+    const app = createAppDesktopApi(ipcRenderer)
+
+    const listed = await app.getHostBrowserSettings()
+    expect(listed).toEqual({ ok: true, value: DEFAULT_HOST_BROWSER_SETTINGS })
+    expect(JSON.stringify(listed)).not.toContain('secret')
+    expect(await app.setHostBrowserEnabled(false)).toEqual({
+      ok: true,
+      value: { ...DEFAULT_HOST_BROWSER_SETTINGS, enabled: false }
+    })
+    expect(await app.setHostBrowserSettings({ showFullUrl: true })).toEqual({
+      ok: true,
+      value: { ...DEFAULT_HOST_BROWSER_SETTINGS, showFullUrl: true }
+    })
+    expect(await app.setHostBrowserSettings({ showFullUrl: true })).toEqual({
+      ok: false,
+      error: { code: 'operation-failed', message: '内置浏览器设置无效。' }
+    })
+    expect(await app.clearHostBrowserData(['cookies'])).toEqual({ ok: true, value: null })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { installed: true, path: '/secret' }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { lastCookieSyncAt: '2026-09-18T00:00:00.000Z', cookie: 'secret' }
+    })
+    const installed = await app.installHostBrowserExtension()
+    expect(installed).toEqual({ ok: true, value: { installed: true } })
+    expect(JSON.stringify(installed)).not.toContain('/secret')
+    const status = await app.getHostBrowserExtensionStatus()
+    expect(status).toEqual({
+      ok: true,
+      value: { lastCookieSyncAt: '2026-09-18T00:00:00.000Z' }
+    })
+    expect(JSON.stringify(status)).not.toContain('secret')
+    expect(ipcRenderer.invoke.mock.calls).toEqual([
+      [APP_INVOKE_CHANNELS.getHostBrowserSettings],
+      [APP_INVOKE_CHANNELS.setHostBrowserEnabled, { enabled: false }],
+      [APP_INVOKE_CHANNELS.setHostBrowserSettings, { showFullUrl: true }],
+      [APP_INVOKE_CHANNELS.setHostBrowserSettings, { showFullUrl: true }],
+      [APP_INVOKE_CHANNELS.clearHostBrowserData, { kinds: ['cookies'] }],
+      [APP_INVOKE_CHANNELS.installHostBrowserExtension],
+      [APP_INVOKE_CHANNELS.getHostBrowserExtensionStatus]
     ])
   })
 

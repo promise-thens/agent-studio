@@ -1,7 +1,8 @@
 /**
  * 浏览器插件进行中的主窗口 HUD 与 overlay 快照。
  *
- * 消费共享 agent-pointer-overlay；插件 pointer 仍恒 undefined，不打开 screen/clipboard。
+ * 消费共享 agent-pointer-overlay；本 ACP 通道继续剥离 pointer（货架 chrome-devtools）。
+ * 配套扩展有限 DIP 走 createAgentPointerSnapshot，不经过本文件。
  */
 
 import type { AgentToolStatus } from './agent'
@@ -81,7 +82,7 @@ export function resolveBrowserPluginHudCopy(input: {
   return resolveAgentPointerHudCopy({
     surface,
     overlayVisible: input.overlayVisible,
-    // 未显式传入时：插件仍把 visible 当进行中；宿主闲置光标不得当成进行中
+    // 未显式传入且无三元组：配套闲置针不得冒充插件进行中
     turnActive:
       input.turnActive ??
       isAgentPointerTurnActive({
@@ -116,6 +117,7 @@ export function createBrowserPluginOverlaySnapshot(input: {
   executionId?: string
   pointer?: BrowserPluginOverlayPointer
 }): BrowserPluginOverlaySnapshot {
+  // 货架 chrome-devtools 的 viewport-css 不得画到 overlay；配套扩展不走这条通道
   void input.pointer
   const shared = createAgentPointerSnapshot({
     visible: input.visible,
@@ -123,8 +125,7 @@ export function createBrowserPluginOverlaySnapshot(input: {
     persistWhenUnfocused: false,
     taskId: input.taskId,
     turnId: input.turnId,
-    executionId: input.executionId,
-    pointer: input.pointer
+    executionId: input.executionId
   })
   return toBrowserPluginOverlaySnapshot(shared)
 }

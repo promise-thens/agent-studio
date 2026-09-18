@@ -19,7 +19,7 @@ import {
   type BrowserPluginOverlaySnapshot,
   type BrowserPluginToolActivity
 } from '../shared/browser-plugin-overlay'
-import type { AgentPointer } from '../shared/agent-pointer-overlay'
+import { createAgentPointerSnapshot, type AgentPointer } from '../shared/agent-pointer-overlay'
 import { TASK_PUSH_CHANNELS, TASK_SEND_CHANNELS } from '../shared/task-ipc'
 import type { TaskExecutionDto, TaskExecutionSnapshot } from '../shared/task-execution'
 import type { RendererTrustOptions } from './security/ipc-sender-validation'
@@ -119,6 +119,7 @@ export class BrowserPluginOverlaySession {
   private displayBounds = { width: 1440, height: 900 }
   private hostPointer: AgentPointer | undefined
   private hostPointerIds: { taskId?: string; turnId?: string; executionId?: string } = {}
+  private companionPointer: AgentPointer | undefined
 
   setDisplayBounds(bounds: { width: number; height: number }): void {
     this.displayBounds = bounds
@@ -192,6 +193,19 @@ export class BrowserPluginOverlaySession {
   }
 
   /**
+   * 配套扩展已映射 overlay DIP。没有有限 pointer 就清针，不得用 ACP rawInput 补造。
+   */
+  acceptCompanionBrowserPluginPointer(input: { pointer?: AgentPointer }): void {
+    const snapshot = createAgentPointerSnapshot({
+      visible: true,
+      surface: 'browser-plugin',
+      persistWhenUnfocused: true,
+      pointer: input.pointer
+    })
+    this.companionPointer = snapshot.pointer
+  }
+
+  /**
    * Spec §6：切到其它 Task 必须藏针。Turn 结束 execution 变空时不要走这里，闲置针要留着。
    */
   noteActiveTask(taskId: string): void {
@@ -213,6 +227,16 @@ export class BrowserPluginOverlaySession {
           ? (this.hostPointerIds.executionId ?? execution?.executionId)
           : undefined
       })
+    }
+    if (this.companionPointer) {
+      // 闲置配套针可在 Agent Studio 失焦时留在用户 Chrome；无三元组不得挂 HUD/芯片
+      return {
+        visible: true,
+        kind: 'browser',
+        surface: 'browser-plugin',
+        persistWhenUnfocused: true,
+        pointer: this.companionPointer
+      }
     }
     const execution = this.execution
     const executionActive = Boolean(execution && ACTIVE_EXECUTION_STATES.has(execution.state))
@@ -275,6 +299,11 @@ export class BrowserPluginOverlayHost {
 
   acceptHostBrowserPointer(input: HostBrowserOverlayPointerInput): void {
     this.session.acceptHostBrowserPointer(input)
+    this.publish()
+  }
+
+  acceptCompanionBrowserPluginPointer(input: { pointer?: AgentPointer }): void {
+    this.session.acceptCompanionBrowserPluginPointer(input)
     this.publish()
   }
 
@@ -348,6 +377,7 @@ export class BrowserPluginOverlayHost {
     ipcMain.removeListener(TASK_SEND_CHANNELS.browserPluginOverlayChipHover, this.onChipHoverIpc)
     this.chipHovered = false
     this.session.clearHostBrowserPointer()
+    this.session.acceptCompanionBrowserPluginPointer({})
     const hidden = createBrowserPluginOverlaySnapshot({ visible: false })
     this.options.publishToMain(hidden)
     this.sendToOverlay(hidden)

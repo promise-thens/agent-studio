@@ -9,6 +9,7 @@ import {
   nativeTheme,
   safeStorage,
   screen,
+  session,
   shell,
   type MenuItemConstructorOptions
 } from 'electron'
@@ -34,6 +35,20 @@ import {
   resolveHostBrowserMcpScriptPath
 } from './browser/host-browser-mcp-host'
 import { HostBrowserSettingsStore } from './browser/host-browser-settings'
+import { ChromeNativeHost, resolveChromeNativeHostScriptPath } from './browser/chrome/native-host'
+import {
+  companionSnapshotHasMappableGeometry,
+  installHostBrowserCompanionExtension,
+  mapChromeNativeSnapshotToOverlayDip,
+  resolveCompanionChromeExtensionDirectory,
+  writeChromeNativeHostWrapper
+} from './browser/chrome/companion-extension'
+import { parseChromeNativeTabsSnapshotPayload } from '../shared/chrome-native-bridge'
+import {
+  createBrowserPartition,
+  mapHostBrowserClearDataKindsToStorages,
+  resolveHostBrowserClearProjectId
+} from './browser/host-browser-session'
 import { APP_PUSH_CHANNELS } from '../shared/app-ipc'
 import { sanitizeExternalHref } from '../shared/external-href'
 import { TAKEOVER_CONTROL_TURN_KIND } from '../shared/task-takeover'
@@ -159,6 +174,7 @@ let browserPluginOverlayHost: BrowserPluginOverlayHost | null = null
 let hostBrowserService: HostBrowserService | null = null
 let hostBrowserSettingsStore: HostBrowserSettingsStore | null = null
 let hostBrowserMcpHost: HostBrowserMcpHost | null = null
+let chromeNativeHost: ChromeNativeHost | null = null
 
 /** 创建应用主窗口，并限制渲染层直接访问系统能力。 */
 function createWindow(): void {
@@ -216,7 +232,13 @@ function createWindow(): void {
       if (!broker) {
         return Promise.resolve({ ok: false, reason: 'internal-error' })
       }
-      return broker.authorizeOperation(intent, execute, options)
+      const settings = hostBrowserSettingsStore?.getSettings()
+      // 浏览始终允许不是完全访问：只给 browser 一次性代批，写文件仍走确认卡。
+      return broker.authorizeOperation(intent, execute, {
+        ...options,
+        browserAlwaysAllow:
+          settings?.agentPermissions.browse === 'always' && settings.cautiousMode === false
+      })
     },
     getHostRendererZoomFactor: () => {
       const window = mainWindow
@@ -705,6 +727,21 @@ async function initializeServices(
     onQuestionCancelled: (request) =>
       sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.questionCancelled, request)
   })
+  // cookieSyncEnabled 由 Native Host 读完整 settings；关同步即停写 Cookie。
+  chromeNativeHost = new ChromeNativeHost({
+    userDataPath: app.getPath('userData'),
+    getSettings: () => requireHostBrowserSettingsStore().getSettings(),
+    getProjectId: () => resolveSelectedHostBrowserProjectId(),
+    setCookie: async (partition, details) => {
+      await session.fromPartition(partition).cookies.set(details)
+    },
+    onTabsSnapshot: (payload) => publishCompanionChromeSnapshot(payload)
+  })
+  try {
+    await chromeNativeHost.start()
+  } catch (error) {
+    console.error(`[Agent Studio] Chrome Native Host 启动失败：${redactSensitiveError(error)}`)
+  }
 }
 
 /** 与 Adapter 同源：~/.grok/bin/grok 存在则用之，否则 PATH 上的 grok。不改 Adapter.resolveBinary。 */
@@ -1036,14 +1073,72 @@ function registerIpcHandlers(): void {
       }
       return { profile, applied: true }
     },
-    getHostBrowserSettings: () => ({
-      enabled: requireHostBrowserSettingsStore().isEnabled()
-    }),
+    getHostBrowserSettings: () => requireHostBrowserSettingsStore().getSettings(),
+    /**
+     * 总开关。busy 时拒绝，避免执行中把 MCP/右栏关掉而旧进程仍按旧偏好跑。
+     */
     setHostBrowserEnabled: async (enabled) => {
       assertGrokConfigCanReload()
       await requireHostBrowserSettingsStore().save(enabled)
-      return { enabled: requireHostBrowserSettingsStore().isEnabled() }
+      return requireHostBrowserSettingsStore().getSettings()
     },
+    /**
+     * 非总开关字段执行中可改。必须先 merge 再 saveSettings：
+     * saveSettings 对缺字段填出厂默认，半份对象会把用户黑名单冲掉。
+     */
+    setHostBrowserSettings: async (patch) => {
+      const store = requireHostBrowserSettingsStore()
+      const current = store.getSettings()
+      const next = await store.saveSettings({ ...current, ...patch })
+      if (next.chromeConnectEnabled !== true) {
+        browserPluginOverlayHost?.acceptCompanionBrowserPluginPointer({})
+      }
+      return next
+    },
+    /**
+     * 只清当前选中 Task 的 persist:as-browser partition。
+     * 没有 Task 就 invalid-state；禁止收 Renderer 传来的 partition 名或路径。
+     */
+    clearHostBrowserData: async (kinds) => {
+      const projectId = resolveSelectedHostBrowserProjectId()
+      if (!projectId) {
+        throw new DesktopIpcFailure('invalid-state', '没有可清理的内置浏览器会话。')
+      }
+      await session.fromPartition(createBrowserPartition(projectId)).clearStorageData({
+        storages: mapHostBrowserClearDataKindsToStorages(kinds)
+      })
+    },
+    /**
+     * 打开 unpacked 扩展目录并写 Native Host 清单。
+     * execPath 必须是 chrome-native-host-stdio 包装命令，不得是 /bin/bash。
+     * 包装脚本钉死本次 userData 的 chrome-native-host.json，禁止扫到另一份身份。
+     */
+    installHostBrowserExtension: async () => {
+      const extensionDirectory = resolveCompanionChromeExtensionDirectory({
+        mainDirectory: __dirname,
+        resourcesPath: process.resourcesPath,
+        appPath: app.getAppPath()
+      })
+      if (!extensionDirectory) {
+        throw new DesktopIpcFailure('not-found', '未找到配套扩展目录。')
+      }
+      const userDataPath = app.getPath('userData')
+      const execPath = await writeChromeNativeHostWrapper({
+        wrapperPath: join(userDataPath, 'browser', 'chrome-native-host-stdio'),
+        electronExecPath: process.execPath,
+        scriptPath: resolveChromeNativeHostScriptPath(__dirname),
+        statePath: join(userDataPath, 'browser', 'chrome-native-host.json')
+      })
+      return installHostBrowserCompanionExtension({
+        homeDir: homedir(),
+        execPath,
+        extensionDirectory,
+        reveal: (directory) => shell.openPath(directory)
+      })
+    },
+    getHostBrowserExtensionStatus: () => ({
+      lastCookieSyncAt: chromeNativeHost?.lastCookieSyncAt() ?? null
+    }),
     // 钩子扫描牢笼绑在 userData，不执行钩子，不把 command / url 经 IPC 回传
     listHooks: () => listGrokHooks(app.getPath('userData')),
     listMcpServers: async (projectId) => {
@@ -1410,9 +1505,45 @@ function createBrowserPluginOverlayHostInstance(): BrowserPluginOverlayHost {
 }
 
 /**
+ * 配套扩展 tabs.snapshot → overlay DIP。没有窗矩形或未开连接就不画针。
+ * 映射必须回读 overlay 落地后的 getBounds()；失败映射不得先建窗。
+ */
+function publishCompanionChromeSnapshot(payload: unknown): void {
+  const overlay = browserPluginOverlayHost
+  if (!overlay) return
+  const settings = hostBrowserSettingsStore?.getSettings()
+  if (settings?.chromeConnectEnabled !== true) {
+    overlay.acceptCompanionBrowserPluginPointer({})
+    return
+  }
+  const parsed = parseChromeNativeTabsSnapshotPayload(payload)
+  const node = parsed?.nodes?.[0]
+  if (
+    !companionSnapshotHasMappableGeometry({
+      windowScreenBounds: parsed?.windowScreenBounds,
+      cssX: node?.x,
+      cssY: node?.y
+    })
+  ) {
+    overlay.acceptCompanionBrowserPluginPointer({})
+    return
+  }
+  const overlayBounds = overlay.ensurePointerOverlayLayout()
+  const pointer = mapChromeNativeSnapshotToOverlayDip({
+    windowScreenBounds: parsed?.windowScreenBounds,
+    cssX: node?.x,
+    cssY: node?.y,
+    zoom: parsed?.zoom,
+    overlayBounds
+  })
+  overlay.acceptCompanionBrowserPluginPointer(pointer ? { pointer } : {})
+}
+
+/**
  * overlay 窗和指针映射必须用同一块屏。
  * 主窗拖到副屏后若仍用 getPrimaryDisplay，光标会画在主屏窗外。
  */
+
 function resolveHostWindowOverlayBounds(): {
   x: number
   y: number
@@ -1718,6 +1849,23 @@ function requireHostBrowserSettingsStore(): HostBrowserSettingsStore {
   return hostBrowserSettingsStore
 }
 
+/**
+ * Cookie 同步与清数据共用：只认当前选中 Task 的 projectId。
+ * 没有 Task 就拒绝写入，避免落到 defaultSession 或去读磁盘 Chrome Profile。
+ */
+function resolveSelectedHostBrowserProjectId(): string | null {
+  const selectedTaskId = agentService?.getSelectedTaskId() ?? null
+  let projectId: string | null = null
+  if (selectedTaskId) {
+    try {
+      projectId = requireTaskStore().getTaskRecord(selectedTaskId).projectId
+    } catch {
+      projectId = null
+    }
+  }
+  return resolveHostBrowserClearProjectId(selectedTaskId, projectId)
+}
+
 /** 内置浏览器动作身份只从 TaskStore 读，MCP 不能自报 project 或 execution root。 */
 function resolveHostBrowserPerformContext(taskId: string): HostBrowserPerformContext | null {
   try {
@@ -1849,6 +1997,8 @@ const appShutdownGate = createAppShutdownGate({
     browserPluginOverlayHost = null
     void hostBrowserMcpHost?.close()
     hostBrowserMcpHost = null
+    void chromeNativeHost?.close()
+    chromeNativeHost = null
   },
   cancelActiveExecution: async () => {
     const identity = taskExecutor?.getActiveIdentity()

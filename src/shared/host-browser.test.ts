@@ -3,11 +3,15 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_HOST_BROWSER_SETTINGS,
   HOST_BROWSER_MAX_URL_CHARS,
   parseCssViewportFromLayoutMetrics,
   parseHostBrowserBounds,
   parseHostBrowserChrome,
+  parseHostBrowserEnabledState,
   parseHostBrowserNavigateUrl,
+  parseHostBrowserSettings,
+  parseHostBrowserSettingsPatch,
   resolveScreenshotViewportCssSize,
   screenshotImageNeedsCssResize
 } from './host-browser'
@@ -107,6 +111,87 @@ describe('parseHostBrowserChrome', () => {
       open: true,
       canGoBack: true,
       canGoForward: true
+    })
+  })
+})
+
+describe('parseHostBrowserSettings', () => {
+  it('完整设置出厂默认开放，丢掉未知键，拒绝非法黑名单', () => {
+    expect(parseHostBrowserSettings({ enabled: true })).toEqual(DEFAULT_HOST_BROWSER_SETTINGS)
+    expect(
+      parseHostBrowserSettings({
+        ...DEFAULT_HOST_BROWSER_SETTINGS,
+        cookie: 'secret',
+        syncBlacklist: ['https://mail.example.com']
+      })
+    ).toEqual({
+      ...DEFAULT_HOST_BROWSER_SETTINGS,
+      syncBlacklist: ['https://mail.example.com']
+    })
+    expect(
+      parseHostBrowserSettings({
+        ...DEFAULT_HOST_BROWSER_SETTINGS,
+        syncBlacklist: ['not-an-origin']
+      })
+    ).toBeNull()
+    expect(parseHostBrowserSettings({ enabled: 'yes' })).toBeNull()
+  })
+
+  it('黑名单规范化去重，超过 64 项或非 http(s) origin 整包失败', () => {
+    expect(
+      parseHostBrowserSettings({
+        enabled: true,
+        syncBlacklist: [
+          'https://mail.example.com/inbox',
+          'https://mail.example.com/',
+          'http://localhost:5173/path'
+        ]
+      })
+    ).toEqual({
+      ...DEFAULT_HOST_BROWSER_SETTINGS,
+      syncBlacklist: ['https://mail.example.com', 'http://localhost:5173']
+    })
+    expect(
+      parseHostBrowserSettings({
+        enabled: true,
+        syncBlacklist: Array.from({ length: 65 }, (_, index) => `https://s${index}.example.com`)
+      })
+    ).toBeNull()
+    expect(
+      parseHostBrowserSettings({
+        enabled: true,
+        syncBlacklist: ['https://user:pass@mail.example.com']
+      })
+    ).toBeNull()
+    expect(parseHostBrowserSettings({ enabled: true, fullCdp: 'yes' })).toBeNull()
+    expect(parseHostBrowserSettings({ enabled: true, linkOpenTarget: 'other' })).toBeNull()
+  })
+
+  it('enabled 解析走完整设置，只向外暴露开关', () => {
+    expect(parseHostBrowserEnabledState({ enabled: true })).toEqual({ enabled: true })
+    expect(
+      parseHostBrowserEnabledState({
+        ...DEFAULT_HOST_BROWSER_SETTINGS,
+        cookie: 'secret'
+      })
+    ).toEqual({ enabled: true })
+    expect(
+      parseHostBrowserEnabledState({
+        ...DEFAULT_HOST_BROWSER_SETTINGS,
+        syncBlacklist: ['not-an-origin']
+      })
+    ).toBeNull()
+  })
+
+  it('设置补丁不得含 enabled，非法黑名单整包失败', () => {
+    expect(parseHostBrowserSettingsPatch({})).toEqual({})
+    expect(parseHostBrowserSettingsPatch({ showFullUrl: true, cookie: 'secret' })).toEqual({
+      showFullUrl: true
+    })
+    expect(parseHostBrowserSettingsPatch({ enabled: true })).toBeNull()
+    expect(parseHostBrowserSettingsPatch({ syncBlacklist: ['not-an-origin'] })).toBeNull()
+    expect(parseHostBrowserSettingsPatch({ syncBlacklist: ['https://mail.example.com'] })).toEqual({
+      syncBlacklist: ['https://mail.example.com']
     })
   })
 })

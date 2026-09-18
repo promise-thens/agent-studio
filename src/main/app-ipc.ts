@@ -1,12 +1,16 @@
 import { isAppAppearanceMode, type AppAppearanceState } from '../shared/app-appearance'
 import {
   APP_INVOKE_CHANNELS,
+  type AppClearHostBrowserDataRequest,
+  type AppHostBrowserExtensionInstallResult,
+  type AppHostBrowserExtensionStatus,
   type AppGrokConfigDocument,
   type AppGrokSandboxApplyResult,
   type AppGrokSandboxState,
   type AppHostBrowserSettings,
   type AppPluginEnabledState
 } from '../shared/app-ipc'
+import { parseHostBrowserSettingsPatch } from '../shared/host-browser'
 import type { GrokHookSummary } from '../shared/grok-hook'
 import { isGrokSandboxProfile, type GrokSandboxProfile } from '../shared/grok-sandbox-profile'
 import type { DesktopIpcResult } from '../shared/ipc-result'
@@ -67,6 +71,13 @@ export interface AppIpcDependencies {
   setGrokSandbox: (profile: GrokSandboxProfile) => Promise<AppGrokSandboxApplyResult>
   getHostBrowserSettings: () => Promise<AppHostBrowserSettings> | AppHostBrowserSettings
   setHostBrowserEnabled: (enabled: boolean) => Promise<AppHostBrowserSettings>
+  setHostBrowserSettings: (
+    patch: Partial<Omit<AppHostBrowserSettings, 'enabled'>>
+  ) => Promise<AppHostBrowserSettings>
+  clearHostBrowserData: (kinds: AppClearHostBrowserDataRequest['kinds']) => Promise<void>
+  installHostBrowserExtension: () => Promise<AppHostBrowserExtensionInstallResult>
+  getHostBrowserExtensionStatus: () =>
+    Promise<AppHostBrowserExtensionStatus> | AppHostBrowserExtensionStatus
   listHooks: () => Promise<GrokHookSummary[]>
   listMcpServers: (projectId?: string) => Promise<McpServerSummary[]>
   upsertMcpServer: (input: McpServerInput) => Promise<McpServerSummary>
@@ -284,16 +295,57 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
     }
     return dependencies.setGrokSandbox(profile)
   })
+  /**
+   * 无参返回完整偏好。Cookie 明文不得出现在该对象里。
+   */
   register(APP_INVOKE_CHANNELS.getHostBrowserSettings, (args) => {
     if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
     return dependencies.getHostBrowserSettings()
   })
+  /**
+   * 总开关只收 { enabled }。执行中拒绝由依赖层 assertGrokConfigCanReload 负责，
+   * 避免任务还在跑就把 MCP/右栏能力关掉。
+   */
   register(APP_INVOKE_CHANNELS.setHostBrowserEnabled, (args) => {
     const request = readRequest(args, ['enabled'])
     if (request.enabled !== true && request.enabled !== false) {
       throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
     }
     return dependencies.setHostBrowserEnabled(request.enabled)
+  })
+  /**
+   * 只收非总开关补丁。含 enabled 必须 invalid-input，避免设置页保存其它字段时把能力关掉。
+   * 未知键丢掉；非法黑名单整包拒绝。执行中允许改这些字段。
+   */
+  register(APP_INVOKE_CHANNELS.setHostBrowserSettings, (args) => {
+    if (args.length !== 1) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    const patch = parseHostBrowserSettingsPatch(args[0])
+    if (!patch) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.setHostBrowserSettings(patch)
+  })
+  /**
+   * 只清内置 persist:as-browser partition 的白名单种类。
+   * 非法 kinds 不得调用擦除依赖，避免误清用户 Chrome 或任意 store。
+   */
+  register(APP_INVOKE_CHANNELS.clearHostBrowserData, async (args) => {
+    const request = readRequest(args, ['kinds'])
+    await dependencies.clearHostBrowserData(readHostBrowserClearDataKinds(request.kinds))
+    return null
+  })
+  /**
+   * 无参。主进程 reveal unpacked 扩展目录并写 Native Host 清单。
+   * Renderer 不得提交 homeDir / execPath，避免测外写到任意目录。
+   */
+  register(APP_INVOKE_CHANNELS.installHostBrowserExtension, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.installHostBrowserExtension()
+  })
+  /**
+   * 无参返回上次 Cookie 同步时间。不得回传 Cookie 明文或 Chrome Profile 路径。
+   */
+  register(APP_INVOKE_CHANNELS.getHostBrowserExtensionStatus, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.getHostBrowserExtensionStatus()
   })
   /**
    * 只读扫描 App grok-home/hooks。无参；Renderer 不得指定路径或要求执行钩子。
@@ -444,6 +496,24 @@ function readMarketplaceGitUrl(value: string): string {
     throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
   }
   return gitUrl
+}
+
+/**
+ * 只接受 1–4 个白名单 kinds。空数组、files 或超长列表一律 invalid-input，
+ * 避免把任意 store 名交给清 partition 依赖。
+ */
+function readHostBrowserClearDataKinds(value: unknown): AppClearHostBrowserDataRequest['kinds'] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) {
+    throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+  }
+  const kinds: AppClearHostBrowserDataRequest['kinds'] = []
+  for (const item of value) {
+    if (item !== 'cookies' && item !== 'cache' && item !== 'history' && item !== 'downloads') {
+      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    kinds.push(item)
+  }
+  return kinds
 }
 
 function readStringMap(value: unknown): Record<string, string> {

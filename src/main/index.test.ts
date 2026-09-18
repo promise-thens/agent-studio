@@ -627,6 +627,44 @@ describe('宿主 overlay 指针组装', () => {
     expect(geometryFn).not.toContain('getZoomFactor')
   })
 
+  it('内置浏览器 get 回完整设置，补丁先 merge 再 saveSettings，总开关才拦 busy', () => {
+    const indexSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'index.ts'),
+      'utf8'
+    )
+    expect(indexSource).toContain(
+      'getHostBrowserSettings: () => requireHostBrowserSettingsStore().getSettings()'
+    )
+    const enabledFn = indexSource.match(
+      /setHostBrowserEnabled: async \(enabled\) => \{[\s\S]*?\n {4}\},/
+    )?.[0]
+    expect(enabledFn).toContain('assertGrokConfigCanReload')
+    expect(enabledFn).toContain('.save(enabled)')
+    expect(enabledFn).toContain('.getSettings()')
+    const settingsFn = indexSource.match(
+      /setHostBrowserSettings: async \(patch\) => \{[\s\S]*?\n {4}\},/
+    )?.[0]
+    expect(settingsFn).toBeTruthy()
+    expect(settingsFn).toContain('getSettings()')
+    expect(settingsFn).toContain('saveSettings')
+    expect(settingsFn).toContain('chromeConnectEnabled')
+    expect(settingsFn).toContain('acceptCompanionBrowserPluginPointer')
+    expect(settingsFn).not.toContain('assertGrokConfigCanReload')
+    expect(indexSource).toContain('clearHostBrowserData:')
+    const clearFn = indexSource.match(
+      /clearHostBrowserData: async \(kinds\) => \{[\s\S]*?\n {4}\},/
+    )?.[0]
+    expect(clearFn).toBeTruthy()
+    expect(clearFn).toContain('resolveSelectedHostBrowserProjectId')
+    expect(clearFn).toContain('没有可清理的内置浏览器会话。')
+    expect(clearFn).toContain('session.fromPartition(createBrowserPartition(projectId))')
+    expect(clearFn).toContain('clearStorageData')
+    expect(clearFn).toContain('kinds')
+    expect(clearFn).not.toContain('async () => undefined')
+    expect(indexSource).toContain('getSelectedTaskId')
+    expect(indexSource).toContain('resolveHostBrowserClearProjectId')
+  })
+
   it('darwin 关主窗后二次启动必须重建窗口，不得只 focus 空窗', () => {
     const indexSource = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), 'index.ts'),
@@ -665,9 +703,48 @@ describe('宿主 overlay 指针组装', () => {
       'utf8'
     )
     expect(indexSource).toContain('takeoverEnabled: task.takeoverEnabled === true')
+    expect(indexSource).toContain('browserAlwaysAllow')
+    expect(indexSource).toContain("agentPermissions.browse === 'always'")
+    expect(indexSource).toContain('cautiousMode === false')
     expect(indexSource).toMatch(
-      /authorizeOperation:\s*\(intent,\s*execute,\s*options\)[\s\S]*broker\.authorizeOperation\(intent,\s*execute,\s*options\)/
+      /authorizeOperation:\s*\(intent,\s*execute,\s*options\)[\s\S]*broker\.authorizeOperation\(intent,\s*execute,\s*\{/
     )
+  })
+
+  it('app ready 后启动 Chrome Native Host，Cookie 写入当前 project partition，不读磁盘 Profile', () => {
+    const indexSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), 'index.ts'),
+      'utf8'
+    )
+    expect(indexSource).toContain("from './browser/chrome/native-host'")
+    expect(indexSource).toContain('new ChromeNativeHost')
+    expect(indexSource).toContain('chromeNativeHost.start')
+    expect(indexSource).toContain('chromeNativeHost?.close')
+    expect(indexSource).toContain('session.fromPartition(createBrowserPartition')
+    expect(indexSource).toContain('cookies.set')
+    expect(indexSource).toContain('cookieSyncEnabled')
+    expect(indexSource).toContain('resolveHostBrowserClearProjectId')
+    expect(indexSource).not.toContain('Google/Chrome/Default')
+    expect(indexSource).not.toContain('Default/Cookies')
+    expect(indexSource).not.toContain('src/main/capability')
+    expect(indexSource).toContain('installHostBrowserExtension:')
+    expect(indexSource).toContain('writeChromeNativeHostWrapper')
+    expect(indexSource).toContain('chrome-native-host-stdio')
+    expect(indexSource).toContain('statePath:')
+    expect(indexSource).toContain('chrome-native-host.json')
+    expect(indexSource).toContain('publishCompanionChromeSnapshot')
+    expect(indexSource).toContain('ensurePointerOverlayLayout')
+    expect(indexSource).toContain('acceptCompanionBrowserPluginPointer')
+    expect(indexSource).toContain('companionSnapshotHasMappableGeometry')
+    const publishFn = indexSource.match(
+      /function publishCompanionChromeSnapshot\([\s\S]*?\nfunction resolveHostWindowOverlayBounds/
+    )?.[0]
+    expect(publishFn).toBeTruthy()
+    expect(publishFn!.indexOf('companionSnapshotHasMappableGeometry')).toBeLessThan(
+      publishFn!.indexOf('ensurePointerOverlayLayout')
+    )
+    expect(indexSource).not.toContain("execPath: '/bin/bash'")
+    expect(indexSource).not.toContain('"/bin/bash"')
   })
 })
 

@@ -12,6 +12,10 @@ files:
 asarUnpack:
   - resources/**
   - out/main/host-browser-mcp-stdio.js
+  - out/main/chrome-native-host-stdio.js
+extraResources:
+  - from: chrome-extension/agent-studio-browser
+    to: chrome-extension/agent-studio-browser
 win:
   executableName: agent-studio
 nsis:

@@ -1220,6 +1220,57 @@ describe('PermissionBroker', () => {
     expect(fixture.approvals).toHaveLength(0)
   })
 
+  it('browserAlwaysAllow 只一次性放行 browser，不得捎带写文件', async () => {
+    const fixture = createFixture()
+    const write = vi.fn(() => 'written')
+    const writePromise = fixture.broker.authorizeOperation(createIntent('write-file'), write, {
+      browserAlwaysAllow: true
+    })
+    const writeApproval = await waitForApproval(fixture.approvals, 0)
+    expect(writeApproval.operationType).toBe('write-file')
+    expect(write).not.toHaveBeenCalled()
+    await fixture.broker.respond({
+      approvalId: writeApproval.approvalId,
+      taskId: writeApproval.taskId,
+      turnId: writeApproval.turnId,
+      decision: 'deny'
+    })
+    await expect(writePromise).resolves.toEqual({ ok: false, reason: 'user-denied' })
+
+    const browser = vi.fn(() => 'browser-ok')
+    const browserPromise = fixture.broker.authorizeOperation(
+      {
+        ...createIntent('unknown'),
+        operationType: 'browser',
+        targets: [{ kind: 'origin', value: 'https://example.com' }]
+      },
+      browser,
+      { browserAlwaysAllow: true }
+    )
+    await waitUntil(() => browser.mock.calls.length === 1)
+    await expect(browserPromise).resolves.toEqual({
+      ok: true,
+      value: 'browser-ok',
+      reason: 'auto-allowed',
+      scope: 'once'
+    })
+    expect(uniqueApprovals(fixture.approvals)).toHaveLength(1)
+
+    const screen = vi.fn()
+    await expect(
+      fixture.broker.authorizeOperation(
+        {
+          ...createIntent('unknown'),
+          operationType: 'screen',
+          targets: [{ kind: 'unknown', value: 'screen' }]
+        },
+        screen,
+        { browserAlwaysAllow: true }
+      )
+    ).resolves.toEqual({ ok: false, reason: 'unsupported' })
+    expect(screen).not.toHaveBeenCalled()
+  })
+
   it('普通删除本任务授权后同类可复用，但不能捎带 .git、越界或 Computer Use', async () => {
     const fixture = createFixture()
     const first = fixture.broker.authorizeOperation(createIntent('delete-path'), vi.fn())

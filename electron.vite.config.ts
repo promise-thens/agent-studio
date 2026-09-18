@@ -27,7 +27,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve('src/main/index.ts'),
-          'host-browser-mcp-stdio': resolve('src/main/browser/host-browser-mcp-stdio.ts')
+          'host-browser-mcp-stdio': resolve('src/main/browser/host-browser-mcp-stdio.ts'),
+          'chrome-native-host-stdio': resolve('src/main/browser/chrome/native-host-stdio.ts')
         }
       }
     }

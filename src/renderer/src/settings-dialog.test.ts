@@ -102,6 +102,28 @@ describe('设置弹窗与外观应用', () => {
     expect(grokConfigSource).not.toContain('HOST_BROWSER_SETTING_TITLE')
   })
 
+  it('浏览器页源码包含说明书分组标题、尚未接入和扩展安装区', () => {
+    const panelSource = readFileSync(
+      join(rendererDir, 'components/HostBrowserSettingsPanel.vue'),
+      'utf8'
+    )
+    expect(panelSource).toContain('HOST_BROWSER_SETTING_PAGE_SUBTITLE')
+    expect(panelSource).toContain('HOST_BROWSER_GROUP_GENERAL_TITLE')
+    expect(panelSource).toContain('HOST_BROWSER_GROUP_PASSWORDS_TITLE')
+    expect(panelSource).toContain('HOST_BROWSER_GROUP_DOWNLOADS_TITLE')
+    expect(panelSource).toContain('HOST_BROWSER_GROUP_AGENT_PERMISSIONS_TITLE')
+    expect(panelSource).toContain('HOST_BROWSER_GROUP_EXTENSION_TITLE')
+    expect(panelSource).toContain('HOST_BROWSER_GROUP_FULL_CDP_TITLE')
+    expect(panelSource).toContain('HOST_BROWSER_GROUP_CAUTIOUS_TITLE')
+    expect(panelSource).toContain('HOST_BROWSER_PASSWORDS_BODY')
+    expect(panelSource).toContain('HOST_BROWSER_EXTENSION_INSTALL_LABEL')
+    expect(panelSource).toContain('HOST_BROWSER_EXTENSION_LAST_SYNC_NONE')
+    expect(panelSource).toContain('HOST_BROWSER_SETTING_BUSY_TITLE')
+    expect(panelSource).not.toContain('HOST_BROWSER_EXTENSION_MISSING')
+    expect(panelSource).not.toContain('ChatGPT')
+    expect(panelSource).not.toContain('交给 Agent')
+  })
+
   it('供应商页说明生图走同一 Base URL', () => {
     expect(onboardingSource).toContain('/v1/images/generations')
     expect(onboardingSource).toContain('生图走同一 Base URL')

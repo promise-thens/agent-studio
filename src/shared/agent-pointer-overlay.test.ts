@@ -156,7 +156,24 @@ describe('HUD', () => {
         visible: true,
         surface: 'browser-plugin'
       })
+    ).toBe(false)
+    expect(
+      isAgentPointerTurnActive({
+        visible: true,
+        surface: 'browser-plugin',
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        executionId: 'execution-1'
+      })
     ).toBe(true)
+    expect(
+      resolveAgentPointerHudCopy({
+        surface: 'browser-plugin',
+        overlayVisible: true,
+        turnActive: false,
+        takeoverCopy: null
+      })
+    ).toBeNull()
     expect(
       shouldRenderAgentPointerCursor({
         visible: true,
@@ -165,11 +182,26 @@ describe('HUD', () => {
         pointer: { x: 1, y: 1 }
       })
     ).toBe(true)
+    expect(
+      shouldRenderAgentPointerCursor({
+        visible: true,
+        surface: 'browser-plugin',
+        persistWhenUnfocused: false,
+        pointer: { x: 12, y: 34 }
+      })
+    ).toBe(true)
+    expect(
+      shouldRenderAgentPointerCursor({
+        visible: true,
+        surface: 'browser-plugin',
+        persistWhenUnfocused: false
+      })
+    ).toBe(false)
   })
 })
 
 describe('createAgentPointerSnapshot / parseAgentPointerSnapshot', () => {
-  it('host-browser 可保留有限 pointer；browser-plugin 恒丢弃 pointer', () => {
+  it('host-browser 与配套扩展有限 DIP 保留；browser-plugin 无几何仍丢弃', () => {
     const host = createAgentPointerSnapshot({
       visible: true,
       surface: 'host-browser',
@@ -191,9 +223,16 @@ describe('createAgentPointerSnapshot / parseAgentPointerSnapshot', () => {
       persistWhenUnfocused: false,
       pointer: { x: 1, y: 2 }
     })
-    expect(plugin.pointer).toBeUndefined()
-    expect(plugin).not.toHaveProperty('pointer')
+    expect(plugin.pointer).toEqual({ x: 1, y: 2 })
     expect(plugin.surface).toBe('browser-plugin')
+
+    const pluginWithoutGeometry = createAgentPointerSnapshot({
+      visible: true,
+      surface: 'browser-plugin',
+      persistWhenUnfocused: false
+    })
+    expect(pluginWithoutGeometry.pointer).toBeUndefined()
+    expect(pluginWithoutGeometry).not.toHaveProperty('pointer')
 
     expect(
       parseAgentPointerSnapshot({
@@ -220,7 +259,8 @@ describe('createAgentPointerSnapshot / parseAgentPointerSnapshot', () => {
     ).toEqual({
       visible: true,
       surface: 'browser-plugin',
-      persistWhenUnfocused: false
+      persistWhenUnfocused: false,
+      pointer: { x: 9, y: 8 }
     })
   })
 

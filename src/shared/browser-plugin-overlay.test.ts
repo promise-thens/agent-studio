@@ -11,12 +11,15 @@ import {
 } from './browser-plugin-overlay'
 
 describe('resolveBrowserPluginHudCopy', () => {
-  it('写文件进行中不出浏览器 HUD，browser overlay 可见时出停止文案', () => {
+  it('写文件进行中不出浏览器 HUD，有三元组才出停止文案', () => {
+    expect(resolveBrowserPluginHudCopy({ takeoverCopy: null, overlayVisible: false })).toBeNull()
+    expect(resolveBrowserPluginHudCopy({ takeoverCopy: null, overlayVisible: true })).toBeNull()
     expect(
-      resolveBrowserPluginHudCopy({ takeoverCopy: null, overlayVisible: false })
-    ).toBeNull()
-    expect(
-      resolveBrowserPluginHudCopy({ takeoverCopy: null, overlayVisible: true })
+      resolveBrowserPluginHudCopy({
+        takeoverCopy: null,
+        overlayVisible: true,
+        turnActive: true
+      })
     ).toBe('Grok 正在使用浏览器插件')
     expect(
       resolveBrowserPluginHudCopy({
@@ -39,7 +42,8 @@ describe('resolveBrowserPluginHudCopy', () => {
     expect(
       resolveBrowserPluginHudCopy({
         takeoverCopy: null,
-        overlayVisible: browserSnapshot.visible
+        overlayVisible: browserSnapshot.visible,
+        turnActive: true
       })
     ).toBe(BROWSER_PLUGIN_HUD_COPY)
   })
@@ -99,9 +103,7 @@ describe('projectBrowserPluginPointer', () => {
     expect(projectBrowserPluginPointer({ _meta: { x: 1, y: 1 } }, bounds)).toBeUndefined()
     expect(projectBrowserPluginPointer({ x: Number.NaN, y: 0 }, bounds)).toBeUndefined()
     expect(projectBrowserPluginPointer({ x: 10_000_000, y: 0 }, bounds)).toBeUndefined()
-    expect(
-      projectBrowserPluginPointer({ tool_input: { x: 120, y: 80 } }, bounds)
-    ).toBeUndefined()
+    expect(projectBrowserPluginPointer({ tool_input: { x: 120, y: 80 } }, bounds)).toBeUndefined()
   })
 })
 

@@ -174,7 +174,8 @@ export class HostBrowserService {
         this.bindProject(context.projectId)
         const guest = this.ensureGuest(context.projectId)
         const result = await this.requireEngine(guest).execute(action)
-        if (result.ok && opensPane(action)) {
+        // 任意成功动作都打开右栏；拒绝的 navigate 不会进入 execute。
+        if (result.ok) {
           this.wantOpen = true
           this.syncAttachment()
           this.emitChrome()
@@ -581,10 +582,6 @@ function originForAction(action: HostBrowserAction, currentUrl: string): string 
   if (action.name === 'browser_navigate') return parseBrowserOrigin(action.url)
   if (action.name === 'browser_tabs_open' && action.url) return parseBrowserOrigin(action.url)
   return currentUrl && currentUrl !== 'about:blank' ? parseBrowserOrigin(currentUrl) : null
-}
-
-function opensPane(action: HostBrowserAction): boolean {
-  return action.name === 'browser_navigate' || action.name === 'browser_tabs_open'
 }
 
 function createHostBrowserIntent(

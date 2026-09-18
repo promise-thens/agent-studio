@@ -1,7 +1,8 @@
 import {
   parseHostBrowserChrome,
-  parseHostBrowserEnabledState,
-  type HostBrowserChrome
+  parseHostBrowserSettings,
+  type HostBrowserChrome,
+  type HostBrowserSettings
 } from '../shared/host-browser'
 import {
   AGENT_OPERATION_TYPES,
@@ -40,7 +41,9 @@ import {
   type AppDesktopApi,
   type AppGrokConfigDocument,
   type AppGrokSandboxApplyResult,
-  type AppGrokSandboxState
+  type AppGrokSandboxState,
+  type AppHostBrowserExtensionInstallResult,
+  type AppHostBrowserExtensionStatus
 } from '../shared/app-ipc'
 import { parseGrokHookSummary, type GrokHookSummary } from '../shared/grok-hook'
 import { isGrokSandboxProfile } from '../shared/grok-sandbox-profile'
@@ -165,6 +168,37 @@ function readBoundedText(value: unknown, maxBytes: number, allowEmpty = false): 
     return null
   }
   return value
+}
+
+/**
+ * Preload 再 parse 完整偏好：未知键丢掉，Cookie 明文不得进 Renderer。
+ */
+function parseHostBrowserSettingsResult(
+  result: DesktopIpcResult<unknown>
+): DesktopIpcResult<HostBrowserSettings> {
+  if (!result.ok) return result
+  const parsed = parseHostBrowserSettings(result.value)
+  if (!parsed) {
+    return { ok: false, error: { code: 'operation-failed', message: '内置浏览器设置无效。' } }
+  }
+  return { ok: true, value: parsed }
+}
+
+/** 安装结果只认 installed: true，丢掉路径等私有键。 */
+function parseHostBrowserExtensionInstallResult(
+  value: unknown
+): AppHostBrowserExtensionInstallResult | null {
+  if (!isPlainRecord(value) || value.installed !== true) return null
+  return { installed: true }
+}
+
+/** 状态只认 lastCookieSyncAt 字符串或 null，禁止把路径回填进 Renderer。 */
+function parseHostBrowserExtensionStatus(value: unknown): AppHostBrowserExtensionStatus | null {
+  if (!isPlainRecord(value)) return null
+  const lastCookieSyncAt = value.lastCookieSyncAt
+  if (lastCookieSyncAt !== null && typeof lastCookieSyncAt !== 'string') return null
+  if (typeof lastCookieSyncAt === 'string' && lastCookieSyncAt.includes('\0')) return null
+  return { lastCookieSyncAt }
 }
 
 /** Preload 再校验 chrome 快照，丢掉 cookie 或非 http(s) 当前 URL。 */
@@ -1123,21 +1157,50 @@ export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopA
       const result = (await ipcRenderer.invoke(
         APP_INVOKE_CHANNELS.getHostBrowserSettings
       )) as DesktopIpcResult<unknown>
-      if (!result.ok) return result
-      const parsed = parseHostBrowserEnabledState(result.value)
-      if (!parsed) {
-        return { ok: false, error: { code: 'operation-failed', message: '内置浏览器设置无效。' } }
-      }
-      return { ok: true, value: parsed }
+      return parseHostBrowserSettingsResult(result)
     },
     setHostBrowserEnabled: async (enabled) => {
       const result = (await ipcRenderer.invoke(APP_INVOKE_CHANNELS.setHostBrowserEnabled, {
         enabled
       })) as DesktopIpcResult<unknown>
+      return parseHostBrowserSettingsResult(result)
+    },
+    setHostBrowserSettings: async (patch) => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.setHostBrowserSettings,
+        patch
+      )) as DesktopIpcResult<unknown>
+      return parseHostBrowserSettingsResult(result)
+    },
+    clearHostBrowserData: async (kinds) =>
+      ipcRenderer.invoke(APP_INVOKE_CHANNELS.clearHostBrowserData, { kinds }) as ReturnType<
+        AppDesktopApi['clearHostBrowserData']
+      >,
+    installHostBrowserExtension: async () => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.installHostBrowserExtension
+      )) as DesktopIpcResult<unknown>
       if (!result.ok) return result
-      const parsed = parseHostBrowserEnabledState(result.value)
+      const parsed = parseHostBrowserExtensionInstallResult(result.value)
       if (!parsed) {
-        return { ok: false, error: { code: 'operation-failed', message: '内置浏览器设置无效。' } }
+        return {
+          ok: false,
+          error: { code: 'operation-failed', message: '配套扩展安装结果无效。' }
+        }
+      }
+      return { ok: true, value: parsed }
+    },
+    getHostBrowserExtensionStatus: async () => {
+      const result = (await ipcRenderer.invoke(
+        APP_INVOKE_CHANNELS.getHostBrowserExtensionStatus
+      )) as DesktopIpcResult<unknown>
+      if (!result.ok) return result
+      const parsed = parseHostBrowserExtensionStatus(result.value)
+      if (!parsed) {
+        return {
+          ok: false,
+          error: { code: 'operation-failed', message: '配套扩展状态无效。' }
+        }
       }
       return { ok: true, value: parsed }
     },
