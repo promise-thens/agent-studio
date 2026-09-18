@@ -52,7 +52,11 @@ import {
   parseHostBrowserSyncBlacklistDraft,
   resolveHostBrowserMasterSwitchDisabled,
   resolveHostBrowserPreferenceDisabled,
-  resolveHostBrowserSettingTitle
+  resolveHostBrowserSettingTitle,
+  revertHostBrowserCheckbox,
+  revertHostBrowserSelect,
+  takeHostBrowserCheckboxIntent,
+  takeHostBrowserSelectIntent
 } from '../host-browser-settings'
 
 const props = withDefaults(
@@ -119,11 +123,12 @@ async function loadSettings(): Promise<void> {
   }
 }
 
-/** 必须等主进程确认后才改 checkbox，禁止先乐观显示已关闭。 */
+/** 必须等主进程确认后才改 checkbox；读完意图立刻打回 DOM，禁止原生控件先翻转。 */
 async function onToggle(event: Event): Promise<void> {
   const target = event.target
-  if (!(target instanceof HTMLInputElement) || masterSwitchDisabled.value) return
-  const next = target.checked
+  if (!(target instanceof HTMLInputElement)) return
+  const next = takeHostBrowserCheckboxIntent(target, settings.value.enabled)
+  if (masterSwitchDisabled.value) return
   saving.value = true
   errorMessage.value = ''
   statusMessage.value = ''
@@ -132,6 +137,7 @@ async function onToggle(event: Event): Promise<void> {
     applySettings(state)
     statusMessage.value = HOST_BROWSER_SETTING_SAVED_SESSION_COPY
   } catch (error) {
+    revertHostBrowserCheckbox(target, settings.value.enabled)
     errorMessage.value = error instanceof Error ? error.message : String(error)
   } finally {
     saving.value = false
@@ -160,22 +166,31 @@ async function savePatch(patch: Partial<Omit<HostBrowserSettings, 'enabled'>>): 
 
 async function onBooleanChange(key: BooleanSettingKey, event: Event): Promise<void> {
   const target = event.target
-  if (!(target instanceof HTMLInputElement) || preferenceDisabled.value) return
-  await savePatch({ [key]: target.checked })
+  if (!(target instanceof HTMLInputElement)) return
+  const next = takeHostBrowserCheckboxIntent(target, settings.value[key])
+  if (preferenceDisabled.value) return
+  const ok = await savePatch({ [key]: next })
+  if (!ok) revertHostBrowserCheckbox(target, settings.value[key])
 }
 
 async function onLinkOpenChange(event: Event): Promise<void> {
   const target = event.target
-  if (!(target instanceof HTMLSelectElement) || preferenceDisabled.value) return
-  if (target.value !== 'studio' && target.value !== 'system') return
-  await savePatch({ linkOpenTarget: target.value })
+  if (!(target instanceof HTMLSelectElement)) return
+  const next = takeHostBrowserSelectIntent(target, settings.value.linkOpenTarget)
+  if (preferenceDisabled.value) return
+  if (next !== 'studio' && next !== 'system') return
+  const ok = await savePatch({ linkOpenTarget: next })
+  if (!ok) revertHostBrowserSelect(target, settings.value.linkOpenTarget)
 }
 
 async function onScreenshotAnnotationChange(event: Event): Promise<void> {
   const target = event.target
-  if (!(target instanceof HTMLSelectElement) || preferenceDisabled.value) return
-  if (target.value !== 'always' && target.value !== 'ask' && target.value !== 'never') return
-  await savePatch({ screenshotAnnotation: target.value })
+  if (!(target instanceof HTMLSelectElement)) return
+  const next = takeHostBrowserSelectIntent(target, settings.value.screenshotAnnotation)
+  if (preferenceDisabled.value) return
+  if (next !== 'always' && next !== 'ask' && next !== 'never') return
+  const ok = await savePatch({ screenshotAnnotation: next })
+  if (!ok) revertHostBrowserSelect(target, settings.value.screenshotAnnotation)
 }
 
 async function onAgentPermissionChange(
@@ -183,14 +198,17 @@ async function onAgentPermissionChange(
   event: Event
 ): Promise<void> {
   const target = event.target
-  if (!(target instanceof HTMLSelectElement) || preferenceDisabled.value) return
-  if (target.value !== 'always' && target.value !== 'ask') return
-  await savePatch({
+  if (!(target instanceof HTMLSelectElement)) return
+  const next = takeHostBrowserSelectIntent(target, settings.value.agentPermissions[key])
+  if (preferenceDisabled.value) return
+  if (next !== 'always' && next !== 'ask') return
+  const ok = await savePatch({
     agentPermissions: {
       ...settings.value.agentPermissions,
-      [key]: target.value
+      [key]: next
     }
   })
+  if (!ok) revertHostBrowserSelect(target, settings.value.agentPermissions[key])
 }
 
 function onBlacklistInput(event: Event): void {

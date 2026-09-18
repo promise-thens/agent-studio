@@ -30,7 +30,11 @@ import {
   parseHostBrowserSyncBlacklistDraft,
   resolveHostBrowserMasterSwitchDisabled,
   resolveHostBrowserPreferenceDisabled,
-  resolveHostBrowserSettingTitle
+  resolveHostBrowserSettingTitle,
+  revertHostBrowserCheckbox,
+  revertHostBrowserSelect,
+  takeHostBrowserCheckboxIntent,
+  takeHostBrowserSelectIntent
 } from './host-browser-settings'
 
 const rendererDir = dirname(fileURLToPath(import.meta.url))
@@ -191,5 +195,43 @@ describe('浏览器设置面板源码契约', () => {
     expect(panelSource).not.toContain('installHostBrowserExtension')
     expect(panelSource).not.toContain('v-model="enabled"')
     expect(panelSource).not.toContain('v-model="settings')
+  })
+
+  it('原生 checkbox/select 读出意图后立刻回写确认值，失败再打回一次', () => {
+    expect(panelSource).toContain('takeHostBrowserCheckboxIntent')
+    expect(panelSource).toContain('takeHostBrowserSelectIntent')
+    expect(panelSource).toContain('revertHostBrowserCheckbox')
+    expect(panelSource).toContain('revertHostBrowserSelect')
+    expect(panelSource).toMatch(
+      /takeHostBrowserCheckboxIntent\(\s*target,\s*settings\.value\.enabled\s*\)[\s\S]*setHostBrowserEnabled[\s\S]*revertHostBrowserCheckbox\(\s*target,\s*settings\.value\.enabled\s*\)/
+    )
+    expect(panelSource).toMatch(
+      /takeHostBrowserCheckboxIntent\(\s*target,\s*settings\.value\[key\]\s*\)[\s\S]*savePatch[\s\S]*revertHostBrowserCheckbox\(\s*target,\s*settings\.value\[key\]\s*\)/
+    )
+    expect(panelSource).toMatch(
+      /takeHostBrowserSelectIntent\(\s*target,\s*settings\.value\.linkOpenTarget\s*\)[\s\S]*savePatch[\s\S]*revertHostBrowserSelect\(\s*target,\s*settings\.value\.linkOpenTarget\s*\)/
+    )
+    expect(panelSource).toMatch(
+      /takeHostBrowserSelectIntent\(\s*target,\s*settings\.value\.screenshotAnnotation\s*\)[\s\S]*savePatch[\s\S]*revertHostBrowserSelect\(\s*target,\s*settings\.value\.screenshotAnnotation\s*\)/
+    )
+    expect(panelSource).toMatch(
+      /takeHostBrowserSelectIntent\(\s*target,\s*settings\.value\.agentPermissions\[key\]\s*\)[\s\S]*savePatch[\s\S]*revertHostBrowserSelect\(\s*target,\s*settings\.value\.agentPermissions\[key\]\s*\)/
+    )
+  })
+})
+
+describe('原生控件回写', () => {
+  it('读出意图后立刻把 checkbox/select 打回确认值，失败路径可再打回一次', () => {
+    const checkbox = { checked: true }
+    expect(takeHostBrowserCheckboxIntent(checkbox, false)).toBe(true)
+    expect(checkbox.checked).toBe(false)
+    revertHostBrowserCheckbox(checkbox, true)
+    expect(checkbox.checked).toBe(true)
+
+    const select = { value: 'system' }
+    expect(takeHostBrowserSelectIntent(select, 'studio')).toBe('system')
+    expect(select.value).toBe('studio')
+    revertHostBrowserSelect(select, 'system')
+    expect(select.value).toBe('system')
   })
 })

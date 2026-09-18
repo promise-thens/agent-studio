@@ -143,6 +143,43 @@ export function formatHostBrowserSyncBlacklist(origins: readonly string[]): stri
 }
 
 /**
+ * 原生 checkbox 一点就改 DOM；Vue 的 :checked 在确认值没变时会跳过 patch。
+ * 必须立刻写回上次确认值，失败后再打回一次，避免看起来已经关了。
+ */
+export function revertHostBrowserCheckbox(
+  target: Pick<HTMLInputElement, 'checked'>,
+  confirmed: boolean
+): void {
+  target.checked = confirmed
+}
+
+export function revertHostBrowserSelect(
+  target: Pick<HTMLSelectElement, 'value'>,
+  confirmed: string
+): void {
+  target.value = confirmed
+}
+
+/** 先读出用户意图，再立刻把 DOM 打回确认值，禁止等待 IPC 期间乐观显示。 */
+export function takeHostBrowserCheckboxIntent(
+  target: Pick<HTMLInputElement, 'checked'>,
+  confirmed: boolean
+): boolean {
+  const next = target.checked
+  revertHostBrowserCheckbox(target, confirmed)
+  return next
+}
+
+export function takeHostBrowserSelectIntent(
+  target: Pick<HTMLSelectElement, 'value'>,
+  confirmed: string
+): string {
+  const next = target.value
+  revertHostBrowserSelect(target, confirmed)
+  return next
+}
+
+/**
  * 黑名单草稿只在 Renderer 做交互校验；主进程仍会再 parse 一遍。
  * 非法 origin 或超过 64 项整包失败，避免把半份名单送进 IPC。
  */
