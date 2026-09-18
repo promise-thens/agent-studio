@@ -74,6 +74,56 @@ export interface HostBrowserBounds {
   height: number
 }
 
+export type HostBrowserLinkOpenTarget = 'studio' | 'system'
+export type HostBrowserScreenshotAnnotation = 'always' | 'ask' | 'never'
+export type HostBrowserAgentPermissionMode = 'always' | 'ask'
+
+export interface HostBrowserAgentPermissions {
+  browse: HostBrowserAgentPermissionMode
+  download: HostBrowserAgentPermissionMode
+  upload: HostBrowserAgentPermissionMode
+  debug: HostBrowserAgentPermissionMode
+}
+
+/** 出厂开放的完整偏好。Cookie 明文不得进入此结构，黑名单只存 origin。 */
+export interface HostBrowserSettings {
+  enabled: boolean
+  linkOpenTarget: HostBrowserLinkOpenTarget
+  showFullUrl: boolean
+  screenshotAnnotation: HostBrowserScreenshotAnnotation
+  downloadAskBefore: boolean
+  agentPermissions: HostBrowserAgentPermissions
+  fullCdp: boolean
+  cautiousMode: boolean
+  cookieSyncEnabled: boolean
+  chromeConnectEnabled: boolean
+  syncBlacklist: string[]
+}
+
+export const DEFAULT_HOST_BROWSER_SETTINGS: HostBrowserSettings = {
+  enabled: true,
+  linkOpenTarget: 'studio',
+  showFullUrl: false,
+  screenshotAnnotation: 'always',
+  downloadAskBefore: false,
+  agentPermissions: {
+    browse: 'always',
+    download: 'always',
+    upload: 'always',
+    debug: 'always'
+  },
+  fullCdp: true,
+  cautiousMode: false,
+  cookieSyncEnabled: true,
+  chromeConnectEnabled: true,
+  syncBlacklist: []
+}
+
+const HOST_BROWSER_MAX_SYNC_BLACKLIST = 64
+const LINK_OPEN_TARGETS = new Set<HostBrowserLinkOpenTarget>(['studio', 'system'])
+const SCREENSHOT_ANNOTATIONS = new Set<HostBrowserScreenshotAnnotation>(['always', 'ask', 'never'])
+const AGENT_PERMISSION_MODES = new Set<HostBrowserAgentPermissionMode>(['always', 'ask'])
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
   const prototype = Object.getPrototypeOf(value)
@@ -158,11 +208,223 @@ function readBound(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) ? value : null
 }
 
-/** Preload 只收 enabled 布尔，丢掉其它键。 */
-export function parseHostBrowserEnabledState(value: unknown): { enabled: boolean } | null {
+function cloneHostBrowserSettings(settings: HostBrowserSettings): HostBrowserSettings {
+  return {
+    ...settings,
+    agentPermissions: { ...settings.agentPermissions },
+    syncBlacklist: [...settings.syncBlacklist]
+  }
+}
+
+function parseEnum<T extends string>(value: unknown, allowed: Set<T>): T | null {
+  return typeof value === 'string' && allowed.has(value as T) ? (value as T) : null
+}
+
+function parseBooleanField(value: unknown): boolean | null {
+  return value === true || value === false ? value : null
+}
+
+/**
+ * 黑名单只收 parseBrowserOrigin 能认出的 http(s) origin。
+ * 超过 64 项、含 userinfo / 非网页协议则整包失败，避免半份脏名单进同步。
+ */
+function parseSyncBlacklist(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length > HOST_BROWSER_MAX_SYNC_BLACKLIST) return null
+  const origins: string[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (typeof item !== 'string' || item.length > HOST_BROWSER_MAX_URL_CHARS) return null
+    const origin = parseBrowserOrigin(item)
+    if (!origin) return null
+    if (seen.has(origin)) continue
+    seen.add(origin)
+    origins.push(origin)
+  }
+  return origins
+}
+
+function parseAgentPermissions(value: unknown): HostBrowserAgentPermissions | null {
   if (!isPlainRecord(value)) return null
-  if (value.enabled !== true && value.enabled !== false) return null
-  return { enabled: value.enabled }
+  const browse = parseEnum(value.browse, AGENT_PERMISSION_MODES)
+  const download = parseEnum(value.download, AGENT_PERMISSION_MODES)
+  const upload = parseEnum(value.upload, AGENT_PERMISSION_MODES)
+  const debug = parseEnum(value.debug, AGENT_PERMISSION_MODES)
+  if (!browse || !download || !upload || !debug) return null
+  return { browse, download, upload, debug }
+}
+
+function readOptional<T>(
+  record: Record<string, unknown>,
+  key: string,
+  parse: (value: unknown) => T | null,
+  fallback: T
+): T | null {
+  return key in record ? parse(record[key]) : fallback
+}
+
+/**
+ * 完整偏好：缺字段用出厂开放默认，未知键丢掉。
+ * enabled 非法或黑名单非法则整包失败，禁止把脏配置当成“已开启”。
+ */
+export function parseHostBrowserSettings(value: unknown): HostBrowserSettings | null {
+  if (!isPlainRecord(value)) return null
+  const enabled = parseBooleanField(value.enabled)
+  if (enabled === null) return null
+  const linkOpenTarget = readOptional(
+    value,
+    'linkOpenTarget',
+    (field) => parseEnum(field, LINK_OPEN_TARGETS),
+    DEFAULT_HOST_BROWSER_SETTINGS.linkOpenTarget
+  )
+  const showFullUrl = readOptional(
+    value,
+    'showFullUrl',
+    parseBooleanField,
+    DEFAULT_HOST_BROWSER_SETTINGS.showFullUrl
+  )
+  const screenshotAnnotation = readOptional(
+    value,
+    'screenshotAnnotation',
+    (field) => parseEnum(field, SCREENSHOT_ANNOTATIONS),
+    DEFAULT_HOST_BROWSER_SETTINGS.screenshotAnnotation
+  )
+  const downloadAskBefore = readOptional(
+    value,
+    'downloadAskBefore',
+    parseBooleanField,
+    DEFAULT_HOST_BROWSER_SETTINGS.downloadAskBefore
+  )
+  const agentPermissions = readOptional(
+    value,
+    'agentPermissions',
+    parseAgentPermissions,
+    DEFAULT_HOST_BROWSER_SETTINGS.agentPermissions
+  )
+  const fullCdp = readOptional(
+    value,
+    'fullCdp',
+    parseBooleanField,
+    DEFAULT_HOST_BROWSER_SETTINGS.fullCdp
+  )
+  const cautiousMode = readOptional(
+    value,
+    'cautiousMode',
+    parseBooleanField,
+    DEFAULT_HOST_BROWSER_SETTINGS.cautiousMode
+  )
+  const cookieSyncEnabled = readOptional(
+    value,
+    'cookieSyncEnabled',
+    parseBooleanField,
+    DEFAULT_HOST_BROWSER_SETTINGS.cookieSyncEnabled
+  )
+  const chromeConnectEnabled = readOptional(
+    value,
+    'chromeConnectEnabled',
+    parseBooleanField,
+    DEFAULT_HOST_BROWSER_SETTINGS.chromeConnectEnabled
+  )
+  const syncBlacklist = readOptional(
+    value,
+    'syncBlacklist',
+    parseSyncBlacklist,
+    DEFAULT_HOST_BROWSER_SETTINGS.syncBlacklist
+  )
+  if (
+    linkOpenTarget === null ||
+    showFullUrl === null ||
+    screenshotAnnotation === null ||
+    downloadAskBefore === null ||
+    agentPermissions === null ||
+    fullCdp === null ||
+    cautiousMode === null ||
+    cookieSyncEnabled === null ||
+    chromeConnectEnabled === null ||
+    syncBlacklist === null
+  ) {
+    return null
+  }
+  return cloneHostBrowserSettings({
+    enabled,
+    linkOpenTarget,
+    showFullUrl,
+    screenshotAnnotation,
+    downloadAskBefore,
+    agentPermissions,
+    fullCdp,
+    cautiousMode,
+    cookieSyncEnabled,
+    chromeConnectEnabled,
+    syncBlacklist
+  })
+}
+
+/**
+ * 设置页补丁不得含 enabled：总开关走独立 IPC，避免其它字段保存时把能力关掉。
+ * 未知键丢掉；出现非法字段则整包失败。
+ */
+export function parseHostBrowserSettingsPatch(
+  value: unknown
+): Partial<Omit<HostBrowserSettings, 'enabled'>> | null {
+  if (!isPlainRecord(value) || 'enabled' in value) return null
+  const patch: Partial<Omit<HostBrowserSettings, 'enabled'>> = {}
+  if ('linkOpenTarget' in value) {
+    const parsed = parseEnum(value.linkOpenTarget, LINK_OPEN_TARGETS)
+    if (!parsed) return null
+    patch.linkOpenTarget = parsed
+  }
+  if ('showFullUrl' in value) {
+    const parsed = parseBooleanField(value.showFullUrl)
+    if (parsed === null) return null
+    patch.showFullUrl = parsed
+  }
+  if ('screenshotAnnotation' in value) {
+    const parsed = parseEnum(value.screenshotAnnotation, SCREENSHOT_ANNOTATIONS)
+    if (!parsed) return null
+    patch.screenshotAnnotation = parsed
+  }
+  if ('downloadAskBefore' in value) {
+    const parsed = parseBooleanField(value.downloadAskBefore)
+    if (parsed === null) return null
+    patch.downloadAskBefore = parsed
+  }
+  if ('agentPermissions' in value) {
+    const parsed = parseAgentPermissions(value.agentPermissions)
+    if (!parsed) return null
+    patch.agentPermissions = parsed
+  }
+  if ('fullCdp' in value) {
+    const parsed = parseBooleanField(value.fullCdp)
+    if (parsed === null) return null
+    patch.fullCdp = parsed
+  }
+  if ('cautiousMode' in value) {
+    const parsed = parseBooleanField(value.cautiousMode)
+    if (parsed === null) return null
+    patch.cautiousMode = parsed
+  }
+  if ('cookieSyncEnabled' in value) {
+    const parsed = parseBooleanField(value.cookieSyncEnabled)
+    if (parsed === null) return null
+    patch.cookieSyncEnabled = parsed
+  }
+  if ('chromeConnectEnabled' in value) {
+    const parsed = parseBooleanField(value.chromeConnectEnabled)
+    if (parsed === null) return null
+    patch.chromeConnectEnabled = parsed
+  }
+  if ('syncBlacklist' in value) {
+    const parsed = parseSyncBlacklist(value.syncBlacklist)
+    if (!parsed) return null
+    patch.syncBlacklist = parsed
+  }
+  return patch
+}
+
+/** 走完整 parse 后只返回 enabled，旧 preload 仍能吃 `{ enabled }`，也能吃完整对象。 */
+export function parseHostBrowserEnabledState(value: unknown): { enabled: boolean } | null {
+  const parsed = parseHostBrowserSettings(value)
+  return parsed ? { enabled: parsed.enabled } : null
 }
 
 /** 宿主浏览器 MCP 工具名。不在此表的一律拒绝，避免 evaluate / CDP 通用入口混进来。 */

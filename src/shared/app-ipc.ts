@@ -1,4 +1,5 @@
 import type { AppAppearanceMode, AppAppearanceState } from './app-appearance'
+import type { HostBrowserSettings } from './host-browser'
 import type { DesktopIpcResult } from './ipc-result'
 import type { GrokHookSummary } from './grok-hook'
 import type { GrokSandboxProfile } from './grok-sandbox-profile'
@@ -103,9 +104,8 @@ export interface AppGrokSandboxApplyResult {
   applied: boolean
 }
 
-export interface AppHostBrowserSettings {
-  enabled: boolean
-}
+/** 完整内置浏览器偏好；Renderer 不得从中拿到 Cookie 明文。 */
+export type AppHostBrowserSettings = HostBrowserSettings
 
 export interface AppListMcpServersRequest {
   projectId?: string
