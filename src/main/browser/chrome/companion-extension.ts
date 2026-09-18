@@ -43,6 +43,23 @@ export function mapChromeNativeSnapshotToOverlayDip(
   return { x: overlayX, y: overlayY }
 }
 
+/** 没有窗 DIP 或节点 CSS 就不得建 overlay 窗。 */
+export function companionSnapshotHasMappableGeometry(input: {
+  windowScreenBounds?: AgentPointerBounds
+  cssX?: number
+  cssY?: number
+}): boolean {
+  const bounds = input.windowScreenBounds
+  return (
+    bounds != null &&
+    isFiniteBounds(bounds) &&
+    typeof input.cssX === 'number' &&
+    typeof input.cssY === 'number' &&
+    Number.isFinite(input.cssX) &&
+    Number.isFinite(input.cssY)
+  )
+}
+
 function isFiniteBounds(value: AgentPointerBounds): boolean {
   return (
     Number.isFinite(value.x) &&

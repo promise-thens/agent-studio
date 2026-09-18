@@ -37,6 +37,7 @@ import {
 import { HostBrowserSettingsStore } from './browser/host-browser-settings'
 import { ChromeNativeHost, resolveChromeNativeHostScriptPath } from './browser/chrome/native-host'
 import {
+  companionSnapshotHasMappableGeometry,
   installHostBrowserCompanionExtension,
   mapChromeNativeSnapshotToOverlayDip,
   resolveCompanionChromeExtensionDirectory,
@@ -1082,7 +1083,11 @@ function registerIpcHandlers(): void {
     setHostBrowserSettings: async (patch) => {
       const store = requireHostBrowserSettingsStore()
       const current = store.getSettings()
-      return store.saveSettings({ ...current, ...patch })
+      const next = await store.saveSettings({ ...current, ...patch })
+      if (next.chromeConnectEnabled !== true) {
+        browserPluginOverlayHost?.acceptCompanionBrowserPluginPointer({})
+      }
+      return next
     },
     /**
      * 只清当前选中 Task 的 persist:as-browser partition。
@@ -1491,12 +1496,8 @@ function createBrowserPluginOverlayHostInstance(): BrowserPluginOverlayHost {
 }
 
 /**
- * overlay 窗和指针映射必须用同一块屏。
- * 主窗拖到副屏后若仍用 getPrimaryDisplay，光标会画在主屏窗外。
- */
-/**
  * 配套扩展 tabs.snapshot → overlay DIP。没有窗矩形或未开连接就不画针。
- * 映射必须回读 overlay 落地后的 getBounds()。
+ * 映射必须回读 overlay 落地后的 getBounds()；失败映射不得先建窗。
  */
 function publishCompanionChromeSnapshot(payload: unknown): void {
   const overlay = browserPluginOverlayHost
@@ -1508,6 +1509,16 @@ function publishCompanionChromeSnapshot(payload: unknown): void {
   }
   const parsed = parseChromeNativeTabsSnapshotPayload(payload)
   const node = parsed?.nodes?.[0]
+  if (
+    !companionSnapshotHasMappableGeometry({
+      windowScreenBounds: parsed?.windowScreenBounds,
+      cssX: node?.x,
+      cssY: node?.y
+    })
+  ) {
+    overlay.acceptCompanionBrowserPluginPointer({})
+    return
+  }
   const overlayBounds = overlay.ensurePointerOverlayLayout()
   const pointer = mapChromeNativeSnapshotToOverlayDip({
     windowScreenBounds: parsed?.windowScreenBounds,
@@ -1518,6 +1529,11 @@ function publishCompanionChromeSnapshot(payload: unknown): void {
   })
   overlay.acceptCompanionBrowserPluginPointer(pointer ? { pointer } : {})
 }
+
+/**
+ * overlay 窗和指针映射必须用同一块屏。
+ * 主窗拖到副屏后若仍用 getPrimaryDisplay，光标会画在主屏窗外。
+ */
 
 function resolveHostWindowOverlayBounds(): {
   x: number

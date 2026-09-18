@@ -156,7 +156,24 @@ describe('HUD', () => {
         visible: true,
         surface: 'browser-plugin'
       })
+    ).toBe(false)
+    expect(
+      isAgentPointerTurnActive({
+        visible: true,
+        surface: 'browser-plugin',
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        executionId: 'execution-1'
+      })
     ).toBe(true)
+    expect(
+      resolveAgentPointerHudCopy({
+        surface: 'browser-plugin',
+        overlayVisible: true,
+        turnActive: false,
+        takeoverCopy: null
+      })
+    ).toBeNull()
     expect(
       shouldRenderAgentPointerCursor({
         visible: true,

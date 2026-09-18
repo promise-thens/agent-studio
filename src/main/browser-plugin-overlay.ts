@@ -199,7 +199,7 @@ export class BrowserPluginOverlaySession {
     const snapshot = createAgentPointerSnapshot({
       visible: true,
       surface: 'browser-plugin',
-      persistWhenUnfocused: false,
+      persistWhenUnfocused: true,
       pointer: input.pointer
     })
     this.companionPointer = snapshot.pointer
@@ -229,11 +229,12 @@ export class BrowserPluginOverlaySession {
       })
     }
     if (this.companionPointer) {
+      // 闲置配套针可在 Agent Studio 失焦时留在用户 Chrome；无三元组不得挂 HUD/芯片
       return {
         visible: true,
         kind: 'browser',
         surface: 'browser-plugin',
-        persistWhenUnfocused: false,
+        persistWhenUnfocused: true,
         pointer: this.companionPointer
       }
     }

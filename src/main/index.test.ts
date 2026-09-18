@@ -645,6 +645,8 @@ describe('宿主 overlay 指针组装', () => {
     expect(settingsFn).toBeTruthy()
     expect(settingsFn).toContain('getSettings()')
     expect(settingsFn).toContain('saveSettings')
+    expect(settingsFn).toContain('chromeConnectEnabled')
+    expect(settingsFn).toContain('acceptCompanionBrowserPluginPointer')
     expect(settingsFn).not.toContain('assertGrokConfigCanReload')
     expect(indexSource).toContain('clearHostBrowserData:')
     const clearFn = indexSource.match(
@@ -729,6 +731,14 @@ describe('宿主 overlay 指针组装', () => {
     expect(indexSource).toContain('publishCompanionChromeSnapshot')
     expect(indexSource).toContain('ensurePointerOverlayLayout')
     expect(indexSource).toContain('acceptCompanionBrowserPluginPointer')
+    expect(indexSource).toContain('companionSnapshotHasMappableGeometry')
+    const publishFn = indexSource.match(
+      /function publishCompanionChromeSnapshot\([\s\S]*?\nfunction resolveHostWindowOverlayBounds/
+    )?.[0]
+    expect(publishFn).toBeTruthy()
+    expect(publishFn!.indexOf('companionSnapshotHasMappableGeometry')).toBeLessThan(
+      publishFn!.indexOf('ensurePointerOverlayLayout')
+    )
     expect(indexSource).not.toContain("execPath: '/bin/bash'")
     expect(indexSource).not.toContain('"/bin/bash"')
   })

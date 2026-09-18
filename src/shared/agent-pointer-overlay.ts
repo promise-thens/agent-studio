@@ -44,8 +44,8 @@ export const BROWSER_PLUGIN_HUD_COPY = 'Grok 正在使用浏览器插件'
 const MAX_OVERLAY_ID_BYTES = 256
 
 /**
- * 插件：visible 即进行中（Turn 结束会整扇隐藏）。
- * 宿主：必须有可停止的 execution 三元组；闲置光标不算进行中。
+ * 宿主与配套扩展闲置针都只画光标：必须有可停止的 execution 三元组才算进行中。
+ * 禁止 visible + browser-plugin 且无三元组冒充 ACP 插件 HUD / 停止芯片。
  */
 export function isAgentPointerTurnActive(snapshot: {
   visible: boolean
@@ -55,10 +55,8 @@ export function isAgentPointerTurnActive(snapshot: {
   executionId?: string
 }): boolean {
   if (!snapshot.visible) return false
-  if (snapshot.surface === 'host-browser') {
-    return Boolean(snapshot.executionId && snapshot.taskId && snapshot.turnId)
-  }
-  return true
+  if (snapshot.surface === 'computer-use') return false
+  return Boolean(snapshot.executionId && snapshot.taskId && snapshot.turnId)
 }
 
 /**

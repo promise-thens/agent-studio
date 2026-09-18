@@ -35,9 +35,8 @@ function setChipHover(hovered: boolean): void {
 
 /**
  * 芯片只在 overlayVisible && turnActive 时出现。
- * 插件：visible 即进行中（Turn 结束会隐藏 overlay）。
- * 宿主：有可停止的 execution 三元组才算进行中；闲置光标只留 pointer。
- * 进行中宿主句为「Grok 正在使用内置浏览器」。
+ * 宿主与配套扩展：有可停止的 execution 三元组才算进行中；闲置光标只留 pointer。
+ * 禁止 visible + browser-plugin 无三元组时挂停止芯片。
  */
 const hudCopy = computed(() =>
   resolveAgentPointerHudCopy({

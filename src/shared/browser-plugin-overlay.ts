@@ -82,7 +82,7 @@ export function resolveBrowserPluginHudCopy(input: {
   return resolveAgentPointerHudCopy({
     surface,
     overlayVisible: input.overlayVisible,
-    // 未显式传入时：插件仍把 visible 当进行中；宿主闲置光标不得当成进行中
+    // 未显式传入且无三元组：配套闲置针不得冒充插件进行中
     turnActive:
       input.turnActive ??
       isAgentPointerTurnActive({

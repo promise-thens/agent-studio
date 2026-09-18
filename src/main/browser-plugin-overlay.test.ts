@@ -68,6 +68,7 @@ vi.mock('electron', () => {
   }
 })
 import type { AgentPermissionRequest } from '../shared/agent'
+import { isAgentPointerTurnActive } from '../shared/agent-pointer-overlay'
 import {
   createBrowserPluginOverlaySnapshot,
   projectBrowserPluginPointer,
@@ -169,10 +170,11 @@ describe('overlay 源码纪律', () => {
   it('OverlayApp 按 surface 显示宿主 HUD，光标仍仅 pointer 挂载', () => {
     const overlayApp = readFileSync(join(overlayDir, 'OverlayApp.vue'), 'utf8')
     const overlayPreload = readFileSync(join(mainDir, '../preload/overlay.ts'), 'utf8')
-    expect(overlayApp).toContain('Grok 正在使用内置浏览器')
     expect(overlayApp).toContain('resolveAgentPointerHudCopy')
     expect(overlayApp).toContain('v-if="snapshot.pointer"')
     expect(overlayApp).toContain('v-if="hudCopy"')
+    expect(overlayApp).toContain('isAgentPointerTurnActive(snapshot.value)')
+    expect(overlayApp).not.toContain('visible 即进行中')
     expect(overlayApp).toContain('overlay-cursor-ring')
     expect(overlayApp).toContain('overlay-cursor-dot')
     expect(overlayApp).toContain('overlay-cursor-hair')
@@ -377,8 +379,28 @@ describe('宿主 host-browser 指针', () => {
     expect(companion.visible).toBe(true)
     expect(companion.surface).toBe('browser-plugin')
     expect(companion.pointer).toEqual({ x: 88, y: 99 })
-    expect(companion.persistWhenUnfocused).toBe(false)
+    expect(companion.persistWhenUnfocused).toBe(true)
+    expect(companion.taskId).toBeUndefined()
+    expect(companion.turnId).toBeUndefined()
+    expect(companion.executionId).toBeUndefined()
     expect(shouldRenderMovingOverlayCursor(companion)).toBe(true)
+    expect(
+      isAgentPointerTurnActive({
+        visible: companion.visible,
+        surface: 'browser-plugin',
+        taskId: companion.taskId,
+        turnId: companion.turnId,
+        executionId: companion.executionId
+      })
+    ).toBe(false)
+    expect(
+      resolveBrowserPluginHudCopy({
+        takeoverCopy: null,
+        overlayVisible: companion.visible,
+        surface: companion.surface,
+        turnActive: false
+      })
+    ).toBeNull()
 
     session.acceptCompanionBrowserPluginPointer({})
     const cleared = session.getSnapshot()

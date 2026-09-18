@@ -11,6 +11,7 @@ import {
 import {
   installHostBrowserCompanionExtension,
   isChromeNativeHostForbiddenExecPath,
+  companionSnapshotHasMappableGeometry,
   mapChromeNativeSnapshotToOverlayDip,
   resolveCompanionChromeExtensionDirectory,
   writeChromeNativeHostWrapper
@@ -124,6 +125,20 @@ describe('配套扩展 snapshot → overlay DIP', () => {
         overlayBounds: { x: 0, y: 0, width: 100, height: 100 }
       })
     ).toBeUndefined()
+
+    expect(
+      companionSnapshotHasMappableGeometry({
+        windowScreenBounds: { x: 100, y: 200, width: 800, height: 600 },
+        cssX: 40,
+        cssY: 60
+      })
+    ).toBe(true)
+    expect(companionSnapshotHasMappableGeometry({ cssX: 40, cssY: 60 })).toBe(false)
+    expect(
+      companionSnapshotHasMappableGeometry({
+        windowScreenBounds: { x: 100, y: 200, width: 800, height: 600 }
+      })
+    ).toBe(false)
   })
 })
 
