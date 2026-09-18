@@ -218,6 +218,12 @@ function createWindow(): void {
       }
       return broker.authorizeOperation(intent, execute, options)
     },
+    getHostRendererZoomFactor: () => {
+      const window = mainWindow
+      if (!window || window.isDestroyed()) return 1
+      const zoomFactor = window.webContents.getZoomFactor()
+      return Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1
+    },
     getPointerGeometry: () => {
       const window = mainWindow
       if (!window || window.isDestroyed()) return null

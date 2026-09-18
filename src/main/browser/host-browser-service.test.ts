@@ -134,6 +134,36 @@ describe('HostBrowserService', () => {
     expect(guest.destroyed).toBe(false)
   })
 
+  it('主 Renderer 缩放时把 CSS bounds 转成 Native DIP', () => {
+    const guest = createFakeGuest('project-a')
+    const service = new HostBrowserService({
+      createGuest: () => guest,
+      attachGuest: vi.fn(),
+      detachGuest: vi.fn(),
+      getHostRendererZoomFactor: () => 1.25
+    })
+
+    service.userNavigate('task-1', 'project-a', 'https://example.com')
+    service.updateBounds({ x: 101, y: 43, width: 479, height: 721 })
+
+    expect(guest.bounds).toEqual({ x: 126, y: 54, width: 599, height: 901 })
+  })
+
+  it('主 Renderer 缩放值无效时回退到原始 CSS bounds', () => {
+    const guest = createFakeGuest('project-a')
+    const service = new HostBrowserService({
+      createGuest: () => guest,
+      attachGuest: vi.fn(),
+      detachGuest: vi.fn(),
+      getHostRendererZoomFactor: () => Number.NaN
+    })
+
+    service.userNavigate('task-1', 'project-a', 'https://example.com')
+    service.updateBounds({ x: 100, y: 40, width: 480, height: 720 })
+
+    expect(guest.bounds).toEqual({ x: 100, y: 40, width: 480, height: 720 })
+  })
+
   it('perform 先过 Broker：拒绝时不得 loadURL', async () => {
     const guest = createFakeGuest('project-a')
     const service = new HostBrowserService({

@@ -617,6 +617,8 @@ describe('宿主 overlay 指针组装', () => {
     expect(indexSource).toContain('relayout')
     expect(indexSource).toContain('ensurePointerOverlayLayout')
     expect(indexSource).toContain('ensureHostBrowserGrokSkill')
+    expect(indexSource).toContain('getHostRendererZoomFactor')
+    expect(indexSource).toContain('webContents.getZoomFactor()')
     expect(indexSource).not.toContain('mapViewportCssToOverlayDip')
     const geometryFn = indexSource.match(
       /getPointerGeometry: \(\) => \{[\s\S]*?acceptHostBrowserPointer/

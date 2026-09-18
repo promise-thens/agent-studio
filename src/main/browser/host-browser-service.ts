@@ -86,6 +86,8 @@ export interface HostBrowserServiceDependencies {
     options?: AuthorizeOperationOptions
   ) => Promise<PermissionAuthorizationResult<T>>
   getPointerGeometry?: () => HostBrowserPointerGeometry | null
+  /** 读取主 Renderer 页面缩放，用于把 CSS bounds 转成 WebContentsView 所需的 Native DIP。 */
+  getHostRendererZoomFactor?: () => number
   acceptHostBrowserPointer?: (input: HostBrowserOverlayPointerNotice) => void
   clearHostBrowserPointer?: () => void
 }
@@ -202,7 +204,19 @@ export class HostBrowserService {
   updateBounds(bounds: HostBrowserBounds): void {
     const parsed = parseHostBrowserBounds(bounds)
     if (!parsed) return
-    this.bounds = parsed
+
+    // Renderer 上报的是主页面 CSS 坐标；Native WebContentsView 使用窗口 DIP，主页面缩放必须参与换算。
+    const rendererZoom = this.dependencies.getHostRendererZoomFactor?.() ?? 1
+    const zoomFactor = Number.isFinite(rendererZoom) && rendererZoom > 0 ? rendererZoom : 1
+    const scaled = parseHostBrowserBounds({
+      x: Math.round(parsed.x * zoomFactor),
+      y: Math.round(parsed.y * zoomFactor),
+      width: Math.round(parsed.width * zoomFactor),
+      height: Math.round(parsed.height * zoomFactor)
+    })
+
+    // 缩放后的值若超出 Native bounds 合法范围，回退到未缩放值而不是把视图置成无效矩形。
+    this.bounds = scaled ?? parsed
     this.syncAttachment()
     this.remapHostBrowserPointer()
   }
