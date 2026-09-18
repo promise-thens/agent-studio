@@ -370,6 +370,23 @@ describe('宿主 host-browser 指针', () => {
     ).toBeUndefined()
   })
 
+  it('配套扩展有限 DIP 画出 browser-plugin 针；无几何不发明；ACP rawInput 仍剥 pointer', () => {
+    const session = new BrowserPluginOverlaySession()
+    session.acceptCompanionBrowserPluginPointer({ pointer: { x: 88, y: 99 } })
+    const companion = session.getSnapshot()
+    expect(companion.visible).toBe(true)
+    expect(companion.surface).toBe('browser-plugin')
+    expect(companion.pointer).toEqual({ x: 88, y: 99 })
+    expect(companion.persistWhenUnfocused).toBe(false)
+    expect(shouldRenderMovingOverlayCursor(companion)).toBe(true)
+
+    session.acceptCompanionBrowserPluginPointer({})
+    const cleared = session.getSnapshot()
+    expect(cleared.pointer).toBeUndefined()
+    expect(cleared).not.toHaveProperty('pointer')
+    expect(shouldRenderMovingOverlayCursor(cleared)).toBe(false)
+  })
+
   it('插件 rawInput 不得覆盖已映射的宿主 pointer', () => {
     const session = new BrowserPluginOverlaySession()
     session.acceptExecutionSnapshot(runningExecution)

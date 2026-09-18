@@ -2,7 +2,8 @@
  * 通用 Agent 指针 overlay 协议（宿主页 / 插件 / 未来 Computer Use 共用底座）。
  *
  * pointer 的 x/y 必须已是 overlay 窗口本地 DIP；Renderer 只 translate，不再换算。
- * 本波只有 host-browser 可写入 pointer；browser-plugin 恒省略；computer-use 仅类型预留。
+ * 本波 host-browser 与配套扩展 browser-plugin 可写入已映射 overlay DIP；
+ * 货架 chrome-devtools 仍走 ACP 通道剥离；computer-use 仅类型预留。
  */
 
 /** Overlay 坐标来源；computer-use 本波无任何 producer。 */
@@ -201,7 +202,7 @@ function readFinitePointer(value: unknown): AgentPointer | undefined {
 }
 
 /**
- * 构造可序列化指针快照。browser-plugin 即使传入 pointer 也丢弃；
+ * 构造可序列化指针快照。host-browser 与配套扩展 browser-plugin 只保留有限 DIP；
  * 入参 surface 不含 computer-use，防止本波无 Helper 时伪造该来源。
  */
 export function createAgentPointerSnapshot(input: {
@@ -222,8 +223,8 @@ export function createAgentPointerSnapshot(input: {
   if (input.turnId) snapshot.turnId = input.turnId
   if (input.executionId) snapshot.executionId = input.executionId
 
-  // 仅宿主页可写入已映射的 overlay DIP；插件路径继续冻结
-  if (input.surface === 'host-browser') {
+  // 无几何不得发明光标；货架 ACP 通道另有剥离，不在这里一刀切丢弃配套扩展针
+  if (input.surface === 'host-browser' || input.surface === 'browser-plugin') {
     const pointer = readFinitePointer(input.pointer)
     if (pointer) snapshot.pointer = pointer
   }
@@ -233,7 +234,7 @@ export function createAgentPointerSnapshot(input: {
 
 /**
  * Preload / overlay 再校验快照：丢掉私有键。
- * host-browser 可保留有限 pointer；browser-plugin 恒丢弃；computer-use 本波拒收。
+ * host-browser 与配套扩展有限 pointer 可保留；无几何仍丢弃；computer-use 本波拒收。
  */
 export function parseAgentPointerSnapshot(value: unknown): AgentPointerSnapshot | null {
   if (!isPlainRecord(value) || (value.visible !== true && value.visible !== false)) return null
@@ -252,9 +253,11 @@ export function parseAgentPointerSnapshot(value: unknown): AgentPointerSnapshot 
   })
 }
 
-/** 无 pointer 或非宿主 surface 时不得在 overlay DOM 留下移动光标节点。 */
+/** 无 pointer 时不得在 overlay DOM 留下移动光标节点；配套扩展有限 DIP 与宿主页一样可画。 */
 export function shouldRenderAgentPointerCursor(snapshot: AgentPointerSnapshot): boolean {
   return (
-    snapshot.visible === true && snapshot.pointer != null && snapshot.surface === 'host-browser'
+    snapshot.visible === true &&
+    snapshot.pointer != null &&
+    (snapshot.surface === 'host-browser' || snapshot.surface === 'browser-plugin')
   )
 }

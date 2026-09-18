@@ -847,12 +847,31 @@ describe('窄 Preload API', () => {
       error: { code: 'operation-failed', message: '内置浏览器设置无效。' }
     })
     expect(await app.clearHostBrowserData(['cookies'])).toEqual({ ok: true, value: null })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { installed: true, path: '/secret' }
+    })
+    ipcRenderer.invoke.mockResolvedValueOnce({
+      ok: true,
+      value: { lastCookieSyncAt: '2026-09-18T00:00:00.000Z', cookie: 'secret' }
+    })
+    const installed = await app.installHostBrowserExtension()
+    expect(installed).toEqual({ ok: true, value: { installed: true } })
+    expect(JSON.stringify(installed)).not.toContain('/secret')
+    const status = await app.getHostBrowserExtensionStatus()
+    expect(status).toEqual({
+      ok: true,
+      value: { lastCookieSyncAt: '2026-09-18T00:00:00.000Z' }
+    })
+    expect(JSON.stringify(status)).not.toContain('secret')
     expect(ipcRenderer.invoke.mock.calls).toEqual([
       [APP_INVOKE_CHANNELS.getHostBrowserSettings],
       [APP_INVOKE_CHANNELS.setHostBrowserEnabled, { enabled: false }],
       [APP_INVOKE_CHANNELS.setHostBrowserSettings, { showFullUrl: true }],
       [APP_INVOKE_CHANNELS.setHostBrowserSettings, { showFullUrl: true }],
-      [APP_INVOKE_CHANNELS.clearHostBrowserData, { kinds: ['cookies'] }]
+      [APP_INVOKE_CHANNELS.clearHostBrowserData, { kinds: ['cookies'] }],
+      [APP_INVOKE_CHANNELS.installHostBrowserExtension],
+      [APP_INVOKE_CHANNELS.getHostBrowserExtensionStatus]
     ])
   })
 

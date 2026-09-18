@@ -56,6 +56,7 @@ export interface ChromeNativeHostDependencies {
   getProjectId: () => string | null
   setCookie: (partition: string, details: ChromeNativeCookieSetDetails) => Promise<void>
   log?: (record: Record<string, unknown>) => void
+  onTabsSnapshot?: (payload: unknown) => void
 }
 
 /**
@@ -212,6 +213,7 @@ export async function handleChromeNativeRequest(options: {
   projectId: string | null
   setCookie: (partition: string, details: ChromeNativeCookieSetDetails) => Promise<void>
   log?: (record: Record<string, unknown>) => void
+  onTabsSnapshot?: (payload: unknown) => void
 }): Promise<ChromeNativeResponse> {
   const parsed = parseChromeNativeRequest(options.request)
   if (!parsed.ok) {
@@ -222,6 +224,8 @@ export async function handleChromeNativeRequest(options: {
     return { id: request.id, ok: true, result: { pong: true } }
   }
   if (request.command === 'tabs.snapshot') {
+    // 几何映射由调用方用 overlay getBounds() 完成；这里只回 accepted，不发明光标
+    options.onTabsSnapshot?.(request.payload)
     return { id: request.id, ok: true, result: { accepted: true } }
   }
   if (request.command === 'tabs.open') {
@@ -271,9 +275,15 @@ export class ChromeNativeHost {
   private server: Server | null = null
   private socketPathValue = ''
   private tokenValue = ''
+  private lastCookieSyncAtValue: string | null = null
   private readonly sockets = new Set<Socket>()
 
   constructor(private readonly dependencies: ChromeNativeHostDependencies) {}
+
+  /** 最近一次真正 apply 的 Cookie 同步时间；关同步忽略时不更新。 */
+  lastCookieSyncAt(): string | null {
+    return this.lastCookieSyncAtValue
+  }
 
   async start(): Promise<void> {
     const directory = join(this.dependencies.userDataPath, 'browser')
@@ -363,8 +373,17 @@ export class ChromeNativeHost {
       settings: this.dependencies.getSettings(),
       projectId: this.dependencies.getProjectId(),
       setCookie: this.dependencies.setCookie,
-      log: this.dependencies.log
+      log: this.dependencies.log,
+      onTabsSnapshot: this.dependencies.onTabsSnapshot
     })
+    if (
+      response.ok &&
+      isRecord(response.result) &&
+      response.result.ignored !== true &&
+      typeof response.result.applied === 'number'
+    ) {
+      this.lastCookieSyncAtValue = new Date().toISOString()
+    }
     if (!socket.destroyed) {
       socket.write(`${JSON.stringify({ result: response })}\n`)
     }

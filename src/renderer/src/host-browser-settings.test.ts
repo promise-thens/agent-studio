@@ -8,7 +8,9 @@ import {
   HOST_BROWSER_AGENT_PERMISSION_OPTIONS,
   HOST_BROWSER_CLEAR_DATA_KINDS,
   HOST_BROWSER_CLEAR_DATA_LABEL,
-  HOST_BROWSER_EXTENSION_MISSING,
+  HOST_BROWSER_EXTENSION_INSTALL_HINT,
+  HOST_BROWSER_EXTENSION_INSTALL_LABEL,
+  HOST_BROWSER_EXTENSION_LAST_SYNC_NONE,
   HOST_BROWSER_FULL_CDP_HINT,
   HOST_BROWSER_GROUP_AGENT_PERMISSIONS_TITLE,
   HOST_BROWSER_GROUP_CAUTIOUS_TITLE,
@@ -61,7 +63,7 @@ describe('内置浏览器设置文案', () => {
     expect(resolveHostBrowserSettingTitle({ runtimeBusy: false })).toBe(HOST_BROWSER_SETTING_TITLE)
   })
 
-  it('分组标题覆盖说明书 §1.7，密码尚未接入，扩展未检测', () => {
+  it('分组标题覆盖说明书 §1.7，密码尚未接入，扩展提供安装按钮', () => {
     expect(HOST_BROWSER_GROUP_GENERAL_TITLE).toBe('常规')
     expect(HOST_BROWSER_GROUP_PASSWORDS_TITLE).toBe('自动填充和密码')
     expect(HOST_BROWSER_GROUP_DOWNLOADS_TITLE).toBe('下载')
@@ -73,7 +75,10 @@ describe('内置浏览器设置文案', () => {
       '内置密码库尚未接入。Chrome 若未开放密码 API，不会假装已同步密码。'
     )
     expect(HOST_BROWSER_PASSWORDS_BODY).toContain('尚未接入')
-    expect(HOST_BROWSER_EXTENSION_MISSING).toBe('未检测到配套扩展')
+    expect(HOST_BROWSER_EXTENSION_INSTALL_LABEL).toBe('安装配套扩展')
+    expect(HOST_BROWSER_EXTENSION_INSTALL_HINT).toContain('开发者模式')
+    expect(HOST_BROWSER_EXTENSION_INSTALL_HINT).toContain('加载已解压')
+    expect(HOST_BROWSER_EXTENSION_LAST_SYNC_NONE).toBe('上次同步：尚未同步')
     expect(HOST_BROWSER_CLEAR_DATA_LABEL).toBe('清除浏览数据')
     expect(HOST_BROWSER_CLEAR_DATA_KINDS).toEqual(['cookies', 'cache', 'history', 'downloads'])
     expect(HOST_BROWSER_FULL_CDP_HINT).toContain('可检查并控制敏感浏览器内部功能')
@@ -183,16 +188,22 @@ describe('浏览器设置面板源码契约', () => {
     expect(panelSource).toContain('HOST_BROWSER_GROUP_FULL_CDP_TITLE')
     expect(panelSource).toContain('HOST_BROWSER_GROUP_CAUTIOUS_TITLE')
     expect(panelSource).toContain('HOST_BROWSER_PASSWORDS_BODY')
-    expect(panelSource).toContain('HOST_BROWSER_EXTENSION_MISSING')
+    expect(panelSource).toContain('HOST_BROWSER_EXTENSION_INSTALL_LABEL')
+    expect(panelSource).toContain('HOST_BROWSER_EXTENSION_INSTALL_HINT')
+    expect(panelSource).toContain('HOST_BROWSER_EXTENSION_LAST_SYNC_NONE')
     expect(panelSource).toContain('HOST_BROWSER_SETTING_BUSY_TITLE')
     expect(panelSource).toContain('resolveHostBrowserMasterSwitchDisabled')
     expect(panelSource).toContain('resolveHostBrowserPreferenceDisabled')
     expect(panelSource).toContain('window.app.setHostBrowserEnabled')
     expect(panelSource).toContain('window.app.setHostBrowserSettings')
     expect(panelSource).toContain('window.app.clearHostBrowserData')
+    expect(panelSource).toContain('window.app.installHostBrowserExtension')
+    expect(panelSource).toContain('window.app.getHostBrowserExtensionStatus')
     expect(panelSource).toContain('HOST_BROWSER_CLEAR_DATA_KINDS')
     expect(panelSource).not.toContain('注入宿主浏览器 MCP')
-    expect(panelSource).not.toContain('installHostBrowserExtension')
+    expect(panelSource).not.toContain('HOST_BROWSER_EXTENSION_MISSING')
+    expect(panelSource).not.toContain('未检测到配套扩展')
+    expect(panelSource).not.toContain('交给 Agent')
     expect(panelSource).not.toContain('v-model="enabled"')
     expect(panelSource).not.toContain('v-model="settings')
   })

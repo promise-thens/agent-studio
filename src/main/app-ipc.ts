@@ -2,6 +2,8 @@ import { isAppAppearanceMode, type AppAppearanceState } from '../shared/app-appe
 import {
   APP_INVOKE_CHANNELS,
   type AppClearHostBrowserDataRequest,
+  type AppHostBrowserExtensionInstallResult,
+  type AppHostBrowserExtensionStatus,
   type AppGrokConfigDocument,
   type AppGrokSandboxApplyResult,
   type AppGrokSandboxState,
@@ -73,6 +75,9 @@ export interface AppIpcDependencies {
     patch: Partial<Omit<AppHostBrowserSettings, 'enabled'>>
   ) => Promise<AppHostBrowserSettings>
   clearHostBrowserData: (kinds: AppClearHostBrowserDataRequest['kinds']) => Promise<void>
+  installHostBrowserExtension: () => Promise<AppHostBrowserExtensionInstallResult>
+  getHostBrowserExtensionStatus: () =>
+    Promise<AppHostBrowserExtensionStatus> | AppHostBrowserExtensionStatus
   listHooks: () => Promise<GrokHookSummary[]>
   listMcpServers: (projectId?: string) => Promise<McpServerSummary[]>
   upsertMcpServer: (input: McpServerInput) => Promise<McpServerSummary>
@@ -326,6 +331,21 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
     const request = readRequest(args, ['kinds'])
     await dependencies.clearHostBrowserData(readHostBrowserClearDataKinds(request.kinds))
     return null
+  })
+  /**
+   * 无参。主进程 reveal unpacked 扩展目录并写 Native Host 清单。
+   * Renderer 不得提交 homeDir / execPath，避免测外写到任意目录。
+   */
+  register(APP_INVOKE_CHANNELS.installHostBrowserExtension, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.installHostBrowserExtension()
+  })
+  /**
+   * 无参返回上次 Cookie 同步时间。不得回传 Cookie 明文或 Chrome Profile 路径。
+   */
+  register(APP_INVOKE_CHANNELS.getHostBrowserExtensionStatus, (args) => {
+    if (args.length !== 0) throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    return dependencies.getHostBrowserExtensionStatus()
   })
   /**
    * 只读扫描 App grok-home/hooks。无参；Renderer 不得指定路径或要求执行钩子。

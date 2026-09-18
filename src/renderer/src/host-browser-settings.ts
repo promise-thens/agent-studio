@@ -64,7 +64,14 @@ export const HOST_BROWSER_PASSWORDS_BODY =
 
 export const HOST_BROWSER_DOWNLOAD_ASK_LABEL = '下载前询问'
 
-export const HOST_BROWSER_EXTENSION_MISSING = '未检测到配套扩展'
+export const HOST_BROWSER_EXTENSION_INSTALL_LABEL = '安装配套扩展'
+
+export const HOST_BROWSER_EXTENSION_INSTALL_HINT =
+  '打开 Chrome 扩展页，启用开发者模式，加载已解压的扩展'
+
+export const HOST_BROWSER_EXTENSION_LAST_SYNC_NONE = '上次同步：尚未同步'
+
+export const HOST_BROWSER_EXTENSION_INSTALL_STATUS = '已打开配套扩展目录。'
 
 export const HOST_BROWSER_COOKIE_SYNC_LABEL = '同步 Cookie 与登录态'
 
@@ -140,6 +147,12 @@ export function cloneHostBrowserSettingsView(settings: HostBrowserSettings): Hos
 
 export function formatHostBrowserSyncBlacklist(origins: readonly string[]): string {
   return origins.join('\n')
+}
+
+/** 上次同步只展示主进程给的 ISO 时间；没有则占位，不猜 Profile。 */
+export function formatHostBrowserLastCookieSync(iso: string | null): string {
+  if (!iso || iso.includes('\0')) return HOST_BROWSER_EXTENSION_LAST_SYNC_NONE
+  return `上次同步：${iso}`
 }
 
 /**

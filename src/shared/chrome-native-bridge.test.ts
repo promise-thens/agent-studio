@@ -14,6 +14,7 @@ import {
   parseChromeNativeFrameLength,
   parseChromeNativeRequest,
   parseChromeNativeTabsOpenUrl,
+  parseChromeNativeTabsSnapshotPayload,
   synthesizeChromeNativeCookieUrl,
   type ChromeNativeCookie
 } from './chrome-native-bridge'
@@ -187,5 +188,29 @@ describe('tabs.open payload', () => {
     )
     expect(parseChromeNativeTabsOpenUrl({ url: 'file:///etc/passwd' })).toBeNull()
     expect(parseChromeNativeTabsOpenUrl({ url: 'javascript:alert(1)' })).toBeNull()
+  })
+})
+
+describe('tabs.snapshot payload', () => {
+  it('收下窗 DIP 与节点 CSS 盒；非法数字整包丢掉', () => {
+    expect(
+      parseChromeNativeTabsSnapshotPayload({
+        windowScreenBounds: { x: 100, y: 80, width: 1200, height: 800 },
+        dpr: 2,
+        zoom: 1.25,
+        nodes: [{ x: 40, y: 60, width: 12, height: 18 }]
+      })
+    ).toEqual({
+      windowScreenBounds: { x: 100, y: 80, width: 1200, height: 800 },
+      dpr: 2,
+      zoom: 1.25,
+      nodes: [{ x: 40, y: 60, width: 12, height: 18 }]
+    })
+    expect(parseChromeNativeTabsSnapshotPayload({})).toEqual({})
+    expect(
+      parseChromeNativeTabsSnapshotPayload({
+        windowScreenBounds: { x: '100', y: 80, width: 1, height: 1 }
+      })
+    ).toBeNull()
   })
 })

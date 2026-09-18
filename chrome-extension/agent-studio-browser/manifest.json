@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Agent Studio Browser",
+  "version": "0.1.0",
+  "description": "把 Chrome Cookie 同步到 Agent Studio 内置浏览器，并上报窗口几何。",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArq8XK8y05uUpU7OVi8av+NfertrV1Y+UHzCFQ99C007Sg3w+qh2Eu/qb1Y0uJf2ewxOfkaoRnJn2wZBo6kjmrIOLk/I5ThBsZ7+OlIEPzo8Qab4ApXf2KsRt9C+S2IGUdBlnwPEra3TGys/JK11kbcfDyssqg6mhR5KsMeYnOL9yw/h3G+efe6t/FqRj8xuOdYy41oxyAkjwDGzLW1hQ+neiG4mlMFUcmrbAUZ/c9zLOpD3eISHVs0fncaayV09KQxM9b1xZXEcFslP79jGwTm7YhkupFaWdpKo518KEr6wWcUF3twkW9r4xEJ1laixmhIYS9ypAkRW08wyqiWACnwIDAQAB",
+  "permissions": ["cookies", "nativeMessaging", "tabs", "scripting"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Agent Studio Browser",
+    "default_popup": "popup.html"
+  }
+}

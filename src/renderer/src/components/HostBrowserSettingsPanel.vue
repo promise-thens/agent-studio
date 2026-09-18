@@ -17,7 +17,10 @@ import {
   HOST_BROWSER_CLEAR_DATA_TITLE,
   HOST_BROWSER_COOKIE_SYNC_LABEL,
   HOST_BROWSER_DOWNLOAD_ASK_LABEL,
-  HOST_BROWSER_EXTENSION_MISSING,
+  HOST_BROWSER_EXTENSION_INSTALL_HINT,
+  HOST_BROWSER_EXTENSION_INSTALL_LABEL,
+  HOST_BROWSER_EXTENSION_INSTALL_STATUS,
+  HOST_BROWSER_EXTENSION_LAST_SYNC_NONE,
   HOST_BROWSER_FULL_CDP_HINT,
   HOST_BROWSER_GROUP_AGENT_PERMISSIONS_TITLE,
   HOST_BROWSER_GROUP_CAUTIOUS_TITLE,
@@ -48,6 +51,7 @@ import {
   HOST_BROWSER_SYNC_BLACKLIST_INVALID_COPY,
   HOST_BROWSER_SYNC_BLACKLIST_LABEL,
   cloneHostBrowserSettingsView,
+  formatHostBrowserLastCookieSync,
   formatHostBrowserSyncBlacklist,
   parseHostBrowserSyncBlacklistDraft,
   resolveHostBrowserMasterSwitchDisabled,
@@ -83,6 +87,8 @@ const blacklistDraft = ref('')
 const saving = ref(false)
 const errorMessage = ref('')
 const statusMessage = ref('')
+const lastCookieSyncAt = ref<string | null>(null)
+const lastSyncCopy = computed(() => formatHostBrowserLastCookieSync(lastCookieSyncAt.value))
 
 const masterSwitchDisabled = computed(() =>
   resolveHostBrowserMasterSwitchDisabled({
@@ -103,6 +109,7 @@ const toggleTitle = computed(() =>
 
 onMounted(() => {
   void loadSettings()
+  void loadExtensionStatus()
 })
 
 function applySettings(next: HostBrowserSettings): void {
@@ -234,6 +241,32 @@ async function onBlacklistCommit(): Promise<void> {
     return
   }
   await savePatch({ syncBlacklist: parsed })
+}
+
+async function loadExtensionStatus(): Promise<void> {
+  try {
+    const status = unwrapDesktopIpcResult(await window.app.getHostBrowserExtensionStatus())
+    lastCookieSyncAt.value = status.lastCookieSyncAt
+  } catch {
+    lastCookieSyncAt.value = null
+  }
+}
+
+/** 主进程 reveal unpacked 目录并写 Native Host 清单；Renderer 不得提交路径。 */
+async function onInstallExtension(): Promise<void> {
+  if (preferenceDisabled.value) return
+  saving.value = true
+  errorMessage.value = ''
+  statusMessage.value = ''
+  try {
+    unwrapDesktopIpcResult(await window.app.installHostBrowserExtension())
+    statusMessage.value = HOST_BROWSER_EXTENSION_INSTALL_STATUS
+    await loadExtensionStatus()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    saving.value = false
+  }
 }
 
 /** 主进程 Task 4 才真正擦 partition；这里只提交白名单 kinds，不宣称已经清掉。 */
@@ -419,7 +452,18 @@ async function onClearData(): Promise<void> {
 
       <fieldset class="browser-field" :disabled="preferenceDisabled">
         <legend>{{ HOST_BROWSER_GROUP_EXTENSION_TITLE }}</legend>
-        <p class="hint">{{ HOST_BROWSER_EXTENSION_MISSING }}</p>
+        <button
+          class="hub-secondary"
+          type="button"
+          :title="HOST_BROWSER_EXTENSION_INSTALL_LABEL"
+          :aria-label="HOST_BROWSER_EXTENSION_INSTALL_LABEL"
+          :disabled="preferenceDisabled"
+          @click="onInstallExtension"
+        >
+          {{ HOST_BROWSER_EXTENSION_INSTALL_LABEL }}
+        </button>
+        <p class="hint">{{ HOST_BROWSER_EXTENSION_INSTALL_HINT }}</p>
+        <p class="hint">{{ lastSyncCopy || HOST_BROWSER_EXTENSION_LAST_SYNC_NONE }}</p>
         <label class="control-row" for="host-browser-sync-blacklist">
           <span>{{ HOST_BROWSER_SYNC_BLACKLIST_LABEL }}</span>
           <textarea

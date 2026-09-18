@@ -35,7 +35,14 @@ import {
   resolveHostBrowserMcpScriptPath
 } from './browser/host-browser-mcp-host'
 import { HostBrowserSettingsStore } from './browser/host-browser-settings'
-import { ChromeNativeHost } from './browser/chrome/native-host'
+import { ChromeNativeHost, resolveChromeNativeHostScriptPath } from './browser/chrome/native-host'
+import {
+  installHostBrowserCompanionExtension,
+  mapChromeNativeSnapshotToOverlayDip,
+  resolveCompanionChromeExtensionDirectory,
+  writeChromeNativeHostWrapper
+} from './browser/chrome/companion-extension'
+import { parseChromeNativeTabsSnapshotPayload } from '../shared/chrome-native-bridge'
 import {
   createBrowserPartition,
   mapHostBrowserClearDataKindsToStorages,
@@ -720,7 +727,8 @@ async function initializeServices(
     getProjectId: () => resolveSelectedHostBrowserProjectId(),
     setCookie: async (partition, details) => {
       await session.fromPartition(partition).cookies.set(details)
-    }
+    },
+    onTabsSnapshot: (payload) => publishCompanionChromeSnapshot(payload)
   })
   try {
     await chromeNativeHost.start()
@@ -1089,6 +1097,34 @@ function registerIpcHandlers(): void {
         storages: mapHostBrowserClearDataKindsToStorages(kinds)
       })
     },
+    /**
+     * 打开 unpacked 扩展目录并写 Native Host 清单。
+     * execPath 必须是 chrome-native-host-stdio 包装命令，不得是 /bin/bash。
+     */
+    installHostBrowserExtension: async () => {
+      const extensionDirectory = resolveCompanionChromeExtensionDirectory({
+        mainDirectory: __dirname,
+        resourcesPath: process.resourcesPath,
+        appPath: app.getAppPath()
+      })
+      if (!extensionDirectory) {
+        throw new DesktopIpcFailure('not-found', '未找到配套扩展目录。')
+      }
+      const execPath = await writeChromeNativeHostWrapper({
+        wrapperPath: join(app.getPath('userData'), 'browser', 'chrome-native-host-stdio'),
+        electronExecPath: process.execPath,
+        scriptPath: resolveChromeNativeHostScriptPath(__dirname)
+      })
+      return installHostBrowserCompanionExtension({
+        homeDir: homedir(),
+        execPath,
+        extensionDirectory,
+        reveal: (directory) => shell.openPath(directory)
+      })
+    },
+    getHostBrowserExtensionStatus: () => ({
+      lastCookieSyncAt: chromeNativeHost?.lastCookieSyncAt() ?? null
+    }),
     // 钩子扫描牢笼绑在 userData，不执行钩子，不把 command / url 经 IPC 回传
     listHooks: () => listGrokHooks(app.getPath('userData')),
     listMcpServers: async (projectId) => {
@@ -1458,6 +1494,31 @@ function createBrowserPluginOverlayHostInstance(): BrowserPluginOverlayHost {
  * overlay 窗和指针映射必须用同一块屏。
  * 主窗拖到副屏后若仍用 getPrimaryDisplay，光标会画在主屏窗外。
  */
+/**
+ * 配套扩展 tabs.snapshot → overlay DIP。没有窗矩形或未开连接就不画针。
+ * 映射必须回读 overlay 落地后的 getBounds()。
+ */
+function publishCompanionChromeSnapshot(payload: unknown): void {
+  const overlay = browserPluginOverlayHost
+  if (!overlay) return
+  const settings = hostBrowserSettingsStore?.getSettings()
+  if (settings?.chromeConnectEnabled !== true) {
+    overlay.acceptCompanionBrowserPluginPointer({})
+    return
+  }
+  const parsed = parseChromeNativeTabsSnapshotPayload(payload)
+  const node = parsed?.nodes?.[0]
+  const overlayBounds = overlay.ensurePointerOverlayLayout()
+  const pointer = mapChromeNativeSnapshotToOverlayDip({
+    windowScreenBounds: parsed?.windowScreenBounds,
+    cssX: node?.x,
+    cssY: node?.y,
+    zoom: parsed?.zoom,
+    overlayBounds
+  })
+  overlay.acceptCompanionBrowserPluginPointer(pointer ? { pointer } : {})
+}
+
 function resolveHostWindowOverlayBounds(): {
   x: number
   y: number

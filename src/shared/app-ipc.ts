@@ -36,6 +36,8 @@ export const APP_INVOKE_CHANNELS = {
   setHostBrowserEnabled: 'app:set-host-browser-enabled',
   setHostBrowserSettings: 'app:set-host-browser-settings',
   clearHostBrowserData: 'app:clear-host-browser-data',
+  installHostBrowserExtension: 'app:install-host-browser-extension',
+  getHostBrowserExtensionStatus: 'app:get-host-browser-extension-status',
   listHooks: 'app:list-hooks',
   listMcpServers: 'app:list-mcp-servers',
   upsertMcpServer: 'app:upsert-mcp-server',
@@ -114,6 +116,16 @@ export interface AppClearHostBrowserDataRequest {
   kinds: Array<'cookies' | 'cache' | 'history' | 'downloads'>
 }
 
+/** 安装成功不回传 Native Host 路径或扩展目录。 */
+export interface AppHostBrowserExtensionInstallResult {
+  installed: true
+}
+
+/** 上次 Cookie 同步时间；没有则 null。不得带 Cookie 明文或文件系统路径。 */
+export interface AppHostBrowserExtensionStatus {
+  lastCookieSyncAt: string | null
+}
+
 export interface AppListMcpServersRequest {
   projectId?: string
 }
@@ -185,6 +197,10 @@ export interface AppDesktopApi {
   clearHostBrowserData: (
     kinds: AppClearHostBrowserDataRequest['kinds']
   ) => Promise<DesktopIpcResult<null>>
+  /** 打开 unpacked 扩展目录并写入 Native Host 清单；无参，Renderer 不得提交路径。 */
+  installHostBrowserExtension: () => Promise<DesktopIpcResult<AppHostBrowserExtensionInstallResult>>
+  /** 只读上次同步时间，不读 Chrome Profile。 */
+  getHostBrowserExtensionStatus: () => Promise<DesktopIpcResult<AppHostBrowserExtensionStatus>>
   /** 列出 App 专属 grok-home/hooks 脱敏摘要，不回传 command / url / 绝对路径。 */
   listHooks: () => Promise<DesktopIpcResult<GrokHookSummary[]>>
   listMcpServers: (projectId?: string) => Promise<DesktopIpcResult<McpServerSummary[]>>

@@ -133,7 +133,7 @@ describe('handleChromeNativeRequest', () => {
     expect(JSON.stringify(response)).not.toContain('/bin/bash')
   })
 
-  it('ping 与 tabs.snapshot 收下；snapshot 只 accepted', async () => {
+  it('ping 与 tabs.snapshot 收下；无窗 DIP 不回调光标', async () => {
     const setCookie = vi.fn(async () => undefined)
     const ping = await handleChromeNativeRequest({
       request: { id: 'p1', command: 'ping' },
@@ -150,6 +150,15 @@ describe('handleChromeNativeRequest', () => {
     })
     expect(snapshot).toEqual({ id: 's1', ok: true, result: { accepted: true } })
     expect(setCookie).not.toHaveBeenCalled()
+    const onTabsSnapshot = vi.fn()
+    await handleChromeNativeRequest({
+      request: { id: 's2', command: 'tabs.snapshot', payload: { nodes: [{ x: 8, y: 2 }] } },
+      settings: DEFAULT_HOST_BROWSER_SETTINGS,
+      projectId: 'proj-1',
+      setCookie,
+      onTabsSnapshot
+    })
+    expect(onTabsSnapshot).toHaveBeenCalledWith({ nodes: [{ x: 8, y: 2 }] })
   })
 
   it('cookieSyncEnabled 为 false 时忽略 sync', async () => {
@@ -292,6 +301,7 @@ describe('v1 路径不读 Profile', () => {
       "'chrome-native-host-stdio': resolve('src/main/browser/chrome/native-host-stdio.ts')"
     )
     expect(builder).toContain('out/main/chrome-native-host-stdio.js')
+    expect(builder).toContain('chrome-extension/agent-studio-browser')
     expect(resolveChromeNativeHostScriptPath('/tmp/out/main')).toContain(
       'chrome-native-host-stdio.js'
     )

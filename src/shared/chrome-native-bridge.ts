@@ -157,6 +157,64 @@ export function parseChromeNativeTabsOpenUrl(payload: unknown): string | null {
   return parseHostBrowserNavigateUrl(payload.url)
 }
 
+export interface ChromeNativeScreenBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export interface ChromeNativeSnapshotNode {
+  x: number
+  y: number
+  width?: number
+  height?: number
+}
+
+/** 扩展上报的窗 DIP 与 viewport CSS 盒；缺字段表示没有几何，主进程不得发明光标。 */
+export interface ChromeNativeTabsSnapshotPayload {
+  windowScreenBounds?: ChromeNativeScreenBounds
+  dpr?: number
+  zoom?: number
+  nodes?: ChromeNativeSnapshotNode[]
+}
+
+const screenBoundsSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  width: z.number().finite(),
+  height: z.number().finite()
+})
+
+const snapshotNodeSchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  width: z.number().finite().optional(),
+  height: z.number().finite().optional()
+})
+
+const tabsSnapshotPayloadSchema = z.object({
+  windowScreenBounds: screenBoundsSchema.optional(),
+  dpr: z.number().finite().optional(),
+  zoom: z.number().finite().optional(),
+  nodes: z.array(snapshotNodeSchema).max(500).optional()
+})
+
+/** tabs.snapshot 只收有限数字几何。非法整包丢掉，避免半份坐标画出飞针。 */
+export function parseChromeNativeTabsSnapshotPayload(
+  payload: unknown
+): ChromeNativeTabsSnapshotPayload | null {
+  if (payload === undefined) return {}
+  const parsed = tabsSnapshotPayloadSchema.safeParse(payload)
+  if (!parsed.success) return null
+  const result: ChromeNativeTabsSnapshotPayload = {}
+  if (parsed.data.windowScreenBounds) result.windowScreenBounds = parsed.data.windowScreenBounds
+  if (parsed.data.dpr !== undefined) result.dpr = parsed.data.dpr
+  if (parsed.data.zoom !== undefined) result.zoom = parsed.data.zoom
+  if (parsed.data.nodes) result.nodes = parsed.data.nodes
+  return result
+}
+
 function isLegalCookieHost(host: string): boolean {
   if (!host || host.length > 253) return false
   if (host.includes(':') || host.includes('/') || host.includes('\\') || host.includes('\0')) {

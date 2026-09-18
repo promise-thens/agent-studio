@@ -38,13 +38,10 @@ describe('Overlay Preload 暴露面', () => {
     expect(typeof api.cancelTurn).toBe('function')
     expect(typeof api.setChipHover).toBe('function')
     api.setChipHover?.(true)
-    expect(ipcRenderer.send).toHaveBeenCalledWith(
-      'task:browser-plugin-overlay-chip-hover',
-      true
-    )
+    expect(ipcRenderer.send).toHaveBeenCalledWith('task:browser-plugin-overlay-chip-hover', true)
   })
 
-  it('宿主快照保留 pointer；插件路径丢掉 pointer；computer-use 拒收', async () => {
+  it('宿主与配套扩展有限 DIP 保留；ACP 省略 surface 仍丢 pointer；computer-use 拒收', async () => {
     await import('./overlay')
     const api = exposeInMainWorld.mock.calls[0]?.[1] as {
       onSnapshot: (listener: (snapshot: unknown) => void) => () => void
@@ -76,6 +73,25 @@ describe('Overlay Preload 暴露面', () => {
       taskId: 'task-1',
       turnId: 'turn-1',
       executionId: 'execution-1'
+    })
+
+    listener.mockClear()
+    handler(
+      {},
+      {
+        visible: true,
+        surface: 'browser-plugin',
+        persistWhenUnfocused: false,
+        pointer: { x: 12, y: 34 },
+        taskId: 'task-1'
+      }
+    )
+    expect(listener).toHaveBeenCalledWith({
+      visible: true,
+      surface: 'browser-plugin',
+      persistWhenUnfocused: false,
+      pointer: { x: 12, y: 34 },
+      taskId: 'task-1'
     })
 
     listener.mockClear()

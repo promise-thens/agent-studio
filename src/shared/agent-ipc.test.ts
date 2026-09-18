@@ -86,6 +86,8 @@ describe('桌面 IPC 静态契约', () => {
       'app:set-host-browser-enabled',
       'app:set-host-browser-settings',
       'app:clear-host-browser-data',
+      'app:install-host-browser-extension',
+      'app:get-host-browser-extension-status',
       'app:list-hooks',
       'app:list-mcp-servers',
       'app:upsert-mcp-server',

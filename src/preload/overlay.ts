@@ -9,14 +9,16 @@ import type { DesktopIpcResult } from '../shared/ipc-result'
 import { TASK_PUSH_CHANNELS, TASK_SEND_CHANNELS } from '../shared/task-ipc'
 
 /**
- * 插件通道常省略 surface / persistWhenUnfocused；缺省按 browser-plugin 理解并丢 pointer。
- * host-browser 才保留已映射 DIP。computer-use 仍被 parseAgentPointerSnapshot 拒收。
+ * 货架 ACP 通道常省略 surface；缺省按 browser-plugin 理解并丢 pointer。
+ * 显式 host-browser / 配套扩展 browser-plugin 才保留已映射 DIP。
+ * computer-use 仍被 parseAgentPointerSnapshot 拒收。
  */
 function parseOverlayPointerSnapshot(payload: unknown): AgentPointerSnapshot | null {
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null
   const value = payload as Record<string, unknown>
   // computer-use 本波无 producer，不得改写成插件/宿主 surface
   if (value.surface === 'computer-use') return null
+  const explicitSurface = value.surface === 'host-browser' || value.surface === 'browser-plugin'
   return parseAgentPointerSnapshot({
     visible: value.visible,
     surface: value.surface === 'host-browser' ? 'host-browser' : 'browser-plugin',
@@ -24,7 +26,7 @@ function parseOverlayPointerSnapshot(payload: unknown): AgentPointerSnapshot | n
     taskId: value.taskId,
     turnId: value.turnId,
     executionId: value.executionId,
-    pointer: value.pointer
+    pointer: explicitSurface ? value.pointer : undefined
   })
 }
 

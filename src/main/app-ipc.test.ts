@@ -74,6 +74,8 @@ function createFixture(): {
   setGrokSandbox: ReturnType<typeof vi.fn>
   setHostBrowserSettings: ReturnType<typeof vi.fn>
   clearHostBrowserData: ReturnType<typeof vi.fn>
+  installHostBrowserExtension: ReturnType<typeof vi.fn>
+  getHostBrowserExtensionStatus: ReturnType<typeof vi.fn>
   listHooks: ReturnType<typeof vi.fn>
   invoke: <T>(channel: string, ...args: unknown[]) => Promise<DesktopIpcResult<T>>
 } {
@@ -144,6 +146,8 @@ function createFixture(): {
     })
   )
   const clearHostBrowserData = vi.fn(async () => undefined)
+  const installHostBrowserExtension = vi.fn(async () => ({ installed: true as const }))
+  const getHostBrowserExtensionStatus = vi.fn(async () => ({ lastCookieSyncAt: null }))
   const listHooks = vi.fn(async () => [hookSummary])
   const listMcpServers = vi.fn(async () => [])
   const upsertMcpServer = vi.fn(async () => ({
@@ -193,6 +197,8 @@ function createFixture(): {
     setHostBrowserEnabled,
     setHostBrowserSettings,
     clearHostBrowserData,
+    installHostBrowserExtension,
+    getHostBrowserExtensionStatus,
     listHooks,
     listMcpServers,
     upsertMcpServer,
@@ -228,6 +234,8 @@ function createFixture(): {
     setGrokSandbox,
     setHostBrowserSettings,
     clearHostBrowserData,
+    installHostBrowserExtension,
+    getHostBrowserExtensionStatus,
     listHooks,
     invoke
   }
@@ -692,6 +700,25 @@ describe('App IPC Handler', () => {
       })
     ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
     expect(fixture.clearHostBrowserData).toHaveBeenCalledTimes(1)
+  })
+
+  it('安装配套扩展无参；状态只回上次同步时间', async () => {
+    const fixture = createFixture()
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.installHostBrowserExtension)).toEqual({
+      ok: true,
+      value: { installed: true }
+    })
+    expect(fixture.installHostBrowserExtension).toHaveBeenCalledTimes(1)
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.installHostBrowserExtension, { homeDir: '/tmp' })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
+    expect(await fixture.invoke(APP_INVOKE_CHANNELS.getHostBrowserExtensionStatus)).toEqual({
+      ok: true,
+      value: { lastCookieSyncAt: null }
+    })
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.getHostBrowserExtensionStatus, { extra: true })
+    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
   })
 
   it('钩子列表无参返回摘要，拒绝未知字段', async () => {
