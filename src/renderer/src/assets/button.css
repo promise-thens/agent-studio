@@ -1,0 +1,42 @@
+/**
+ * Agent Studio 统一按钮交互与物理反馈规范 (Button Styles)
+ *
+ * 职责说明：
+ * 1. 统一定义全站按钮在悬停（:hover）时的极细微高光轮廓反馈（Subtle Highlight / Shimmer）；
+ * 2. 规范点击激活（:active）时的拟物物理按压微位移（1px 垂直沉降下压感）；
+ * 3. 规范按钮禁用态（:disabled）的光标阻断与透明度标准；
+ * 4. 在系统开启减少动效偏好（prefers-reduced-motion）时安全降级，取消物理位移。
+ */
+
+/* ==========================================================================
+   1. 按钮悬停微高光与点击物理按压反馈
+   ========================================================================== */
+
+/* 全局按钮微高光悬浮反馈：悬停时呈现微弱顶边光与外围轮廓 */
+button:not(:disabled):hover {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), inset 0 1px 0 var(--border-highlight);
+}
+
+/* 全局按钮物理按压微位移：真实下沉 1px，赋予桌面应用的精密操控触感 */
+button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+/* 按钮禁用态：光标变为禁止手势，取消悬停投影与按压位移 */
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+  box-shadow: none !important;
+  transform: none !important;
+}
+
+/* ==========================================================================
+   2. 无障碍动效减弱偏好适配
+   ========================================================================== */
+
+/* 开启减少动效偏好时禁用按压位移过渡 */
+@media (prefers-reduced-motion: reduce) {
+  button:not(:disabled):active {
+    transform: none !important;
+  }
+}

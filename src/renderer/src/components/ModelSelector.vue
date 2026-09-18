@@ -278,10 +278,11 @@ function errorMessage(error: unknown): string {
   background: var(--surface-2);
 }
 
+/* 触发器模型标签：遵守不低于 11px 的全站字号红线 */
 .model-trigger > span {
   overflow: hidden;
   min-width: 0;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -307,6 +308,7 @@ function errorMessage(error: unknown): string {
   box-shadow: 0 18px 48px rgb(2 5 9 / 46%);
 }
 
+/* 弹出菜单标题头：遵守不低于 11px 的全站字号红线 */
 .model-menu > header {
   display: flex;
   align-items: center;
@@ -314,7 +316,7 @@ function errorMessage(error: unknown): string {
   min-height: 34px;
   padding: 0 10px;
   border-bottom: 1px solid var(--border);
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 
 .model-menu > header span {
@@ -365,8 +367,9 @@ function errorMessage(error: unknown): string {
   white-space: nowrap;
 }
 
+/* 模型项标题与 ModelId 代码标注：消除 8px/10px 极小字体，严格遵守字号红线 */
 .model-options strong {
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 620;
 }
 
@@ -374,13 +377,14 @@ function errorMessage(error: unknown): string {
   margin-top: 3px;
   color: var(--text-3);
   font-family: 'SFMono-Regular', Consolas, monospace;
-  font-size: 8px;
+  font-size: var(--text-xs);
 }
 
 .model-options svg {
   color: var(--accent);
 }
 
+/* 加载与错误状态提示：遵守不低于 11px 的全站字号红线 */
 .menu-state {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -389,7 +393,7 @@ function errorMessage(error: unknown): string {
   min-height: 68px;
   padding: 12px;
   color: var(--text-3);
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 
 .menu-state.error {
@@ -397,6 +401,7 @@ function errorMessage(error: unknown): string {
   color: color-mix(in srgb, var(--danger) 84%, white);
 }
 
+/* 重试按钮：遵守不低于 11px 的全站字号红线 */
 .menu-state button {
   min-height: 26px;
   padding: 0 8px;
@@ -404,7 +409,7 @@ function errorMessage(error: unknown): string {
   border-radius: 10px;
   color: var(--text-2);
   background: var(--surface-1);
-  font-size: 9px;
+  font-size: var(--text-xs);
   cursor: pointer;
 }
 

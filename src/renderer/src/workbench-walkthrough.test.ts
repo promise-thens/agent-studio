@@ -16,6 +16,7 @@ import type { ConversationSubagentBlock } from './conversation-turn-view'
 const root = dirname(fileURLToPath(import.meta.url))
 const mainCss = readFileSync(join(root, 'assets/main.css'), 'utf8')
 const baseCss = readFileSync(join(root, 'assets/base.css'), 'utf8')
+const tokensCss = readFileSync(join(root, 'assets/tokens.css'), 'utf8')
 const conversationTurnSource = readFileSync(join(root, 'components/ConversationTurn.vue'), 'utf8')
 const subagentCardSource = readFileSync(join(root, 'components/SubagentCard.vue'), 'utf8')
 const conversationTurnViewSource = readFileSync(join(root, 'conversation-turn-view.ts'), 'utf8')
@@ -163,7 +164,7 @@ describe('工作台对照走查（夹具，非桌面 GUI）', () => {
     ]
 
     const facts = collectWorkbenchWalkthroughFacts({
-      baseCss,
+      baseCss: `${baseCss}\n${tokensCss}`,
       mainCss,
       conversationTurnSource,
       toolRowSource,

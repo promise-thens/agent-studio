@@ -411,7 +411,7 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div
         v-if="actionProject && menuPosition"
-        class="project-actions"
+        class="context-dropdown-menu project-actions"
         :class="{ ready: menuReady }"
         :data-placement="menuPosition.placement"
         role="menu"
@@ -464,26 +464,20 @@ onBeforeUnmount(() => {
 <style scoped>
 .project-sidebar {
   display: flex;
-  min-width: 0;
-  min-height: 0;
   height: 100%;
   flex-direction: column;
-  background: var(--app-bg);
+  background: var(--surface-0);
   color: var(--text-2);
 }
 
 .sidebar-toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   padding: 10px 8px 6px;
 }
 
-.new-project,
-.plugins-nav,
-.project-header,
 .icon-button,
-.project-actions button,
 .text-button {
   border: 0;
   background: transparent;
@@ -491,6 +485,7 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+/* 新建项目微卡片：精致桌面微卡片，浅/深色带微边框与 surface-1 纯色底，hover 时带微高光 */
 .new-project {
   display: inline-flex;
   min-width: 0;
@@ -499,9 +494,31 @@ onBeforeUnmount(() => {
   gap: 8px;
   min-height: 32px;
   padding: 0 10px;
-  border-radius: var(--radius-soft);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-1);
   color: var(--text-1);
   font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease;
+}
+
+.new-project:not(:disabled):hover {
+  background: color-mix(in srgb, var(--surface-1) 88%, var(--accent));
+  border-color: color-mix(in srgb, var(--border-subtle) 60%, var(--accent));
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-1);
+}
+
+.new-project:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .icon-button {
@@ -511,23 +528,61 @@ onBeforeUnmount(() => {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: var(--radius-chip);
+  border-radius: 6px;
   color: var(--text-3);
+  transition:
+    background 140ms ease,
+    color 140ms ease;
 }
 
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* 顶部工具栏设置按钮：与新建项目卡片对称高度 32px、圆角 8px、微边框与纯色底 */
+.sidebar-toolbar .icon-button {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-2);
+  box-shadow: var(--shadow-sm);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease;
+}
+
+.sidebar-toolbar .icon-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--surface-1) 88%, var(--accent));
+  border-color: color-mix(in srgb, var(--border-subtle) 60%, var(--accent));
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--text-1);
+}
+
+/* 插件导航入口：统一 8px 圆角与边距（margin: 2px 6px 6px），保持与项目列表视觉节奏完全一致 */
 .plugins-nav {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  min-height: 30px;
-  margin: 2px 8px 6px;
+  min-height: 32px;
+  margin: 2px 6px 6px;
   padding: 0 10px;
-  border-radius: var(--radius-soft);
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--text-2);
   font-size: 13px;
   font-weight: 600;
   text-align: left;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
 }
 
 .plugins-nav[aria-current='page'] {
@@ -535,22 +590,9 @@ onBeforeUnmount(() => {
   background: var(--selected-fill);
 }
 
-.new-project:not(:disabled):hover,
-.plugins-nav:hover,
-.icon-button:hover,
-.project-header:not(:disabled):hover,
-.project-actions button:not(:disabled):hover,
-.text-button:hover {
+.plugins-nav:hover {
   background: var(--hover-fill);
   color: var(--text-1);
-}
-
-.new-project:disabled,
-.icon-button:disabled,
-.project-header:disabled,
-.project-actions button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .tree-hint {
@@ -582,13 +624,40 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+/* 项目头行：引入内嵌卡片感（左右 margin: 2px 6px，圆角 8px） */
 .project-header-row {
   position: relative;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
-  padding: 0 6px 0 4px;
+  margin: 2px 6px;
+  padding: 0 4px;
+  border-radius: 8px;
+  transition: background 140ms ease;
+}
+
+.project-header-row:hover {
+  background: var(--hover-fill);
+}
+
+/* 极致降噪（Hover-to-Reveal）：平时隐藏操作按钮，悬停、获焦或菜单展开时才显示 */
+.project-header-row .icon-button {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.project-header-row:hover .icon-button,
+.project-header-row:focus-within .icon-button,
+.project-header-row .icon-button[aria-expanded='true'] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.project-header-row .icon-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text-1) 12%, transparent);
+  color: var(--text-1);
 }
 
 /* 0fr→1fr 才能跟着内容长高；收起时列表还在，才能看见折叠。 */
@@ -640,9 +709,18 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   min-height: 30px;
-  padding: 0 6px;
-  border-radius: var(--radius-soft);
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
   text-align: left;
+  cursor: pointer;
+}
+
+.project-header:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .project-header.live {
@@ -685,63 +763,31 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
+/* 运行任务数徽标：使用设计令牌 var(--text-xs)（11px），并注入柔和 Accent 呼吸光晕微反光 */
 .run-count {
   flex: 0 0 auto;
-  min-width: 16px;
-  padding: 0 5px;
+  min-width: 18px;
+  padding: 1px 6px;
   border-radius: var(--radius-chip);
   color: var(--accent);
-  font-size: 10px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 24%, transparent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1;
 }
 
+/* 资源不可用提示标签：遵守全站字号不低于 11px 红线 */
 .unavailable {
   flex: 0 0 auto;
   color: var(--warning, #d9b25f);
-  font-size: 10px;
+  font-size: var(--text-xs);
 }
 
+/* 上下文操作菜单：复用 menu.css 上下文悬浮菜单统一规范，保留位置定位断言 */
 .project-actions {
-  -webkit-app-region: no-drag;
   position: fixed;
-  z-index: 40;
-  display: grid;
-  min-width: 136px;
-  padding: 4px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  background: var(--surface-2);
-  box-shadow: 0 12px 32px color-mix(in srgb, var(--text-1) 18%, transparent);
   transform-origin: top right;
-  opacity: 0;
-  transform: translateY(-6px) scale(0.96);
-  pointer-events: none;
-}
-
-.project-actions[data-placement='above'] {
-  transform-origin: bottom right;
-  transform: translateY(6px) scale(0.96);
-}
-
-.project-actions.ready {
-  opacity: 1;
-  transform: none;
-  pointer-events: auto;
-  transition:
-    opacity 160ms ease,
-    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.project-actions button {
-  min-height: 28px;
-  padding: 0 8px;
-  border-radius: 7px;
-  color: var(--text-2);
-  font-size: 12px;
-  text-align: left;
-}
-
-.project-actions button.danger:not(:disabled):hover {
-  color: var(--danger);
 }
 
 .text-button {
@@ -750,6 +796,11 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .project-header-row .icon-button {
+    opacity: 1;
+    pointer-events: auto;
+    transition: none;
+  }
   .caret {
     transition: none;
   }
@@ -761,9 +812,7 @@ onBeforeUnmount(() => {
     transition: none;
   }
 
-  .project-actions,
-  .project-actions.ready,
-  .project-actions[data-placement='above'] {
+  .project-actions {
     transform: none;
     transition: none;
   }

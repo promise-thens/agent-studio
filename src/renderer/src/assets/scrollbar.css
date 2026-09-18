@@ -1,0 +1,54 @@
+/**
+ * Agent Studio 全站极细暗黑滚动条样式规范 (Custom Scrollbar)
+ *
+ * 职责说明：
+ * 1. 定制全站 4px 极细暗黑自适应滚动条，告别粗糙的原生灰白滚动条；
+ * 2. 平时滑块呈半透明微隐状态（低对比度微呈现），保持界面深邃纯净与阅读专注；
+ * 3. 悬停（:hover）与活跃拖拽（:active）时高亮显现圆角滑块，提供明确的交互反馈；
+ * 4. 兼容 WebKit/Blink 内核（Chrome、Electron）伪类与现代 CSS 规范（Firefox）。
+ */
+
+/* ==========================================================================
+   1. WebKit/Blink 内核滚动条定制 (Electron 桌面环境)
+   ========================================================================== */
+
+/* 全局滚动条尺寸：统一设置为 4px 极细规格，水平与垂直方向一致 */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+/* 滚动条轨道：保持完全透明，无缝融入应用工作台背景 */
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 滚动条滑块：默认半透明微隐状态，使用大圆角胶囊造型 */
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--border-strong) 48%, transparent);
+  border-radius: var(--radius-chip);
+  transition: background-color 150ms ease;
+}
+
+/* 滚动条滑块悬停态：提升可见度，提供清晰的操作反馈 */
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text-3) 72%, transparent);
+}
+
+/* 滚动条滑块激活/拖拽态：高亮突出 */
+::-webkit-scrollbar-thumb:active {
+  background: var(--text-2);
+}
+
+/* 滚动条拐角（双向滚动相交处）：透明无缝过渡 */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ==========================================================================
+   2. 现代标准 CSS 滚动条规范 (标准浏览器与 Firefox 支持)
+   ========================================================================== */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--border-strong) 48%, transparent) transparent;
+}

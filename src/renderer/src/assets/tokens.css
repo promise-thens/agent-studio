@@ -1,0 +1,221 @@
+/**
+ * Agent Studio 设计令牌系统 (Design Tokens)
+ * 
+ * 模块职责：
+ * 1. 统一管理全站色彩、表面层级、边框高光、文字色阶与语义状态；
+ * 2. 建立双主题体系：默认/深色（极致深邃黑）与浅色（现代米白工作台）；
+ * 3. 规范 4px 栅格间距步进与不低于 11px 的全站字号红线；
+ * 4. 彻底消灭幽灵变量（--border-subtle, --focus-ring, --text-muted 等）。
+ */
+
+/* ==========================================================================
+   1. 深色主题：极致深邃黑 (Dark Theme - 默认基准)
+   ========================================================================== */
+:root,
+html[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* --- 表面层 (Surface Layers) --- */
+  /* 应用最底层背景：极深黑夜基底 */
+  --app-bg: #05070a;
+  /* 侧边栏与深层工作台基底 */
+  --surface-0: #080b0f;
+  /* 主面板、对话流与卡片主表面 */
+  --surface-1: #0d1117;
+  /* 次级浮层、输入框、下拉框背景 */
+  --surface-2: #131821;
+  /* 浮动卡片、悬停高亮、激活态背景 */
+  --surface-3: #1a202c;
+  /* 顶层弹窗、模态对话框、全局遮罩层表面 */
+  --surface-overlay: #202736;
+  /* 磨砂玻璃质感半透明表面（用于浮动工具条、状态提示栏） */
+  --surface-glass: rgba(13, 17, 23, 0.72);
+
+  /* --- 边框与微光 (Borders & Shimmer) --- */
+  /* 极细微弱边框与内部分割线 */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  /* 标准组件与面板边框 */
+  --border: #232b36;
+  /* 强调态、交互悬停与外层强轮廓边框 */
+  --border-strong: #344050;
+  /* 顶部边缘微光高光线（用于卡片或面板顶边微质感） */
+  --border-highlight: rgba(255, 255, 255, 0.16);
+
+  /* --- 文本色阶 (Typography Colors) --- */
+  /* 主文本色：标题、主正文、输入内容 */
+  --text-1: #f3f5f8;
+  /* 次级文本色：次要说明、属性名、元数据标签 */
+  --text-2: #9da8b6;
+  /* 弱化文本色：占位符、禁用态、时间戳 */
+  --text-3: #657180;
+  /* 静音文本色：辅助说明、只读提示 */
+  --text-muted: #6b7785;
+
+  /* --- 焦点与语义状态 (Focus & Semantic States) --- */
+  /* 键盘焦点光环：双层结构，内层隔离底色，外层强调色 */
+  --focus-ring: 0 0 0 2px var(--surface-0), 0 0 0 4px var(--accent);
+  /* 警告与风险提示色 */
+  --warning: #e5b95c;
+  /* 危险与破坏性操作色 */
+  --danger: #dc6b6b;
+  /* 成功与完成状态色 */
+  --success: #62b886;
+
+  /* --- 强调色：沿用产品橙体系 --- */
+  /* 核心强调色 */
+  --accent: #d98252;
+  /* 强调色悬停状态 */
+  --accent-hover: #e49366;
+  /* 强调色块上的前景色（高对比墨色） */
+  --accent-ink: #1d1009;
+
+  /* --- 交互填充 (Interactive Fills) --- */
+  /* 悬停微填充 */
+  --hover-fill: color-mix(in srgb, var(--text-1) 6%, transparent);
+  /* 选中与激活态微填充 */
+  --selected-fill: color-mix(in srgb, var(--text-1) 11%, transparent);
+
+  /* --- 深度阴影 (Elevation Shadows) --- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.32);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* ==========================================================================
+   2. 浅色主题：现代米白工作台 (Light Theme)
+   ========================================================================== */
+html[data-theme='light'] {
+  color-scheme: light;
+
+  /* --- 表面层 (Surface Layers) --- */
+  /* 现代冷灰米白工作台底色 */
+  --app-bg: #f5f6f8;
+  /* 浅色侧边栏背景 */
+  --surface-0: #eaecf0; /* 侧边栏专用的沉静冷灰底色，拉开与主面板的纵深 */
+  /* 面板基底表面 */
+  --surface-1: #ffffff; /* 主内容区与卡片纯白底 */
+  /* 纯白卡片表面与输入控件底色 */
+  --surface-2: #ffffff;
+  /* 悬停与次级高亮表面 */
+  --surface-3: #e8e8ea;
+  /* 浅色顶层弹窗与浮层表面 */
+  --surface-overlay: #ffffff;
+  /* 浅色磨砂半透明表面 */
+  --surface-glass: rgba(255, 255, 255, 0.72);
+
+  /* --- 边框与微光 (Borders & Shimmer) --- */
+  /* 浅色极弱分割线 */
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  /* 浅色标准组件边框 */
+  --border: #e5e5e7;
+  /* 浅色强轮廓边框 */
+  --border-strong: #d2d2d6;
+  /* 浅色高光线 */
+  --border-highlight: rgba(0, 0, 0, 0.12);
+
+  /* --- 文本色阶 (Typography Colors) --- */
+  /* 浅色主文本 */
+  --text-1: #1c1c1e;
+  /* 浅色次级文本 */
+  --text-2: #6e6e73;
+  /* 浅色弱化文本 */
+  --text-3: #8e8e93;
+  /* 浅色静音说明文本 */
+  --text-muted: #8e8e93;
+
+  /* --- 焦点与语义状态 (Focus & Semantic States) --- */
+  --focus-ring: 0 0 0 2px var(--surface-2), 0 0 0 4px var(--accent);
+  --warning: #c68a2c;
+  --danger: #c45c5c;
+  --success: #3d8a62;
+
+  /* --- 强调色：沿用产品橙体系 --- */
+  --accent: #d98252;
+  --accent-hover: #c56b35;
+  --accent-ink: #fffdfb;
+
+  /* --- 交互填充 (Interactive Fills) --- */
+  --hover-fill: rgba(0, 0, 0, 0.05);
+  --selected-fill: rgba(0, 0, 0, 0.08);
+
+  /* --- 浅色阴影 (Elevation Shadows) --- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+/* ==========================================================================
+   3. 系统外观跟随：浅色偏好适配 (System Light Preference)
+   ========================================================================== */
+@media (prefers-color-scheme: light) {
+  html:not([data-theme='dark']) {
+    color-scheme: light;
+
+    --app-bg: #f5f6f8;
+    --surface-0: #eaecf0;
+    --surface-1: #ffffff;
+    --surface-2: #ffffff;
+    --surface-3: #e8e8ea;
+    --surface-overlay: #ffffff;
+    --surface-glass: rgba(255, 255, 255, 0.72);
+
+    --border-subtle: rgba(0, 0, 0, 0.06);
+    --border: #e5e5e7;
+    --border-strong: #d2d2d6;
+    --border-highlight: rgba(0, 0, 0, 0.12);
+
+    --text-1: #1c1c1e;
+    --text-2: #6e6e73;
+    --text-3: #8e8e93;
+    --text-muted: #8e8e93;
+
+    --focus-ring: 0 0 0 2px var(--surface-2), 0 0 0 4px var(--accent);
+    --warning: #c68a2c;
+    --danger: #c45c5c;
+    --success: #3d8a62;
+
+    --accent: #d98252;
+    --accent-hover: #c56b35;
+    --accent-ink: #fffdfb;
+
+    --hover-fill: rgba(0, 0, 0, 0.05);
+    --selected-fill: rgba(0, 0, 0, 0.08);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+  }
+}
+
+/* ==========================================================================
+   4. 公共设计尺度 (主题中立基准：间距步进、字号红线、圆角、布局)
+   ========================================================================== */
+:root {
+  /* --- 4px 栅格间距步进 (Spacing Scale) --- */
+  --space-05: 2px;  /* 0.5x 微调间距 */
+  --space-1: 4px;   /* 1x 最小栅格步进 */
+  --space-2: 8px;   /* 2x 紧凑内间距 */
+  --space-3: 12px;  /* 3x 中等内间距/常规行间距 */
+  --space-4: 16px;  /* 4x 标准内边距与容器间隙 */
+  --space-5: 20px;  /* 5x 宽松区块内间距 */
+  --space-6: 24px;  /* 6x 大区块间隔 */
+  --space-8: 32px;  /* 8x 模块外边距 */
+
+  /* --- 字号红线 (Typography Scale - 全站不得小于 11px) --- */
+  --text-xs: 11px;    /* 严苛红线字号：微小标签、时间戳、状态徽章 */
+  --text-sm: 12px;    /* 次级紧凑文本、代码标注、辅助提示 */
+  --text-base: 13px;  /* 正文基准字号、输入框、常规列表内容 */
+  --text-md: 14px;    /* 强调段落、卡片次级标题、重要属性 */
+  --text-lg: 16px;    /* 弹窗标题、主要板块一级标题 */
+
+  /* --- 圆角规范 (Border Radius) --- */
+  --radius-sm: 6px;         /* 微型圆角：标签、徽章 */
+  --radius-md: 8px;         /* 小型圆角：内部按钮、菜单项 */
+  --radius-control: 12px;   /* 交互控件圆角：输入框、主要按钮 */
+  --radius-soft: 14px;      /* 柔和面板圆角：内部卡片、嵌入式区块 */
+  --radius-panel: 18px;     /* 主面板圆角：工作台外廓、弹窗 */
+  --radius-chip: 999px;     /* 胶囊药丸圆角：过滤胶囊、状态小球 */
+
+  /* --- 布局标准尺寸 (Layout Sizing) --- */
+  --titlebar-height: 46px;  /* macOS/桌面无框窗口标题栏高度 */
+}

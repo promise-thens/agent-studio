@@ -1,37 +1,30 @@
+/**
+ * Agent Studio 基础重置与排版基准 (Base Styles)
+ *
+ * 职责：
+ * 1. 引入 tokens.css 设计令牌系统；
+ * 2. 提供全站基础排版基准与抗锯齿渲染设置；
+ * 3. 规范通用 HTML 标签盒模型与窗口尺寸下限；
+ * 4. 统一定义表单控件默认继承字体与键盘焦点轮廓。
+ */
+
+/* 引入全局设计令牌：包含双主题色彩、4px栅格间距、字号红线与圆角阴影 */
+@import './tokens.css';
+
 :root {
-  color-scheme: dark;
-  --app-bg: #0d1117;
-  --surface-0: #0a0d12;
-  --surface-1: #11161d;
-  --surface-2: #161c24;
-  --surface-3: #1c2430;
-  --border: #29313d;
-  --border-strong: #3a4553;
-  --text-1: #eef2f6;
-  --text-2: #a8b3bf;
-  --text-3: #74808d;
-  --accent: #d98252;
-  --accent-hover: #e49366;
-  --accent-ink: #1d1009;
-  --danger: #dc6b6b;
-  --success: #62b886;
-  --hover-fill: color-mix(in srgb, var(--text-1) 6%, transparent);
-  --selected-fill: color-mix(in srgb, var(--text-1) 11%, transparent);
-  --radius-panel: 18px;
-  --radius-control: 12px;
-  --radius-chip: 999px;
-  --radius-soft: 14px;
-  --titlebar-height: 46px;
+  /* 基础排版字体栈与渲染优化 */
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
 
+/* 全局盒模型重置 */
 * {
   box-sizing: border-box;
 }
 
+/* 视口与根容器最小尺寸保护 */
 html,
 body,
 #app {
@@ -43,12 +36,14 @@ body,
   overflow: hidden;
 }
 
+/* 应用主体背景与文字基准 */
 body {
   color: var(--text-1);
   background: var(--app-bg);
   user-select: none;
 }
 
+/* 表单与按钮字体继承 */
 button,
 textarea,
 input {
@@ -59,6 +54,7 @@ button {
   color: inherit;
 }
 
+/* 默认键盘焦点可见性高亮（双重保障） */
 button:focus-visible,
 textarea:focus-visible,
 input:focus-visible {
@@ -66,51 +62,7 @@ input:focus-visible {
   outline-offset: 2px;
 }
 
+/* 按钮点击按压反馈 */
 button:active:not(:disabled) {
   transform: translateY(1px);
-}
-
-/* 米白：冷灰白工作台底，强调色仍用产品橙。跟随系统时靠 prefers-color-scheme 避免首帧闪深色。 */
-html[data-theme='light'] {
-  color-scheme: light;
-  --app-bg: #f7f7f8;
-  --surface-0: #ececee;
-  --surface-1: #f3f3f4;
-  --surface-2: #ffffff;
-  --surface-3: #e8e8ea;
-  --border: #e5e5e7;
-  --border-strong: #d2d2d6;
-  --text-1: #1c1c1e;
-  --text-2: #6e6e73;
-  --text-3: #8e8e93;
-  --accent: #d98252;
-  --accent-hover: #c56b35;
-  --accent-ink: #fffdfb;
-  --danger: #c45c5c;
-  --success: #3d8a62;
-  --hover-fill: color-mix(in srgb, var(--text-1) 6%, transparent);
-  --selected-fill: color-mix(in srgb, var(--text-1) 9%, transparent);
-}
-
-@media (prefers-color-scheme: light) {
-  html:not([data-theme='dark']) {
-    color-scheme: light;
-    --app-bg: #f7f7f8;
-    --surface-0: #ececee;
-    --surface-1: #f3f3f4;
-    --surface-2: #ffffff;
-    --surface-3: #e8e8ea;
-    --border: #e5e5e7;
-    --border-strong: #d2d2d6;
-    --text-1: #1c1c1e;
-    --text-2: #6e6e73;
-    --text-3: #8e8e93;
-    --accent: #d98252;
-    --accent-hover: #c56b35;
-    --accent-ink: #fffdfb;
-    --danger: #c45c5c;
-    --success: #3d8a62;
-    --hover-fill: color-mix(in srgb, var(--text-1) 6%, transparent);
-    --selected-fill: color-mix(in srgb, var(--text-1) 9%, transparent);
-  }
 }

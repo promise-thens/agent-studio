@@ -34,12 +34,10 @@ describe('侧栏任务行溢出契约', () => {
     expect(taskMenuEscapesListOverflow('.task-menu {\n  position: absolute;\n}')).toBe(false)
   })
 
-  it('对话行不再画近距横线，标题悬停也不叠一层 hover-fill', () => {
+  it('对话行卡片化选中态显式应用 selected-fill，标题悬停不单独叠 hover-fill', () => {
     expect(taskListSource).not.toContain('class="task-marker"')
     expect(taskListSource).toContain("from '../line-sidebar-proximity'")
-    expect(extractCssRuleBlock(taskListSource, '.task-row.selected')).not.toContain(
-      '--selected-fill'
-    )
+    expect(extractCssRuleBlock(taskListSource, '.task-row.selected')).toContain('--selected-fill')
     const titleHover = extractCssRuleBlock(taskListSource, '.task-main:not(:disabled):hover')
     expect(titleHover).not.toContain('background:')
     expect(titleHover).not.toContain('--hover-fill')

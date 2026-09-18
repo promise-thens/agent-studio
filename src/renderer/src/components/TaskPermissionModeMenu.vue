@@ -241,10 +241,11 @@ function handleOutsideClick(event: PointerEvent): void {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
+/* 触发器模式标签：遵守不低于 11px 的全站字号红线 */
 .permission-mode-trigger > span {
   overflow: hidden;
   min-width: 0;
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 620;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -269,13 +270,14 @@ function handleOutsideClick(event: PointerEvent): void {
   box-shadow: 0 18px 48px rgb(2 5 9 / 46%);
 }
 
+/* 弹出菜单标题头：遵守不低于 11px 的全站字号红线 */
 .permission-mode-panel > header {
   display: flex;
   align-items: center;
   min-height: 34px;
   padding: 0 10px;
   border-bottom: 1px solid var(--border);
-  font-size: 9px;
+  font-size: var(--text-xs);
 }
 
 .permission-mode-options {
@@ -325,15 +327,16 @@ function handleOutsideClick(event: PointerEvent): void {
   min-width: 0;
 }
 
+/* 模式名称与说明文案：消除 8px/10px 极小字体，严格遵守字号红线 */
 .permission-mode-options strong {
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 620;
 }
 
 .permission-mode-options small {
   margin-top: 3px;
   color: var(--text-3);
-  font-size: 8px;
+  font-size: var(--text-xs);
   line-height: 1.4;
   white-space: normal;
 }

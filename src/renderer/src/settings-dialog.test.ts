@@ -13,6 +13,7 @@ import {
 
 const rendererDir = dirname(fileURLToPath(import.meta.url))
 const baseCss = readFileSync(join(rendererDir, 'assets/base.css'), 'utf8')
+const tokensCss = readFileSync(join(rendererDir, 'assets/tokens.css'), 'utf8')
 const settingsSource = readFileSync(join(rendererDir, 'components/SettingsDialog.vue'), 'utf8')
 const onboardingSource = readFileSync(
   join(rendererDir, 'components/ProviderOnboarding.vue'),
@@ -62,10 +63,11 @@ describe('设置弹窗与外观应用', () => {
 
   it('米白底色跟窗口背景一致，不再用暖黄纸色', () => {
     const lightBg = APP_APPEARANCE_BACKGROUNDS.light
-    expect(lightBg).toBe('#f7f7f8')
-    expect(baseCss).toContain(`--app-bg: ${lightBg}`)
-    expect(baseCss).not.toContain('#f4efe6')
-    expect(baseCss).toContain('--text-1: #1c1c1e')
+    expect(lightBg).toBe('#f5f6f8')
+    expect(baseCss).toContain("@import './tokens.css';")
+    expect(tokensCss).toContain(`--app-bg: ${lightBg}`)
+    expect(tokensCss).not.toContain('#f4efe6')
+    expect(tokensCss).toContain('--text-1: #1c1c1e')
     expect(settingsSource).toContain(lightBg)
     expect(settingsSource).not.toContain('#f4efe6')
   })

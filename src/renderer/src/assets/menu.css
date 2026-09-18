@@ -1,0 +1,123 @@
+/**
+ * Agent Studio 统一上下文悬浮菜单与下拉浮层规范 (Context Dropdown Menu)
+ *
+ * 职责说明：
+ * 1. 抽象并统一全站上下文弹出菜单（如项目行更多操作、任务行更多操作等）的基础容器与视觉分层；
+ * 2. 提供深色半透明表面、16px 毛玻璃高斯模糊（backdrop-filter: blur(16px)）与微弱发光边框（var(--border-subtle)）；
+ * 3. 统一规范菜单展开时的轻微弹性平滑淡入动效，支持下方（below）与上方（above）智能翻转锚定；
+ * 4. 统一弹出菜单内按钮项的排版、悬停微填充反馈、危险操作高亮及无障碍禁用态；
+ * 5. 消除 ProjectSidebar 与 TaskList 等组件中重复冗余的菜单样式定义。
+ */
+
+/* ==========================================================================
+   1. 上下文悬浮菜单基础容器
+   ========================================================================== */
+
+/* 统一弹出菜单容器：脱离文档流、深色毛玻璃表面、微发光边框与初始微缩淡隐状态 */
+.context-dropdown-menu,
+.project-actions,
+.task-menu {
+  -webkit-app-region: no-drag;
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 136px;
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.36),
+    0 0 0 1px var(--border-subtle);
+  transform-origin: top right;
+  opacity: 0;
+  transform: translateY(-6px) scale(0.96);
+  pointer-events: none;
+}
+
+/* 向上翻转弹出的菜单：变换原点与入场位移从底部向上反向锚定 */
+.context-dropdown-menu[data-placement='above'],
+.project-actions[data-placement='above'],
+.task-menu[data-placement='above'] {
+  transform-origin: bottom right;
+  transform: translateY(6px) scale(0.96);
+}
+
+/* 菜单定位就绪（ready）：平滑淡入显现并恢复正常缩放与鼠标交互 */
+.context-dropdown-menu.ready,
+.project-actions.ready,
+.task-menu.ready {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition:
+    opacity 160ms ease,
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* ==========================================================================
+   2. 菜单内部操作项按钮规范
+   ========================================================================== */
+
+/* 菜单项基础按钮样式：左对齐排版、圆角高光与交互平滑过渡 */
+.context-dropdown-menu button,
+.project-actions button,
+.task-menu button {
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-2);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+/* 菜单项悬停态：背景微填充与文字增亮 */
+.context-dropdown-menu button:not(:disabled):hover,
+.project-actions button:not(:disabled):hover,
+.task-menu button:not(:disabled):hover {
+  color: var(--text-1);
+  background: var(--hover-fill);
+}
+
+/* 菜单项禁用态：静音文本与禁止点击手势 */
+.context-dropdown-menu button:disabled,
+.project-actions button:disabled,
+.task-menu button:disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+/* 危险操作项（如删除项目、删除任务）：悬停呈现警示红 */
+.context-dropdown-menu button.danger:not(:disabled):hover,
+.project-actions button.danger:not(:disabled):hover,
+.task-menu button.danger:not(:disabled):hover {
+  color: var(--danger);
+}
+
+/* ==========================================================================
+   3. 无障碍与减少动效适配 (Prefers Reduced Motion)
+   ========================================================================== */
+
+/* 系统开启减少动画偏好时立即显隐，移除平移与缩放过渡 */
+@media (prefers-reduced-motion: reduce) {
+  .context-dropdown-menu,
+  .context-dropdown-menu.ready,
+  .context-dropdown-menu[data-placement='above'],
+  .project-actions,
+  .project-actions.ready,
+  .project-actions[data-placement='above'],
+  .task-menu,
+  .task-menu.ready,
+  .task-menu[data-placement='above'] {
+    transform: none;
+    transition: none;
+  }
+}

@@ -106,10 +106,11 @@ defineEmits<{
   white-space: nowrap;
 }
 
+/* 快捷指令语法提示：遵守不低于 11px 的全站字号红线 */
 .slash-command-hint {
   grid-column: 1 / -1;
   font-family: 'SFMono-Regular', Consolas, monospace;
-  font-size: 10px;
+  font-size: var(--text-xs);
 }
 
 @media (prefers-reduced-motion: reduce) {

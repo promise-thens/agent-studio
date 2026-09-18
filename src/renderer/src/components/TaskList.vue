@@ -534,7 +534,7 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <div
         v-if="menuItem && menuPosition"
-        class="task-menu"
+        class="context-dropdown-menu task-menu"
         :class="{ ready: menuReady }"
         :data-placement="menuPosition.placement"
         role="menu"
@@ -614,6 +614,7 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
+/* 任务项卡片化：左右内缩 6px，圆角 8px，悬停与选中呈现细腻内嵌胶囊卡片质感 */
 .task-row {
   --effect: 0;
   --max-shift: 8px;
@@ -621,16 +622,33 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   min-width: 0;
+  margin: 2px 6px;
+  border-radius: 8px;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
 }
 
+.task-row:hover {
+  background: var(--hover-fill);
+}
+
+/* 选中态：显式应用 selected-fill 背景与 550 字重加深，形成清晰明确的内嵌胶囊卡片 */
 .task-row.selected {
   --effect: 1;
+  background: var(--selected-fill);
+  font-weight: 550;
+  color: var(--text-1);
+}
+
+.task-row.selected .task-main {
+  color: var(--text-1);
+  font-weight: 550;
 }
 
 .task-main,
 .task-menu-button,
-.task-text-button,
-.task-menu button {
+.task-text-button {
   border: 0;
   background: transparent;
   color: inherit;
@@ -673,6 +691,35 @@ onBeforeUnmount(() => {
   color: color-mix(in srgb, var(--accent) 42%, var(--text-1));
 }
 
+/* 运行中任务指示点：紧凑直径 6px、柔和内敛的微光晕，在深色和浅色模式下克制通透，杜绝大同心圆靶心 */
+.task-row.live::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 4px var(--accent);
+  animation: task-live-pulse 2.4s ease-in-out infinite alternate;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* 活跃任务微光晕呼吸律动：柔和微张弛，无死板 6px 外圈扩散 */
+@keyframes task-live-pulse {
+  0% {
+    opacity: 0.75;
+    box-shadow: 0 0 3px var(--accent);
+  }
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 6px var(--accent);
+  }
+}
+
 .task-title-measure {
   position: absolute;
   left: 0;
@@ -697,6 +744,36 @@ onBeforeUnmount(() => {
 
 .task-title-loop {
   display: none;
+}
+
+/* 优化标题文本截断体验：为溢出标题增加柔和渐变遮罩，使文本平滑淡出，不晃眼 */
+.task-title.is-overflow {
+  mask-image: linear-gradient(to right, black 0%, black calc(100% - 16px), transparent 100%);
+  -webkit-mask-image: linear-gradient(
+    to right,
+    black 0%,
+    black calc(100% - 16px),
+    transparent 100%
+  );
+}
+
+/* 滚动状态下的双端羽化遮罩：滚动时左侧平滑渐入、右侧平滑渐出 */
+.task-row.selected .task-title.is-overflow,
+.task-row:hover .task-title.is-overflow {
+  mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    black 12px,
+    black calc(100% - 16px),
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0%,
+    black 12px,
+    black calc(100% - 16px),
+    transparent 100%
+  );
 }
 
 .task-row.selected .task-title.is-overflow .task-title-track,
@@ -769,54 +846,15 @@ onBeforeUnmount(() => {
 }
 
 .task-menu-button:not(:disabled):hover,
-.task-text-button:not(:disabled):hover,
-.task-menu button:not(:disabled):hover {
+.task-text-button:not(:disabled):hover {
   color: var(--text-1);
   background: var(--hover-fill);
 }
 
+/* 任务行上下文操作菜单：复用 menu.css 上下文悬浮菜单统一规范，保留位置定位断言 */
 .task-menu {
-  -webkit-app-region: no-drag;
   position: fixed;
-  z-index: 40;
-  display: grid;
-  min-width: 136px;
-  padding: 4px;
-  border: 1px solid var(--border-strong);
-  border-radius: 10px;
-  background: var(--surface-2);
-  box-shadow: 0 12px 32px color-mix(in srgb, var(--text-1) 18%, transparent);
   transform-origin: top right;
-  opacity: 0;
-  transform: translateY(-6px) scale(0.96);
-  pointer-events: none;
-}
-
-.task-menu[data-placement='above'] {
-  transform-origin: bottom right;
-  transform: translateY(6px) scale(0.96);
-}
-
-.task-menu.ready {
-  opacity: 1;
-  transform: none;
-  pointer-events: auto;
-  transition:
-    opacity 160ms ease,
-    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-.task-menu button {
-  min-height: 28px;
-  padding: 0 8px;
-  border-radius: 7px;
-  color: var(--text-2);
-  font-size: 12px;
-  text-align: left;
-}
-
-.task-menu button.danger:not(:disabled):hover {
-  color: var(--danger);
 }
 
 .task-text-button {
@@ -830,6 +868,12 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .task-row.live::before {
+    animation: none;
+    opacity: 1;
+    box-shadow: 0 0 4px var(--accent);
+  }
+
   .task-title {
     transform: none;
   }
@@ -843,9 +887,7 @@ onBeforeUnmount(() => {
     pointer-events: auto;
   }
 
-  .task-menu,
-  .task-menu.ready,
-  .task-menu[data-placement='above'] {
+  .task-menu {
     transform: none;
     transition: none;
   }
