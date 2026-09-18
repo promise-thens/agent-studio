@@ -8,7 +8,7 @@
 >
 > **2026-08-31 产品确认：** 先打磨一个 Runtime（Grok）。P1-06～08 与 P2 搁置；现有单 Provider 设置保留。
 >
-> **2026-09-17：** Computer Use 提为下一开发项。说明书 [2026-09-17-computer-use-development.md](../specs/2026-09-17-computer-use-development.md)。先 [P3-06](p3-06-chrome-native-bridge.md) 配套扩展+光标，再 [P3-07](p3-07-macos-computer-use-helper.md) 任意 App Helper。P0-19 GUI 走查不挡开工。
+> **2026-09-17：** Computer Use 提为下一开发项。说明书 [2026-09-17-computer-use-development.md](../specs/2026-09-17-computer-use-development.md)。先 [P3-06](p3-06-chrome-native-bridge.md) 独立设置页+扩展装上即同步并连接（出厂开放），再 [P3-07](p3-07-macos-computer-use-helper.md) 任意 App Helper。P0-19 GUI 走查不挡开工。
 
 ## 使用规则
 
@@ -103,7 +103,7 @@
 | 9 | [P0-19h](p0-19h-context-usage-signals-bridge.md) | 3 | Grok signals 上下文用量桥接 | 代码已落地；开发版 GUI 待走查 | 现有 Usage 事件链；不改 Renderer |
 | 后 | [P0-21](p0-21-host-managed-browser.md) | 4 | 宿主内置浏览器（Codex 式共享页） | 任务 2–4 代码已落地；内置页允许软件光标（21a overlay）；任务 5 HUD 消费 21a overlay；开发版 GUI 未走查 | 不挡 19b；取代 P3-05 第一波共享页 |
 | 后 | [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) | 4 | 内置页指针 overlay 与可交互 snapshot | 任务 1–4 代码已落地；任务 5 文档+自动验证以本任务命令为准；GUI 未走查；不得宣称任意 App Computer Use | P0-21 任务 2–4；复用 19f overlay 窗；插件 pointer 仍冻结 |
-| 下 | P3-06～07 | 3 | Chrome 配套扩展+光标 / macOS Helper | **下一开发项**（不再后置）。说明书 [CU 开发文档](../specs/2026-09-17-computer-use-development.md)。P3-07 消费 `agent-pointer-overlay`，不自建光标窗 | 内置页 bbox/ref 已有；扩展必须上报屏幕 DIP 才能画针 |
+| 下 | P3-06～07 | 3 | 浏览器设置页+扩展默认同步连接 / macOS Helper | **下一开发项**（不再后置，出厂开放）。说明书 [CU 开发文档](../specs/2026-09-17-computer-use-development.md) §0.4。P3-07 消费 `agent-pointer-overlay`，不自建光标窗 | 内置页 bbox/ref 已有；扩展已连必须上报窗 DIP 才能画针 |
 
 P0-14 Worktree 仍是 P0-B，可与 GACP-06 并行，不挡本表。
 
@@ -173,7 +173,7 @@ P3 统一沿用 `Manifest / ActionDescriptor → Registry → Executor → Permi
 | 03   |    3 | [高级项目体检与自动化入口](p3-03-project-health-and-git-review.md)               | 待开始 | P0-A、P3-01、P3-02         |
 | 04   |    4 | [MCP 与 Skills Host](p3-04-mcp-and-skills-host.md)                               | 待开始 | P3-01、P3-02；Grok 的 `mcpServers` 注入已由 P0-10D 负责，本计划不抢 |
 | 05   |    3 | [应用内受管浏览器](p3-05-managed-browser.md)                                     | 被 P0-21 取代，不开工 | 见 [P0-21](p0-21-host-managed-browser.md) |
-| 06   |    3 | [Chrome Native Bridge](p3-06-chrome-native-bridge.md)                            | **下一开发项**（阶段 0b）：配套扩展 + Native Host + 插件光标 | 现有 browser L3 / origin；扩展必须上报窗 DIP |
+| 06   |    3 | [Chrome Native Bridge](p3-06-chrome-native-bridge.md)                            | **下一开发项**（阶段 0b）：独立设置页 + 扩展装上即同步并连接；出厂开放 | 现有 browser L3；登录态走扩展 API，不解析磁盘 Profile |
 | 07   |    3 | [macOS Computer Use Helper](p3-07-macos-computer-use-helper.md)                  | 紧随 0b：任意 App + `elementIndex`。消费 `agent-pointer-overlay`，不自建光标窗。[CU 说明书](../specs/2026-09-17-computer-use-development.md) | 辅助功能/屏幕录制授权；P3-06 光标合同可并行设计 |
 
 ## P4：多大脑协作（暂缓，依赖 P2）

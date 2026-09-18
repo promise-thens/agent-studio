@@ -1,10 +1,10 @@
 # Computer Use 开发文档：按 Codex 方式做本机 GUI 操作
 
-> 日期：2026-09-17（同日按产品五条验收改写）
-> 状态：**已提为下一开发项**（2026-09-17）。最终体验对标 Codex：配套扩展可操作且有光标、可操作 Mac 上任意 App、点击失败即停、速度有预算。开工顺序：阶段 0 → 0b（P3-06）→ 1–4（P3-07）。
+> 日期：2026-09-17（按通用型 Agent 改写：默认开放，不为安全剧场上锁）
+> 状态：**已提为下一开发项**。最终体验对标 Codex / ChatGPT Browser Use，产品哲学是 **自由、开放、通用**：总开关打开后 Agent 自己开标签、用登录态、点内置页、连用户 Chrome、点 Mac 任意 App。设置页用来给你关，不是用来一路拦它。开工顺序：阶段 0 → 0b（P3-06：设置页 + 扩展同步/连接）→ 1–4（P3-07）。
 > 相关：[p3-06-chrome-native-bridge.md](../plans/p3-06-chrome-native-bridge.md)、[p3-07-macos-computer-use-helper.md](../plans/p3-07-macos-computer-use-helper.md)、[2026-09-16-host-browser-pointer-overlay-design.md](2026-09-16-host-browser-pointer-overlay-design.md)、[p0-21a-host-browser-pointer-and-snapshot.md](../plans/p0-21a-host-browser-pointer-and-snapshot.md)、[p0-21-host-managed-browser.md](../plans/p0-21-host-managed-browser.md)、[product-vision.md](../../product-vision.md) §7.2–7.3
 
-**一句话：** 做成和 Codex 一类的本机 GUI 操作。三条战场都要有 **真实几何 + 软件光标**：内置页、用户 Chrome（配套扩展）、任意 Mac App。模型只报编号。OCR 不是主路径。
+**一句话：** 通用型 Agent。打开「让 Grok 控制内置浏览器」就全权用内置页；装上配套扩展就把用户 Chrome 的可同步状态带进来，并且能操作 Chrome 窗口。不要每站批一次、不要下载还要批准、不要把连接模式藏进开发者开关。任意 App 走 Helper。模型只报编号。OCR 不是主路径。
 
 ---
 
@@ -40,24 +40,51 @@
 - overlay：`screen = contentBounds + viewBounds + css / 1`，回读 overlay 窗真实 `getBounds()`。
 - 技能 `host-browser`：有框就 ref，禁止 OCR/PIL，下拉后重新 snapshot。
 
+### 0.4 通用型 Agent 的自由合同（2026-09-17 产品拍板）
+
+用户要的是通用型 Agent，不是加了十道确认的保姆。合同如下。
+
+**默认开放：**
+
+- 「让 Grok 控制内置浏览器」打开 = 浏览 / 下载 / 上传 / 调试 / 自己开标签 **全部始终允许**。
+- 装上配套扩展 = 授权同步用户 Chrome 里扩展 API 能拿到的状态（Cookie、登录态、能拿到的存储），并允许连接、操作用户 Chrome 窗口、使用完整 CDP。
+- 辅助功能授权后 = 可点 Mac 上任意普通 App，不必每下一个 App 再批一次。
+- 智能体权限表的出厂默认是「始终允许」，不是「需要批准」。设置里保留按站点改严，那是用户的自由，不是产品预置锁。
+
+**只允许这三类门，禁止再发明第四类：**
+
+1. **操作系统物理门：** Chrome 必须装扩展才能合法拿到 Cookie / 操作标签；macOS 辅助功能 / 屏幕录制会弹系统窗。绕不过。解析磁盘 Profile 不是开放接口，也不稳定。
+2. **用户在设置里主动关掉：** 总开关、某站例外、卸扩展、关完整 CDP。关了才拦。
+3. **能力门：** 点不准必须停、没有几何不许发明光标、看得见的停止按钮。这是准，不是锁。
+
+**禁止当作默认产品行为：** 每站点一次授权、下载/上传默认要批准、连接用户 Chrome 默认关、密码/登录态默认同步拒绝、银行/系统设置默认弹确认卡、把完整 CDP 藏成「开发者才配用」。
+
+§6 确认矩阵降为设置里的 **谨慎模式**。出厂与 P0-19g 接管同精神：总开关打开后 GUI 动作直接做。
+
 ---
 
 ## 1. 产品验收（用户五条，全部 MUST）
 
 最终效果要对标 Codex。下面五条是验收，不是愿望。缺一条就不能宣称「做成这样」。
 
-### 1.1 给浏览器装配套插件，Agent 能操作浏览器，并且有光标
+### 1.1 内置浏览器官 Agent 自己开；配套插件同步并连接 Chrome，并且有光标
 
-必须交付 **我们自己的配套浏览器扩展**（Chrome / Edge Manifest V3），经 Native Messaging 连到 Agent Studio。不是货架上的 chrome-devtools，也不是「猜 ACP `click_at`」。
+对标用户提供的 ChatGPT「浏览器」设置页。那一页管的是 **内置浏览器**。配套扩展负责把用户 Chrome 变成通用 Agent 的一部分，而不是每次请用户点一下。
 
-扩展职责：
+三层合同，缺一层就不算对标：
 
-- 用户主动点一下「把这个标签交给 Agent」，只授权当前 tab，不读 Profile / Cookie / 全浏览器。
-- 在页面里做可交互 snapshot（DOM + AX），每个节点带 **视口 CSS 盒**，并附带浏览器窗口在屏幕上的 DIP 矩形（chrome、DPR、zoom 由扩展量）。
-- 主进程把「视口 CSS + 窗矩形」合成 **屏幕 DIP**，才能画 overlay 光标。P0-19f 冻结的是「viewport-css 不可映射就发明光标」；配套扩展的合同是 **扩展把可映射几何交上来**，所以插件路径 **必须画光标**。
-- 点击走 `ref` / `element_index`；扩展在页内 `elementFromPoint` 复核，对不上就失败，不许 silently 点旁边。
+1. **主战场是工作台内置浏览器。** 总开关：「让 Grok 控制内置浏览器」，默认开。打开后 Agent **自己打开右栏、自己新建/导航标签、自己点、自己下、自己传**。用户不用点地球图标。
+2. **独立设置页。** 设置 → 浏览器 做成 ChatGPT 那种完整页（§1.7）。页面用来展示能力和让用户关，不是一路拦截。
+3. **配套扩展：同步 + 连接，装上即授权。** 用户装一次。扩展经 Native Messaging 把 Chrome 扩展 API 能提供的状态同步进内置 partition（Cookie / 登录态 / 能拿到的本地存储；密码库若 API 允许也同步，不允许就在设置里写清「Chrome 不开放密码 API」，不要假装我们在保护用户）。装上扩展同时允许操作用户 Chrome 窗口并走完整 CDP。不同步名单是可选黑名单，不是出厂白名单。
 
-内置页（右栏 `WebContentsView`）仍然要：同样的光标、同样的 ref 合同。用户可以只用内置页，也可以把系统 Chrome 交给扩展。两条都要有针。
+登录态走扩展、不解析 `~/Library/Application Support/Google/Chrome/`：那是 Chrome 加密 Profile 的物理接口，不稳定也不是开放 API。这是开放通道，不是安全剧场。
+
+光标：
+
+- 内置页必须有针（`surface=host-browser`）。
+- 扩展已连接就必须画 `browser-plugin` 针（上报窗 DIP + `ref` + `elementFromPoint`）。没有几何才允许不画；有几何必须画。禁止把「不连 Chrome」写成默认产品。
+
+P0-19f 冻结仍然成立：货架 chrome-devtools 的 viewport-css `click_at` 不许当主路径。
 
 ### 1.2 像 Codex 一样操作 Mac 上的任意 App
 
@@ -65,9 +92,9 @@ P3-07 Helper：Accessibility + 窗口截图 + 输入。模型报 `elementIndex`�
 
 「任意 App」验收口径：
 
-- 用户前台可见的普通 Cocoa / Electron / Chrome 窗，授权辅助功能后可 `getAppState` + `click(elementIndex)`。
-- 密码管理器、系统设置、银行类默认加确认（见确认矩阵），不是偷偷点。
-- 游戏全屏、远程桌面、纯 WebGL 画布：必须失败并说明原因，**不许假装点中**。这与 1.3 的失败即停一致，不是偷偷降级成猜像素。
+- 用户前台可见的普通 Cocoa / Electron / Chrome 窗，授权辅助功能后可 `getAppState` + `click(elementIndex)`。出厂不按 App 类别再弹确认。
+- 谨慎模式（设置可选）才启用 §6 确认矩阵。出厂通用型不拦银行 / 系统设置 / 密码管理器。
+- 游戏全屏、远程桌面、纯 WebGL 画布：必须失败并说明原因，**不许假装点中**。这是点不准，不是权限锁。
 
 未授权辅助功能时不得宣称已支持任意 App。
 
@@ -102,26 +129,74 @@ GUI 验收：企业资质下拉选指定公司、点「新增」、点备忘录�
 
 模型自己思考无法保证成 Codex 那么快。我们保证：不逼它看 0.9MB 逐步截图、不让它跑 Python、snapshot 不塞 150 个废节点、Helper 自己等稳定而不是让模型 sleep。
 
-### 1.5 一定要有配套浏览器插件
+### 1.5 一定要有配套浏览器插件（装上即同步且可连接）
 
 交付物必须进仓库，不能只写计划：
 
 ```text
 chrome-extension/agent-studio-browser/   # MV3，固定 extension id
 src/main/capability/chrome/native-host.ts
+src/renderer/src/components/HostBrowserSettingsPanel.vue  # 独立设置页，对标 ChatGPT
 ```
 
-安装体验：设置页「安装配套扩展」→ 打开 Chrome 扩展页或提供 crx/unpacked 目录；Native Host 清单进 `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`（仅我们的 host，命令白名单）。用户必须手动选 tab。没有扩展 = 不能操作用户 Chrome，只能走内置页。
+安装体验：设置 → 浏览器 → 「安装配套扩展」→ 打开 Chrome 扩展页或提供 unpacked 目录；Native Host 清单进 `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`（仅我们的 host，命令白名单）。
+
+扩展装好之后（出厂即开放）：
+
+- 同步 Chrome 扩展 API 能提供的 Cookie / 登录态 / 存储到内置 partition。可选黑名单，不出厂白名单。
+- 允许 snapshot / 操作用户 Chrome 窗口，画 `browser-plugin` 针，完整 CDP 默认开。
+- Agent 可在用户 Chrome 里自己开标签，不必等人点扩展 popup。
+- 没有扩展：内置页仍全权可用，只是没有系统 Chrome 的登录态。
+
+同步通道是扩展 API + Native Host，不是解析磁盘 Profile。用户可在设置里关掉同步或卸扩展。
 
 ### 1.6 三条战场（不许再缩成只做内置页）
 
-| 战场 | 几何从哪来 | overlay surface | 计划 |
-| --- | --- | --- | --- |
-| 内置页 | CDP quads → 视口 CSS | `host-browser` | P0-21 / 21a，巩固 |
-| 用户 Chrome | **配套扩展** DOM 盒 + 窗 DIP | `browser-plugin`（新 producer，不再恒空） | P3-06 升级为硬验收 |
-| 任意 Mac App | Helper AX frame 屏幕 DIP | `computer-use` | P3-07 |
+| 战场 | 谁在开标签 | 几何从哪来 | overlay surface | 计划 |
+| --- | --- | --- | --- | --- |
+| 内置页（主路径） | **Agent 自己开**，用户不用点 | CDP quads → 视口 CSS | `host-browser` | P0-21 / 21a + 设置页 |
+| 用户 Chrome 登录态 | 扩展默认同步进内置 partition | 内置页几何 | 仍是 `host-browser` | P3-06 同步 |
+| 用户 Chrome 窗口 | 扩展已装即可，Agent 可自己开标签 | 扩展 DOM 盒 + 窗 DIP | `browser-plugin`（有几何必须画） | P3-06 连接 |
+| 任意 Mac App | Helper | AX frame 屏幕 DIP | `computer-use` | P3-07 |
 
-P0-19f「插件不画光标」只约束 **别人的 chrome-devtools + 不可映射的 viewport-css**。配套扩展一旦给出屏幕 DIP，就必须画针。禁止继续用那条冻结当借口不做插件光标。
+P0-19f「插件不画光标」只约束 **别人的 chrome-devtools + 不可映射的 viewport-css**。配套扩展已连接并给出屏幕 DIP，就必须画针。禁止继续用那条冻结当借口，也禁止把连接做成默认关。
+
+### 1.7 浏览器设置页信息架构（对标 ChatGPT 截图，MUST）
+
+设置里必须有独立的「浏览器」页，副标题对标：「管理 Browser Use 偏好设置和网站访问权限」。当前实现只有一个 MCP 开关，不算完成。
+
+按截图分组落地，文案用产品名 Grok / Agent Studio，不写 ChatGPT：
+
+1. **总开关**
+   - 浏览器：让 Grok 控制内置浏览器（默认开）。关则下一 session 不再注入宿主 MCP。这是唯一的总闸。
+2. **常规**
+   - 网页 URL 和链接打开位置：默认 Agent Studio（内置页）。
+   - 本地 URL 打开位置：同上。
+   - 显示完整网址。
+   - 浏览数据：清内置 partition 的历史 / 网站数据 / 缓存 / 下载记录。
+   - 浏览历史：管理内置页访问过的页面。
+   - 批注截图：始终包含 / 询问 / 从不。默认「始终包含」，设置里写清会增加 token。
+3. **自动填充和密码**
+   - 内置浏览器自己的密码管理器、联系信息。
+   - 扩展已装且 API 允许时，从用户 Chrome 同步进来。Chrome 若根本不开放密码 API，设置里写明，不要改成「为了安全不同步」。
+4. **下载**
+   - 位置、下载前询问（默认关，直接下）、下载历史。
+5. **浏览器权限**
+   - 网站设置：摄像头 / 麦克风。
+   - 历史记录：Grok 可读取内置浏览历史，默认「始终允许」。
+   - 启用站点工具：默认开，允许 WebMCP / 站点工具。
+6. **智能体权限**
+   - 默认 + 可选按站点改严。列：浏览、下载、上传、调试。
+   - **出厂四列全部「始终允许」。** 截图里的「下载/上传需要批准」是 ChatGPT 的谨慎默认，我们按通用型改成始终允许。用户要严自己改。
+   - 「调试」含自己开标签、完整 CDP、连接用户 Chrome。
+7. **配套扩展**
+   - 安装状态、上次同步时间、可选「不同步这些站点」黑名单。
+   - 出厂：同步 Cookie / 登录态 / 能拿到的存储；连接用户 Chrome 默认开。
+8. **完整 CDP**
+   - 文案仍写风险（可检查并控制敏感浏览器内部功能）。**出厂开**（总开关开且扩展已连时）。用户可关。不要藏在「开发者才配用」。
+
+导入按钮（截图右上「导入…」）可以后做；不挡设置页主体。
+谨慎模式：单独一个开关，打开才启用 §6 确认矩阵。出厂关。
 
 ---
 
@@ -364,7 +439,9 @@ Helper 在 click 后、getAppState 前：
 
 ---
 
-## 6. 安全确认矩阵（技能原文，Broker 必须落地）
+## 6. 谨慎模式确认矩阵（出厂不用）
+
+通用型出厂：**总开关打开后 GUI 动作直接做**，Broker 不按本表拦。本表只在设置「谨慎模式」打开时生效。
 
 Computer Use 的确认 **只适用于 GUI 动作**（点、键、滚、拖、用 CU 导航浏览器）。普通终端命令不走这张表。
 
@@ -383,7 +460,7 @@ Computer Use 的确认 **只适用于 GUI 动作**（点、键、滚、拖、用
 - 只在下一步会产生影响时问；传敏感数据在 **即将键入前** 问。
 - 已确认且风险没变，不重复问。
 
-本项目：Permission Broker 已有 browser L3。Computer Use 新开 `operationType`（例如 `computer-use`），不要复用 browser grant 去点系统设置。完全接管（P0-19g）不得变成全局 yolo 点桌面。
+本项目：Permission Broker 已有 browser L3。通用型出厂把 browser 与 computer-use 的日常动作视为总开关已授权，不再逐次弹卡。谨慎模式才套用上表。完全接管（P0-19g）与本出厂精神一致：打开就做，停止按钮随时可用。
 
 ---
 
@@ -401,26 +478,30 @@ Computer Use 的确认 **只适用于 GUI 动作**（点、键、滚、拖、用
 | 技能 | `src/main/runtime/grok/host-browser-grok-skill.ts` 写入 `grok-home/skills/host-browser` | 不写 `~/.grok` |
 | 权限 | browser L3 + origin | screen/clipboard 仍 deny |
 
-### 7.2 还没有（按 1.1–1.5 必须补齐）
+### 7.2 还没有（按 1.1–1.7 必须补齐）
 
-- 配套 Chrome/Edge 扩展 + Native Messaging（P3-06 硬验收）
-- 扩展路径 overlay 光标（`browser-plugin` 不再恒空，前提是扩展上报屏幕 DIP）
+- ChatGPT 级独立浏览器设置页（现在只有一个 MCP 开关）
+- Agent 需要浏览器时自动打开右栏并新建/导航标签（用户不用点地球图标）
+- 配套 Chrome/Edge 扩展 + Native Messaging（P3-06 硬验收）：装上即同步登录态，并连接用户 Chrome
+- 扩展已连就必须画 `browser-plugin` 光标（上报屏幕 DIP 后必须画；没几何才允许不画）
 - `list_apps` / `get_app_state` 任意 App
 - Accessibility Helper、ScreenCaptureKit Helper
 - `surface=computer-use` 的 pointer producer
-- click 后 hit-test 复核（三条战场都要）
+- click 后 hit-test 复核（内置页、连接模式、任意 App）
 
-不做、也不拿来充数：弹簧光标、锁屏接管、货架 chrome-devtools 的猜点光标。
+不做、也不拿来充数：弹簧光标、锁屏接管、货架 chrome-devtools 的猜点光标、解析磁盘 Chrome Profile 冒充同步。
 
-### 7.3 三战场 ↔ Codex
+### 7.3 三战场 ↔ ChatGPT / Codex
 
-| Codex | 内置页 | 配套扩展（用户 Chrome） | 任意 App |
+| ChatGPT / Codex | 内置页（主路径） | 配套扩展 | 任意 App |
 | --- | --- | --- | --- |
-| `get_app_state` | `browser_snapshot` | 扩展 snapshot + 窗 DIP | Helper AX 文本 + 可选截图 |
-| `element_index` | `ref` | `ref` | `elementIndex` |
-| 几何主人 | CDP quads | 扩展 getBoundingClientRect | AX frame |
-| 光标 | `host-browser` | `browser-plugin`（可映射才画） | `computer-use` |
-| 技能 | `host-browser` | 同一技能补「用配套扩展」 | `computer-use` |
+| 控制内置浏览器 | 右栏 `WebContentsView`，Agent 自己开标签 | 把 Chrome 登录态同步进该视图 | 不是浏览器 |
+| 独立设置页 | §1.7 | 安装即授权，可选黑名单 | 辅助功能/屏幕录制 |
+| `get_app_state` | `browser_snapshot` | 默认同步；已连即可 snapshot + 窗 DIP | Helper AX 文本 + 可选截图 |
+| `element_index` | `ref` | 已连即可 `ref` | `elementIndex` |
+| 几何主人 | CDP quads | getBoundingClientRect | AX frame |
+| 光标 | `host-browser` | 已连必须 `browser-plugin` | `computer-use` |
+| 技能 | `host-browser`（补：自己开标签，禁止等用户点） | 同一技能补「扩展已装就同步并连接」 | `computer-use` |
 
 ---
 
@@ -428,7 +509,7 @@ Computer Use 的确认 **只适用于 GUI 动作**（点、键、滚、拖、用
 
 > 内置页巩固可与文档同步。任意 App 在 P3-02 与产品确认之前 **不写 Helper 代码**。
 
-> 五条 MUST 全部做完才算对标 Codex。阶段 0 巩固内置页；阶段 0b 做配套扩展+光标；阶段 1–4 做任意 App。不要用「19f 冻结」跳过扩展光标。
+> 五条 MUST 全部做完才算对标 Codex。阶段 0 巩固内置页（含 Agent 自己开标签）；阶段 0b 做独立设置页 + 扩展默认同步并连接；阶段 1–4 做任意 App。不要用「19f 冻结」跳过扩展光标，也不要把日常路径做成「请用户点扩展」或「默认关」。
 
 ### 阶段 0 — 内置页对齐 Codex 工作流（可立刻做，且已部分完成）
 
@@ -439,20 +520,27 @@ Computer Use 的确认 **只适用于 GUI 动作**（点、键、滚、拖、用
 0.3 snapshot 有可交互节点时不填 generic rest（已做）。
 0.4 下拉/dialog 打开后模型应再 snapshot。用会话日志抽检：`option` 出现在后一次 snapshot，且随后 `browser_click` 带 ref 而非 xy。
 0.5 开发版 GUI 走查：百度点搜索框、关弹窗、企业资质下拉选公司。区分自动测试与 GUI。
+0.6 Agent 需要浏览器时 **自动打开右栏并导航**。验收：用户不点地球图标，只发「打开某某页」，右栏出现该页。
 
-**完成判断：** 新一轮「新增企业资质」里，`browser_click(ref)` 明显多于 `click_xy`；终端不应再出现 PIL 算坐标；连续 10 次指定控件 hit-test 通过。
+**完成判断：** 新一轮「新增企业资质」里，`browser_click(ref)` 明显多于 `click_xy`；终端不应再出现 PIL 算坐标；连续 10 次指定控件 hit-test 通过；用户没点工具栏也能看见内置页。
 
-### 阶段 0b — 配套浏览器扩展 + 插件光标（P3-06 升级为硬验收）
+### 阶段 0b — 独立设置页 + 配套扩展默认同步并连接（P3-06 硬验收）
 
-0b.1 仓库落地 `chrome-extension/agent-studio-browser/`（MV3）。popup：选择当前 tab 交给 Agent。
-0b.2 Native Host 只收签名/固定 schema；不读 cookie/history。
-0b.3 扩展上报：节点 `ref/role/name/x/y/width/height`（视口 CSS）+ `windowScreenBounds` + `devicePixelRatio` + `zoom`。
-0b.4 主进程合成屏幕 DIP，写入 overlay `surface=browser-plugin`。没有窗矩形就 **宁可不画针，也不许发明**。有窗矩形就 **必须画针**。
-0b.5 点击：扩展 `elementFromPoint` 复核。
-0b.6 设置页安装说明；未装扩展时内置页仍可用。
-0b.7 技能补一句：用户 Chrome 走配套扩展，禁止 chrome-devtools `click_at` 当主路径。
+0b.1 设置 → 浏览器 按 §1.7 做成独立页。至少落地：总开关、链接打开位置、清除浏览数据、智能体权限（四列出厂始终允许）、配套扩展安装区、完整 CDP（出厂开）、谨慎模式（出厂关）。密码管理器与下载可以第二刀，但页面分组必须在。
+0b.2 仓库落地 `chrome-extension/agent-studio-browser/`（MV3）。popup / 设置：安装状态、可选黑名单。 **没有「每次把当前 tab 交给 Agent」作为主按钮。装上即同步且可连接。**
+0b.3 Native Host 只收签名/固定 schema。默认同步 Cookie / 登录态 / 扩展 API 能提供的存储（脱敏日志，不写 Timeline）。不解析磁盘 Profile。密码库：API 允许就同步，不允许就在设置写明原因。
+0b.4 同步写入内置 Project partition。默认全量同步；黑名单内的 origin 才跳过。卸扩展或关同步立即停。
+0b.5 Agent 调试：自己开内置标签，也可在已连接的用户 Chrome 里开标签。桌面负责把右栏打开。
+0b.6 扩展已连就上报 `ref/role/name/x/y/width/height` + `windowScreenBounds` + DPR + zoom；主进程合成屏幕 DIP，画 `browser-plugin` 针。没有窗矩形就 **宁可不画针，也不许发明**。有窗矩形就 **必须画针**。点击 `elementFromPoint` 复核。完整 CDP 出厂开。
+0b.7 技能：扩展已装就同步并连接；禁止 chrome-devtools `click_at`；禁止等用户去点扩展；禁止把下载/上传写成还要再批一次。
 
-**完成判断：** 用户 Chrome 打开企业资质页，Agent 点「新增」看得到光标且 hit-test 通过；扩展未选 tab 时不能操作其它标签。
+**完成判断：**
+
+- 只说话「打开企业资质页」，右栏自己出现，用户没点地球图标。
+- 设置页能看见图里那些分组；智能体权限出厂四列始终允许。
+- 装上扩展后内置页带上 Chrome 登录态，不用再按站点点一次授权。
+- 未装扩展时内置页仍全权可用。
+- 扩展已连时，点用户 Chrome 里「新增」看得到光标且 hit-test 通过。用户没关连接就不要拦。
 
 ### 阶段 1 — 合同与权限（P3-07 任务 1 的细拆）
 
@@ -525,17 +613,20 @@ Grok MCP browser_click(ref)
   → overlay translate
 ```
 
-### 10.2 用户 Chrome（配套扩展，目标）
+### 10.2 配套扩展（装上即同步并连接）
 
 ```text
-用户点击扩展「交给 Agent」
-  → Native Host 登记 tabId + origin
-Grok MCP browser_snapshot（扩展源）
-  → 页内 DOM 盒 + windowScreenBounds
-  → 主进程合成屏幕 DIP，可画 browser-plugin 光标
-Grok MCP browser_click(ref)
-  → 扩展 elementFromPoint 复核
-  → 失败即停，成功才回报
+用户安装扩展
+  → Native Host 校验 schema
+  → 同步 Cookie / 登录态进内置 Project partition（黑名单除外）
+Grok 要调试
+  → 桌面自动打开右栏
+  → browser_navigate / 新标签（内置页或用户 Chrome）
+  → 内置页走 10.1
+  → 用户 Chrome：snapshot + windowScreenBounds
+      → overlay surface=browser-plugin
+      → click(ref) + elementFromPoint 复核
+      → 失败即停
 ```
 
 ### 10.3 任意 App（目标）
@@ -568,8 +659,9 @@ Grok MCP computer_use.click({ elementIndex })
 
 ### 11.2 开发版 GUI（必须如实区分）
 
-内置页：新 Task 有 `host-browser` 技能；点搜索框有光标；开下拉再 snapshot 后 ref 点 option；连续 10 次 hit-test；终端无 PIL。
-配套扩展：Chrome 选中 tab，点「新增」有光标且打中；未选中的 tab 动不了。
+内置页：新 Task 有 `host-browser` 技能；用户不点地球图标，只说话就能打开右栏；点搜索框有光标；开下拉再 snapshot 后 ref 点 option；连续 10 次 hit-test；终端无 PIL。
+设置页：浏览器页能看到总开关、常规、智能体权限（出厂始终允许）、配套扩展、完整 CDP（出厂开）、谨慎模式（出厂关）；不是只有一个 MCP 开关。
+配套扩展：装上后内置页带上 Chrome 登录态，不用按站点再授权。已连时点「新增」有光标且打中。
 任意 App：未授权引导；授权后点「备忘录」指定按钮 10/10；切 App 光标消失。
 
 **未做完五条 MUST 前不得宣称：** 已和 Codex 一样、已支持任意 Mac App、已完成配套扩展光标、已完成 P3-07。
@@ -582,7 +674,10 @@ Grok MCP computer_use.click({ elementIndex })
 - 不默认全屏连续录制、不读剪贴板全文、不后台偷听。
 - **不**用货架 chrome-devtools 的 viewport-css `click_at` 发明光标。配套扩展给出屏幕 DIP 之后 **必须** 画针。
 - 不开放 `browser_evaluate` / `Runtime.evaluate` 当主路径。
-- 不把 Computer Use 做成第二个无头 Chrome 冒充用户浏览器。
+- 不把 Computer Use 做成第二个无头 Chrome 冒充用户浏览器。日常调试必须是用户看得见的右栏内置页。
+- 不解析磁盘 Chrome Profile 来冒充同步。登录态走扩展 API。
+- 不把「每次请用户点扩展交出当前 tab」当成主 UX。
+- 不把每站点授权、下载要批准、连接默认关做出厂行为。
 - 不为对标而依赖 Codex 私有二进制或 `@oai/sky`。
 - 不做弹簧光标 / fog lens / 锁屏接管。
 
@@ -598,7 +693,10 @@ Grok MCP computer_use.click({ elementIndex })
 | 点错高风险按钮 | 确认矩阵；完全接管不覆盖 CU 高风险项 |
 | overlay 与点击分家 | 回读真实 bounds；guest zoom=1 |
 | 文档与代码漂移 | 实现变更必须改本文件、p3-06、p3-07 |
-| 用 19f 冻结挡配套扩展光标 | 扩展上报屏幕 DIP 后必须画针；画不出来就说明几何没交齐 |
+| 用 19f 冻结挡扩展光标 | 扩展已连并上报屏幕 DIP 后必须画针 |
+| 把扩展做成每次点 tab | 主路径是自己开标签 + 装上即同步并连接 |
+| 用安全剧场锁死通用型 | 出厂始终允许；设置里才能改严 |
+| 解析磁盘 Profile | 只走扩展 API + Native Host |
 | 逐步截图把速度拖死 | 技能+MCP 禁止每步截图；snapshot p95 预算见 1.4 |
 
 ---
@@ -614,13 +712,16 @@ Grok MCP computer_use.click({ elementIndex })
 - [ ] 有软件光标，落点与 CDP 点击一致
 - [ ] snapshot/click 满足 1.4 耗时预算
 
-配套扩展（1.1 / 1.5）：
+设置页 + 配套扩展（1.1 / 1.5 / 1.7）：
 
+- [ ] 设置 → 浏览器 按 §1.7 分组，不再是单开关
+- [ ] 只说话即可打开内置页标签，用户不用点地球图标
 - [ ] `chrome-extension/agent-studio-browser/` 可安装
-- [ ] Native Host 只操作用户选中的 tab
-- [ ] 扩展上报 CSS 盒 + 窗 DIP，overlay 画出 `browser-plugin` 光标
+- [ ] Native Host 默认同步扩展 API 能提供的 Cookie / 登录态，不解析磁盘 Profile
+- [ ] 装上扩展后不必按站点再点一次授权；黑名单才排除
+- [ ] 扩展已连即上报 CSS 盒 + 窗 DIP，overlay 画出 `browser-plugin` 光标
 - [ ] `elementFromPoint` 复核失败即停
-- [ ] 未选 tab 不能动其它标签
+- [ ] 智能体权限出厂四列始终允许；谨慎模式出厂关
 
 任意 App（1.2）：
 
@@ -636,4 +737,4 @@ Grok MCP computer_use.click({ elementIndex })
 
 ## 15. 一句话给执行者
 
-用户要的是 Codex 那类成品：**配套浏览器插件有光标、能点用户 Chrome、能点 Mac 任意 App、点出去必须打中、栈不能拖成十几秒一步。** 几何由内置页 / 扩展 / Helper 当主人，模型只报编号。OCR 和猜像素不是退路。没做完五条 MUST，不准写「已经和 Codex 一样」。
+用户要的是通用型 Agent：**独立浏览器设置页、Agent 自己开标签、扩展装上就同步登录态并连接 Chrome、能点 Mac 任意 App、点出去必须打中、栈不能拖成十几秒一步。设置用来关，不用来一路拦。** 几何由内置页 / 扩展 / Helper 当主人，模型只报编号。OCR 和猜像素不是退路。没做完五条 MUST，不准写「已经和 Codex 一样」。
