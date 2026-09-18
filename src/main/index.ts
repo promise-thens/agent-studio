@@ -9,6 +9,7 @@ import {
   nativeTheme,
   safeStorage,
   screen,
+  session,
   shell,
   type MenuItemConstructorOptions
 } from 'electron'
@@ -34,6 +35,11 @@ import {
   resolveHostBrowserMcpScriptPath
 } from './browser/host-browser-mcp-host'
 import { HostBrowserSettingsStore } from './browser/host-browser-settings'
+import {
+  createBrowserPartition,
+  mapHostBrowserClearDataKindsToStorages,
+  resolveHostBrowserClearProjectId
+} from './browser/host-browser-session'
 import { APP_PUSH_CHANNELS } from '../shared/app-ipc'
 import { sanitizeExternalHref } from '../shared/external-href'
 import { TAKEOVER_CONTROL_TURN_KIND } from '../shared/task-takeover'
@@ -216,7 +222,13 @@ function createWindow(): void {
       if (!broker) {
         return Promise.resolve({ ok: false, reason: 'internal-error' })
       }
-      return broker.authorizeOperation(intent, execute, options)
+      const settings = hostBrowserSettingsStore?.getSettings()
+      // 浏览始终允许不是完全访问：只给 browser 一次性代批，写文件仍走确认卡。
+      return broker.authorizeOperation(intent, execute, {
+        ...options,
+        browserAlwaysAllow:
+          settings?.agentPermissions.browse === 'always' && settings.cautiousMode === false
+      })
     },
     getPointerGeometry: () => {
       const window = mainWindow
@@ -1049,10 +1061,27 @@ function registerIpcHandlers(): void {
       return store.saveSettings({ ...current, ...patch })
     },
     /**
-     * 占位：Task 4 才擦 persist:as-browser partition，不得碰用户 Chrome。
-     * 本任务只接 IPC 校验后的 kinds。
+     * 只清当前选中 Task 的 persist:as-browser partition。
+     * 没有 Task 就 invalid-state；禁止收 Renderer 传来的 partition 名或路径。
      */
-    clearHostBrowserData: async () => undefined,
+    clearHostBrowserData: async (kinds) => {
+      const selectedTaskId = agentService?.getSelectedTaskId() ?? null
+      let projectId: string | null = null
+      if (selectedTaskId) {
+        try {
+          projectId = requireTaskStore().getTaskRecord(selectedTaskId).projectId
+        } catch {
+          projectId = null
+        }
+      }
+      projectId = resolveHostBrowserClearProjectId(selectedTaskId, projectId)
+      if (!projectId) {
+        throw new DesktopIpcFailure('invalid-state', '没有可清理的内置浏览器会话。')
+      }
+      await session.fromPartition(createBrowserPartition(projectId)).clearStorageData({
+        storages: mapHostBrowserClearDataKindsToStorages(kinds)
+      })
+    },
     // 钩子扫描牢笼绑在 userData，不执行钩子，不把 command / url 经 IPC 回传
     listHooks: () => listGrokHooks(app.getPath('userData')),
     listMcpServers: async (projectId) => {

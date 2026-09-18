@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { mkdtemp, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -22,5 +23,22 @@ describe('ensureHostBrowserGrokSkill', () => {
     const again = await ensureHostBrowserGrokSkill(grokHome)
     expect(again).toBe(skillFile)
     expect(await readFile(skillFile, 'utf8')).toBe(body)
+  })
+
+  it('要求自己开标签，禁止等地球图标、OCR/PIL 和 chrome-devtools click_at', async () => {
+    const grokHome = await mkdtemp(join(tmpdir(), 'agent-studio-skill-open-'))
+    const body = await readFile(await ensureHostBrowserGrokSkill(grokHome), 'utf8')
+    expect(body).toContain('browser_navigate')
+    expect(body).toContain('browser_tabs_open')
+    expect(body).toContain('地球')
+    expect(body).toContain('chrome-devtools')
+    expect(body).toContain('click_at')
+    expect(body).toContain('OCR')
+    expect(body).toContain('PIL')
+    const repoSkill = readFileSync(
+      join(process.cwd(), '.agents/skills/host-browser/SKILL.md'),
+      'utf8'
+    )
+    expect(repoSkill).toBe(HOST_BROWSER_GROK_SKILL_MARKDOWN)
   })
 })

@@ -157,6 +157,7 @@ describe('HostBrowserService', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('denied')
     expect(guest.getURL()).toBe('about:blank')
+    expect(service.getChrome().open).toBe(false)
   })
 
   it('perform 允许后才导航，并且打开右栏', async () => {
@@ -186,6 +187,33 @@ describe('HostBrowserService', () => {
     })
     expect(result.ok).toBe(true)
     expect(guest.getURL()).toBe('https://example.com/docs')
+    expect(service.getChrome().open).toBe(true)
+  })
+
+  it('snapshot 成功也打开右栏', async () => {
+    const guest = createFakeGuest('project-a')
+    const service = new HostBrowserService({
+      createGuest: () => guest,
+      attachGuest: vi.fn(),
+      detachGuest: vi.fn(),
+      resolvePerformContext: () => ({
+        taskId: 'task-1',
+        turnId: 'turn-1',
+        projectId: 'project-a',
+        environmentId: 'env-a',
+        executionRoot: process.cwd()
+      }),
+      authorizeOperation: async (_intent, execute) => ({
+        ok: true,
+        value: await execute(_intent as never),
+        reason: 'user-allowed',
+        scope: 'once'
+      })
+    })
+
+    expect(service.getChrome().open).toBe(false)
+    const result = await service.perform('task-1', { name: 'browser_snapshot' })
+    expect(result.ok).toBe(true)
     expect(service.getChrome().open).toBe(true)
   })
 

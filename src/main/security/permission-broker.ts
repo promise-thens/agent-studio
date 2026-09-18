@@ -71,6 +71,11 @@ export interface AuthorizeOperationOptions {
    * 这是桌面代批 allow-once，不是 ACP allow_always，也不是 Broker 沙箱。
    */
   takeoverEnabled?: boolean
+  /**
+   * 仅 `operationType === 'browser'`：浏览始终允许且未开谨慎模式时，走 takeover 同款一次性代批。
+   * 这不是完全访问；写文件 / exec / screen / clipboard 不得被这个标志放行。
+   */
+  browserAlwaysAllow?: boolean
 }
 
 export interface PermissionBrokerOptions {
@@ -249,6 +254,18 @@ export class PermissionBroker {
       const grantKey = createOperationGrantKey(resolved)
       // 用户确认完全访问后，午休期间也不能卡在确认卡上；仍只回一次性允许。
       if (options.takeoverEnabled === true) {
+        admission.release()
+        return await this.executeAllowed(
+          resolved,
+          execute,
+          policy.risk,
+          'auto-allowed',
+          'once',
+          options.isActive
+        )
+      }
+      // 浏览始终允许只覆盖 browser；deny / unsupported 已在上面失败关闭。
+      if (options.browserAlwaysAllow === true && resolved.operationType === 'browser') {
         admission.release()
         return await this.executeAllowed(
           resolved,

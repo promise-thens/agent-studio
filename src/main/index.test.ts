@@ -647,6 +647,16 @@ describe('宿主 overlay 指针组装', () => {
     expect(settingsFn).toContain('saveSettings')
     expect(settingsFn).not.toContain('assertGrokConfigCanReload')
     expect(indexSource).toContain('clearHostBrowserData:')
+    const clearFn = indexSource.match(
+      /clearHostBrowserData: async \(kinds\) => \{[\s\S]*?\n {4}\},/
+    )?.[0]
+    expect(clearFn).toBeTruthy()
+    expect(clearFn).toContain('getSelectedTaskId')
+    expect(clearFn).toContain('没有可清理的内置浏览器会话。')
+    expect(clearFn).toContain('session.fromPartition(createBrowserPartition(projectId))')
+    expect(clearFn).toContain('clearStorageData')
+    expect(clearFn).toContain('kinds')
+    expect(clearFn).not.toContain('async () => undefined')
   })
 
   it('darwin 关主窗后二次启动必须重建窗口，不得只 focus 空窗', () => {
@@ -687,8 +697,11 @@ describe('宿主 overlay 指针组装', () => {
       'utf8'
     )
     expect(indexSource).toContain('takeoverEnabled: task.takeoverEnabled === true')
+    expect(indexSource).toContain('browserAlwaysAllow')
+    expect(indexSource).toContain("agentPermissions.browse === 'always'")
+    expect(indexSource).toContain('cautiousMode === false')
     expect(indexSource).toMatch(
-      /authorizeOperation:\s*\(intent,\s*execute,\s*options\)[\s\S]*broker\.authorizeOperation\(intent,\s*execute,\s*options\)/
+      /authorizeOperation:\s*\(intent,\s*execute,\s*options\)[\s\S]*broker\.authorizeOperation\(intent,\s*execute,\s*\{/
     )
   })
 })
