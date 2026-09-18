@@ -1,7 +1,6 @@
 import { createConnection } from 'node:net'
 import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute } from 'node:path'
 import {
   CHROME_NATIVE_MAX_FRAME_BYTES,
   parseChromeNativeFrameLength,
@@ -135,36 +134,38 @@ export function shouldRunChromeNativeHostStdioMain(argv1 = process.argv[1]): boo
 }
 
 /**
- * 先认环境变量，再读 App userData 里的状态文件。
- * 只找 Agent Studio 自己的目录，不打开 Chrome Profile。
+ * 只认本次包装钉死的状态文件，禁止 -dev json 能 parse 就抢走正式包 socket。
+ * SOCKET+TOKEN 仍可覆盖，供测试直连；STATE 指向哪份 json 就只读哪份。
+ * 缺 STATE 或该文件不可读时不得回落到另一身份，Cookie 不能写进另一份 partition。
+ * 只读 Agent Studio 自己的 json，不打开 Chrome Profile。
  */
 export function resolveChromeNativeHostBridge(
-  env: NodeJS.ProcessEnv = process.env,
-  home = homedir()
+  env: NodeJS.ProcessEnv = process.env
 ): { socketPath: string; token: string } | null {
   const socketFromEnv = env.AGENT_STUDIO_CHROME_NATIVE_SOCKET
   const tokenFromEnv = env.AGENT_STUDIO_CHROME_NATIVE_TOKEN
   if (socketFromEnv && tokenFromEnv) {
     return { socketPath: socketFromEnv, token: tokenFromEnv }
   }
-  const candidates = [
-    env.AGENT_STUDIO_CHROME_NATIVE_STATE,
-    join(home, 'Library/Application Support/agent-studio-dev/browser/chrome-native-host.json'),
-    join(home, 'Library/Application Support/agent-studio/browser/chrome-native-host.json')
-  ]
-  for (const candidate of candidates) {
-    if (!candidate) continue
-    try {
-      const parsed = JSON.parse(readFileSync(candidate, 'utf8')) as {
-        socketPath?: unknown
-        token?: unknown
-      }
-      if (typeof parsed.socketPath === 'string' && typeof parsed.token === 'string') {
-        return { socketPath: parsed.socketPath, token: parsed.token }
-      }
-    } catch {
-      continue
+  const statePath = env.AGENT_STUDIO_CHROME_NATIVE_STATE
+  if (
+    typeof statePath !== 'string' ||
+    statePath.trim() === '' ||
+    statePath.includes('\0') ||
+    !isAbsolute(statePath)
+  ) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(statePath, 'utf8')) as {
+      socketPath?: unknown
+      token?: unknown
     }
+    if (typeof parsed.socketPath === 'string' && typeof parsed.token === 'string') {
+      return { socketPath: parsed.socketPath, token: parsed.token }
+    }
+  } catch {
+    return null
   }
   return null
 }

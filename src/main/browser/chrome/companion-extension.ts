@@ -85,11 +85,14 @@ function posixShellSingleQuote(value: string): string {
 /**
  * 写出专用包装命令。Chrome 清单的 path 必须指向它，而不是 /bin/bash。
  * 包装脚本只拉起 chrome-native-host-stdio，禁止变成任意 Shell。
+ * 必须钉死本次安装的 chrome-native-host.json：Chrome 全局只有一份 Native Host 清单，
+ * 不写 AGENT_STUDIO_CHROME_NATIVE_STATE 时，残留的 agent-studio-dev json 会把正式包连到另一份 partition。
  */
 export async function writeChromeNativeHostWrapper(options: {
   wrapperPath: string
   electronExecPath: string
   scriptPath: string
+  statePath: string
 }): Promise<string> {
   if (isChromeNativeHostForbiddenExecPath(options.electronExecPath)) {
     throw new Error('Native Host 命令不得是通用 Shell。')
@@ -103,8 +106,20 @@ export async function writeChromeNativeHostWrapper(options: {
   if (typeof options.wrapperPath !== 'string' || !isAbsolute(options.wrapperPath)) {
     throw new Error('Native Host 包装路径无效。')
   }
+  if (
+    typeof options.statePath !== 'string' ||
+    !isAbsolute(options.statePath) ||
+    options.statePath.includes('\0')
+  ) {
+    throw new Error('Native Host 状态文件路径无效。')
+  }
+  const stateBase = options.statePath.split(/[/\\]/).pop() ?? ''
+  if (stateBase !== 'chrome-native-host.json') {
+    throw new Error('Native Host 状态文件必须是 chrome-native-host.json。')
+  }
   const script = `#!/bin/sh
 export ELECTRON_RUN_AS_NODE=1
+export AGENT_STUDIO_CHROME_NATIVE_STATE=${posixShellSingleQuote(options.statePath)}
 exec ${posixShellSingleQuote(options.electronExecPath)} ${posixShellSingleQuote(options.scriptPath)} "$@"
 `
   await mkdir(dirname(options.wrapperPath), { recursive: true, mode: 0o700 })

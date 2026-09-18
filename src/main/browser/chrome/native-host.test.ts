@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -21,7 +21,12 @@ import {
   installChromeNativeHostManifest,
   resolveChromeNativeHostScriptPath
 } from './native-host'
-import { encodeChromeNativeFrame, runChromeNativeHostStdio } from './native-host-stdio'
+import {
+  encodeChromeNativeFrame,
+  resolveChromeNativeHostBridge,
+  runChromeNativeHostStdio
+} from './native-host-stdio'
+import { writeChromeNativeHostWrapper } from './companion-extension'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -305,5 +310,73 @@ describe('v1 路径不读 Profile', () => {
     expect(resolveChromeNativeHostScriptPath('/tmp/out/main')).toContain(
       'chrome-native-host-stdio.js'
     )
+  })
+
+  it('packaged 优先 app.asar.unpacked，不因 asar 内 existsSync 为 true 就 exec 进归档', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-chrome-asar-'))
+    const asarMain = join(root, 'Contents', 'Resources', 'app.asar', 'out', 'main')
+    const unpackedMain = join(root, 'Contents', 'Resources', 'app.asar.unpacked', 'out', 'main')
+    await mkdir(asarMain, { recursive: true })
+    await mkdir(unpackedMain, { recursive: true })
+    await writeFile(join(asarMain, 'chrome-native-host-stdio.js'), 'asar-stub\n', 'utf8')
+    await writeFile(join(unpackedMain, 'chrome-native-host-stdio.js'), 'unpacked-stub\n', 'utf8')
+    expect(resolveChromeNativeHostScriptPath(asarMain)).toBe(
+      join(unpackedMain, 'chrome-native-host-stdio.js')
+    )
+    expect(resolveChromeNativeHostScriptPath(unpackedMain)).toBe(
+      join(unpackedMain, 'chrome-native-host-stdio.js')
+    )
+    expect(resolveChromeNativeHostScriptPath(join(root, 'out', 'main'))).toBe(
+      join(root, 'out', 'main', 'chrome-native-host-stdio.js')
+    )
+  })
+})
+
+describe('Native Host 身份钉死', () => {
+  it('-dev json 能 parse 时，packaged wrapper 仍连当前身份，不连 -dev', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'as-chrome-identity-'))
+    const devState = join(
+      homeDir,
+      'Library/Application Support/agent-studio-dev/browser/chrome-native-host.json'
+    )
+    const prodState = join(
+      homeDir,
+      'Library/Application Support/agent-studio/browser/chrome-native-host.json'
+    )
+    await mkdir(dirname(devState), { recursive: true })
+    await mkdir(dirname(prodState), { recursive: true })
+    const devSocket = join(homeDir, 'dev.sock')
+    const prodSocket = join(homeDir, 'prod.sock')
+    await writeFile(
+      devState,
+      `${JSON.stringify({ socketPath: devSocket, token: 'dev-token' })}\n`,
+      'utf8'
+    )
+    await writeFile(
+      prodState,
+      `${JSON.stringify({ socketPath: prodSocket, token: 'prod-token' })}\n`,
+      'utf8'
+    )
+
+    const wrapperPath = await writeChromeNativeHostWrapper({
+      wrapperPath: join(homeDir, 'browser', 'chrome-native-host-stdio'),
+      electronExecPath: join(homeDir, 'Agent Studio.app/Contents/MacOS/Agent Studio'),
+      scriptPath: join(homeDir, 'chrome-native-host-stdio.js'),
+      statePath: prodState
+    })
+    const wrapper = await readFile(wrapperPath, 'utf8')
+    expect(wrapper).toContain(`AGENT_STUDIO_CHROME_NATIVE_STATE='${prodState}'`)
+    expect(wrapper).not.toContain('agent-studio-dev')
+
+    expect(resolveChromeNativeHostBridge({ AGENT_STUDIO_CHROME_NATIVE_STATE: prodState })).toEqual({
+      socketPath: prodSocket,
+      token: 'prod-token'
+    })
+    expect(resolveChromeNativeHostBridge({})).toBeNull()
+    expect(
+      resolveChromeNativeHostBridge({
+        AGENT_STUDIO_CHROME_NATIVE_STATE: join(homeDir, 'missing-chrome-native-host.json')
+      })
+    ).toBeNull()
   })
 })

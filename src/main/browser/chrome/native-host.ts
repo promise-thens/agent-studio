@@ -1,8 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync } from 'node:fs'
 import { chmod, mkdir, unlink, writeFile } from 'node:fs/promises'
 import { createServer, type Server, type Socket } from 'node:net'
-import { dirname, isAbsolute, join } from 'node:path'
+import { dirname, isAbsolute, join, sep } from 'node:path'
 import type { HostBrowserSettings } from '../../../shared/host-browser'
 import {
   CHROME_NATIVE_HOST_NAME,
@@ -116,10 +115,21 @@ export async function installChromeNativeHostManifest(options: {
   return filePath
 }
 
+/**
+ * packaged 入口必须走 app.asar.unpacked。
+ * Electron 对 asar 内文件 existsSync 仍为 true，但 ELECTRON_RUN_AS_NODE 不能 exec 归档里的脚本。
+ * 只替换路径段 `app.asar`，避免 `app.asar.unpacked` 被二次替换。
+ */
 export function resolveChromeNativeHostScriptPath(mainDirectory: string): string {
-  const bundled = join(mainDirectory, 'chrome-native-host-stdio.js')
-  if (existsSync(bundled)) return bundled
-  return join(mainDirectory.replace('app.asar', 'app.asar.unpacked'), 'chrome-native-host-stdio.js')
+  return join(resolveAsarUnpackedDirectory(mainDirectory), 'chrome-native-host-stdio.js')
+}
+
+function resolveAsarUnpackedDirectory(mainDirectory: string): string {
+  const parts = mainDirectory.split(/[/\\]/)
+  const asarIndex = parts.findIndex((part) => part === 'app.asar')
+  if (asarIndex === -1) return mainDirectory
+  parts[asarIndex] = 'app.asar.unpacked'
+  return parts.join(sep)
 }
 
 /**

@@ -728,6 +728,8 @@ describe('宿主 overlay 指针组装', () => {
     expect(indexSource).toContain('installHostBrowserExtension:')
     expect(indexSource).toContain('writeChromeNativeHostWrapper')
     expect(indexSource).toContain('chrome-native-host-stdio')
+    expect(indexSource).toContain('statePath:')
+    expect(indexSource).toContain('chrome-native-host.json')
     expect(indexSource).toContain('publishCompanionChromeSnapshot')
     expect(indexSource).toContain('ensurePointerOverlayLayout')
     expect(indexSource).toContain('acceptCompanionBrowserPluginPointer')

@@ -153,14 +153,16 @@ describe('配套扩展安装与 Native Host 包装', () => {
       writeChromeNativeHostWrapper({
         wrapperPath: join(homeDir, 'chrome-native-host-stdio'),
         electronExecPath: '/bin/bash',
-        scriptPath: join(homeDir, 'chrome-native-host-stdio.js')
+        scriptPath: join(homeDir, 'chrome-native-host-stdio.js'),
+        statePath: join(homeDir, 'browser', 'chrome-native-host.json')
       })
     ).rejects.toThrow(/Shell/)
 
     const wrapperPath = await writeChromeNativeHostWrapper({
       wrapperPath: join(homeDir, 'browser', 'chrome-native-host-stdio'),
       electronExecPath: join(homeDir, 'Agent Studio.app/Contents/MacOS/Agent Studio'),
-      scriptPath: join(homeDir, 'chrome-native-host-stdio.js')
+      scriptPath: join(homeDir, 'chrome-native-host-stdio.js'),
+      statePath: join(homeDir, 'browser', 'chrome-native-host.json')
     })
     expect(wrapperPath.endsWith('chrome-native-host-stdio')).toBe(true)
     expect(wrapperPath).not.toBe('/bin/bash')
@@ -168,6 +170,24 @@ describe('配套扩展安装与 Native Host 包装', () => {
     expect(wrapper).toContain('ELECTRON_RUN_AS_NODE=1')
     expect(wrapper).toContain('chrome-native-host-stdio.js')
     expect(wrapper).not.toMatch(/^\/bin\/bash/m)
+  })
+
+  it('包装脚本钉死本次 chrome-native-host.json，不把身份交给 -dev 扫描', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'as-chrome-wrapper-state-'))
+    const prodState = join(
+      homeDir,
+      'Library/Application Support/agent-studio/browser/chrome-native-host.json'
+    )
+    const wrapperPath = await writeChromeNativeHostWrapper({
+      wrapperPath: join(homeDir, 'browser', 'chrome-native-host-stdio'),
+      electronExecPath: join(homeDir, 'Agent Studio.app/Contents/MacOS/Agent Studio'),
+      scriptPath: join(homeDir, 'chrome-native-host-stdio.js'),
+      statePath: prodState
+    })
+    const wrapper = await readFile(wrapperPath, 'utf8')
+    expect(wrapper).toContain("AGENT_STUDIO_CHROME_NATIVE_STATE='")
+    expect(wrapper).toContain(prodState)
+    expect(wrapper).not.toContain('agent-studio-dev')
   })
 
   it('安装只写临时 homeDir，reveal unpacked 目录，不碰开发者真 Chrome', async () => {

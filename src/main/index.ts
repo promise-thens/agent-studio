@@ -1105,6 +1105,7 @@ function registerIpcHandlers(): void {
     /**
      * 打开 unpacked 扩展目录并写 Native Host 清单。
      * execPath 必须是 chrome-native-host-stdio 包装命令，不得是 /bin/bash。
+     * 包装脚本钉死本次 userData 的 chrome-native-host.json，禁止扫到另一份身份。
      */
     installHostBrowserExtension: async () => {
       const extensionDirectory = resolveCompanionChromeExtensionDirectory({
@@ -1115,10 +1116,12 @@ function registerIpcHandlers(): void {
       if (!extensionDirectory) {
         throw new DesktopIpcFailure('not-found', '未找到配套扩展目录。')
       }
+      const userDataPath = app.getPath('userData')
       const execPath = await writeChromeNativeHostWrapper({
-        wrapperPath: join(app.getPath('userData'), 'browser', 'chrome-native-host-stdio'),
+        wrapperPath: join(userDataPath, 'browser', 'chrome-native-host-stdio'),
         electronExecPath: process.execPath,
-        scriptPath: resolveChromeNativeHostScriptPath(__dirname)
+        scriptPath: resolveChromeNativeHostScriptPath(__dirname),
+        statePath: join(userDataPath, 'browser', 'chrome-native-host.json')
       })
       return installHostBrowserCompanionExtension({
         homeDir: homedir(),
