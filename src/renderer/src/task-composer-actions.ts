@@ -262,9 +262,13 @@ export function presentComposerContextUsage(
   if (!timeline?.turns.length) return null
   const usage = pickLatestContextUsage(timeline)
   if (!usage) return pendingComposerContextUsagePresentation()
-  const hasFinishedTurn = timeline.turns.some(
-    (turn) => turn.status != null && COMPOSER_CONTEXT_TERMINAL_STATUSES.has(turn.status)
-  )
+  // 单执行槽下，只要已经出现更晚的 Turn，就说明更早一轮已经结束；历史 record
+  // 可能还没回填终态，不能把这段真实上下文用量误判成首轮基线并清零。
+  const hasFinishedTurn =
+    timeline.turns.length > 1 ||
+    timeline.turns.some(
+      (turn) => turn.status != null && COMPOSER_CONTEXT_TERMINAL_STATUSES.has(turn.status)
+    )
   return resolveComposerContextUsagePresentation(
     hasFinishedTurn ? usage : { ...usage, usedTokens: 0 }
   )

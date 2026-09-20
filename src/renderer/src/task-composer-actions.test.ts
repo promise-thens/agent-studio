@@ -311,6 +311,33 @@ describe('发送与停止身份', () => {
       label: '142000/500000'
     })
   })
+
+  it('第二轮执行期间上一轮终态尚未回填时，Composer 不把真实用量清零', () => {
+    const previousTurnUsage = {
+      scope: 'context' as const,
+      usedTokens: 142000,
+      limitTokens: 500000
+    }
+    expect(
+      presentComposerContextUsage({
+        turns: [
+          {
+            // 实时 Timeline 可能暂时仍是 pending，直到历史记录异步刷新。
+            status: 'pending',
+            usage: { contextSamples: [previousTurnUsage] }
+          },
+          {
+            status: 'running',
+            usage: { contextSamples: [] }
+          }
+        ]
+      })
+    ).toMatchObject({
+      compactLabel: '142k / 500k',
+      label: '142000/500000',
+      percentage: 28.4
+    })
+  })
 })
 
 describe('Task 页眉事实', () => {
