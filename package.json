@@ -7,7 +7,7 @@
   "homepage": "https://github.com/promise-thens/agent-studio",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "packageManager": "pnpm@10.33.0",
   "pnpm": {
@@ -27,7 +27,9 @@
     "typecheck:web": "vue-tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "pnpm typecheck:node && pnpm typecheck:web",
     "start": "electron-vite preview",
+    "predev": "node scripts/assert-node-for-vite.mjs",
     "dev": "electron-vite dev",
+    "prebuild": "node scripts/assert-node-for-vite.mjs",
     "build": "pnpm typecheck && electron-vite build",
     "postinstall": "electron-builder install-app-deps",
     "build:unpack": "pnpm build && electron-builder --dir",

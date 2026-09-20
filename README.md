@@ -60,7 +60,7 @@
 
 ## 环境要求
 
-- Node.js 20 或更高版本（本机验证优先 Node 22 / 24）
+- Node.js 20.19+ 或 22.12+（Vite 7 需要 `crypto.hash`；本机优先 Node 22 / 24，可 `nvm use`）
 - pnpm 10
 - 已安装 Grok Build CLI，并能通过 `grok` 或 `~/.grok/bin/grok` 启动
 
