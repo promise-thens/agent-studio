@@ -31,6 +31,8 @@ const ACTIVE_EXECUTION_STATES = new Set<TaskExecutionDto['state']>([
 ])
 
 const TERMINAL_TOOL_STATES = new Set<AgentToolStatus>(['completed', 'failed', 'cancelled'])
+/** Overlay 使用独立内存 session，避免继承主 Renderer 按 origin 持久化的页面缩放。 */
+const OVERLAY_SESSION_PARTITION = 'agent-studio-overlay'
 
 export interface BrowserPluginOverlayWindowBounds {
   x: number
@@ -100,6 +102,8 @@ export function createBrowserPluginOverlayWindowOptions(input: {
     show: false,
     webPreferences: {
       preload: input.preloadPath,
+      partition: OVERLAY_SESSION_PARTITION,
+      zoomFactor: 1,
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false
@@ -443,6 +447,8 @@ export class BrowserPluginOverlayHost {
     this.window = window
     this.applyIgnoreMouseEvents()
     window.webContents.once('did-finish-load', () => {
+      // Overlay 接收的是屏幕 DIP 坐标；加载完成后再次归一缩放，避免 origin 缩放污染最终绘制位置。
+      window.webContents.setZoomFactor(1)
       this.sendToOverlay(this.session.getSnapshot())
     })
     if (this.options.isDev && this.options.rendererUrl) {

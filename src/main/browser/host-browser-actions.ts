@@ -330,6 +330,8 @@ export class HostBrowserActionEngine {
    */
   private async clickXy(x: number, y: number): Promise<HostBrowserActionResult> {
     const viewport = await this.viewportCssSize()
+    // 坐标点击必须建立在当前 CSS 视口存在的前提上，不能在尺寸未知时猜测落点。
+    if (!viewport) return fail('unavailable', '无法读取页面视口。')
     const pixels = this.lastScreenshotPixels
     let targetX = x
     let targetY = y
@@ -343,6 +345,10 @@ export class HostBrowserActionEngine {
     ) {
       targetX = (x / pixels.width) * viewport.width
       targetY = (y / pixels.height) * viewport.height
+    }
+    // 视口右边和下边是开区间；越界事件会被浏览器丢到别的层，不能回报成功。
+    if (!isHostBrowserPointInViewport({ x: targetX, y: targetY }, viewport)) {
+      return fail('invalid-input', '点击坐标超出当前页面视口。')
     }
     return this.dispatchClickAt(targetX, targetY)
   }
@@ -381,6 +387,15 @@ export class HostBrowserActionEngine {
     })
     const viewport = await this.viewportCssSize()
     const point = quads.ok ? resolveHostBrowserClickablePoint(quads.value, viewport) : null
+    if (point && isHostBrowserPointInViewport(point, viewport)) {
+      // browser_type 会直接 focus + insertText；补发 mouseMoved 让 Guest 的 hover/指针状态同步到同一落点。
+      const moved = await sendHostBrowserCdp(this.driver, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: point.x,
+        y: point.y
+      })
+      if (!moved.ok) return moved
+    }
     const inserted = await sendHostBrowserCdp(this.driver, 'Input.insertText', { text })
     if (!inserted.ok) return inserted
     if (submit) {
@@ -673,7 +688,7 @@ export function isHostBrowserPointInViewport(
   viewport: { width: number; height: number } | null
 ): boolean {
   if (!viewport) return true
-  return point.x >= 0 && point.y >= 0 && point.x <= viewport.width && point.y <= viewport.height
+  return point.x >= 0 && point.y >= 0 && point.x < viewport.width && point.y < viewport.height
 }
 
 function sleep(ms: number): Promise<void> {

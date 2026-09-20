@@ -4,7 +4,7 @@
 >
 > **Spec：** [2026-09-16-host-browser-pointer-overlay-design.md](../specs/2026-09-16-host-browser-pointer-overlay-design.md)
 >
-> **状态：** 任务 1–4 代码已落地。任务 5 文档与自动验证以本任务命令为准；开发版 GUI 未走查。不包含 P3-07 Helper。不得宣称任意 App Computer Use / P0-19f 插件虚拟鼠标完成。
+> **状态：** 任务 1–4 代码已落地。任务 5 文档与自动验证以本任务命令为准；开发版 GUI 未走查。不包含 P3-07 Helper。**2026-09-18：** 虚拟鼠标必须做；下文任务步骤里「插件 pointer 不得出现 / 恒 undefined」是当时冻结，不再作为现行约束。不得宣称任意 App Computer Use / P0-19f 插件虚拟鼠标已完成。
 
 **Goal：** 右栏内置页能被 Grok 点到搜索框和关闭按钮，并在现有 overlay 上画出可滑动软件光标；overlay DTO 成为后续 Computer Use 的接入面。
 
@@ -17,8 +17,8 @@
 - IPC 只用 `agent:*` / `app:*` / `task:*`，不得新增 `grok:*`。
 - `clientCapabilities` 保持 `{}`。
 - 不移动系统指针；无 CGEvent / Accessibility / ScreenCaptureKit。
-- 插件 `click_at` 仍不得画光标。
-- `computer-use` surface 本波无 producer。
+- 虚拟鼠标必须做。`click_at` 不是几何来源；针走可映射屏幕 DIP（配套扩展窗矩形 / 内置页 quads / Helper AX）。
+- `computer-use` surface 由 P3-07 Helper 成为 producer，并必须画针。
 - 坐标不进 MCP 回包、Timeline、日志。
 - 中文注释写原因和边界；协议字段保持英文。
 - 用户已有未跟踪文件必须保留。
@@ -30,8 +30,8 @@
 **Files:**
 - Create: `src/shared/agent-pointer-overlay.ts`
 - Create: `src/shared/agent-pointer-overlay.test.ts`
-- Modify: `src/shared/browser-plugin-overlay.ts`（改 re-export / 消费共享类型，`projectBrowserPluginPointer` 仍恒 `undefined`）
-- Modify: `src/shared/browser-plugin-overlay.test.ts`（pointer 仍不得出现）
+- Modify: `src/shared/browser-plugin-overlay.ts`（改 re-export / 消费共享类型。**当时**测 `projectBrowserPluginPointer` 恒 `undefined`；2026-09-18 起虚拟鼠标必须做，该冻结作废）
+- Modify: `src/shared/browser-plugin-overlay.test.ts`（当时 pointer 不得出现；现行作废）
 
 **Interfaces:**
 - Consumes: 无
@@ -106,7 +106,7 @@ pnpm exec vitest run src/shared/agent-pointer-overlay.test.ts
 
 - [ ] **Step 3: 最小实现**
 
-`mapViewportCssToOverlayDip` 按 spec 公式；zoom 非有限或 <=0 返回 undefined。`createAgentPointerSnapshot` 不得在 surface=`computer-use` 时被宿主/插件调用方使用（本任务只提供类型）。plugin overlay 的 `parse` / `create` 改为基于共享 snapshot，并继续丢弃 plugin pointer。
+`mapViewportCssToOverlayDip` 按 spec 公式；zoom 非有限或 <=0 返回 undefined。`createAgentPointerSnapshot` 不得在 surface=`computer-use` 时被宿主/插件调用方使用（本任务只提供类型）。plugin overlay 的 `parse` / `create` 改为基于共享 snapshot。当时丢弃 plugin pointer；**2026-09-18 起有 DIP 必须画出。**
 
 - [ ] **Step 4: 跑测试确认通过**
 
@@ -170,7 +170,7 @@ pnpm exec vitest run src/main/browser/host-browser-actions.test.ts src/main/brow
 
 - 成功 click 后 session 快照 `surface === 'host-browser'` 且 pointer 为映射后的 DIP。
 - view 关闭或主窗口 `blur`：pointer 省略。
-- `acceptBrowserTool` 插件 rawInput 仍无 pointer。
+- `acceptBrowserTool` 当时插件 rawInput 无 pointer；现行虚拟鼠标必须从可映射 DIP 画出。
 - 无任何测试把 `surface` 设成 `computer-use`。
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -225,7 +225,7 @@ pnpm exec vitest run src/main/browser-plugin-overlay.test.ts
 
 **Files:**
 - Modify: `docs/superpowers/plans/p0-21-host-managed-browser.md`（任务 5 HUD 部分改为消费本 overlay；内置页允许软件光标）
-- Modify: `docs/superpowers/plans/p0-19f-browser-computer-use-surface.md`（插件仍不画；宿主页走 21a）
+- Modify: `docs/superpowers/plans/p0-19f-browser-computer-use-surface.md`（插件虚拟鼠标必须做；宿主页走 21a）
 - Modify: `docs/superpowers/plans/p3-07-macos-computer-use-helper.md`（消费 `agent-pointer-overlay`，不自建光标窗）
 - Modify: `docs/superpowers/plans/roadmap-index.md`、`docs/product-vision.md` §7.3 快照、`AGENTS.md`、`CLAUDE.md`
 
@@ -254,7 +254,7 @@ git diff --check
 
 - [x] 可交互优先 snapshot 有测试。
 - [ ] 宿主 click 能画出 overlay 光标；失焦消失。← 代码与聚焦测试已有；开发版 GUI 未走查，不得宣称可见。
-- [x] 插件路径仍无 pointer。
+- [x] 插件路径当时无 pointer（2026-09-16 冻结，2026-09-18 作废）。现行：虚拟鼠标必须做。
 - [x] 无 Helper、无系统鼠标、无 `grok:*` IPC。
 - [ ] 自动验证通过；GUI 走查有记录后才能宣称「内置页光标可用」。← 自动验证已过（2026-09-16）；GUI 未跑。
 - [x] 不得宣称任意 App Computer Use 已完成。

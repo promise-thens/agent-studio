@@ -4,7 +4,7 @@
 >
 > **状态：** 任务 1 由 P0-19f 打开 `browser` L3。任务 2 与右栏壳代码已落地（用户导航 / bounds / chrome IPC）；开发版 GUI 未走查。任务 3 窄动作引擎已落地。任务 4 MCP stdio 注入已落地（`agent-studio-browser`，默认开，下一 session 生效）。[P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) 已落地内置页软件光标 overlay（自动验证见 21a 任务 5；开发版 GUI 未走查）。**已补 `browser_click_xy` / `browser_click_at`（视口 CSS 坐标点击，映射 overlay）；截图按 PNG IHDR 缩到 viewport CSS，避免 Retina 上 NativeImage.getSize 仍是 DIP 却把 2x PNG 交给模型；overlay 覆盖主窗所在屏（不是钉死主屏），光标改成准星+圆心。`browser_evaluate` 仍拒绝，不开放 JS。** 任务 5 HUD 消费 21a overlay；mapper / 截图 Artifact 仍未做。任务 7 未做。后退/前进/刷新按钮目前禁用。
 >
-> **插入点：** 不挡 [P0-19b](p0-19b-grok-sandbox-profile.md)。实现建议在 19b 空闲重建 session 纪律之后（MCP 注入只发生在 `session/new` / `load` / `resume`）。可与 19c–e 并行。权限层与 [P0-19f](p0-19f-browser-computer-use-surface.md) 共享 `browser` L3：**19f 已打开 `browser`，本计划不得改回 `unsupported`。** 19f 覆盖 **插件自己的浏览器**（置顶 overlay；虚拟鼠标硬验收仍因坐标不可映射开放），不自建第二只 Chrome。`screen` / `clipboard` **不再留给 19f**，改留给后置软件表面 / P3-07。本计划的内置页 **允许软件光标**（[P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) overlay，`surface=host-browser`）；插件路径仍不画光标。开发版 GUI 走查仍未跑，不得宣称内置页光标可用。本计划取代 [P3-05](p3-05-managed-browser.md) 的第一波共享页面，不依赖 P3-01 Capability Pack。
+> **插入点：** 不挡 [P0-19b](p0-19b-grok-sandbox-profile.md)。实现建议在 19b 空闲重建 session 纪律之后（MCP 注入只发生在 `session/new` / `load` / `resume`）。可与 19c–e 并行。权限层与 [P0-19f](p0-19f-browser-computer-use-surface.md) 共享 `browser` L3：**19f 已打开 `browser`，本计划不得改回 `unsupported`。** 19f 覆盖 **插件自己的浏览器**（置顶 overlay；**虚拟鼠标必须做**），不自建第二只 Chrome。`screen` / `clipboard` **不再留给 19f**，改留给后置软件表面 / P3-07。本计划的内置页 **必须有软件光标**（[P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) overlay，`surface=host-browser`）；插件路径同样必须画光标。开发版 GUI 走查仍未跑，不得宣称内置页光标可用。本计划取代 [P3-05](p3-05-managed-browser.md) 的第一波共享页面，不依赖 P3-01 Capability Pack。
 
 **优先级：** P0+ / 权重 4（用户要和 Agent 看同一只浏览器；Grok 已经会调 MCP，缺的是宿主视图）
 
@@ -47,7 +47,7 @@
 ## 非目标
 
 - 不实现文件编辑器、LSP、未保存缓冲、ACP `fs`（GACP-05）。
-- 不实现 Chrome Native Bridge（P3-06）、macOS Computer Use Helper（P3-07）。内置页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) 的已有 overlay，不自建第二扇光标窗，也不申请辅助功能。插件虚拟鼠标只在 [P0-19f](p0-19f-browser-computer-use-surface.md) 的置顶 overlay（方案 A）；当前因 ACP 指针键 not-observed / `click_at` 为 viewport-css 尚未画出，本计划不得补画。
+- 不实现 Chrome Native Bridge（P3-06）、macOS Computer Use Helper（P3-07）。内置页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) 的已有 overlay，不自建第二扇光标窗，也不申请辅助功能。插件虚拟鼠标只在 [P0-19f](p0-19f-browser-computer-use-surface.md) 的置顶 overlay（方案 A）画出，**必须做**。本计划不负责货架插件针，但不得再写「不画针」。
 - 不把 chrome-devtools-mcp 接到这只视图的调试端口。
 - 不在 Inspector 增加 `browser` 标签。浏览器是工作区右栏。
 - 不把桌面做成 MCP Host / Marketplace Host；Grok 仍是 MCP 客户端。
@@ -359,7 +359,7 @@ git diff --check
 - [ ] 用户只发自然语言，Grok 能操作右侧那只浏览器。
 - [ ] 用户也能在同一只浏览器里导航；两边看到同一文档。
 - [ ] Profile 与用户 Chrome、App defaultSession、HTML Preview 隔离。
-- [ ] `browser` 为 L3 + origin；写文件 grant 不能捎带；`screen` / `clipboard` 仍未接入（留给后置软件表面 / P3-07，不留给 19f）。内置页允许软件光标（P0-21a overlay）；开发版 GUI 未走查，不得宣称光标可用。插件路径仍不画光标。
+- [ ] `browser` 为 L3 + origin；写文件 grant 不能捎带；`screen` / `clipboard` 仍未接入（留给后置软件表面 / P3-07，不留给 19f）。内置页必须有软件光标（P0-21a overlay）；开发版 GUI 未走查，不得宣称已完成。插件路径虚拟鼠标必须做。
 - [ ] 无任意 CDP、无 `grok:*` IPC、`clientCapabilities` 仍为 `{}`。
 - [ ] 控制期间停止可见；截图按 P0-13 注册或明确降级。
 - [ ] 自动验证通过；开发版走查有记录。
@@ -370,7 +370,7 @@ git diff --check
 | 计划 | 关系 |
 | --- | --- |
 | P0-19b | 空闲重建 session 纪律；开关 MCP 依赖它。本计划不挡 19b 开工。 |
-| P0-19f | 插件操作浏览器的 L3、截图、停止条已落地；置顶 overlay 有停止芯片。**插件虚拟鼠标硬验收仍开放。** 共享 `browser` L3 原则（19f 已打开，后到者不得改回）；**不**在 19f 里建 WebContentsView；宿主页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md)；`screen` / `clipboard` 留给后置软件表面 / P3-07，不留给 19f。 |
+| P0-19f | 插件操作浏览器的 L3、截图、停止条已落地；置顶 overlay 有停止芯片。**插件虚拟鼠标必须做（当前未画出 ≠ 允许不做）。** 共享 `browser` L3 原则（19f 已打开，后到者不得改回）；**不**在 19f 里建 WebContentsView；宿主页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md)；`screen` / `clipboard` 留给后置软件表面 / P3-07，不留给 19f。 |
 | P0-21a | 内置页可交互 snapshot + 同一扇 overlay 上的 host-browser 软件光标。代码已落地；自动验证见 21a 任务 5；开发版 GUI 未走查。不得宣称任意 App Computer Use。 |
 | P3-05 | **被本计划取代第一波共享页。** 文件保留，状态改为后置/取代，不开工。 |
 | P3-06 | 用户 Chrome 标签页桥，仍后置。 |

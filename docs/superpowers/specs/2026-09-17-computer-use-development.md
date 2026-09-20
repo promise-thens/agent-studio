@@ -55,7 +55,7 @@
 
 1. **操作系统物理门：** Chrome 必须装扩展才能合法拿到 Cookie / 操作标签；macOS 辅助功能 / 屏幕录制会弹系统窗。绕不过。解析磁盘 Profile 不是开放接口，也不稳定。
 2. **用户在设置里主动关掉：** 总开关、某站例外、卸扩展、关完整 CDP。关了才拦。
-3. **能力门：** 点不准必须停、没有几何不许发明光标、看得见的停止按钮。这是准，不是锁。
+3. **能力门：** 点不准必须停、虚拟鼠标必须做、看得见的停止按钮。没有几何不许猜点击落点，但必须把几何补上并画出针。这是准，不是锁。
 
 **禁止当作默认产品行为：** 每站点一次授权、下载/上传默认要批准、连接用户 Chrome 默认关、密码/登录态默认同步拒绝、银行/系统设置默认弹确认卡、把完整 CDP 藏成「开发者才配用」。
 
@@ -82,9 +82,9 @@
 光标：
 
 - 内置页必须有针（`surface=host-browser`）。
-- 扩展已连接就必须画 `browser-plugin` 针（上报窗 DIP + `ref` + `elementFromPoint`）。没有几何才允许不画；有几何必须画。禁止把「不连 Chrome」写成默认产品。
+- 扩展已连接就必须画 `browser-plugin` 针（上报窗 DIP + `ref` + `elementFromPoint`）。**虚拟鼠标必须做。** 缺窗矩形则补上报并失败该帧，禁止把「不画针」写成产品默认。禁止把「不连 Chrome」写成默认产品。
 
-P0-19f 冻结仍然成立：货架 chrome-devtools 的 viewport-css `click_at` 不许当主路径。
+货架 chrome-devtools 的 viewport-css `click_at` 不许当点击主路径，也不是针的几何来源。**虚拟鼠标必须做**，几何走配套扩展 / 内置页 / Helper。
 
 ### 1.2 像 Codex 一样操作 Mac 上的任意 App
 
@@ -159,7 +159,7 @@ src/renderer/src/components/HostBrowserSettingsPanel.vue  # 独立设置页，�
 | 用户 Chrome 窗口 | 扩展已装即可，Agent 可自己开标签 | 扩展 DOM 盒 + 窗 DIP | `browser-plugin`（有几何必须画） | P3-06 连接 |
 | 任意 Mac App | Helper | AX frame 屏幕 DIP | `computer-use` | P3-07 |
 
-P0-19f「插件不画光标」只约束 **别人的 chrome-devtools + 不可映射的 viewport-css**。配套扩展已连接并给出屏幕 DIP，就必须画针。禁止继续用那条冻结当借口，也禁止把连接做成默认关。
+**虚拟鼠标必须做。** 货架 chrome-devtools 的 `click_at` 不是几何来源；配套扩展 / 内置页 / Helper 给出屏幕 DIP 后就必须画针。禁止再写「插件不画光标」，也禁止把连接做成默认关。
 
 ### 1.7 浏览器设置页信息架构（对标 ChatGPT 截图，MUST）
 
@@ -474,7 +474,7 @@ Computer Use 的确认 **只适用于 GUI 动作**（点、键、滚、拖、用
 | MCP `agent-studio-browser` | `host-browser-mcp-stdio.ts` | snapshot / click(ref) / click_xy / type / screenshot |
 | snapshot bbox | `attachSnapshotBoxes` | viewport CSS；缺 quad 省略框仍留节点 |
 | 点击几何 | `resolveHostBrowserClickableBox` | 跳过占满视口的外壳，点紧凑可见盒 |
-| overlay | `agent-pointer-overlay` + OverlayApp | 一扇窗；host-browser 可画针；plugin 恒空；computer-use 无 producer |
+| overlay | `agent-pointer-overlay` + OverlayApp | 一扇窗；host-browser / browser-plugin / computer-use **都必须画针** |
 | 技能 | `src/main/runtime/grok/host-browser-grok-skill.ts` 写入 `grok-home/skills/host-browser` | 不写 `~/.grok` |
 | 权限 | browser L3 + origin | screen/clipboard 仍 deny |
 
@@ -483,7 +483,7 @@ Computer Use 的确认 **只适用于 GUI 动作**（点、键、滚、拖、用
 - ChatGPT 级独立浏览器设置页（现在只有一个 MCP 开关）
 - Agent 需要浏览器时自动打开右栏并新建/导航标签（用户不用点地球图标）
 - 配套 Chrome/Edge 扩展 + Native Messaging（P3-06 硬验收）：装上即同步登录态，并连接用户 Chrome
-- 扩展已连就必须画 `browser-plugin` 光标（上报屏幕 DIP 后必须画；没几何才允许不画）
+- 扩展已连就必须画 `browser-plugin` 光标（**虚拟鼠标必须做**；缺几何则补上报，禁止不画针当完成）
 - `list_apps` / `get_app_state` 任意 App
 - Accessibility Helper、ScreenCaptureKit Helper
 - `surface=computer-use` 的 pointer producer
@@ -509,7 +509,7 @@ Computer Use 的确认 **只适用于 GUI 动作**（点、键、滚、拖、用
 
 > 内置页巩固可与文档同步。任意 App 在 P3-02 与产品确认之前 **不写 Helper 代码**。
 
-> 五条 MUST 全部做完才算对标 Codex。阶段 0 巩固内置页（含 Agent 自己开标签）；阶段 0b 做独立设置页 + 扩展默认同步并连接；阶段 1–4 做任意 App。不要用「19f 冻结」跳过扩展光标，也不要把日常路径做成「请用户点扩展」或「默认关」。
+> 五条 MUST 全部做完才算对标 Codex。阶段 0 巩固内置页（含 Agent 自己开标签）；阶段 0b 做独立设置页 + 扩展默认同步并连接；阶段 1–4 做任意 App。虚拟鼠标必须做，禁止用「19f 冻结」跳过；也不要把日常路径做成「请用户点扩展」或「默认关」。
 
 ### 阶段 0 — 内置页对齐 Codex 工作流（可立刻做，且已部分完成）
 
@@ -531,7 +531,7 @@ Computer Use 的确认 **只适用于 GUI 动作**（点、键、滚、拖、用
 0b.3 Native Host 只收签名/固定 schema。默认同步 Cookie / 登录态 / 扩展 API 能提供的存储（脱敏日志，不写 Timeline）。不解析磁盘 Profile。密码库：API 允许就同步，不允许就在设置写明原因。
 0b.4 同步写入内置 Project partition。默认全量同步；黑名单内的 origin 才跳过。卸扩展或关同步立即停。
 0b.5 Agent 调试：自己开内置标签，也可在已连接的用户 Chrome 里开标签。桌面负责把右栏打开。
-0b.6 扩展已连就上报 `ref/role/name/x/y/width/height` + `windowScreenBounds` + DPR + zoom；主进程合成屏幕 DIP，画 `browser-plugin` 针。没有窗矩形就 **宁可不画针，也不许发明**。有窗矩形就 **必须画针**。点击 `elementFromPoint` 复核。完整 CDP 出厂开。
+0b.6 扩展已连就上报 `ref/role/name/x/y/width/height` + `windowScreenBounds` + DPR + zoom；主进程合成屏幕 DIP，**必须** 画 `browser-plugin` 针。没有窗矩形就补上报并让该帧失败，**禁止把不画针写成验收**。点击 `elementFromPoint` 复核。完整 CDP 出厂开。
 0b.7 技能：扩展已装就同步并连接；禁止 chrome-devtools `click_at`；禁止等用户去点扩展；禁止把下载/上传写成还要再批一次。
 
 **完成判断：**
@@ -672,7 +672,7 @@ Grok MCP computer_use.click({ elementIndex })
 
 - 不实现 Windows/Linux Computer Use。
 - 不默认全屏连续录制、不读剪贴板全文、不后台偷听。
-- **不**用货架 chrome-devtools 的 viewport-css `click_at` 发明光标。配套扩展给出屏幕 DIP 之后 **必须** 画针。
+- 货架 chrome-devtools 的 `click_at` 不是针的几何来源。**虚拟鼠标必须做**；几何走配套扩展 / 内置页 / Helper 的屏幕 DIP。
 - 不开放 `browser_evaluate` / `Runtime.evaluate` 当主路径。
 - 不把 Computer Use 做成第二个无头 Chrome 冒充用户浏览器。日常调试必须是用户看得见的右栏内置页。
 - 不解析磁盘 Chrome Profile 来冒充同步。登录态走扩展 API。
@@ -693,7 +693,7 @@ Grok MCP computer_use.click({ elementIndex })
 | 点错高风险按钮 | 确认矩阵；完全接管不覆盖 CU 高风险项 |
 | overlay 与点击分家 | 回读真实 bounds；guest zoom=1 |
 | 文档与代码漂移 | 实现变更必须改本文件、p3-06、p3-07 |
-| 用 19f 冻结挡扩展光标 | 扩展已连并上报屏幕 DIP 后必须画针 |
+| 把「不画针」写进计划 | 虚拟鼠标必须做；缺几何就补来源，不准冻结成不做 |
 | 把扩展做成每次点 tab | 主路径是自己开标签 + 装上即同步并连接 |
 | 用安全剧场锁死通用型 | 出厂始终允许；设置里才能改严 |
 | 解析磁盘 Profile | 只走扩展 API + Native Host |

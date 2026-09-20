@@ -20,7 +20,7 @@
 - 不申请辅助功能 / 屏幕录制。
 - 不实现 `list_apps` / `get_app_state` / 点 Notes、微信、系统 Chrome。
 - 不移动系统指针，不调用 CGEvent / SkyLight。
-- 不把插件 `click_at` 的 viewport-css 画到桌面（P0-19f 冻结仍有效）。
+- `click_at` 的 viewport-css 不是针的几何来源。**虚拟鼠标必须做**，映射必须用窗 DIP / 配套扩展节点盒 / 内置页 quads。
 - 不做 Codex 弹簧物理、锁屏接管、全屏 Computer Use 遮罩。
 
 关网页对话框：**不是**新 API。Grok 对快照里的关闭按钮 `browser_click`。
@@ -34,7 +34,7 @@ Codex 能画虚拟鼠标，是因为 Helper 自己持有控件的屏幕几何。
 | 来源 | 几何在哪 | 能不能画 |
 | --- | --- | --- |
 | 宿主内置页 `getContentQuads` | 主进程，相对我们自己的 `WebContentsView` | 能。窗口 + view bounds 已知。 |
-| 插件 chrome-devtools `click(uid)` / `click_at` | 别人的 Chrome，ACP 无屏幕 DIP | 不能。继续不发明光标。 |
+| 插件 / 配套扩展 Chrome | 窗 DIP + 节点 CSS 盒 | **必须画。** `click_at` 本身不是几何来源。 |
 | 未来 Computer Use AX frame | Helper 读到的屏幕矩形 | 能。接到同一 overlay。 |
 
 所以提前做的「Computer Use 简单一些」，指的是 **overlay 快照、HUD、停止、坐标空间、失焦策略** 先成为稳定接口，而不是把 P3-07 整包提前。
@@ -68,7 +68,7 @@ interface AgentPointerSnapshot {
 
 - `pointer` 的 `x/y` **已经是 overlay 窗口本地 DIP**。Renderer 只 `translate`，不再换算、不猜。
 - 谁生产谁映射。映射失败则 **省略 pointer**，DOM 不得挂光标节点。
-- `browser-plugin`：继续走 `projectBrowserPluginPointer`，恒为 `undefined`。
+- `browser-plugin`：**必须画针**。几何来自配套扩展窗 DIP / 节点盒，不是 `click_at` viewport-css。
 - `host-browser`：仅主进程用 view 矩形映射成功后写入。
 - `computer-use`：本波只出现在类型联合里。任何代码路径不得伪造该 surface 的 pointer。
 - `persistWhenUnfocused`：宿主页为 `false`（主窗口失焦/最小化立刻清指针，避免 alwaysOnTop 把箭头留在别的 App 上）。未来 Helper 对前台目标 App 可为 `true`。本波没有任何调用方传 `true`。
@@ -162,13 +162,13 @@ Grok MCP browser_click(ref)
 ## 8. 文件范围（预计）
 
 - 新增：`src/shared/agent-pointer-overlay.ts` 及测试
-- 修改：`src/shared/browser-plugin-overlay.ts`（改消费共享 DTO，plugin pointer 仍恒空）
+- 修改：`src/shared/browser-plugin-overlay.ts`（改消费共享 DTO；`browser-plugin` pointer 有 DIP 就必须画）
 - 修改：`src/main/browser-plugin-overlay.ts`（surface、宿主 pointer、失焦清理）
 - 修改：`src/main/browser/host-browser-actions.ts`（交互优先 snapshot；click/type 回传 viewport 点给主进程，不进 MCP）
 - 修改：`src/main/browser/host-browser-service.ts`（映射并通知 overlay）
 - 修改：`src/renderer/src/overlay/OverlayApp.vue`（按 surface 文案；闲置无芯片）
 - 修改：`src/main/index.ts` 只组装，不把几何堆进入口
-- 文档：本文件、`p0-21` 状态、roadmap、P0-19f 指针冻结「宿主页除外」、P3-07 注明消费本 overlay、AGENTS.md / CLAUDE.md 进度快照
+- 文档：本文件、`p0-21` 状态、roadmap、P0-19f 虚拟鼠标必须做、P3-07 注明消费本 overlay、AGENTS.md / CLAUDE.md 进度快照
 
 不改 `clientCapabilities`。不新增 `grok:*` IPC。
 
@@ -189,7 +189,7 @@ Grok MCP browser_click(ref)
 - 无名 button 可被收入。
 - 150 上限与 truncated。
 - 宿主 viewport 点映射到 overlay DIP，出 view 矩形则无 pointer。
-- 插件 rawInput 仍投影不出 pointer。
+- 插件 rawInput 不是几何来源；`browser-plugin` 必须用窗 DIP 画出 pointer。
 - 失焦策略：`persistWhenUnfocused: false` 时 pointer 被清。
 - 无 CGEvent / Accessibility 导入出现在宿主映射模块。
 

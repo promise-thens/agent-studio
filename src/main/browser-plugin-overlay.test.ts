@@ -5,6 +5,12 @@ import { describe, expect, it, vi } from 'vitest'
 
 const overlayWindowMocks = vi.hoisted(() => ({
   windows: [] as Array<{
+    webContents: {
+      send: ReturnType<typeof vi.fn>
+      once: ReturnType<typeof vi.fn>
+      on: ReturnType<typeof vi.fn>
+      setZoomFactor: ReturnType<typeof vi.fn>
+    }
     setIgnoreMouseEvents: ReturnType<typeof vi.fn>
     setBounds: ReturnType<typeof vi.fn>
     getBounds: () => { x: number; y: number; width: number; height: number }
@@ -15,7 +21,7 @@ const overlayWindowMocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => {
   class BrowserWindow {
-    webContents = { send: vi.fn(), once: vi.fn(), on: vi.fn() }
+    webContents = { send: vi.fn(), once: vi.fn(), on: vi.fn(), setZoomFactor: vi.fn() }
     setIgnoreMouseEvents = vi.fn()
     constructor() {
       overlayWindowMocks.windows.push(this)
@@ -462,6 +468,38 @@ describe('宿主 host-browser 指针', () => {
     expect(hidden?.pointer).toBeUndefined()
   })
 
+  it('overlay 加载完成后先归一缩放，再发送最新快照', () => {
+    overlayWindowMocks.windows.length = 0
+    const host = new BrowserPluginOverlayHost({
+      isDev: false,
+      preloadPath: '/tmp/overlay.js',
+      productionHtmlPath: '/tmp/overlay.html',
+      platform: 'darwin',
+      publishToMain: vi.fn()
+    })
+    host.acceptHostBrowserPointer({
+      pointer: { x: 310, y: 130 },
+      taskId: 'task-1',
+      turnId: 'turn-1'
+    })
+    const window = overlayWindowMocks.windows.at(-1)
+    if (!window) throw new Error('需要 overlay 窗')
+    const didFinishLoad = window.webContents.once.mock.calls.find(
+      ([eventName]) => eventName === 'did-finish-load'
+    )?.[1] as (() => void) | undefined
+    if (!didFinishLoad) throw new Error('需要 did-finish-load 回调')
+
+    window.webContents.setZoomFactor.mockClear()
+    window.webContents.send.mockClear()
+    didFinishLoad()
+
+    expect(window.webContents.setZoomFactor).toHaveBeenCalledWith(1)
+    expect(window.webContents.send).toHaveBeenCalledTimes(1)
+    expect(window.webContents.setZoomFactor.mock.invocationCallOrder[0]).toBeLessThan(
+      window.webContents.send.mock.invocationCallOrder[0]
+    )
+  })
+
   it('ensurePointerOverlayLayout 回读落地后的 bounds，而不是只信 setBounds 入参', () => {
     overlayWindowMocks.windows.length = 0
     const requested = { x: 0, y: 0, width: 1440, height: 900 }
@@ -599,6 +637,8 @@ describe('overlay 窗口构造', () => {
     })
     expect(options.webPreferences).toMatchObject({
       preload: '/tmp/overlay.js',
+      partition: 'agent-studio-overlay',
+      zoomFactor: 1,
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false

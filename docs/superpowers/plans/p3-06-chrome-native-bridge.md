@@ -4,7 +4,7 @@
 
 **Goal:** 独立浏览器设置页（对标 ChatGPT Browser Use，出厂开放）+ Agent 自己开右栏 + 配套扩展装上即同步 Cookie/登录态并允许连接用户 Chrome。
 
-**Architecture:** 设置与权限走现有 `app:*` IPC 和 `HostBrowserSettingsStore`。Native Host 放在 `src/main/browser/chrome/`（不新建 Capability Pack）。扩展只经 Native Messaging 说话，不解析磁盘 Chrome Profile。内置页继续用 `src/main/browser/`。三条战场共用已有 overlay；配套扩展有窗 DIP 才画 `browser-plugin` 针。
+**Architecture:** 设置与权限走现有 `app:*` IPC 和 `HostBrowserSettingsStore`。Native Host 放在 `src/main/browser/chrome/`（不新建 Capability Pack）。扩展只经 Native Messaging 说话，不解析磁盘 Chrome Profile。内置页继续用 `src/main/browser/`。三条战场共用已有 overlay；配套扩展 **必须** 画 `browser-plugin` 虚拟鼠标。
 
 **Tech Stack:** Electron 39、Vue 3、TypeScript、electron-vite、pnpm 10、Node.js 20+、Vitest、Chrome MV3 Native Messaging。
 
@@ -19,8 +19,8 @@
 - 不解析 `~/Library/Application Support/Google/Chrome/` Profile。
 - 不依赖 P3-01 / P3-02 Capability Pack；禁止新建 `src/main/capability/`。
 - Native Host 不得变成任意 Shell：固定 extension id、zod schema、长度上限、命令白名单。
-- `browser` L3 已开，不得改回 `unsupported`。货架 chrome-devtools 的 viewport-css `click_at` 仍不得发明光标。
-- 配套扩展已连并上报屏幕 DIP 后必须画 `browser-plugin` 针；没有几何宁可不画。
+- `browser` L3 已开，不得改回 `unsupported`。货架 chrome-devtools 的 `click_at` 不是针的几何来源。
+- **虚拟鼠标必须做。** 配套扩展已连就必须上报窗 DIP 并画出 `browser-plugin` 针；缺几何时补上报，禁止把「不画针」写成验收。
 - 出厂：总开关开、智能体权限四列始终允许、完整 CDP 开、连接开、Cookie 同步开、谨慎模式关、下载前询问关。
 - 任务执行中禁止改总开关；保存必须等主进程确认，禁止乐观 UI。
 - 清浏览数据只清内置 `persist:as-browser:{projectId}` partition，不动用户 Chrome。
@@ -38,7 +38,7 @@
 4. `setHostBrowserEnabled` 保留为总开关（继续 `assertGrokConfigCanReload`）。其它字段走新的 `app:set-host-browser-settings`。
 5. schemaVersion 升到 2；读到 v1 只取 `enabled`，其余出厂默认。
 6. 任意成功的宿主 MCP `perform` 都打开右栏，不限于 navigate / tabs_open。
-7. ACP 插件 overlay 通道仍剥离不可映射 pointer；配套扩展经 Native Host 合成屏幕 DIP 后走 `createAgentPointerSnapshot({ surface: 'browser-plugin', pointer })`。
+7. **虚拟鼠标必须做。** 配套扩展经 Native Host 合成屏幕 DIP 后走 `createAgentPointerSnapshot({ surface: 'browser-plugin', pointer })`。货架 chrome-devtools 的 `click_at` 不是几何来源，不得再把「剥离 pointer」写成完成态。
 
 ---
 
@@ -421,9 +421,9 @@ screenX = windowScreenBounds.x + cssX * (windowScreenBounds.width / innerWidth)
 overlayX = windowScreenBounds.x + node.x * (dpr/dpr) / zoom - overlayBounds.x
 ```
 
-实现时用与 host-browser 相同的 overlay `getBounds()` 回读。没有 `windowScreenBounds` → 不画针。
+实现时用与 host-browser 相同的 overlay `getBounds()` 回读。没有 `windowScreenBounds` → 该帧不猜点，必须让扩展补上报；虚拟鼠标仍是本任务验收。
 
-`createAgentPointerSnapshot`：`browser-plugin` 在 pointer 为有限数字时保留。更新测试「browser-plugin 恒丢弃 pointer」为「无几何仍丢弃；有限 DIP 保留」。ACP `browser-plugin-overlay.ts` 通道继续剥离 pointer（货架插件）。
+`createAgentPointerSnapshot`：`browser-plugin` 在 pointer 为有限数字时 **必须保留并画出**。更新测试「browser-plugin 恒丢弃 pointer」为「有限 DIP 必须保留」。禁止再把 ACP 通道剥离 pointer 当成验收。
 
 扩展 background：
 - 装上后 `chrome.runtime.connectNative(CHROME_NATIVE_HOST_NAME)`
@@ -435,7 +435,7 @@ overlayX = windowScreenBounds.x + node.x * (dpr/dpr) / zoom - overlayBounds.x
 - 按钮「安装配套扩展」→ 主进程 reveal unpacked 目录 + 安装 native host manifest
 - 文案：打开 Chrome 扩展页，启用开发者模式，加载已解压的扩展
 
-- [ ] **Step 1: Failing tests**（manifest 无 give-tab 文案、popup 源码不含「交给 Agent」、pointer 有 DIP 保留、无 bounds 不画、ACP 通道仍剥 pointer）
+- [ ] **Step 1: Failing tests**（manifest 无 give-tab 文案、popup 源码不含「交给 Agent」、pointer 有 DIP 必须保留并画出）
 - [ ] **Step 2: Verify fail**
 - [ ] **Step 3: Minimal implementation**
 - [ ] **Step 4: Tests + eslint + `pnpm typecheck` + `git diff --check`**
@@ -454,7 +454,7 @@ git commit -m "feat(p3-06): 落地配套扩展并在已连接时画出插件光�
 - [ ] 智能体权限出厂四列始终允许；谨慎模式出厂关；browse=always 时 browser 不弹卡，写文件仍弹
 - [ ] `chrome-extension/agent-studio-browser/` 可 unpacked 安装
 - [ ] Native Host 默认同步扩展 Cookie 到内置 partition，不解析磁盘 Profile；卸扩展或关同步即停（关开关后不再 apply）
-- [ ] 扩展已连并带窗 DIP 时 overlay 画出 `browser-plugin` 针；无几何不发明
+- [ ] 扩展已连时 overlay **必须** 画出 `browser-plugin` 虚拟鼠标；缺窗 DIP 则补上报，禁止把不画针当完成
 - [ ] 相关新增核心函数/IPC/权限边界有中文注释；测试只用假凭据
 - [ ] 目标 ESLint、相关 Vitest、`pnpm typecheck`、`pnpm build` 与 `git diff --check` 通过
 

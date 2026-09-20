@@ -1,3 +1,5 @@
+> **2026-09-18：** 下文是 2026-09-07 的协议观察（`click_at` 是 viewport-css、`click(uid)` 无坐标）。这些事实仍成立，但 **不再构成「不画虚拟鼠标」的计划冻结**。虚拟鼠标必须做，几何改走窗 DIP / 配套扩展 / 内置页 quads。
+
 # P0-19f 浏览器插件字段观察
 
 > 冻结浏览器工具白名单与虚拟鼠标坐标。观察方法是 `sdk+docs+binary`，**不是**真机 ACP 会话；实现必须服从本表，不得从 title、截图或 `_meta` 猜测 URL / 光标。没见到的字段写 not-observed。
@@ -131,7 +133,7 @@ ACP 层（产品只许读这里）：
 | `rawInput.tool_input.x` / `rawInput.tool_input.y` | **not-observed**（UseToolInput 套层未经 ACP 证实） | 即使将来 nested，空间仍是 viewport-css |
 | ToolCall 顶层 `x` / `y` | **not-observed** | SDK `ToolCall` / `ToolCallUpdate` 无此属性 |
 
-`_meta` 一律不读。`_meta.x` / `_meta.y` 不得发明光标。
+`_meta` 一律不读。`_meta.x` / `_meta.y` 不得用该字段猜针（虚拟鼠标必须另走可映射 DIP）。
 
 MCP 层（chrome-devtools `click_at`，**不是** ACP 顶层键）：
 
@@ -141,7 +143,7 @@ MCP 层（chrome-devtools `click_at`，**不是** ACP 顶层键）：
 | 实现 | `page.pptrPage.mouse.click(x, y)` |
 | 空间 | **viewport-css**：Puppeteer `Mouse`「main-frame CSS pixels relative to the top-left corner of the viewport」。测试用页面内 `50,50` 点 100×100 的 div，不是屏幕 DIP。 |
 | 能否映射到 overlay 屏幕 DIP | **不可映射**。缺 Chrome 窗口屏上位置、工具栏/装饰、DPR、多屏。本计划禁止 Accessibility / CGEvent / 读窗几何来补映射。数值不得原样画到桌面。 |
-| 默认路径 | `click(uid)` **无坐标** → 不得发明光标。`click_at` 默认未广告给未开 vision 的服务器。 |
+| 默认路径 | `click(uid)` **无坐标** → 不得用该字段猜针（虚拟鼠标必须另走可映射 DIP）。`click_at` 默认未广告给未开 vision 的服务器。 |
 | browser-use / tinyfish | README **无** 稳定指针键 |
 
 `resize_page` 的 `width` / `height`、`emulate.viewport` 字符串是页面尺寸 / 设备模拟，**不是**指针。
@@ -151,5 +153,5 @@ MCP 层（chrome-devtools `click_at`，**不是** ACP 顶层键）：
 1. **只按第 2 节 name 精确匹配映射 `browser`。** 禁止 title 正则猜 URL，禁止把 `use_tool` 标成 browser，禁止把夹具 `computer-use` 当货架或白名单。
 2. **URL 只从冻结键 `rawInput.url` 拷贝**，经 `parseBrowserOrigin`；失败则 unknown。不要读 `_meta`、title、`tool_input.url`。
 3. **pointer 只在「ACP 键 observed 且空间 = screen-DIP（或已证明可映射）」时写入快照。** 本表 ACP 指针键全部 not-observed；MCP `click_at` 即使将来出现在 `rawInput.x/y`，空间仍是 viewport-css、**不可映射**。任务 6 **不得**标完成。任务 2–5 仍可继续（停止条可以没有光标）。
-4. **`click(uid)` 没有坐标 → 不得发明光标。** 禁止用 uid、截图像素、title、无障碍树猜点。
+4. **`click(uid)` 没有坐标 → 不得用该字段猜针（虚拟鼠标必须另走可映射 DIP）。** 禁止用 uid、截图像素、title、无障碍树猜点。
 5. **本计划不打开 `screen` / `clipboard`。** 不为画光标去改用户插件 MCP 启动参数，不加 `--experimentalVision`。

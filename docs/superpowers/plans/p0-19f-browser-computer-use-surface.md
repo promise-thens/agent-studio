@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。步骤使用复选框 (`- [ ]`) 跟踪。
 >
-> **状态：** 任务 1–5 代码已落地。任务 6 overlay 窗口与停止芯片已落地，**虚拟鼠标硬验收未过**（ACP 指针键 not-observed；`click_at` 为 viewport-css，不可映射到 overlay 屏幕 DIP；未发明光标）。任务 7 自动验证已过；**开发版 GUI 未走查**。`screen` / `clipboard` 仍 deny。不得宣称计划完成。2026-09-07 产品对齐：**本计划只做插件操作浏览器**；**虚拟鼠标是硬验收**；点桌面软件 / `screen` / `clipboard` 后置到软件表面 / P3-07。方案 A 置顶 HUD 光标，不注入系统鼠标（方案 B / P3-07）。**2026-09-16：** 插件仍不画光标（`projectBrowserPluginPointer` 恒 `undefined`）。宿主内置页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md)，不是本计划验收项；21a 开发版 GUI 未走查，不得借 21a 宣称本计划虚拟鼠标已完成。
+> **状态：** 任务 1–5 代码已落地。任务 6 overlay 窗口与停止芯片已落地；**虚拟鼠标是硬验收且必须做**（当前代码未画出 ≠ 计划允许不做）。禁止再用 ACP 指针 not-observed / `click_at` viewport-css 把「不画针」写进计划：针的几何改走窗 DIP / 配套扩展 / 内置页 quads。任务 7 自动验证已过；**开发版 GUI 未走查，不得宣称计划完成**。`screen` / `clipboard` 仍 deny。2026-09-07 产品对齐：**本计划只做插件操作浏览器**；**虚拟鼠标必须看见**；点桌面软件 / `screen` / `clipboard` 后置到软件表面 / P3-07。方案 A 置顶 HUD 光标，不注入系统鼠标（方案 B / P3-07）。宿主内置页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md)；不得借 21a 宣称本计划虚拟鼠标已完成。
 >
 > **插入点：** [P0-19](p0-19-grok-host-capability-polish.md) 插件浏览器表面。前置：P0-10E 能安装市场插件；GACP-03 不得把 `browser` 放进「本任务写文件」grant。
 >
@@ -19,7 +19,7 @@
 1. **权限：** 只打开 `browser` 为 L3；目标尽量投影为 origin；没有可信目标就 unknown，不能自动过，不能被写文件 grant 复用。`screen` / `clipboard` 本计划保持 `deny + unsupported`。
 2. **证据：** 插件截图若已落在 execution root 或已冻结的 Grok session 图片目录，注册为 Task Artifact；Timeline 只存 artifact 引用。失败不阻断 Turn。
 3. **窗口内停止条：** 未完成的 browser 工具或未决 L3 浏览器权限时，主窗口显示不可拖丢的停止（复用 `cancelTurn`，与 P0-19g 共用一条 HUD，文案区分）。
-4. **虚拟光标 HUD（A，硬验收）：** 浏览器插件进行中，独立透明置顶层画虚拟鼠标。主窗口最小化或失焦时仍可见。光标只跟随观察冻结且可映射到屏幕 DIP 的坐标；**禁止**用 uid、截图像素、title 猜点。没有可映射坐标则 **不得宣称虚拟鼠标已完成**。叠加层除停止芯片外点击穿透。
+4. **虚拟光标 HUD（A，硬验收，必须做）：** 浏览器插件进行中，独立透明置顶层画虚拟鼠标。主窗口最小化或失焦时仍可见。几何必须是可映射到 overlay 屏幕 DIP 的窗矩形 / 配套扩展节点盒 / 内置页 quads；**禁止**用 uid、截图像素、title 猜点。缺几何时该帧不猜点，但必须补来源直到能画；停止条不能替代虚拟鼠标。叠加层除停止芯片外点击穿透。
 
 **Tech Stack：** Electron 39 透明 `BrowserWindow`（`alwaysOnTop` + `setIgnoreMouseEvents`）、现有插件页、Permission Broker、P0-13 Artifact、P0-11 evidence、runtime media 路径、electron-vite 增加 overlay 入口。
 
@@ -67,14 +67,14 @@
 
 货架上 **没有** 名为 `computer-use` 的官方插件。点桌面 App 不是这期。
 
-默认 `chrome-devtools` 点击是 `click(uid)`（无障碍树），不是屏幕坐标。带坐标的 `click_at(x, y)` 需插件 `--experimentalVision`，默认未开。桌面 **不得** 为了画光标去改用户插件 MCP 启动参数。
+默认 `chrome-devtools` 点击是 `click(uid)`（无障碍树），不是屏幕坐标。`click_at(x, y)` 是 viewport-css，**不是**针的几何来源。桌面 **不得** 为了画光标去改用户插件 MCP 启动参数；虚拟鼠标改走窗 DIP / 配套扩展上报的屏幕几何。
 
 ### 与相邻计划
 
 | 计划 | 关系 |
 | --- | --- |
-| P0-21 | 宿主右栏内置页。共享 `browser` L3 原则。谁先改策略谁打开 `browser`；后到者不得改回 `unsupported`。插件虚拟光标仍在本计划 overlay 且因坐标不可映射不画；宿主页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) 的同一扇 overlay（`surface=host-browser`），不画进 WebContentsView。 |
-| P0-21a | 宿主内置页 snapshot + overlay 指针。插件路径继续丢 pointer。不得把 21a 标成本计划虚拟鼠标完成。 |
+| P0-21 | 宿主右栏内置页。共享 `browser` L3 原则。谁先改策略谁打开 `browser`；后到者不得改回 `unsupported`。插件虚拟光标必须画在本计划 overlay；宿主页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) 的同一扇 overlay（`surface=host-browser`），不画进 WebContentsView。 |
+| P0-21a | 宿主内置页 snapshot + overlay 指针。插件路径必须自己画 pointer，不得再丢。不得把 21a 标成本计划虚拟鼠标完成。 |
 | P3-07 | 真控系统鼠标、点任意软件。后置。消费 `agent-pointer-overlay`，不自建光标窗。 |
 | 以后的软件表面 | 打开 `screen` / `clipboard`、Computer Use 类插件。未立项，不在本文件实现。 |
 
@@ -92,7 +92,7 @@
 - 不做 macOS Computer Use Helper，不注入系统鼠标（P3-07 / 方案 B）。
 - 不打开 `screen` / `clipboard`。
 - 不为每个网站做桌面内嵌登录浏览器（共享页走 P0-21）。
-- 不把虚拟光标画进 P0-21 的 WebContentsView。宿主页 overlay 光标由 P0-21a 负责；本计划插件路径仍不画 pointer。
+- 不把虚拟光标画进 P0-21 的 WebContentsView。宿主页 overlay 光标由 P0-21a 负责；本计划插件路径 **必须** 画 pointer。
 - 不实现 `get_command_or_subagent_output` 轮询器，不把插件输出写进 Inspector「终端」。
 - 不把 overlay 做成第二条 Task 或第二条 Runtime。
 - 不把 chrome-devtools 接到 P0-21 视图的调试端口。
@@ -125,8 +125,8 @@ Grok 申请 browser
 
 browser 进行中或未决 L3
   → 主窗口停止 HUD：「Grok 正在使用浏览器插件」
-  → 置顶 overlay：有可映射坐标则画虚拟鼠标；停止芯片始终可点
-  → 无坐标：overlay 不得发明光标位置；计划级验收保持未完成
+  → 置顶 overlay：必须画虚拟鼠标；停止芯片始终可点
+  → 无坐标：该帧不猜点，必须补窗 DIP / 配套扩展几何；不得把「不画针」写成计划
 用户点 overlay 停止或 Composer 停止
   → 现有 cancelTurn
   → overlay 与停止文案消失，不得再声称正在控制浏览器
@@ -157,7 +157,7 @@ browser 进行中或未决 L3
 - 修改：`src/renderer/src/components/TaskComposer.vue`（与 P0-19g 共用一条 HUD）
 - 修改：`electron.vite.config.ts`（overlay 入口 + preload `isolatedEntries`，禁止沙箱 `require('./chunks/*')`）；必要时 `electron-builder.yml`
 - 修改：`src/main/index.ts` 只组装 overlay 生命周期，不把窗口细节堆进入口
-- 测试：grant 不捎带；screen 仍 deny；无坐标不发明光标；停止关闭 overlay；无截图降级；overlay 源码不含 Accessibility / CGEvent
+- 测试：grant 不捎带；screen 仍 deny；虚拟鼠标必须有可映射 DIP；无几何该帧不猜点；停止关闭 overlay；无截图降级；overlay 源码不含 Accessibility / CGEvent
 - 走查：装 chrome-devtools → L3 卡 → 允许后主窗口 HUD + overlay；停止后消失
 
 公开状态（任务 4–6 共用）：
@@ -166,7 +166,7 @@ browser 进行中或未决 L3
 /** 本计划只有浏览器插件一种 overlay，不为 screen 预留 kind。 */
 export type BrowserPluginOverlayKind = 'browser'
 
-/** 主进程投影给 overlay / 主窗口 HUD 的可序列化快照。缺 pointer 表示不得画光标。 */
+/** 主进程投影给 overlay / 主窗口 HUD 的可序列化快照。缺 pointer 表示这一帧不画针，不是计划允许没有虚拟鼠标。 */
 export interface BrowserPluginOverlaySnapshot {
   visible: boolean
   kind: BrowserPluginOverlayKind
@@ -181,7 +181,7 @@ export interface BrowserPluginOverlaySnapshot {
 
 ### 任务 1: 观察浏览器插件的 ACP 字段
 
-**任务目标：** 冻结「哪些工具算操作浏览器」以及「虚拟鼠标坐标从哪来」。没有这张表，后面不得从 title 猜 URL，也不得发明光标。
+**任务目标：** 冻结「哪些工具算操作浏览器」以及「虚拟鼠标坐标从哪来」。没有这张表，后面不得从 title 猜 URL。虚拟鼠标必须做，坐标必须是可映射屏幕 DIP。
 
 **Files:**
 - Create: `docs/superpowers/plans/grokACP计划/observations/p0-19f-browser-plugin-pointer-observation.md`
@@ -249,7 +249,7 @@ export interface BrowserPluginOverlaySnapshot {
 1. 只按上表 name 映射 browser，禁止 title 正则猜 URL。
 2. URL 只从冻结键拷贝，经 `parseBrowserOrigin`；失败则 unknown。
 3. pointer 只在「键 observed 且空间 = screen-DIP（或已证明可映射）」时写入快照。
-4. `click(uid)` 没有坐标 → 不得发明光标。
+4. `click(uid)` 没有坐标 → 不得用 uid 猜针；必须从窗 DIP / 配套扩展节点盒拿几何。
 5. 本计划不打开 screen / clipboard。
 ```
 
@@ -265,7 +265,7 @@ git add docs/superpowers/plans/grokACP计划/observations/p0-19f-browser-plugin-
 git commit -m "docs(p0-19f): freeze browser plugin tool and pointer observation"
 ```
 
-**门：** 若第 3 节全部 not-observed，或坐标空间不可映射到屏幕 DIP，任务 6 **不得**标完成。任务 2–5 仍可继续。
+**门：** 任务 6 在看见虚拟鼠标之前 **不得**标完成。若货架插件自己报不出屏幕 DIP，改用窗几何 / 配套扩展上报，禁止把任务改成「不画针」。任务 2–5 仍可继续。
 
 ---
 
@@ -677,11 +677,11 @@ git commit -m "feat(p0-19f): show stop hud while plugin browser runs"
 
 ### 任务 6: 虚拟光标 HUD（方案 A，硬验收）
 
-> **2026-09-07 快照：** overlay 窗口 + 停止芯片已落地（`2f6b8f0` / `90ca64a`）。`projectBrowserPluginPointer` 恒返回 `undefined`；DOM 无 `.overlay-cursor`。**本任务不得打勾。** 阻塞：任务 1 冻结 ACP 指针键 not-observed；`click_at` 为 viewport-css，禁止用 Accessibility / 窗几何补映射。停止芯片 ≠ 虚拟鼠标。
+> **2026-09-07 快照：** overlay 窗口 + 停止芯片已落地（`2f6b8f0` / `90ca64a`）。当时 `projectBrowserPluginPointer` 恒 `undefined`。**本任务不得打勾，直到看见虚拟鼠标。** **2026-09-18 起：** 虚拟鼠标必须做。删除「禁止用窗几何补映射」。`click_at` 不是几何来源；针走窗 DIP / 配套扩展节点盒。停止芯片 ≠ 虚拟鼠标。
 
 **任务目标：** 浏览器插件进行中，失焦也能看见虚拟鼠标；桌面不移动系统指针。
 
-**前置：** 任务 1 第 3 节必须有可映射到屏幕 DIP 的冻结键。否则停止本任务并写明阻塞原因，**不要**画一个假光标然后打勾。
+**前置：** 虚拟鼠标必须做。坐标必须是可映射到 overlay 屏幕 DIP 的窗矩形 / 配套扩展节点盒。禁止 uid / OCR / 截图像素猜点。缺几何时去补来源，不要把本任务停成「不画针」。
 
 **Files:**
 - Create: `src/main/browser-plugin-overlay.ts`
@@ -829,13 +829,13 @@ git diff --check
 5. 拒绝权限：无截图、无 overlay、不得声称正在控制。
 6. 同一 Task 先允许写文件，再要求打开网页：必须再弹 browser 卡。
 
-**走查记录（2026-09-07）：** 本任务 **未跑** 开发版 GUI。虚拟鼠标被任务 1 观察阻塞（ACP 指针键 not-observed；`click_at` 为 viewport-css，不可映射到 overlay 屏幕 DIP）。停止芯片不等于虚拟鼠标。不得打勾「开发版 GUI 已过」。
+**走查记录（2026-09-07）：** 本任务 **未跑** 开发版 GUI。当时坐标观察阻塞。**2026-09-18：** 虚拟鼠标必须做，不再把观察阻塞写成「不画针」。停止芯片不等于虚拟鼠标。不得打勾「开发版 GUI 已过」。
 
-未跑 GUI 不得打勾「开发版 GUI 已过」。虚拟鼠标若因坐标不可映射没画出来，走查记录写阻塞，不得改口说「停止条就算虚拟鼠标」。
+未跑 GUI 不得打勾「开发版 GUI 已过」。虚拟鼠标没画出来就是没做完，不得改口说「停止条就算虚拟鼠标」，也不得把「不画针」写回计划。
 
 - [x] **第 3 步: 文档**
 
-同步 `AGENTS.md` / `CLAUDE.md` 第 15 节、roadmap、P0-19 程序索引、P0-21 交叉引用、product-vision §7.2 / §7.3。P0-21 写明：插件虚拟鼠标在 19f 且仍不画；宿主页软件光标走 21a overlay；`screen` / `clipboard` 不再「留给 19f」，改留给后置软件表面 / P3-07。
+同步 `AGENTS.md` / `CLAUDE.md` 第 15 节、roadmap、P0-19 程序索引、P0-21 交叉引用、product-vision §7.2 / §7.3。P0-21 写明：插件虚拟鼠标在 19f **必须做**；宿主页软件光标走 21a overlay；`screen` / `clipboard` 不再「留给 19f」，改留给后置软件表面 / P3-07。
 
 ## 验收标准
 
@@ -843,6 +843,6 @@ git diff --check
 - [x] `screen` / `clipboard` 仍未接入。
 - [x] 有截图则进 Artifact；无截图有明确降级。
 - [x] 控制期间主窗口停止入口始终可见（代码路径 + 聚焦测试；开发版 GUI 未走查）。
-- [ ] **虚拟鼠标必须可见**（失焦仍在）；无坐标不发明光标，也不得把计划标成已完成。← 观察阻塞，保持开放。
+- [ ] **虚拟鼠标必须可见**（失焦仍在）；无几何该帧不猜点，必须补可映射 DIP。未画出 = 未完成，不是冻结。
 - [x] 没有 BrowserView、没有读用户 Chrome Profile、没有系统鼠标注入、没有点桌面软件。
 - [ ] 自动验证 + 开发版走查记录（走查未跑则保持未过）。← 自动验证已过（2026-09-07）；开发版 GUI 未跑。

@@ -400,7 +400,7 @@ describe('HostBrowserActionEngine', () => {
     expect(driver.cdpMethods).not.toContain('Runtime.evaluate')
   })
 
-  it('click_xy 略越界不得当成 0-1000 折算', async () => {
+  it('click_xy 越出当前视口时拒绝，不发送鼠标事件', async () => {
     const driver = createDriver({
       url: 'https://example.com/',
       viewport: { width: 600, height: 900 }
@@ -409,15 +409,26 @@ describe('HostBrowserActionEngine', () => {
       name: 'browser_click_xy',
       arguments: { x: 300, y: 920 }
     })
-    expect(clicked.ok).toBe(true)
-    if (!clicked.ok || clicked.data.kind !== 'clicked') throw new Error('需要 clicked')
-    expect(clicked.data.viewportX).toBe(300)
-    expect(clicked.data.viewportY).toBe(920)
-    expect(driver.mouseEvents.map((event) => ({ x: event.x, y: event.y }))).toEqual([
-      { x: 300, y: 920 },
-      { x: 300, y: 920 },
-      { x: 300, y: 920 }
-    ])
+    expect(clicked).toMatchObject({ ok: false, code: 'invalid-input' })
+    expect(driver.mouseEvents).toEqual([])
+  })
+
+  it('click_xy 落在右边或下边边界时拒绝', async () => {
+    const driver = createDriver({
+      url: 'https://example.com/',
+      viewport: { width: 600, height: 900 }
+    })
+    for (const point of [
+      { x: 600, y: 100 },
+      { x: 300, y: 900 }
+    ]) {
+      const clicked = await new HostBrowserActionEngine(driver).perform({
+        name: 'browser_click_xy',
+        arguments: point
+      })
+      expect(clicked).toMatchObject({ ok: false, code: 'invalid-input' })
+    }
+    expect(driver.mouseEvents).toEqual([])
   })
 
   it('click_xy 只在最近截图像素与视口不一致时按 PNG 折到 CSS', async () => {
@@ -573,6 +584,9 @@ describe('HostBrowserActionEngine', () => {
     expect(JSON.stringify(typed)).not.toContain('s3cret-token')
     expect(driver.cdpMethods).toContain('Input.insertText')
     expect(driver.cdpMethods).toContain('Input.dispatchKeyEvent')
+    expect(
+      driver.mouseEvents.map((event) => ({ type: event.type, x: event.x, y: event.y }))
+    ).toEqual([{ type: 'mouseMoved', x: 10, y: 10 }])
   })
 })
 

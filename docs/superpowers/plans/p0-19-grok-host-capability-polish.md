@@ -2,7 +2,7 @@
 
 > **致执行者：** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans。本文件是**程序索引**，不是一次性写完的实现清单。每个子系统只在对应分计划里落地。
 >
-> **状态：** 已立项（2026-08-31 产品确认）。GACP-03 / P0-19g / P0-19a / GACP-06 / P0-19b / P0-19c / P0-19d / P0-19e 代码已落地（开发版 GUI 未过）。P0-19f 任务 1–5 与 overlay/停止芯片已落地；**插件虚拟鼠标硬验收因观察阻塞保持开放**（ACP 指针键 not-observed，`click_at` 为 viewport-css）；开发版 GUI 未过；不得标计划完成。下一步 [P0-21](p0-21-host-managed-browser.md)（任务 2–4 代码已落地）；宿主页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md)（代码已落地，GUI 未走查）。`screen` / `clipboard` 留给后置软件表面 / P3-07，不留给 19f。
+> **状态：** 已立项（2026-08-31 产品确认）。GACP-03 / P0-19g / P0-19a / GACP-06 / P0-19b / P0-19c / P0-19d / P0-19e 代码已落地（开发版 GUI 未过）。P0-19f 任务 1–5 与 overlay/停止芯片已落地；**虚拟鼠标必须做**（当前未画出 ≠ 允许不做）；开发版 GUI 未过；不得标计划完成。下一步 [P0-21](p0-21-host-managed-browser.md)（任务 2–4 代码已落地）；宿主页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md)（代码已落地，GUI 未走查）。`screen` / `clipboard` 留给后置软件表面 / P3-07，不留给 19f。
 >
 > **插入点：** 当前主线。P1 扩展与 P2 Codex 搁置期间，Grok 日用能力按本程序推进。P0-13 产物走查仍建议做，但 **2026-08-31 确认：P0-10C 至 P0-13 的开发版走查暂时可以通过，不挡 P0-19 新能力开工**。走查可并行补，未走查不得把对应计划标成「开发版 GUI 已过」。
 
@@ -83,7 +83,7 @@
      ↓
 7. P0-19e 后台命令监视
      ↓
-8. P0-19f 插件操作浏览器（截图 Artifact、browser L3、可见停止已落地；方案 A 虚拟鼠标因观察阻塞保持开放；不打开 screen/clipboard，不自建视图，不注入系统鼠标）
+8. P0-19f 插件操作浏览器（截图 Artifact、browser L3、可见停止已落地；方案 A **虚拟鼠标必须做**；不打开 screen/clipboard，不自建视图，不注入系统鼠标）
      ↓
 9. 宿主内置浏览器见独立计划 P0-21（不挡 19b；不在本程序 19a–e 里做）
 ```
@@ -113,7 +113,7 @@
 - 不把桌面做成 Marketplace Host 或 MCP Host。
 - 不把 always-approve 做成静默默认或全局 config；接管只按 [P0-19g](p0-19g-task-takeover-always-approve.md) 做当前 Task 显式开关。
 - Inspector 现有顶层标签为 `timeline | plan | changes | terminal | artifacts`；计划详情独立放在 Plan，插件浏览器证据进 Timeline + Artifacts，终端标签继续留给 P0-15 用户 PTY，**不得**把 Agent 后台命令写进用户 Shell。宿主内置浏览器是工作区右栏，见 P0-21，不新增 Inspector 标签。
-- 本程序 19a–e 不做共享 BrowserView。P0-21 的 WebContentsView 禁止任意 CDP 转发、禁止读用户 Chrome Profile。内置页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) overlay（开发版 GUI 未走查，不得宣称可用）。系统级 macOS 虚拟光标（Accessibility / CGEvent）仍禁止，见 P3-07（消费 `agent-pointer-overlay`，不自建光标窗）。P0-19f 只为**浏览器插件**做点击穿透的置顶 HUD；当前只落地停止芯片，插件虚拟鼠标因坐标不可映射未画出，不移动系统指针，也不打开 `screen` / `clipboard`。
+- 本程序 19a–e 不做共享 BrowserView。P0-21 的 WebContentsView 禁止任意 CDP 转发、禁止读用户 Chrome Profile。内置页软件光标走 [P0-21a](p0-21a-host-browser-pointer-and-snapshot.md) overlay（开发版 GUI 未走查，不得宣称可用）。系统级 macOS 虚拟光标（Accessibility / CGEvent）仍禁止，见 P3-07（消费 `agent-pointer-overlay`，不自建光标窗）。P0-19f 只为**浏览器插件**做点击穿透的置顶 HUD；**虚拟鼠标必须做**（当前代码未画出 ≠ 计划允许不做），不移动系统指针，也不打开 `screen` / `clipboard`。
 - 不为 Codex 复制本程序的表面。
 
 ## 6. 安全总则
@@ -134,7 +134,7 @@
 4. 回退上一轮时分得清「对话」和「文件」，漂移则拒绝自动改盘。
 5. 看见本 GROK_HOME 里的 Hooks 是否启用，桌面不替 Grok 跑它们。
 6. 后台命令在 Timeline 标成后台，可停，输出进证据而不是用户终端。
-7. 安装并信任浏览器插件后，截图进 Artifacts，浏览器动作走 L3 + 可见停止。失焦虚拟鼠标是 19f 硬验收，**当前因坐标不可映射未画出**，不得宣称已过。点桌面软件不是本程序 19f 的验收项。
+7. 安装并信任浏览器插件后，截图进 Artifacts，浏览器动作走 L3 + 可见停止。失焦虚拟鼠标是 19f 硬验收且必须做；当前未画出不得宣称已过，也不得把「不画针」写回计划。点桌面软件不是本程序 19f 的验收项。
 8. 宿主内置浏览器（P0-21）不作为本程序 19a–e 的验收项；做完 P0-21 后，用户说一句话应能操作右侧同一只页面。
 
 自动门禁仍是：目标文件 ESLint、相关 Vitest、`pnpm typecheck`、`pnpm build`、`git diff --check`。UI 改动必须有开发版走查记录。
