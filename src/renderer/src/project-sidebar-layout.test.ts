@@ -9,6 +9,7 @@ const sidebarSource = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), 'components/ProjectSidebar.vue'),
   'utf8'
 )
+const appSource = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'App.vue'), 'utf8')
 const taskListSource = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), 'components/TaskList.vue'),
   'utf8'
@@ -39,9 +40,20 @@ describe('侧栏项目平铺', () => {
     expect(pluginsButton).not.toContain('run-count')
   })
 
-  it('新对话仍是可点按钮，当前项目头保留 project-current 给 e2e', () => {
+  it('新对话按每个项目自己的 id 查询门禁，当前项目头保留 project-current 给 e2e', () => {
     expect(sidebarSource).toContain('aria-label="新对话"')
+    expect(sidebarSource).toContain(':disabled="newChatGate(project.projectId).disabled"')
+    expect(sidebarSource).toContain(':title="newChatGate(project.projectId).reason || \'新对话\'"')
+    expect(sidebarSource).not.toContain(':disabled="newChatDisabled"')
     expect(sidebarSource).toContain("'project-current'")
+  })
+
+  it('App 把目标项目门禁同时接到按钮和 startNewChat 二次校验', () => {
+    expect(appSource).toContain(':new-chat-gate="newChatGateForProject"')
+    expect(appSource).toContain(
+      'if (!targetProjectId || newChatGateForProject(targetProjectId).disabled) return'
+    )
+    expect(appSource).not.toContain('if (newChatDisabled.value')
   })
 
   it('项目行用文件夹图标分层，⋯ 菜单能打开目录', () => {

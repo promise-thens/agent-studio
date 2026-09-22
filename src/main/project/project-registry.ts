@@ -11,6 +11,7 @@ const MAX_IDENTIFIER_BYTES = 4 * 1024
 const MAX_PROJECT_PATH_BYTES = 16 * 1024
 
 interface ProjectRecordV1 {
+  kind?: 'managed-chat'
   schemaVersion: typeof PROJECT_SCHEMA_VERSION
   projectId: string
   canonicalRoot: string
@@ -94,7 +95,8 @@ export class ProjectRegistry {
     }
   }
 
-  async register(path: string): Promise<ProjectSummary> {
+  /** kind 仅由主进程托管目录服务传入，公开选目录 IPC 不接受此字段。 */
+  async register(path: string, kind?: 'managed-chat'): Promise<ProjectSummary> {
     const canonicalRoot = await resolveCanonicalDirectory(path)
     const existing = [...this.records.values()].find((record) =>
       compareCanonicalPath(record.canonicalRoot, canonicalRoot)
@@ -131,7 +133,8 @@ export class ProjectRegistry {
       schemaVersion: PROJECT_SCHEMA_VERSION,
       projectId,
       canonicalRoot,
-      displayName: basename(canonicalRoot) || canonicalRoot,
+      ...(kind ? { kind } : {}),
+      displayName: kind === 'managed-chat' ? '无项目对话' : basename(canonicalRoot) || canonicalRoot,
       status: 'active',
       registeredAt: observedAt,
       lastOpenedAt: observedAt,
@@ -223,6 +226,7 @@ export class ProjectRegistry {
       projectId: record.projectId,
       canonicalRoot: record.canonicalRoot,
       displayName: record.displayName,
+      ...(record.kind === 'managed-chat' ? { kind: record.kind } : {}),
       status: record.status,
       availability,
       registeredAt: record.registeredAt,
@@ -309,6 +313,7 @@ function parseProjectRecord(value: unknown): ProjectParseResult {
     return { kind: 'unsupported', value: record }
   }
   if (record.schemaVersion !== PROJECT_SCHEMA_VERSION) return { kind: 'corrupt' }
+  if (record.kind !== undefined && record.kind !== 'managed-chat') return { kind: 'corrupt' }
   if (!isValidIdentifier(record.projectId) || !isValidCanonicalRoot(record.canonicalRoot)) {
     return { kind: 'corrupt' }
   }

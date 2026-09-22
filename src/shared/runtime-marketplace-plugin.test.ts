@@ -21,10 +21,25 @@ describe('市场插件条目契约', () => {
     expectTypeOf<MarketplacePluginSummary>().toHaveProperty('displayName')
     expectTypeOf<MarketplacePluginSummary>().toHaveProperty('description')
     expectTypeOf<MarketplacePluginSummary>().toHaveProperty('sourceName')
+    expectTypeOf<MarketplacePluginSummary>().toHaveProperty('sourceUrlMatched')
     expectTypeOf<MarketplacePluginSummary>().toHaveProperty('installed')
+    expectTypeOf<MarketplacePluginSummary>().not.toHaveProperty('sourceVerified')
+    expectTypeOf<MarketplacePluginSummary>().not.toHaveProperty('official')
     expectTypeOf<MarketplacePluginSummary>().not.toHaveProperty('path')
     expectTypeOf<MarketplacePluginSummary>().not.toHaveProperty('sha')
     expectTypeOf<MarketplacePluginSummary>().not.toHaveProperty('url')
+  })
+
+  it('只保留 URL 匹配事实，丢弃旧的可信或官方身份声明', () => {
+    const parsed = parseMarketplacePluginSummary({
+      ...validSummary,
+      sourceUrlMatched: true,
+      sourceVerified: true,
+      official: true
+    })
+    expect(parsed).toMatchObject({ sourceUrlMatched: true })
+    expect(parsed).not.toHaveProperty('sourceVerified')
+    expect(parsed).not.toHaveProperty('official')
   })
 
   it('解析丢弃 path、sha、url 等敏感或越权字段', () => {

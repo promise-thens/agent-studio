@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { BrowserFocusSnapshot, BrowserFocusIntent } from '../../shared/browser-focus-overlay'
+import { resolveWorkspaceWidths, type WorkspaceWidthBudget } from './workspace-layout'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   PhCircleNotch as CircleNotch,
@@ -103,6 +105,7 @@ import {
   inspectorToggleLabel,
   openChangesReview,
   toggleInspectorOpen,
+  type InspectorConversationTarget,
   type InspectorTab
 } from './task-inspector'
 import { presentChangeCard } from './task-changes-presentation'
@@ -131,18 +134,15 @@ import {
   matchProductSlashSubmit,
   type SlashCommandItem
 } from './slash-command-palette'
-import {
-  resolveComposerPlanSwitch,
-  resolveOpenPlanPermissionChange,
-  resolvePlanModeAfterOpenPlanIpc,
-  resolvePlanModeAfterTakeoverApplied
-} from './composer-plan-mode'
+import { resolveComposerPlanSwitch } from './composer-plan-mode'
 import {
   createAndSelectTask,
   deriveSessionTitle,
   isUntitledTaskTitle,
+  resolveNewChatGate,
   resolvePermissionTaskTitle,
-  resolveSidebarTaskSelection
+  resolveSidebarTaskSelection,
+  type NewChatGate
 } from './task-navigation'
 import {
   clearRespondingPermission,
@@ -215,6 +215,15 @@ const {
   act: actHostBrowser
 } = useHostBrowser(activeTaskId)
 
+const workspaceElement = ref<HTMLElement | null>(null)
+const browserFocusMode = ref(false)
+const browserBounds = ref({ x: 0, y: 0, width: 0, height: 0 })
+const workspaceBudget = ref<WorkspaceWidthBudget>({ workspaceWidth: 0 })
+const conversationFocusTurnId = ref<string | null>(null)
+const conversationFocusNodeId = ref<string | null>(null)
+const conversationFocusRequestId = ref(0)
+const nativeUiObscured = ref(false)
+const browserResizing = ref(false)
 const DEFAULT_HOST_BROWSER_WIDTH = 480
 const MIN_HOST_BROWSER_WIDTH = 320
 
@@ -274,7 +283,7 @@ const historyConfirmationPending = ref(false)
 
 /** 全屏模态弹窗（设置弹窗、删除确认）打开期间挂起内置浏览器原生视图，关闭后恢复，防止原生 View 遮挡模态框右上角关闭按钮及表单交互。 */
 const hasBlockingModal = computed(() =>
-  Boolean(showSettingsDialog.value || historyConfirmation.value)
+  Boolean(showSettingsDialog.value || historyConfirmation.value || nativeUiObscured.value)
 )
 let resumeHostBrowserAfterModal = false
 
@@ -348,6 +357,9 @@ const showInspector = ref(INSPECTOR_DEFAULT_OPEN)
 const inspectorTab = ref<InspectorTab>(INSPECTOR_DEFAULT_TAB)
 /** 计划从对话打开时记住被点击的 Turn；普通打开则回看最新计划。 */
 const inspectorPlanTurnId = ref<string | null>(null)
+/** 工具选择只保存 Timeline 事实 ID，重复点击通过 requestId 重新聚焦。 */
+const inspectorFocusNodeId = ref<string | null>(null)
+const inspectorFocusRequestId = ref(0)
 /** 检查器默认悬浮；吸附后工作区切成三列，聊天列由 CSS Grid 自适应。 */
 const inspectorDocked = ref(false)
 const inspectorToggleTitle = computed(() => inspectorToggleLabel(showInspector.value))
@@ -422,6 +434,7 @@ function openChangeReview(path?: string): void {
   showInspector.value = next.open
   inspectorTab.value = next.tab
   inspectorPlanTurnId.value = null
+  inspectorFocusNodeId.value = null
   if (path) void taskChanges.selectPath(path)
 }
 
@@ -430,12 +443,14 @@ function openPlanReview(turnId: string): void {
   showInspector.value = true
   inspectorTab.value = 'plan'
   inspectorPlanTurnId.value = turnId
+  inspectorFocusNodeId.value = null
 }
 
 /** 关闭 Inspector 时一并清掉计划聚焦，下一次普通打开回到最新计划。 */
 function closeInspector(): void {
   showInspector.value = false
   inspectorPlanTurnId.value = null
+  inspectorFocusNodeId.value = null
 }
 
 function startChangeRestore(): void {
@@ -449,6 +464,7 @@ watch(
   activeTaskId,
   (taskId) => {
     inspectorPlanTurnId.value = null
+    inspectorFocusNodeId.value = null
     taskTimeline.setActiveTask(taskId)
   },
   { flush: 'sync' }
@@ -630,7 +646,7 @@ const isBusy = computed(
 const projectInteractionBlocked = computed(() => isBusy.value || projectSelectionPending.value)
 /** 历史导航不受后台 execution 影响，只在 Project 列表切换事务自身未完成时禁用。 */
 const historyNavigationBlocked = computed(() => projectSelectionPending.value)
-const { resolveCapability, isAvailable } = useRuntimeCapabilities(status)
+const { resolveCapability } = useRuntimeCapabilities(status)
 const promptCapability = computed(() => resolveCapability('session.prompt.text', '发送文本 Prompt'))
 const createSessionCapability = computed(() => resolveCapability('session.create', '创建新对话'))
 const connectCapability = computed(() => resolveCapability('runtime.connect', '连接 Runtime'))
@@ -667,6 +683,8 @@ const composerSend = computed(() =>
     restoreReason: conversationEntry.value?.reason,
     providerConfigured: Boolean(providerSummary.value?.configured),
     projectSelectionPending: projectSelectionPending.value,
+    projectConnectionPending: projectConnectionPending.value,
+    taskCreationPending: taskCreationPending.value,
     turnTiming: isTurnTiming.value,
     promptSubmissionPending: promptSubmissionPending.value,
     promptCapabilityAvailable: promptCapability.value.available,
@@ -702,11 +720,18 @@ const taskPermission = ref<
       takeoverApplied: boolean
       takeoverMayStillBeActive?: boolean
       permissionPromptStyle: PermissionPromptStyle
+      desiredMode?: TaskPermissionMode
+      applyState?: AgentTaskRuntimeState['permissionApplyState']
+      applyMessage?: string
     }
   >
 >({})
 const composerPlanModeByTask = ref<Record<string, ComposerPlanMode>>({})
 const permissionModeBusy = ref(false)
+const globalPermissionMode = ref<TaskPermissionMode>('ask')
+const takeoverConfirmed = ref(false)
+const taskCreationPending = ref(false)
+let taskCreation: Promise<string> | null = null
 /** 与 Composer 同一套忙碌判定；对话回退不新开 IPC。 */
 const turnRewindBusy = computed(() =>
   isTurnRewindBusy({
@@ -717,12 +742,22 @@ const turnRewindBusy = computed(() =>
 )
 const activePermissionState = computed(() => taskPermission.value[activeTaskId.value] ?? null)
 const composerPermissionMode = computed<TaskPermissionMode>(
-  () => activePermissionState.value?.mode ?? 'assist'
+  () => activePermissionState.value?.mode ?? globalPermissionMode.value
 )
+const permissionApplyNotice = computed(() => {
+  const current = activePermissionState.value
+  if (current?.applyState === 'pending' || current?.applyState === 'failed') {
+    return current.applyMessage || '权限尚未生效，请重试。'
+  }
+  return composerPlanMode.value === 'plan' && globalPermissionMode.value === 'takeover'
+    ? 'Plan 暂时使用请求批准；退出 Plan 后恢复全局完全访问。'
+    : ''
+})
 const composerPlanMode = computed<ComposerPlanMode>(
   () => composerPlanModeByTask.value[activeTaskId.value] ?? 'normal'
 )
 
+/** 只展示主进程确认的实际权限；期望值和等待状态独立保留，不乐观显示已生效。 */
 function applyPermissionRuntime(task: AgentTaskRuntimeState): void {
   const permissionPromptStyle: PermissionPromptStyle =
     task.permissionPromptStyle === 'ask' ? 'ask' : 'assist'
@@ -736,15 +771,33 @@ function applyPermissionRuntime(task: AgentTaskRuntimeState): void {
       takeoverEnabled: task.takeoverEnabled === true,
       takeoverApplied: task.takeoverApplied === true,
       permissionPromptStyle,
+      desiredMode: task.desiredPermissionMode,
+      applyState: task.permissionApplyState,
+      applyMessage: task.permissionApplyMessage,
       ...(task.takeoverMayStillBeActive ? { takeoverMayStillBeActive: true } : {})
+    }
+  }
+  if (task.desiredPermissionMode) globalPermissionMode.value = task.desiredPermissionMode
+  // 退出意图 pending/failed 时仍保留 Plan；仅按主进程已应用快照更新开关。
+  if (typeof task.planPermissionOverride === 'boolean' && task.permissionApplyState === 'applied') {
+    composerPlanModeByTask.value = {
+      ...composerPlanModeByTask.value,
+      [task.taskId]: task.planPermissionOverride ? 'plan' : 'normal'
     }
   }
 }
 
+/** 所有退出入口共用主进程撤销；执行中返回 pending，不冒充已经恢复全局权限。 */
+async function exitTaskPlanMode(taskId: string): Promise<void> {
+  applyPermissionRuntime(
+    unwrapDesktopIpcResult(await window.agent.setPlanPermissionOverride(taskId, false))
+  )
+}
+
 /** 等主进程成功后再改 UI，禁止乐观切换接管。无 Task 时先创建再 IPC，busy 必须抛错不得静默。 */
 async function setTaskPermissionMode(mode: TaskPermissionMode): Promise<void> {
-  if (permissionModeBusy.value || composerChrome.value.modelBusy) {
-    throw new Error('任务执行中不能切换批准模式。')
+  if (permissionModeBusy.value) {
+    throw new Error('正在保存批准模式，请稍候。')
   }
   permissionModeBusy.value = true
   try {
@@ -758,11 +811,10 @@ async function setTaskPermissionMode(mode: TaskPermissionMode): Promise<void> {
         })
       ).task
     )
+    globalPermissionMode.value = mode
+    if (mode === 'takeover') takeoverConfirmed.value = true
     if (mode === 'takeover') {
-      composerPlanModeByTask.value = {
-        ...composerPlanModeByTask.value,
-        [taskId]: resolvePlanModeAfterTakeoverApplied()
-      }
+      await exitTaskPlanMode(taskId)
     }
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
@@ -773,8 +825,8 @@ async function setTaskPermissionMode(mode: TaskPermissionMode): Promise<void> {
 }
 
 /**
- * Plan 只存在 Renderer：按 Task 记录，不进 Timeline、不新 IPC。
- * 打开 Plan 若正接管，必须等批准模式 IPC 成功后再拨开关，禁止乐观 UI。
+ * Plan 只临时改变当前 session 有效权限，不能把全局完全访问选择改成 ask。
+ * 必须等主进程完成权限切换后再拨开关，禁止乐观 UI。
  * 退出 Plan 只要求空闲；广告消失后仍允许回到 Normal，避免开关卡死。
  */
 async function setTaskPlanMode(mode: ComposerPlanMode): Promise<void> {
@@ -796,32 +848,17 @@ async function setTaskPlanMode(mode: ComposerPlanMode): Promise<void> {
     return
   }
 
-  if (mode === 'plan') {
-    const change = resolveOpenPlanPermissionChange({
-      permissionMode: composerPermissionMode.value,
-      previousStyle: activePermissionState.value?.permissionPromptStyle
-    })
-    let ipcSucceeded = true
-    if (change.permissionModeToSet) {
-      try {
-        await setTaskPermissionMode(change.permissionModeToSet)
-      } catch {
-        ipcSucceeded = false
-      }
+  try {
+    if (mode === 'normal') {
+      await exitTaskPlanMode(taskId)
+    } else {
+      applyPermissionRuntime(
+        unwrapDesktopIpcResult(await window.agent.setPlanPermissionOverride(taskId, true))
+      )
     }
-    if (
-      resolvePlanModeAfterOpenPlanIpc({
-        permissionChangeRequired: Boolean(change.permissionModeToSet),
-        ipcSucceeded
-      }) !== 'plan'
-    ) {
-      return
-    }
-  }
-
-  composerPlanModeByTask.value = {
-    ...composerPlanModeByTask.value,
-    [taskId]: mode
+  } catch (error) {
+    appendMessage('error', error instanceof Error ? error.message : String(error))
+    return
   }
 }
 
@@ -850,23 +887,23 @@ const composerTextareaDisabled = computed(
     !promptCapability.value.available ||
     !providerSummary.value?.configured
 )
-const newChatDisabled = computed(
-  () =>
-    status.value.state !== 'ready' ||
-    projectInteractionBlocked.value ||
-    !activeProjectExecutable.value ||
-    !providerSummary.value?.configured ||
-    !isAvailable('runtime.connect') ||
-    !isAvailable('session.create')
-)
-const newChatDisabledReason = computed(() => {
-  if (projectSelectionPending.value) return '正在切换 Project，暂时不能创建新对话。'
-  if (isBusy.value) return 'Runtime 正在执行或连接中，暂时不能创建新对话。'
-  if (!providerSummary.value?.configured) return '请先配置 Provider。'
-  if (!activeProjectExecutable.value) return activeProjectExecutionReason.value
-  if (status.value.state !== 'ready') return '请先连接 Runtime，再创建新对话。'
-  return connectCapability.value.reason ?? createSessionCapability.value.reason ?? ''
-})
+/** 每个侧栏入口都按自己的 Project 判定，禁止复用当前选中项目的 Runtime 状态。 */
+function newChatGateForProject(projectId: string): NewChatGate {
+  return resolveNewChatGate({
+    targetProject:
+      workbench.projects.value.find((project) => project.projectId === projectId) ?? null,
+    runtimeState: status.value.state,
+    runtimeBusy: isBusy.value,
+    providerConfigured: Boolean(providerSummary.value?.configured),
+    projectSelectionPending: projectSelectionPending.value,
+    projectConnectionPending: projectConnectionPending.value,
+    taskCreationPending: taskCreationPending.value,
+    connectCapabilityAvailable: connectCapability.value.available,
+    connectCapabilityReason: connectCapability.value.reason,
+    createSessionCapabilityAvailable: createSessionCapability.value.available,
+    createSessionCapabilityReason: createSessionCapability.value.reason
+  })
+}
 const activeProjectId = computed(() => workbench.selectedProjectId.value)
 watch(
   activeProjectId,
@@ -1077,6 +1114,13 @@ onMounted(async () => {
 
   try {
     await workbench.initialize()
+    // 始终保留独立的无项目历史分组；主进程准备 cwd，Renderer 不处理任何文件路径。
+    unwrapDesktopIpcResult(await window.agent.prepareChatWorkspace())
+    await workbench.registry.refresh()
+    await workbench.retryTaskList()
+    const preference = unwrapDesktopIpcResult(await window.agent.getPermissionPreferences())
+    globalPermissionMode.value = preference.mode
+    takeoverConfirmed.value = preference.takeoverConfirmed
     workspace.value = workbench.selectedProject.value?.canonicalRoot ?? workspace.value
     const initialTask = taskHistory.tasks.value[0]
     if (initialTask && !activeTaskId.value) {
@@ -1116,25 +1160,36 @@ onBeforeUnmount(() => {
   }
 })
 
-/** 新对话先 createTask，再走同一条 selectTask / enterTask，不再另开只读入口。 */
+/** 新对话先连接目标 Project，再 createTask 并走同一条 selectTask / enterTask。 */
 async function startNewChat(projectId?: string): Promise<void> {
   const targetProjectId =
     typeof projectId === 'string' && projectId ? projectId : activeProjectId.value
-  if (newChatDisabled.value || projectSelectionPending.value || !targetProjectId) return
+  if (!targetProjectId || newChatGateForProject(targetProjectId).disabled) return
 
+  taskCreationPending.value = true
   try {
     if (targetProjectId !== activeProjectId.value) {
       await selectProject(targetProjectId)
       if (activeProjectId.value !== targetProjectId) return
     }
+    // 显式的新对话动作允许在空闲时切换 Runtime；目录展开和历史浏览仍保持只读，不会抢执行槽。
+    const connected = await ensureProjectConnected(
+      targetProjectId,
+      () => activeProjectId.value === targetProjectId
+    )
+    if (!connected || activeProjectId.value !== targetProjectId) return
     await createAndSelectTask({
       projectId: targetProjectId,
       createTask: async (id) => unwrapDesktopIpcResult(await window.agent.createTask(id)),
-      selectTask,
+      selectTask: async (taskId) => {
+        if (activeProjectId.value === targetProjectId) await selectTask(taskId)
+      },
       refreshTasks: () => taskHistory.refreshTasks()
     })
   } catch (error) {
     appendMessage('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    taskCreationPending.value = false
   }
 }
 
@@ -1192,14 +1247,27 @@ function activateTaskView(task: AgentTaskRuntimeState, mode: 'live' | 'history' 
 
 /** 首次发送时懒创建 Task；后续 Turn 始终复用当前稳定 taskId。 */
 async function ensureActiveTask(): Promise<string> {
-  if (projectSelectionPending.value) throw new Error('正在切换 Project，请稍候。')
+  if (projectSelectionPending.value) throw new Error('正在准备项目，请稍候。')
   const current = activeTaskView.value
   if (current?.projectId === activeProjectId.value && current.taskId) return current.taskId
-
-  const task = unwrapDesktopIpcResult(await window.agent.createTask(activeProjectId.value))
-  activateTaskView(task)
-  await taskHistory.refreshTasks()
-  return task.taskId
+  if (taskCreation) return taskCreation
+  if (taskCreationPending.value) throw new Error('正在创建对话，请稍候。')
+  const projectId = activeProjectId.value
+  const previousTaskId = activeTaskId.value
+  taskCreationPending.value = true
+  taskCreation = (async () => {
+    const task = unwrapDesktopIpcResult(await window.agent.createTask(projectId))
+    if (projectId !== activeProjectId.value || previousTaskId !== activeTaskId.value) {
+      throw new Error('已切换对话，新创建的对话保留在原项目历史中。')
+    }
+    activateTaskView(task)
+    await taskHistory.refreshTasks()
+    return task.taskId
+  })().finally(() => {
+    taskCreation = null
+    taskCreationPending.value = false
+  })
+  return taskCreation
 }
 
 /** 点选即进入对话；选中身份由 workbench revision 保护，Runtime 恢复仍留在 App。 */
@@ -1476,6 +1544,10 @@ function handleProductSlashAction(action: NonNullable<SlashCommandItem['productA
 }
 
 async function startSettingsGrokAction(command: string): Promise<void> {
+  // 先卸载设置模态并把焦点交还 Composer，避免 Turn 在背景被 inert 时启动。
+  closeSettingsDialog()
+  await nextTick()
+  taskComposer.value?.focus()
   prompt.value = command
   await sendPrompt()
 }
@@ -1830,15 +1902,8 @@ async function respondQuestion(event: AgentRespondQuestionRequest): Promise<void
     unwrapDesktopIpcResult(
       await window.agent.respondQuestion(buildQuestionRespondIpcPayload(event))
     )
-    if (
-      queued?.kind === 'plan-approval' &&
-      (event.response.action === 'approve-plan' || event.response.action === 'abandon-plan')
-    ) {
-      // Grok 已确认退出/放弃当前 Plan；同步 Composer，避免下一轮被错误包装成 /plan。
-      composerPlanModeByTask.value = {
-        ...composerPlanModeByTask.value,
-        [event.taskId]: 'normal'
-      }
+    if (event.response.action === 'approve-plan' || event.response.action === 'abandon-plan') {
+      await exitTaskPlanMode(event.taskId)
     }
     questionQueue.value = questionQueue.value.filter((item) => item.questionId !== event.questionId)
   } catch (error) {
@@ -1921,7 +1986,10 @@ function schedulePermissionExpiry(): void {
 function toggleInspector(): void {
   const nextOpen = toggleInspectorOpen(showInspector.value)
   showInspector.value = nextOpen
-  if (!nextOpen) inspectorPlanTurnId.value = null
+  if (!nextOpen) {
+    inspectorPlanTurnId.value = null
+    inspectorFocusNodeId.value = null
+  }
 }
 
 /**
@@ -1957,7 +2025,7 @@ function onWorkbenchKeydown(event: KeyboardEvent): void {
     taskComposer.value?.focusStop?.()
     return
   }
-  showInspector.value = false
+  closeInspector()
 }
 
 function handleAgentEvent(event: PublicAgentEvent): void {
@@ -2203,6 +2271,295 @@ function upsertToolActivity(event: PublicAgentToolEvent): void {
 function scrollMessagesToBottom(): void {
   // 对话滚动由 TaskConversation 在用户贴底时自行跟随，避免抢阅读位置。
 }
+/** 主窗口是唯一草稿来源；外部替换草稿或切 Task 时废弃旧投影身份。 */
+let focusProjectionId = crypto.randomUUID()
+let focusRevision = 0
+let focusDraftAck = 0
+let acceptingFocusDraft = false
+let publishedFocus: BrowserFocusSnapshot | null = null
+watch(
+  [activeTaskId, prompt],
+  () => {
+    if (acceptingFocusDraft) return
+    focusProjectionId = crypto.randomUUID()
+    focusDraftAck = 0
+  },
+  { flush: 'sync' }
+)
+watch(activeTaskId, () => {
+  conversationFocusTurnId.value = null
+  conversationFocusNodeId.value = null
+})
+
+/** 预算来自实际工作区；原生浏览器与 docked Inspector 不再拥有矛盾的 CSS 状态。 */
+function measureWorkspace(): void {
+  const element = workspaceElement.value
+  if (!element) return
+  workspaceBudget.value = {
+    workspaceWidth: element.getBoundingClientRect().width,
+    sidebarWidth: element.querySelector('.project-sidebar')?.getBoundingClientRect().width ?? 0,
+    inspectorWidth:
+      showInspector.value && inspectorDocked.value
+        ? (element.querySelector('.task-inspector')?.getBoundingClientRect().width ?? 0)
+        : 0,
+    separatorsWidth: 1
+  }
+  if (workspaceBudget.value.workspaceWidth <= 980) inspectorDocked.value = false
+  if (!hostBrowserVisible.value || browserFocusMode.value) return
+  const widths = resolveWorkspaceWidths(workspaceBudget.value, hostBrowserWidth.value)
+  if (widths.collapseInspector) inspectorDocked.value = false
+  if (widths.collapseBrowser) void setHostBrowserVisible(false)
+  else hostBrowserWidth.value = widths.browserWidth
+}
+
+/** 专注模式使用原生子窗，网页矩形不为输入条缩短。 */
+function enterBrowserFocus(): void {
+  browserFocusMode.value = true
+  closeInspector()
+  inspectorDocked.value = false
+}
+function leaveBrowserFocus(): void {
+  browserFocusMode.value = false
+  void nextTick(measureWorkspace)
+}
+/** 浏览器顶部栏请求查看执行详情时，切回分栏并打开检查器。 */
+function handleBrowserDetailsRequest(): void {
+  leaveBrowserFocus()
+  showInspector.value = true
+}
+function receiveBrowserBounds(bounds: BrowserFocusSnapshot['browserBounds']): void {
+  browserBounds.value = bounds
+  if (!browserResizing.value) void updateHostBrowserBounds(bounds)
+}
+/** 拖动期间临时移除网页命中区域，避免原生页截获指针；松开恢复完整矩形。 */
+function setBrowserResizing(resizing: boolean): void {
+  browserResizing.value = resizing
+  void updateHostBrowserBounds(resizing ? { x: 0, y: 0, width: 1, height: 1 } : browserBounds.value)
+}
+/** Inspector 返回主列时携带真实轮次/节点身份；每次点击都可重新聚焦同一目标。 */
+function focusConversationTarget(target: InspectorConversationTarget): void {
+  leaveBrowserFocus()
+  inspectorPlanTurnId.value = target.turnId
+  inspectorFocusNodeId.value = target.nodeId ?? null
+  inspectorFocusRequestId.value += 1
+  conversationFocusTurnId.value = target.turnId
+  conversationFocusNodeId.value = target.nodeId ?? null
+  conversationFocusRequestId.value += 1
+}
+
+/** 对话里的工具入口打开 Timeline，并让 Inspector 选中同一个真实节点。 */
+function openToolReview(turnId: string, nodeId: string): void {
+  if (!turnId || !nodeId) return
+  leaveBrowserFocus()
+  showInspector.value = true
+  inspectorTab.value = 'timeline'
+  inspectorPlanTurnId.value = turnId
+  inspectorFocusNodeId.value = nodeId
+  inspectorFocusRequestId.value += 1
+}
+
+/** 子窗没有 Runtime 权限；所有动作重新核对投影及真实执行三元组。 */
+function receiveBrowserFocusIntent(intent: BrowserFocusIntent): void {
+  const snapshot = publishedFocus
+  if (
+    !snapshot?.visible ||
+    intent.projectionId !== focusProjectionId ||
+    snapshot.taskId !== activeTaskId.value
+  )
+    return
+  if (intent.kind === 'draft') {
+    if (intent.sequence <= focusDraftAck || composerTextareaDisabled.value) return
+    acceptingFocusDraft = true
+    prompt.value = intent.text
+    acceptingFocusDraft = false
+    focusDraftAck = intent.sequence
+    void publishBrowserFocus()
+    return
+  }
+  if (intent.kind === 'stop') {
+    // 主进程校验后执行仍可能切换；再次把点击身份与当前投影、当前执行同时对齐。
+    const execution = activeExecution.value
+    if (
+      execution &&
+      snapshot.execution &&
+      intent.execution.taskId === snapshot.taskId &&
+      intent.execution.executionId === snapshot.execution.executionId &&
+      intent.execution.taskId === snapshot.execution.taskId &&
+      intent.execution.turnId === snapshot.execution.turnId &&
+      intent.execution.executionId === execution.executionId &&
+      intent.execution.taskId === execution.taskId &&
+      intent.execution.turnId === execution.turnId
+    )
+      void cancelTurn()
+    return
+  }
+  if (intent.revision !== snapshot.revision) return
+  if (intent.kind === 'send' && canSend.value) void sendPrompt()
+  if (intent.kind === 'expand') {
+    // 退出浏览器专注模式，平滑切回【左侧对话列表 + 右侧浏览器】分栏视图；绝不弹出悬浮 Inspector 遮挡对话
+    leaveBrowserFocus()
+    void nextTick(() => taskComposer.value?.focus())
+  }
+}
+
+/**
+ * 提取当前任务时间线中最新一条模型回复文本。
+ * 逆序查找 taskTimeline.activeTimeline.value 的 turns，
+ * 找到首个包含 message 节点的轮次，并将其中所有回复合并为纯文本。
+ * 包含空字符清理与 32KB 字节上限截断，若无有效回复则返回 null。
+ */
+function resolveLatestAssistantMessage(): string | null {
+  const turns = taskTimeline.activeTimeline.value?.turns ?? []
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i]
+    const texts: string[] = []
+    for (const node of turn.nodes) {
+      if (node.kind === 'message' && typeof node.text === 'string') {
+        const trimmed = node.text.trim()
+        if (trimmed) {
+          texts.push(trimmed)
+        }
+      }
+    }
+    if (texts.length > 0) {
+      const merged = texts.join('\n\n')
+      const sanitized = merged.replace(/\0/g, '')
+      const encoder = new TextEncoder()
+      if (encoder.encode(sanitized).length <= 32 * 1024) {
+        return sanitized
+      }
+      let low = 0
+      let high = sanitized.length
+      let clamped = ''
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2)
+        const sub = sanitized.slice(0, mid)
+        if (encoder.encode(sub).length <= 32 * 1024) {
+          clamped = sub
+          low = mid + 1
+        } else {
+          high = mid - 1
+        }
+      }
+      return clamped || null
+    }
+  }
+  return null
+}
+
+/** 响应式追踪最新一条模型回复文本 */
+const latestAssistantMessage = computed<string | null>(() => resolveLatestAssistantMessage())
+
+/** 仅发送有界公开状态；发布失败立即返回普通对话，不留下不可用的输入入口。 */
+async function publishBrowserFocus(): Promise<void> {
+  if (!window.browserFocus) return
+  if (!activeTaskId.value) {
+    if (publishedFocus) {
+      const hidden = { ...publishedFocus, visible: false, revision: ++focusRevision }
+      publishedFocus = hidden
+      await window.browserFocus.publish(hidden).catch(() => undefined)
+    }
+    return
+  }
+  const execution = activeExecution.value
+  const snapshot: BrowserFocusSnapshot = {
+    projectionId: focusProjectionId,
+    taskId: activeTaskId.value,
+    revision: ++focusRevision,
+    draftAck: focusDraftAck,
+    visible:
+      browserFocusMode.value &&
+      hostBrowserVisible.value &&
+      !hasBlockingModal.value &&
+      !showInspector.value &&
+      workbench.primaryView.value === 'conversation',
+    draft: prompt.value,
+    taskTitle: (activeTaskView.value?.title ?? '').slice(0, 128),
+    status: (composerDisabledMessage.value ?? status.value.message ?? '').slice(0, 256),
+    modelLabel: (
+      currentModel.value?.displayName?.trim() ||
+      currentModel.value?.modelId ||
+      ''
+    ).slice(0, 128),
+    attachmentCount: draftAttachments.value.length,
+    canSend: canSend.value,
+    textareaDisabled: composerTextareaDisabled.value,
+    execution: execution
+      ? { executionId: execution.executionId, taskId: execution.taskId, turnId: execution.turnId }
+      : null,
+    // 显式复制几何标量，避免 Vue 响应式 Proxy 进入 contextBridge 克隆边界。
+    theme: appearance.value.resolved,
+    browserBounds: { ...browserBounds.value },
+    // 传递最新一条模型回复纯文本，支持浮层展开卡片展示
+    latestAssistantMessage: latestAssistantMessage.value
+  }
+  publishedFocus = snapshot
+  try {
+    unwrapDesktopIpcResult(await window.browserFocus.publish(snapshot))
+  } catch (error) {
+    if (publishedFocus !== snapshot || !snapshot.visible) return
+    leaveBrowserFocus()
+    appendMessage(
+      'error',
+      readRendererErrorMessage(error, '浏览器输入浮层不可用，请在对话中重试。')
+    )
+  }
+}
+watch(
+  [
+    browserFocusMode,
+    hostBrowserVisible,
+    hasBlockingModal,
+    showInspector,
+    prompt,
+    activeTaskId,
+    browserBounds,
+    canSend,
+    composerTextareaDisabled,
+    activeExecution,
+    currentModel,
+    appearance,
+    draftAttachments,
+    latestAssistantMessage,
+    () => workbench.primaryView.value
+  ],
+  () => {
+    void publishBrowserFocus()
+  },
+  { deep: true }
+)
+watch([showInspector, () => workbench.primaryView.value], ([inspector, view]) => {
+  if (inspector || view !== 'conversation') leaveBrowserFocus()
+})
+watch([hostBrowserVisible, showInspector, inspectorDocked], () => {
+  if (hostBrowserVisible.value) inspectorDocked.value = false
+  void nextTick(measureWorkspace)
+})
+let workspaceObserver: ResizeObserver | null = null
+let nativeUiObserver: MutationObserver | null = null
+let unsubscribeBrowserFocus: (() => void) | undefined
+onMounted(() => {
+  workspaceObserver = new ResizeObserver(measureWorkspace)
+  if (workspaceElement.value) workspaceObserver.observe(workspaceElement.value)
+  unsubscribeBrowserFocus = window.browserFocus?.onIntent(receiveBrowserFocusIntent)
+  // Teleport 菜单、确认框和图片预览也会覆盖原生页，统一观测实际 DOM，不复制各菜单状态。
+  nativeUiObserver = new MutationObserver(() => {
+    nativeUiObscured.value = Boolean(
+      document.querySelector('[role="menu"], [role="dialog"], .context-dropdown-menu')
+    )
+  })
+  nativeUiObserver.observe(document.body, { childList: true, subtree: true })
+  measureWorkspace()
+})
+watch(workspaceElement, (element, previous) => {
+  if (previous) workspaceObserver?.unobserve(previous)
+  if (element) workspaceObserver?.observe(element)
+})
+onBeforeUnmount(() => {
+  unsubscribeBrowserFocus?.()
+  workspaceObserver?.disconnect()
+  nativeUiObserver?.disconnect()
+})
 </script>
 
 <template>
@@ -2272,8 +2629,10 @@ function scrollMessagesToBottom(): void {
 
     <div
       v-else
+      ref="workspaceElement"
       class="workspace-layout"
       :class="{
+        'is-browser-focus': browserFocusMode && hostBrowserVisible,
         'is-inspector-docked': showInspector && inspectorDocked,
         'is-browser-open': hostBrowserVisible
       }"
@@ -2288,8 +2647,7 @@ function scrollMessagesToBottom(): void {
         :selected-task-id="activeSidebarTaskId"
         :active-execution="activeExecution"
         :task-list-load-state="workbench.taskListLoadState.value"
-        :new-chat-disabled="newChatDisabled"
-        :new-chat-disabled-reason="newChatDisabledReason"
+        :new-chat-gate="newChatGateForProject"
         :history-navigation-disabled="historyNavigationBlocked"
         history-navigation-disabled-reason="正在切换 Project，请稍候。"
         :mutation-actions-disabled="projectInteractionBlocked"
@@ -2324,6 +2682,7 @@ function scrollMessagesToBottom(): void {
       />
 
       <main
+        v-show="!browserFocusMode || !hostBrowserVisible"
         class="chat-panel"
         :class="{
           'is-plugins': workbench.primaryView.value === 'plugins',
@@ -2360,6 +2719,9 @@ function scrollMessagesToBottom(): void {
           />
 
           <TaskConversation
+            :focus-turn-id="conversationFocusTurnId"
+            :focus-node-id="conversationFocusNodeId"
+            :focus-request-id="conversationFocusRequestId"
             :conversation-key="activeTaskId"
             :model="taskTimeline.activeTimeline.value"
             :clock-tick="nowTick"
@@ -2377,6 +2739,8 @@ function scrollMessagesToBottom(): void {
             :question="question"
             :question-pending="questionResponsePending"
             :change-card="changeCard"
+            :turn-change-cards="taskChanges.turnChangeCards.value"
+            :checkpoints-error="taskChanges.checkpointsError.value"
             :restore-busy="restoreBusy"
             :plan-mode="composerPlanMode"
             @load-more-turns="loadMoreHistoryTurns"
@@ -2387,9 +2751,15 @@ function scrollMessagesToBottom(): void {
             @review-changes="openChangeReview()"
             @restore-changes="startChangeRestore"
             @review-file="openChangeReview"
+            @retry-changes="taskChanges.reload"
             @open-plan="openPlanReview"
+            @open-tool="openToolReview"
           />
 
+          <p v-if="projectSelectionPending || projectConnectionPending" role="status">
+            正在准备项目
+          </p>
+          <p v-if="permissionApplyNotice" role="status">{{ permissionApplyNotice }}</p>
           <!-- HUD 认 surface + turnActive；宿主闲置光标不得出插件句。 -->
           <TaskComposer
             ref="taskComposer"
@@ -2406,6 +2776,8 @@ function scrollMessagesToBottom(): void {
             :model-busy="composerChrome.modelBusy || permissionModeBusy"
             :model-disabled="!providerSummary?.configured"
             :permission-mode="composerPermissionMode"
+            :takeover-confirmed="takeoverConfirmed"
+            :permission-busy="permissionModeBusy"
             :takeover-applied="activePermissionState?.takeoverApplied === true"
             :takeover-may-still-be-active="activePermissionState?.takeoverMayStillBeActive === true"
             :set-permission-mode="setTaskPermissionMode"
@@ -2447,10 +2819,21 @@ function scrollMessagesToBottom(): void {
         :can-go-back="Boolean(hostBrowserChrome.canGoBack)"
         :can-go-forward="Boolean(hostBrowserChrome.canGoForward)"
         :task-id="activeTaskId"
+        :width-budget="workspaceBudget"
+        :requested-width="hostBrowserWidth"
+        :focus-mode="browserFocusMode"
+        :task-title="activeTaskView?.title"
+        :execution-status="status.message"
+        @request:details="handleBrowserDetailsRequest"
+        @resize-active="setBrowserResizing"
+        @request:focus="enterBrowserFocus"
+        @request:split="leaveBrowserFocus"
+        @collapse:inspector="inspectorDocked = false"
+        @collapse:browser="setHostBrowserVisible(false)"
         @navigate="navigateHostBrowser"
         @act="actHostBrowser"
         @close="setHostBrowserVisible(false)"
-        @update:bounds="updateHostBrowserBounds"
+        @update:bounds="receiveBrowserBounds"
         @update:width="handleHostBrowserWidthChange"
       />
 
@@ -2461,6 +2844,8 @@ function scrollMessagesToBottom(): void {
         :docked="inspectorDocked"
         :task-id="activeTaskId"
         :focus-turn-id="inspectorPlanTurnId"
+        :focus-node-id="inspectorFocusNodeId"
+        :focus-request-id="inspectorFocusRequestId"
         :timeline="taskTimeline.activeTimeline.value"
         :timeline-loading="Boolean(taskTimeline.coordinators.value[activeTaskId]?.loading)"
         :permission-audits="taskHistory.permissionAudits.value"
@@ -2471,6 +2856,7 @@ function scrollMessagesToBottom(): void {
         :artifacts-controller="taskArtifacts"
         :advertised-commands="runtimeSlashCommands"
         :rewind-busy="turnRewindBusy"
+        @focus-target="focusConversationTarget"
         @close="closeInspector"
         @update:active-tab="inspectorTab = $event"
         @update:docked="inspectorDocked = $event"

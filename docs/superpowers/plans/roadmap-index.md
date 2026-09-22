@@ -10,6 +10,23 @@
 >
 > **2026-09-17：** Computer Use 提为下一开发项。说明书 [2026-09-17-computer-use-development.md](../specs/2026-09-17-computer-use-development.md)。先 [P3-06](p3-06-chrome-native-bridge.md) 独立设置页+扩展装上即同步并连接（出厂开放），再 [P3-07](p3-07-macos-computer-use-helper.md) 任意 App Helper。P0-19 GUI 走查不挡开工。
 
+## 2026-09-20 问题清单修复
+
+来源：[问题与优化需求](../../问题/问题.md)。本组优先处理当前工作台缺陷，不宣称 P3-07 或其他历史 GUI 验收完成。下列计划已完成根因核查，**待批准实施，运行代码尚未修改**。
+
+已确认：权限对所有对话统一且跨重启保留，运行中不重启、空闲后应用；无项目聊天使用托管目录；执行中消息必须补充当前轮，不以排队替代。用户插件只读发现及浏览器底部避让方案包含在本轮计划审批中。
+
+| 顺序 | 计划 | 覆盖问题 | 依赖与整合 |
+| --- | --- | --- | --- |
+| 1 | [P0-23A 会话状态](p0-23a-conversation-state-repair.md) | 1.1、1.2、1.3、1.5 | 先标题回归，再全局权限和托管聊天；复用现有核心 |
+| 2 | [P0-23D 工作区布局](p0-23d-workspace-layout-and-navigation.md) | 2.4、2.5、2.7 部分 | 宽度止损可独立先做，原生布局单独 GUI 验收 |
+| 3 | [P0-23B 插件来源](p0-23b-plugin-source-visibility.md) | 1.4 | 可独立实施，主进程/Preload 共享编辑串行整合 |
+| 4 | [P0-23C 对话展示](p0-23c-conversation-presentation.md) | 1.7、2.1、2.2、2.3、2.7 部分 | 与 D 共享 App/样式编辑串行整合 |
+| 5 | [P0-23E 设置一致性](p0-23e-settings-interaction-consistency.md) | 2.6、2.7 部分 | 独立业务验收，复用统一视觉变量 |
+| 并行核实 | [GACP-07 当前轮补充](grokACP计划/gacp-07-active-turn-interjection.md) | 1.6 | 先本地 Mock 协议证明，再接入；不阻塞明确 bug 修复 |
+
+验收统一要求：目标测试后跑完整 Vitest、ESLint、typecheck、build 和 diff 检查；主入口变更补 unpack；UI 必须开发版走查。没有 GUI 证据的项保留未验收，不把计划或静态核查写成已修复。
+
 ## 使用规则
 
 - **顺序优先于按钮数量：** 前置依赖未完成，不开始后续功能主体。

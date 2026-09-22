@@ -1,16 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TaskHistorySummary } from '../../shared/task-history'
+import type { ProjectSummary, TaskHistorySummary } from '../../shared/task-history'
 import {
   countProjectLiveTasks,
   createAndSelectTask,
   deriveSessionTitle,
   isUntitledTaskTitle,
+  resolveNewChatGate,
   resolvePermissionTaskTitle,
   resolveProjectAccordionToggle,
   resolveSidebarTaskSelection,
   tasksForExpandedProject,
   toProjectSwitcherRow,
-  toTaskListItemView
+  toTaskListItemView,
+  type NewChatGateInput
 } from './task-navigation'
 
 function task(
@@ -29,6 +31,35 @@ function task(
     createdAt: '2026-08-12T00:00:00.000Z',
     updatedAt: '2026-08-12T00:00:00.000Z',
     revision: 1
+  }
+}
+
+function project(projectId = 'p-target', overrides: Partial<ProjectSummary> = {}): ProjectSummary {
+  return {
+    projectId,
+    canonicalRoot: `/tmp/${projectId}`,
+    displayName: projectId,
+    status: 'active',
+    availability: { state: 'available' },
+    registeredAt: '2026-09-21T00:00:00.000Z',
+    lastOpenedAt: '2026-09-21T00:00:00.000Z',
+    revision: 1,
+    ...overrides
+  }
+}
+
+function newChatGateInput(overrides: Partial<NewChatGateInput> = {}): NewChatGateInput {
+  return {
+    targetProject: project(),
+    runtimeState: 'ready',
+    runtimeBusy: false,
+    providerConfigured: true,
+    projectSelectionPending: false,
+    projectConnectionPending: false,
+    taskCreationPending: false,
+    connectCapabilityAvailable: true,
+    createSessionCapabilityAvailable: true,
+    ...overrides
   }
 }
 
@@ -261,6 +292,72 @@ describe('Task 导航展示', () => {
         browseTasks: browse
       })
     ).toEqual({ projectId: 'p-a', shouldSwitchProject: false })
+  })
+
+  it('Runtime idle/error 时，显式新对话仍可为目标项目发起连接', () => {
+    for (const runtimeState of ['idle', 'error', 'ready'] as const) {
+      expect(
+        resolveNewChatGate(
+          newChatGateInput({
+            targetProject: project('p-other'),
+            runtimeState
+          })
+        )
+      ).toEqual({ disabled: false, reason: '' })
+    }
+  })
+
+  it('Runtime 执行、连接或唯一执行槽占用时，所有目标项目都禁用新对话', () => {
+    for (const runtimeState of ['busy', 'connecting'] as const) {
+      expect(resolveNewChatGate(newChatGateInput({ runtimeState }))).toMatchObject({
+        disabled: true,
+        reason: expect.stringContaining('Runtime 正在执行或连接中')
+      })
+    }
+    expect(
+      resolveNewChatGate(
+        newChatGateInput({
+          runtimeState: 'ready',
+          runtimeBusy: true,
+          targetProject: project('p-other')
+        })
+      )
+    ).toMatchObject({ disabled: true })
+  })
+
+  it('新对话只读取目标项目可执行性，不被当前项目状态串线', () => {
+    expect(
+      resolveNewChatGate(
+        newChatGateInput({
+          targetProject: project('p-target', {
+            availability: { state: 'unavailable', message: '目标目录不存在' }
+          })
+        })
+      )
+    ).toEqual({ disabled: true, reason: '目标目录不存在' })
+    expect(resolveNewChatGate(newChatGateInput({ targetProject: project('p-other') }))).toEqual({
+      disabled: false,
+      reason: ''
+    })
+  })
+
+  it('项目准备、创建与能力门禁继续阻止新对话', () => {
+    expect(resolveNewChatGate(newChatGateInput({ projectSelectionPending: true }))).toEqual({
+      disabled: true,
+      reason: '正在准备项目'
+    })
+    expect(resolveNewChatGate(newChatGateInput({ taskCreationPending: true }))).toEqual({
+      disabled: true,
+      reason: '正在创建对话'
+    })
+    expect(
+      resolveNewChatGate(
+        newChatGateInput({
+          createSessionCapabilityAvailable: false,
+          createSessionCapabilityReason: '当前 Runtime 不支持创建新对话。'
+        })
+      )
+    ).toEqual({ disabled: true, reason: '当前 Runtime 不支持创建新对话。' })
   })
 
   it('新对话先 createTask 再 selectTask', async () => {

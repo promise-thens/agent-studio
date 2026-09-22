@@ -83,6 +83,8 @@ export interface TaskRecordV1 {
   runtimeSession: PersistedRuntimeSessionRefV1
   permissionPolicy: { kind: 'legacy-runtime' }
   title: string
+  /** 缺字段的旧标题来源不可证明，必须保留；控制回合不消耗 default。 */
+  titleSource?: 'default' | 'user-message' | 'manual'
   state: HistoryExecutionState
   activeTurnId?: string
   activeExecutionId?: string
@@ -334,6 +336,7 @@ export class TaskStore {
         },
         permissionPolicy: { kind: 'legacy-runtime' },
         title: '新任务',
+        titleSource: 'default',
         state: 'pending',
         turnCount: 0,
         createdAt: observedAt,
@@ -437,7 +440,10 @@ export class TaskStore {
       }
       const nextTask: TaskRecordV1 = {
         ...task,
-        title: task.turnCount === 0 ? deriveTaskTitle(input.promptDisplayText) : task.title,
+        // 计数包含审计回合，不能据此判断首条用户消息；手动标题和未知旧标题始终优先。
+        ...(task.titleSource === 'default' && !isTakeoverControlTurn(input)
+          ? { title: deriveTaskTitle(input.promptDisplayText), titleSource: 'user-message' as const }
+          : {}),
         state: input.initialState,
         activeTurnId: input.turnId,
         ...(input.activeExecutionId ? { activeExecutionId: input.activeExecutionId } : {}),
@@ -757,6 +763,7 @@ export class TaskStore {
       const nextTask: TaskRecordV1 = {
         ...task,
         title: nextTitle,
+        titleSource: 'manual',
         updatedAt: observedAt,
         revision: task.revision + 1
       }

@@ -38,6 +38,7 @@ const isLoading = ref(false)
 const selectingId = ref<string | null>(null)
 const activeIndex = ref(0)
 const menuError = ref('')
+const menuStyle = ref<Record<string, string>>({})
 
 const isDisabled = computed(() => props.busy || props.disabled || selectingId.value !== null)
 const discoveredCurrentModel = computed(() =>
@@ -60,8 +61,14 @@ watch(
   }
 )
 
-onMounted(() => document.addEventListener('pointerdown', handleOutsideClick))
-onBeforeUnmount(() => document.removeEventListener('pointerdown', handleOutsideClick))
+onMounted(() => {
+  document.addEventListener('pointerdown', handleOutsideClick)
+  window.addEventListener('resize', updateMenuGeometry)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', handleOutsideClick)
+  window.removeEventListener('resize', updateMenuGeometry)
+})
 
 /** 模型名称必须来自 Provider，不拼接 Runtime 或 Provider 前缀。 */
 function modelLabel(model: ProviderModelOption): string {
@@ -77,6 +84,8 @@ async function toggleMenu(): Promise<void> {
 async function openMenu(edge?: 'first' | 'last'): Promise<void> {
   if (isDisabled.value) return
   isOpen.value = true
+  await nextTick()
+  updateMenuGeometry()
   await refreshModels()
   if (!isOpen.value || !models.value.length) return
 
@@ -90,6 +99,20 @@ function closeMenu(restoreFocus = false): void {
   isOpen.value = false
   menuError.value = ''
   if (restoreFocus) void nextTick(() => trigger.value?.focus())
+}
+
+/** 菜单以 Composer 真实矩形夹紧，窄聊天列中也不能越界或被窗口宽度误导。 */
+function updateMenuGeometry(): void {
+  if (!isOpen.value || !root.value) return
+  const container = root.value.closest('.composer')
+  if (!(container instanceof HTMLElement)) return
+  const containerRect = container.getBoundingClientRect()
+  const rootRect = root.value.getBoundingClientRect()
+  const width = Math.max(1, Math.min(330, containerRect.width - 16))
+  const minLeft = containerRect.left + 8 - rootRect.left
+  const maxLeft = containerRect.right - 8 - width - rootRect.left
+  const left = Math.min(Math.max(0, minLeft), maxLeft)
+  menuStyle.value = { width: `${width}px`, left: `${left}px` }
 }
 
 /** 每次打开重新读取真实模型列表，避免缓存过期名称。 */
@@ -207,6 +230,7 @@ function errorMessage(error: unknown): string {
       :id="`${id}-menu`"
       ref="menu"
       class="model-menu"
+      :style="menuStyle"
       role="dialog"
       aria-label="选择模型"
       :aria-busy="isLoading"
@@ -298,7 +322,7 @@ function errorMessage(error: unknown): string {
   bottom: calc(100% + 7px);
   left: 0;
   z-index: 12;
-  width: min(330px, calc(100vw - 42px));
+  width: 330px;
   max-height: min(330px, 48vh);
   overflow: hidden;
   border: 1px solid var(--border-strong);
@@ -336,7 +360,7 @@ function errorMessage(error: unknown): string {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 35px;
+  min-height: 44px;
   padding: 7px 8px;
   border: 0;
   border-radius: 10px;

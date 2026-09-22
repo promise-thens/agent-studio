@@ -9,6 +9,18 @@ import {
 } from '@phosphor-icons/vue'
 import type { MarketplacePluginSummary } from '../../../shared/runtime-marketplace-plugin'
 import type { RuntimePluginDetail, RuntimePluginSummary } from '../../../shared/runtime-plugin'
+import type {
+  PluginDiscoveryDesktopApi,
+  RuntimePluginDiscovery,
+  RuntimePluginDiscoverySnapshot
+} from '../../../shared/runtime-plugin-discovery'
+import {
+  filterPluginDiscoveries,
+  hasAmbiguousMarketplaceName,
+  pluginCountLabel,
+  pluginDiscoverySubtitle,
+  pluginSourceNotice
+} from '../plugins-page-discovery'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import {
   OFFICIAL_MARKETPLACE_GIT_URL,
@@ -49,6 +61,11 @@ const loadState = ref<'loading' | 'ready' | 'error'>('loading')
 const errorMessage = ref('')
 const plugins = ref<RuntimePluginSummary[]>([])
 const details = ref<RuntimePluginDetail[]>([])
+const detailState = ref<'loading' | 'ready' | 'error'>('loading')
+const detailError = ref('')
+const discoveryState = ref<'loading' | 'ready' | 'error'>('loading')
+const discoveryError = ref('')
+const discoveries = ref<RuntimePluginDiscoverySnapshot>({ items: [], sources: [] })
 const marketplacePlugins = ref<MarketplacePluginSummary[]>([])
 const marketLoadState = ref<'loading' | 'ready' | 'error'>('loading')
 const marketError = ref('')
@@ -67,6 +84,23 @@ const mcpPanel = ref<{ startCreate: () => void } | null>(null)
 const userMcpCount = ref(0)
 let loadGeneration = 0
 let marketGeneration = 0
+let discoveryGeneration = 0
+
+const discoveryApi = window.app as typeof window.app & Partial<PluginDiscoveryDesktopApi>
+const discoveryGroups = computed(() =>
+  [
+    { source: 'app', label: '应用目录发现（未登记）' },
+    { source: 'user', label: '用户目录发现（只读）' }
+  ].map((group) => ({
+    ...group,
+    items: filterPluginDiscoveries(discoveries.value.items, query.value).filter(
+      (item) => item.source === group.source
+    )
+  }))
+)
+const sourceNotices = computed(() =>
+  discoveries.value.sources.map(pluginSourceNotice).filter(Boolean)
+)
 
 const pluginMcps = computed(() => flattenPluginMcps(details.value))
 const skills = computed(() => flattenPluginSkills(details.value))
@@ -112,25 +146,69 @@ async function loadHub(): Promise<void> {
   const generation = ++loadGeneration
   loadState.value = 'loading'
   errorMessage.value = ''
+  detailState.value = 'loading'
+  detailError.value = ''
+  details.value = []
   try {
     const listed = unwrapDesktopIpcResult(await window.app.listPlugins())
+    if (generation !== loadGeneration) return
+    plugins.value = listed
+    loadState.value = 'ready'
+    // 基本库存立即显示，详情失败只能影响技能和 MCP 投影。
+    let failed = 0
     const nextDetails = await Promise.all(
       listed.map(async (plugin) => {
         try {
           return unwrapDesktopIpcResult(await window.app.getPlugin(plugin.pluginId))
         } catch {
+          failed++
           return null
         }
       })
     )
     if (generation !== loadGeneration) return
-    plugins.value = listed
     details.value = nextDetails.filter((item): item is RuntimePluginDetail => item !== null)
-    loadState.value = 'ready'
+    detailState.value = failed ? 'error' : 'ready'
+    if (failed) detailError.value = `${failed} 个插件详情读取失败，技能与 MCP 列表可能不完整。`
   } catch (error) {
     if (generation !== loadGeneration) return
     errorMessage.value = error instanceof Error ? error.message : String(error)
     loadState.value = 'error'
+    detailState.value = 'error'
+  }
+}
+
+/** 只读发现不依赖执行槽；缺少新桥接时明确报错，不能假装用户目录为空。 */
+async function loadDiscoveries(): Promise<void> {
+  const generation = ++discoveryGeneration
+  discoveryState.value = 'loading'
+  discoveryError.value = ''
+  try {
+    if (!discoveryApi.listPluginDiscoveries) throw new Error('用户目录发现接口尚未接通。')
+    const snapshot = unwrapDesktopIpcResult(await discoveryApi.listPluginDiscoveries())
+    if (generation !== discoveryGeneration) return
+    discoveries.value = snapshot
+    discoveryState.value = 'ready'
+  } catch (error) {
+    if (generation !== discoveryGeneration) return
+    discoveryError.value = error instanceof Error ? error.message : '插件来源发现失败。'
+    discoveryState.value = 'error'
+  }
+}
+
+/** 刷新只重读库存，不触发安装、信任或重启当前 Runtime。 */
+async function refreshHub(): Promise<void> {
+  await Promise.all([loadHub(), loadMarketplace(), loadDiscoveries()])
+}
+
+/** Renderer 只提交发现身份；目录路径在主进程重新解析与限制。 */
+async function revealDiscovery(item: RuntimePluginDiscovery): Promise<void> {
+  actionError.value = ''
+  try {
+    if (!discoveryApi.revealPluginDiscovery) throw new Error('来源定位接口尚未接通。')
+    unwrapDesktopIpcResult(await discoveryApi.revealPluginDiscovery(item.discoveryId))
+  } catch (error) {
+    actionError.value = error instanceof Error ? error.message : '无法定位来源。'
   }
 }
 
@@ -177,7 +255,12 @@ function toggleSkill(skill: PluginHubSkillRow): void {
 }
 
 function openTrustDialog(plugin: MarketplacePluginSummary): void {
-  if (plugin.installed || actionBusy.value) return
+  if (
+    plugin.installed ||
+    actionBusy.value ||
+    hasAmbiguousMarketplaceName(plugin, marketplacePlugins.value)
+  )
+    return
   actionError.value = ''
   pendingInstall.value = plugin
 }
@@ -193,7 +276,7 @@ async function confirmTrustedInstall(): Promise<void> {
     unwrapDesktopIpcResult(await window.app.installPlugin(request.name, request.trust))
     actionStatus.value = PLUGIN_INSTALL_SUCCESS_COPY
     pendingInstall.value = null
-    await Promise.all([loadHub(), loadMarketplace()])
+    await refreshHub()
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -210,7 +293,7 @@ async function uninstallListedPlugin(plugin: RuntimePluginSummary): Promise<void
   actionStatus.value = ''
   try {
     unwrapDesktopIpcResult(await window.app.uninstallPlugin(request.pluginId))
-    await Promise.all([loadHub(), loadMarketplace()])
+    await refreshHub()
   } catch (error) {
     actionError.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -240,8 +323,7 @@ function installButtonTitle(plugin: MarketplacePluginSummary): string {
 }
 
 onMounted(() => {
-  void loadHub()
-  void loadMarketplace()
+  void refreshHub()
 })
 </script>
 
@@ -254,6 +336,14 @@ onMounted(() => {
             <h1 id="plugins-page-title">插件</h1>
             <p>{{ PLUGIN_PAGE_INTRO_COPY }}</p>
           </div>
+          <button
+            class="hub-secondary"
+            type="button"
+            title="刷新插件、来源和市场列表，不重启当前任务"
+            @click="refreshHub"
+          >
+            刷新列表
+          </button>
           <button
             v-if="tab === 'mcp'"
             class="hub-primary"
@@ -275,7 +365,7 @@ onMounted(() => {
               :aria-selected="tab === 'plugins'"
               @click="tab = 'plugins'"
             >
-              插件 {{ plugins.length }}
+              插件 {{ pluginCountLabel(loadState, plugins.length) }}
             </button>
             <button
               class="plugins-tab"
@@ -284,7 +374,7 @@ onMounted(() => {
               :aria-selected="tab === 'mcp'"
               @click="tab = 'mcp'"
             >
-              MCP {{ mcpCount }}
+              MCP {{ pluginCountLabel(detailState, mcpCount) }}
             </button>
             <button
               class="plugins-tab"
@@ -293,7 +383,7 @@ onMounted(() => {
               :aria-selected="tab === 'skills'"
               @click="tab = 'skills'"
             >
-              技能 {{ skills.length }}
+              技能 {{ pluginCountLabel(detailState, skills.length) }}
             </button>
           </div>
           <label class="plugins-search">
@@ -344,10 +434,20 @@ onMounted(() => {
         <p v-if="actionError" class="plugins-banner is-error" role="alert">{{ actionError }}</p>
       </div>
       <p v-if="toggleError" class="plugins-banner is-error" role="alert">{{ toggleError }}</p>
+      <p v-if="loadState === 'error'" class="plugins-banner is-error" role="alert">
+        {{ errorMessage || '插件列表加载失败。' }}
+      </p>
+      <p v-if="marketLoadState === 'error'" class="plugins-banner is-error" role="alert">
+        {{ marketError || '市场货架加载失败。' }}
+      </p>
+      <p v-if="discoveryError" class="plugins-banner is-error" role="alert">{{ discoveryError }}</p>
+      <p v-if="detailError" class="plugins-banner is-error" role="alert">{{ detailError }}</p>
 
       <div class="plugins-scroll">
         <div v-show="tab === 'plugins'">
           <template v-if="pane === 'installed'">
+            <h2 class="hub-group-heading">应用安装</h2>
+            <p class="plugins-banner">开关仅表示应用配置；当前会话是否加载尚未验证。</p>
             <div v-if="loadState === 'loading'" class="plugins-state" role="status">
               <CircleNotch :size="18" class="spin" />
               正在加载插件
@@ -413,9 +513,74 @@ onMounted(() => {
                 </div>
               </li>
             </ul>
+            <p v-if="discoveryState === 'loading'" class="plugins-banner" role="status">
+              正在发现插件来源
+            </p>
+            <template v-if="discoveryState === 'ready'">
+              <p v-for="notice in sourceNotices" :key="notice" class="plugins-banner">
+                {{ notice }}
+              </p>
+              <section v-for="group in discoveryGroups" :key="group.source">
+                <h2 class="hub-group-heading">{{ group.label }} {{ group.items.length }}</h2>
+                <p v-if="!group.items.length" class="plugins-banner">
+                  {{ query ? '没有匹配的发现项。' : '此来源没有发现额外插件目录。' }}
+                </p>
+                <ul v-else class="hub-list" :aria-label="group.label">
+                  <li v-for="item in group.items" :key="item.discoveryId" class="hub-row">
+                    <span class="hub-icon" aria-hidden="true"><PuzzlePiece :size="18" /></span>
+                    <div class="hub-copy">
+                      <strong>{{ item.displayName || item.directoryName }}</strong>
+                      <small :title="pluginDiscoverySubtitle(item)">{{
+                        pluginDiscoverySubtitle(item)
+                      }}</small>
+                      <details class="discovery-detail">
+                        <summary>来源详情</summary>
+                        <p>
+                          {{ item.source === 'app' ? '应用专属目录' : '用户 .grok' }} /
+                          {{ item.root }} / {{ item.directoryName }}
+                        </p>
+                        <p v-if="item.version">清单版本：{{ item.version }}</p>
+                        <p v-if="item.description">{{ item.description }}</p>
+                        <p>未验证加载，不继承信任。暂不支持导入本地自制插件。</p>
+                      </details>
+                    </div>
+                    <button
+                      class="hub-secondary"
+                      type="button"
+                      title="在文件管理器定位来源目录"
+                      :disabled="item.state === 'invalid'"
+                      @click="revealDiscovery(item)"
+                    >
+                      定位来源
+                    </button>
+                    <button
+                      class="hub-secondary"
+                      type="button"
+                      disabled
+                      title="只读发现项不能由当前应用启停或卸载"
+                    >
+                      仅只读
+                    </button>
+                  </li>
+                </ul>
+              </section>
+            </template>
           </template>
 
           <template v-else>
+            <p class="plugins-banner">
+              市场是可安装货架，不代表当前 Runtime 已加载。来源 URL 匹配只表示 App 配置与本地缓存
+              origin 相同，不证明官方身份或信任。
+            </p>
+            <button
+              class="hub-secondary"
+              type="button"
+              title="添加或刷新官方市场缓存"
+              :disabled="actionBusy"
+              @click="addOfficialMarketplace"
+            >
+              添加 / 刷新官方市场
+            </button>
             <div v-if="marketLoadState === 'loading'" class="plugins-state" role="status">
               <CircleNotch :size="18" class="spin" />
               正在加载市场
@@ -450,7 +615,7 @@ onMounted(() => {
             <ul v-else class="hub-list" aria-label="市场插件">
               <li
                 v-for="plugin in filteredMarketplace"
-                :key="`${plugin.sourceName}:${plugin.name}`"
+                :key="`${plugin.sourceId || plugin.sourceName}:${plugin.name}`"
                 class="hub-row"
               >
                 <span class="hub-icon" aria-hidden="true">
@@ -462,21 +627,30 @@ onMounted(() => {
                   }}</strong>
                   <small>{{ marketplacePluginSubtitle(plugin) || plugin.sourceName }}</small>
                 </div>
-                <span class="hub-origin">{{ plugin.sourceName }}</span>
+                <span class="hub-origin"
+                  >{{ plugin.sourceName
+                  }}{{ plugin.sourceUrlMatched ? '（配置 URL 匹配）' : '（货架自报）' }}</span
+                >
                 <button
                   class="hub-primary"
                   type="button"
                   :title="installButtonTitle(plugin)"
                   :aria-label="installButtonTitle(plugin)"
-                  :disabled="plugin.installed || actionBusy"
+                  :disabled="
+                    plugin.installed ||
+                    actionBusy ||
+                    hasAmbiguousMarketplaceName(plugin, marketplacePlugins)
+                  "
                   @click="openTrustDialog(plugin)"
                 >
                   {{
-                    plugin.installed
-                      ? '已安装'
-                      : installingName === plugin.name
-                        ? '正在安装…'
-                        : '安装'
+                    hasAmbiguousMarketplaceName(plugin, marketplacePlugins)
+                      ? '同名来源待确认'
+                      : plugin.installed
+                        ? '已安装'
+                        : installingName === plugin.name
+                          ? '正在安装…'
+                          : '安装'
                   }}
                 </button>
               </li>
@@ -495,7 +669,11 @@ onMounted(() => {
         />
 
         <div v-show="tab === 'skills'">
-          <div v-if="loadState === 'loading'" class="plugins-state" role="status">
+          <div
+            v-if="loadState === 'loading' || detailState === 'loading'"
+            class="plugins-state"
+            role="status"
+          >
             <CircleNotch :size="18" class="spin" />
             正在加载插件
           </div>
@@ -678,7 +856,24 @@ onMounted(() => {
 }
 
 .plugins-search input:focus {
-  outline: 0;
+  outline: 2px solid var(--text-2);
+  outline-offset: 2px;
+}
+
+.hub-group-heading {
+  margin: 20px 0 12px;
+  font-size: 14px;
+  color: var(--text-2);
+}
+
+.discovery-detail {
+  color: var(--text-3);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.discovery-detail summary {
+  cursor: pointer;
 }
 
 .hub-list {

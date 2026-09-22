@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   PhBrain as Brain,
   PhCode as Code,
@@ -17,6 +17,12 @@ import type {
   ProviderTestResult
 } from '../../../shared/provider'
 import { APPEARANCE_OPTIONS, SETTINGS_SECTIONS, type SettingsSection } from '../settings-dialog'
+import {
+  canLeaveSettingsPane,
+  mountSettingsFocus,
+  settingsPaneFeedback,
+  type SettingsPaneState
+} from '../settings-dialog-interaction'
 import GrokConfigEditor from './GrokConfigEditor.vue'
 import GrokHooksPanel from './GrokHooksPanel.vue'
 import HostBrowserSettingsPanel from './HostBrowserSettingsPanel.vue'
@@ -45,24 +51,68 @@ const emit = defineEmits<{
   'start-turn': [command: string]
 }>()
 
-const closeButton = ref<HTMLButtonElement | null>(null)
-const paneDirty = ref(false)
+const dialog = ref<HTMLElement | null>(null)
+const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+const paneState = ref<SettingsPaneState>({ dirty: false, saving: false, error: '' })
+const requestedAppearance = ref<AppAppearanceMode | null>(null)
+const appearanceFeedback = ref('更改后自动保存，无需额外点击保存。')
+const busy = computed(() => paneState.value.saving || Boolean(props.appearancePending))
+const feedback = computed(() =>
+  props.section === 'appearance'
+    ? props.appearancePending ? '正在保存外观…' : appearanceFeedback.value
+    : settingsPaneFeedback(paneState.value)
+)
+let releaseFocus: (() => void) | undefined
 
+/** 关闭按钮、遮罩和 Esc 共用同一离开检查，保存中不能销毁子页。 */
 function requestClose(): void {
-  if (paneDirty.value && !window.confirm('有未保存的更改，确定关闭设置？')) return
+  if (busy.value || !canLeaveSettingsPane(paneState.value, () => window.confirm('有未保存的更改，确定丢弃并关闭设置？'))) return
   emit('close')
 }
 
+/** 切页只在用户确认丢弃后重置摘要，取消时继续保留原组件和草稿。 */
 function requestSection(id: SettingsSection): void {
   if (id === props.section) return
-  if (paneDirty.value && !window.confirm('有未保存的更改，确定离开当前页？')) return
-  paneDirty.value = false
+  if (busy.value || !canLeaveSettingsPane(paneState.value, () => window.confirm('有未保存的更改，确定丢弃并离开当前页？'))) return
+  paneState.value = { dirty: false, saving: false, error: '' }
   emit('update:section', id)
 }
 
-onMounted(() => {
-  void nextTick(() => closeButton.value?.focus())
+/** 原生 select 在取消离开时必须恢复旧值，不能视觉上先切页。 */
+function selectSection(event: Event): void {
+  const select = event.target as HTMLSelectElement
+  const target = select.value as SettingsSection
+  select.value = props.section
+  requestSection(target)
+}
+
+/** 记忆快捷动作会由 App 关闭设置，同样必须先处理未保存草稿。 */
+function requestStartTurn(command: string): void {
+  if (busy.value || !canLeaveSettingsPane(paneState.value, () => window.confirm('有未保存的更改，确定丢弃并返回对话？'))) return
+  emit('start-turn', command)
+}
+
+/** 外观仍通过原有事件保存，只从确认后的 props 推断结果，不做乐观选中。 */
+function requestAppearance(mode: AppAppearanceMode): void {
+  if (props.appearancePending || mode === props.appearance.mode) return
+  requestedAppearance.value = mode
+  emit('changeAppearance', mode)
+}
+
+watch(() => props.appearancePending, (pending, previous) => {
+  if (pending || !previous || !requestedAppearance.value) return
+  appearanceFeedback.value = props.appearance.mode === requestedAppearance.value
+    ? '外观已保存并生效。'
+    : '外观保存失败，仍使用上次确认的外观，请重试。'
+  requestedAppearance.value = null
 })
+
+onMounted(() => {
+  void nextTick(() => {
+    if (dialog.value) releaseFocus = mountSettingsFocus(dialog.value, requestClose, returnFocus)
+  })
+})
+onUnmounted(() => releaseFocus?.())
 
 function sectionIcon(id: SettingsSection): typeof Palette {
   if (id === 'appearance') return Palette
@@ -77,18 +127,19 @@ function sectionIcon(id: SettingsSection): typeof Palette {
 <template>
   <div class="modal-backdrop settings-backdrop" @click.self="requestClose">
     <section
+      ref="dialog"
       class="settings-dialog"
       role="dialog"
+      tabindex="-1"
       aria-modal="true"
       aria-labelledby="settings-dialog-title"
-      @keydown.esc.stop="requestClose"
     >
       <header class="settings-dialog-header">
         <h2 id="settings-dialog-title">设置</h2>
         <button
-          ref="closeButton"
           class="icon-button"
           type="button"
+          :disabled="busy"
           title="关闭设置"
           aria-label="关闭设置"
           @click="requestClose"
@@ -98,12 +149,21 @@ function sectionIcon(id: SettingsSection): typeof Palette {
       </header>
 
       <div class="settings-dialog-body">
+        <label class="settings-compact-nav">
+          <span>设置栏目</span>
+          <select :value="section" :disabled="busy" @change="selectSection">
+            <option v-for="item in SETTINGS_SECTIONS" :key="item.id" :value="item.id">
+              {{ item.label }}
+            </option>
+          </select>
+        </label>
         <nav class="settings-nav" aria-label="设置栏目">
           <button
             v-for="item in SETTINGS_SECTIONS"
             :key="item.id"
             class="settings-nav-item"
             type="button"
+            :disabled="busy"
             :class="{ current: section === item.id }"
             :aria-current="section === item.id ? 'page' : undefined"
             @click="requestSection(item.id)"
@@ -115,9 +175,6 @@ function sectionIcon(id: SettingsSection): typeof Palette {
 
         <div
           class="settings-pane"
-          :class="{
-            fill: section === 'memory' || section === 'grok-config' || section === 'hooks'
-          }"
         >
           <div v-if="section === 'provider'" class="provider-pane">
             <h3>供应商</h3>
@@ -128,6 +185,7 @@ function sectionIcon(id: SettingsSection): typeof Palette {
               :list-models="props.listModels"
               :save-provider="props.saveProvider"
               :clear-provider="props.clearProvider"
+              @state="paneState = $event"
               @saved="emit('saved', $event)"
             />
           </div>
@@ -150,7 +208,7 @@ function sectionIcon(id: SettingsSection): typeof Palette {
                 :aria-label="option.label"
                 :disabled="appearancePending"
                 :class="{ selected: appearance.mode === option.mode }"
-                @click="emit('changeAppearance', option.mode)"
+                @click="requestAppearance(option.mode)"
               >
                 <span class="appearance-swatch" :data-mode="option.mode" aria-hidden="true" />
                 <span class="appearance-copy">
@@ -166,18 +224,23 @@ function sectionIcon(id: SettingsSection): typeof Palette {
             :selected-task-id="selectedTaskId"
             :grok-actions-available="grokActionsAvailable"
             :project-hint="projectHint"
-            @dirty="paneDirty = $event"
-            @start-turn="emit('start-turn', $event)"
+            @state="paneState = $event"
+            @start-turn="requestStartTurn"
           />
           <GrokConfigEditor
             v-else-if="section === 'grok-config'"
             :runtime-busy="runtimeBusy"
-            @dirty="paneDirty = $event"
+            @state="paneState = $event"
           />
-          <HostBrowserSettingsPanel v-else-if="section === 'browser'" :runtime-busy="runtimeBusy" />
-          <GrokHooksPanel v-else-if="section === 'hooks'" />
+          <HostBrowserSettingsPanel
+            v-else-if="section === 'browser'"
+            :runtime-busy="runtimeBusy"
+            @state="paneState = $event"
+          />
+          <GrokHooksPanel v-else-if="section === 'hooks'" @state="paneState = $event" />
         </div>
       </div>
+      <footer class="settings-status" role="status" aria-live="polite">{{ feedback }}</footer>
     </section>
   </div>
 </template>
@@ -191,9 +254,9 @@ function sectionIcon(id: SettingsSection): typeof Palette {
 
 .settings-dialog {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  width: min(860px, calc(100vw - 48px));
-  height: min(640px, calc(100vh - 48px));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(1080px, calc(100vw - 48px));
+  height: min(760px, calc(100dvh - 48px));
   overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-panel);
@@ -238,6 +301,7 @@ function sectionIcon(id: SettingsSection): typeof Palette {
   padding: 12px;
   border-right: 1px solid var(--border);
   background: var(--app-bg);
+  overflow-y: auto;
 }
 
 .settings-nav-item {
@@ -270,13 +334,74 @@ function sectionIcon(id: SettingsSection): typeof Palette {
   min-height: 0;
   overflow: auto;
   padding: 20px 22px 24px;
+  container-type: inline-size;
+  container-name: settings-content;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
-/* 记忆、配置编辑和 Hooks 列表需要铺满右侧，避免外层滚动把内部两栏裁成一团。 */
-.settings-pane.fill {
-  display: grid;
-  overflow: hidden;
-  padding: 16px 18px 18px;
+/* 页面由壳层负责纵向滚动，状态栏占独立行，不覆盖最后一个字段。 */
+.settings-status {
+  padding: 10px 20px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.settings-compact-nav {
+  display: none;
+}
+
+.settings-dialog :deep(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-dialog :deep(h3) {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+@media (max-width: 980px), (max-height: 560px) {
+  .settings-dialog {
+    width: calc(100vw - 24px);
+    height: calc(100dvh - 24px);
+  }
+
+  .settings-dialog-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    display: none;
+  }
+
+  .settings-compact-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+
+  .settings-compact-nav select {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-control);
+    color: var(--text-1);
+    background: var(--surface-2);
+    font: inherit;
+  }
+
+  .settings-pane {
+    padding: 16px;
+  }
 }
 
 .provider-pane,

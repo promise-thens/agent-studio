@@ -27,6 +27,8 @@ export type ProjectAvailability =
 
 /** Renderer 可见的 Project 摘要，不授予任意路径读取能力。 */
 export interface ProjectSummary {
+  /** 应用托管聊天单独分组；缺省仍是用户添加的项目。 */
+  kind?: 'managed-chat'
   projectId: string
   canonicalRoot: string
   displayName: string

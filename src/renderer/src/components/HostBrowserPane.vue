@@ -20,6 +20,11 @@ import {
   PhXCircle as XCircle
 } from '@phosphor-icons/vue'
 import { parseHostBrowserNavigateUrl } from '../../../shared/host-browser'
+import {
+  resolveWorkspaceDrag,
+  resolveWorkspaceWidths,
+  type WorkspaceWidthBudget
+} from '../workspace-layout'
 
 const props = defineProps<{
   /** 侧边浏览器是否处于开启显示状态 */
@@ -36,6 +41,12 @@ const props = defineProps<{
   canGoForward?: boolean
   /** 当前选中的 Task 身份 */
   taskId?: string
+  /** 主窗口统一测量的预算；未接入时按实际侧栏和工作区测量止损。 */
+  widthBudget?: WorkspaceWidthBudget
+  requestedWidth?: number
+  focusMode?: boolean
+  taskTitle?: string
+  executionStatus?: string
 }>()
 
 const emit = defineEmits<{
@@ -49,6 +60,12 @@ const emit = defineEmits<{
   'update:bounds': [bounds: { x: number; y: number; width: number; height: number }]
   /** 用户拖拽改变面板宽度 */
   'update:width': [width: number]
+  'request:focus': []
+  'request:split': []
+  'request:details': []
+  'collapse:inspector': []
+  'collapse:browser': []
+  'resize-active': [active: boolean]
 }>()
 
 /** 地址栏编辑框绑定的输入值 */
@@ -67,6 +84,11 @@ let copyTimer: ReturnType<typeof setTimeout> | null = null
 const isResizing = ref(false)
 let resizeStartX = 0
 let resizeStartWidth = 0
+const focusPreview = ref(false)
+let captureTarget: HTMLElement | null = null
+let capturePointerId: number | null = null
+let previousCursor = ''
+let previousUserSelect = ''
 
 /** 尺寸监听器：容器宽高变动时及时通知主进程同步更新 Native View */
 let resizeObserver: ResizeObserver | null = null
@@ -195,66 +217,126 @@ function reportBounds(): void {
  * 鼠标在调整把手上按下，开始拖动修改宽度
  */
 function onResizerPointerDown(event: PointerEvent): void {
-  if (event.button !== 0) return
+  if (event.button !== 0 || props.focusMode || isResizing.value) return
+  event.preventDefault()
+  captureTarget = event.currentTarget as HTMLElement
+  capturePointerId = event.pointerId
+  captureTarget.setPointerCapture(event.pointerId)
   isResizing.value = true
+  focusPreview.value = false
   resizeStartX = event.clientX
   resizeStartWidth = paneRef.value?.getBoundingClientRect().width ?? 480
 
+  previousCursor = document.body.style.cursor
+  previousUserSelect = document.body.style.userSelect
   document.body.style.cursor = 'col-resize'
   document.body.style.userSelect = 'none'
+  emit('resize-active', true)
 
   window.addEventListener('pointermove', onResizerPointerMove)
   window.addEventListener('pointerup', onResizerPointerUp)
+  window.addEventListener('pointercancel', cancelResize)
+  window.addEventListener('blur', cancelResize)
+}
+
+/** 兼容尚未整合的父层，侧栏只扣实际可见宽度；Inspector 预算由父层明确传入。 */
+function readWidthBudget(): WorkspaceWidthBudget {
+  if (props.widthBudget) return props.widthBudget
+  const workspace = paneRef.value?.parentElement
+  const sidebar = workspace?.querySelector('.project-sidebar')
+  return {
+    workspaceWidth: workspace?.getBoundingClientRect().width ?? 0,
+    sidebarWidth: sidebar?.getBoundingClientRect().width ?? 0,
+    separatorsWidth: 1
+  }
+}
+
+/** 预算不足只发出收起请求，不把自动缩窗解释为用户要求专注模式。 */
+function applyWidth(candidate: unknown): void {
+  const widths = resolveWorkspaceWidths(readWidthBudget(), candidate)
+  if (widths.collapseInspector) emit('collapse:inspector')
+  if (widths.collapseBrowser) emit('collapse:browser')
+  emit('update:width', widths.browserWidth)
 }
 
 /**
  * 鼠标拖拽中：向左拉伸增大宽度，向右收缩减小宽度
  */
 function onResizerPointerMove(event: PointerEvent): void {
-  if (!isResizing.value) return
+  if (!isResizing.value || event.pointerId !== capturePointerId) return
   const deltaX = resizeStartX - event.clientX
   const candidate = Math.round(resizeStartWidth + deltaX)
-  // 最小宽度 320px，最大保证左侧对话区域保留至少 380px
-  const maxAllowed = Math.max(340, window.innerWidth - 380)
-  const clamped = Math.max(300, Math.min(candidate, maxAllowed))
-  emit('update:width', clamped)
+  focusPreview.value = resolveWorkspaceDrag(readWidthBudget(), candidate).requestFocus
+  applyWidth(candidate)
 }
 
 /**
- * 鼠标松开，结束拖动并清理事件与样式
+ * 只有同一指针正常松开才提交专注请求，取消和失焦只清理。
  */
-function onResizerPointerUp(): void {
+function onResizerPointerUp(event: PointerEvent): void {
+  if (event.pointerId !== capturePointerId) return
+  const focus = focusPreview.value
+  cancelResize()
+  if (focus) emit('request:focus')
+}
+
+/** 原样还原拖动前样式；释放捕获、失焦和卸载共享幂等清理。 */
+function cancelResize(): void {
   if (!isResizing.value) return
   isResizing.value = false
-  document.body.style.cursor = ''
-  document.body.style.userSelect = ''
+  focusPreview.value = false
+  if (capturePointerId !== null && captureTarget?.hasPointerCapture(capturePointerId)) {
+    captureTarget.releasePointerCapture(capturePointerId)
+  }
+  captureTarget = null
+  capturePointerId = null
+  document.body.style.cursor = previousCursor
+  document.body.style.userSelect = previousUserSelect
   window.removeEventListener('pointermove', onResizerPointerMove)
   window.removeEventListener('pointerup', onResizerPointerUp)
+  window.removeEventListener('pointercancel', cancelResize)
+  window.removeEventListener('blur', cancelResize)
+  emit('resize-active', false)
 }
 
 /**
  * 双击拖拽条快速恢复默认舒适宽度（480px）
  */
 function onResizerDblClick(): void {
-  emit('update:width', 480)
+  applyWidth(480)
 }
 
 onMounted(() => {
   resizeObserver = new ResizeObserver(() => {
+    if (!props.focusMode && !isResizing.value) {
+      applyWidth(props.requestedWidth ?? paneRef.value?.getBoundingClientRect().width)
+    }
     reportBounds()
   })
   if (containerRef.value) resizeObserver.observe(containerRef.value)
+  if (paneRef.value?.parentElement) resizeObserver.observe(paneRef.value.parentElement)
+  const sidebar = paneRef.value?.parentElement?.querySelector('.project-sidebar')
+  if (sidebar) resizeObserver.observe(sidebar)
   window.addEventListener('resize', reportBounds)
   void nextTick(() => reportBounds())
 })
 
 onUnmounted(() => {
+  cancelResize()
   resizeObserver?.disconnect()
   window.removeEventListener('resize', reportBounds)
   window.removeEventListener('pointermove', onResizerPointerMove)
   window.removeEventListener('pointerup', onResizerPointerUp)
   if (copyTimer) clearTimeout(copyTimer)
 })
+
+watch(
+  () => [props.widthBudget, props.requestedWidth, props.focusMode],
+  () => {
+    if (!props.focusMode) applyWidth(props.requestedWidth ?? paneRef.value?.getBoundingClientRect().width)
+  },
+  { deep: true }
+)
 
 watch(
   () => props.visible,
@@ -275,22 +357,34 @@ watch(
   >
     <!-- 左侧边缘拖动分割条（支持随意调整大小，双击恢复默认） -->
     <div
+      v-if="!focusMode"
       class="host-browser-resizer"
       :class="{ 'is-active': isResizing }"
       role="separator"
       aria-orientation="vertical"
       title="拖拽调整浏览器宽度，双击恢复默认 (480px)"
       @pointerdown="onResizerPointerDown"
+      @lostpointercapture="cancelResize"
       @dblclick="onResizerDblClick"
     >
       <div class="resizer-line" />
     </div>
 
-    <!-- 拖拽调整大小过程中的防穿透遮罩层，防止鼠标进入 WebContentsView 造成拖拽丢失 -->
+    <!-- 仅提供 Renderer 内拖动反馈；原生视图需由父层响应 resize-active 暂停显示。 -->
     <div v-if="isResizing" class="host-browser-drag-shield" />
 
     <!-- 现代精致深色浏览器顶栏 -->
     <header class="host-browser-chrome no-drag">
+      <button v-if="focusMode" type="button" class="browser-icon-btn" title="退出浏览器专注" aria-label="退出浏览器专注" @click="emit('request:split')">
+        <ArrowLeft :size="15" />
+      </button>
+      <button v-if="focusMode" type="button" class="focus-task-entry" :title="`${taskTitle || '当前对话'} · ${executionStatus || ''}`" @click="emit('request:details')">
+        {{ taskTitle || '当前对话' }} · {{ executionStatus || '执行详情' }}
+      </button>
+      <button v-else type="button" class="browser-icon-btn" title="浏览器专注" aria-label="浏览器专注" @click="emit('request:focus')">
+        <Compass :size="15" />
+      </button>
+      <span v-if="focusPreview" class="focus-preview" role="status">松开进入浏览器专注</span>
       <!-- 加载中微光流动进度条 -->
       <div v-if="isLoading" class="host-browser-progress-bar" />
 

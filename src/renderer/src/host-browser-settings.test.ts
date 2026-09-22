@@ -229,6 +229,14 @@ describe('浏览器设置面板源码契约', () => {
       /takeHostBrowserSelectIntent\(\s*target,\s*settings\.value\.agentPermissions\[key\]\s*\)[\s\S]*savePatch[\s\S]*revertHostBrowserSelect\(\s*target,\s*settings\.value\.agentPermissions\[key\]\s*\)/
     )
   })
+
+  it('黑名单字段校验与页面操作错误分开，只有字段错误标记 aria-invalid', () => {
+    expect(panelSource).toContain("const blacklistErrorMessage = ref('')")
+    expect(panelSource).toContain(':aria-invalid="Boolean(blacklistErrorMessage)"')
+    expect(panelSource).toContain('id="host-browser-sync-blacklist-error"')
+    expect(panelSource).toContain('{{ blacklistErrorMessage }}')
+    expect(panelSource).not.toContain(':aria-invalid="Boolean(errorMessage && blacklistDirty)"')
+  })
 })
 
 describe('原生控件回写', () => {

@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { getManagedGrokHome } from '../../provider/grok-provider-config'
+import { readInstalledPluginRegistry } from './grok-plugin-inventory-discovery'
 import {
   MANAGED_GROK_PLUGIN_SCOPE,
   MAX_RUNTIME_PLUGIN_NAME_LENGTH,
@@ -178,28 +179,12 @@ async function listDropInPluginIds(jail: PluginJail): Promise<string[]> {
 
 /**
  * 市场安装以 registry.json 的插件名为 id，避免把 `name-hash` 目录名直接展示给用户。
- * registry 损坏或缺文件时退回扫描 installed-plugins 下一层目录，且跳过 registry.json。
+ * 缺失、损坏和合法空表都不回退；未登记目录由独立的只读发现摘要展示。
  */
 async function listInstalledRegistryEntries(jail: PluginJail): Promise<InstalledRegistryEntry[]> {
   if (!jail.installedPlugins) return []
 
-  const fromRegistry = await readInstalledRegistry(jail)
-  if (fromRegistry) return fromRegistry
-
-  let entries: string[]
-  try {
-    entries = await fs.readdir(jail.installedPlugins)
-  } catch {
-    return []
-  }
-
-  return entries
-    .filter((name) => name !== INSTALLED_REGISTRY_FILE && isRuntimePluginId(name))
-    .sort(compareAscii)
-    .map((pluginId) => ({
-      pluginId,
-      candidatePath: join(jail.installedPlugins as string, pluginId)
-    }))
+  return (await readInstalledRegistry(jail)) ?? []
 }
 
 async function resolvePluginCandidate(
@@ -218,14 +203,6 @@ async function resolvePluginCandidate(
   const fromRegistry = registry?.find((entry) => entry.pluginId === pluginId)
   if (fromRegistry) return fromRegistry
 
-  if (jail.installedPlugins) {
-    const installed = join(jail.installedPlugins, pluginId)
-    const resolved = await realpathExisting(installed)
-    if (resolved.kind === 'ok' || resolved.kind === 'invalid') {
-      return { pluginId, candidatePath: installed }
-    }
-  }
-
   return null
 }
 
@@ -235,33 +212,8 @@ async function resolvePluginCandidate(
  */
 async function readInstalledRegistry(jail: PluginJail): Promise<InstalledRegistryEntry[] | null> {
   if (!jail.installedPlugins) return null
-  const registryPath = join(jail.installedPlugins, INSTALLED_REGISTRY_FILE)
-  const json = await readJsonInside(jail.grokHome, registryPath)
-  if (json.kind === 'missing') return null
-  if (json.kind === 'invalid') return null
-  if (json.value.version !== 1 || !isPlainRecord(json.value.repos)) return null
-
-  const entries: InstalledRegistryEntry[] = []
-  for (const [repoKey, repoValue] of Object.entries(json.value.repos)) {
-    if (!isRuntimePluginId(repoKey) || !isPlainRecord(repoValue)) continue
-    const plugins = isPlainRecord(repoValue.plugins) ? repoValue.plugins : null
-    const names = plugins ? Object.keys(plugins) : [repoKey]
-    const candidatePath =
-      typeof repoValue.path === 'string' && repoValue.path.trim()
-        ? repoValue.path
-        : join(jail.installedPlugins, repoKey)
-
-    for (const pluginId of names) {
-      if (!isRuntimePluginId(pluginId)) continue
-      const pluginMeta = plugins && isPlainRecord(plugins[pluginId]) ? plugins[pluginId] : null
-      const version = pluginMeta ? pickVersion(pluginMeta) : undefined
-      const entry: InstalledRegistryEntry = { pluginId, candidatePath }
-      if (version) entry.version = version
-      entries.push(entry)
-    }
-  }
-
-  return entries.sort((left, right) => compareAscii(left.pluginId, right.pluginId))
+  const registry = await readInstalledPluginRegistry(jail.grokHome)
+  return registry.entries.sort((left, right) => compareAscii(left.pluginId, right.pluginId))
 }
 
 /**
@@ -290,19 +242,10 @@ async function readPluginAt(
     return withRegistryVersion(makeInvalidDetail(pluginId, INVALID_READ_REASON), registryVersion)
   }
 
+  // 缺少身份清单的目录只能作为发现项，不能默认启用其脚本与组件。
+  const manifest = await readPluginManifest(jail.grokHome, resolved.canonical)
+  if (manifest.kind === 'missing') return null
   const scanned = await scanPluginContents(pluginId, resolved.canonical, jail.grokHome)
-  if (
-    scanned.manifestMissing &&
-    !scanned.detail.invalidReason &&
-    scanned.detail.skillCount === 0 &&
-    scanned.detail.mcpCount === 0 &&
-    scanned.detail.hookCount === 0 &&
-    jail.installedPlugins &&
-    isDirectChildPath(jail.installedPlugins, resolved.canonical)
-  ) {
-    // 市场安装失败或 Grok 卸完后留下的空 clone，不是可卸载插件。
-    return null
-  }
 
   return withRegistryVersion(scanned.detail, registryVersion)
 }

@@ -59,6 +59,9 @@ import type {
   ProviderModelOption
 } from '../shared/provider'
 import { AgentService, AgentServiceError } from './agent/agent-service'
+import { PermissionPreferences } from './agent/permission-preferences'
+import { runPermissionControlTurn } from './agent/permission-control-turn'
+import { ManagedChatWorkspace } from './project/managed-chat-workspace'
 import { projectPublicAgentEvent } from './agent/agent-event-projection'
 import { registerAgentIpcHandlers } from './agent/ipc'
 import { registerTaskIpcHandlers } from './agent/task-ipc'
@@ -75,6 +78,7 @@ import { TaskExecutor } from './agent/task-executor'
 import { TaskExecutionController } from './agent/task-execution-controller'
 import { AppearanceController, type NativeThemeAdapter } from './appearance/appearance-controller'
 import { AppearanceStore } from './appearance/appearance-store'
+import { BrowserFocusOverlay } from './browser/browser-focus-overlay'
 import { registerAppIpcHandlers } from './app-ipc'
 import {
   openMacosFilesPrivacySettings,
@@ -135,6 +139,11 @@ import {
   uninstallManagedGrokPlugin
 } from './runtime/grok/grok-plugin-cli'
 import { getGrokPlugin, listGrokPlugins } from './runtime/grok/grok-plugin-inventory'
+import {
+  listGrokPluginDiscoveries,
+  resolveGrokPluginDiscoveryDirectory
+} from './runtime/grok/grok-plugin-inventory-discovery'
+import { registerPluginDiscoveryIpc } from './plugin-discovery-ipc'
 import { PermissionAuditStore } from './security/permission-audit-store'
 import { PermissionBroker } from './security/permission-broker'
 import { resolvePermissionTurnIdentity } from './security/permission-intent-context'
@@ -156,6 +165,7 @@ let runtimeAdapter: GrokAcpAdapter | null = null
 let providerStore: ProviderConfigStore | null = null
 let providerTester: ProviderConnectionTester | null = null
 let projectRegistry: ProjectRegistry | null = null
+let managedChatWorkspace: ManagedChatWorkspace | null = null
 let taskStore: TaskStore | null = null
 let taskAttachmentInbox: TaskAttachmentInbox | null = null
 let taskChangeMediaPreviewService: TaskChangeMediaPreviewService | null = null
@@ -195,6 +205,16 @@ function createWindow(): void {
       sandbox: true
     }
   })
+
+  // 原生输入子窗跟随本次主窗生命周期；关闭时控制器自行撤销 IPC。
+  const browserFocusOverlay = new BrowserFocusOverlay({
+    parent: mainWindow,
+    ownerTrust: createRendererTrustOptions(),
+    preloadPath: join(__dirname, '../preload/browser-focus-overlay.js'),
+    productionHtmlPath: join(__dirname, '../renderer/browser-focus-overlay.html'),
+    rendererUrl: is.dev ? process.env.ELECTRON_RENDERER_URL : undefined
+  })
+  browserFocusOverlay.registerIpc(ipcMain)
 
   const remapHostBrowserPointer = (): void => {
     hostBrowserService?.remapHostBrowserPointer()
@@ -376,6 +396,12 @@ async function initializeServices(
   }
   projectRegistry = new ProjectRegistry({ userDataPath: app.getPath('userData') })
   await projectRegistry.initialize()
+  // 与配置树同级而非其子目录；测试 userData 覆盖也拥有独立工作区。
+  managedChatWorkspace = new ManagedChatWorkspace({
+    root: `${app.getPath('userData')}-chat-workspace`,
+    userDataPath: app.getPath('userData'),
+    registry: projectRegistry
+  })
   if (controlledE2e) {
     // Project 由 Main 注册，避免 E2E 借助 Renderer 或系统目录选择框传入工作区路径。
     await projectRegistry.register(controlledE2e.workspacePath)
@@ -679,6 +705,16 @@ async function initializeServices(
     onSnapshot: (snapshot) => {
       sendToTrustedRenderer(rendererTrust, AGENT_PUSH_CHANNELS.executionUpdate, snapshot)
       browserPluginOverlayHost?.acceptExecutionSnapshot(snapshot)
+      const execution = snapshot.execution
+      if (execution && ['completed', 'failed', 'cancelled', 'interrupted'].includes(execution.state)) {
+        // 终态推送早于 after 检查点和 lease 释放；等待释放后才进入权限队列。
+        // 控制回合由队列内的调用者确认，不能再排队制造递归控制。
+        if (execution.turnKind !== TAKEOVER_CONTROL_TURN_KIND) {
+          void taskExecutor?.waitForTerminal()
+            .then(() => agentService?.applyPendingPermissionMode(execution.taskId))
+            .catch(() => undefined)
+        }
+      }
     },
     onEvent: (event) =>
       sendToTrustedRenderer(
@@ -691,6 +727,14 @@ async function initializeServices(
     attachmentInbox: taskAttachmentInbox ?? undefined
   })
   agentService = new AgentService(adapter, new TaskExecutionController(), {
+    permissionPreferences: new PermissionPreferences(app.getPath('userData')),
+    runPermissionControlTurn: (taskId, prompt) => {
+      const service = requireAgentService()
+      const executor = taskExecutor!
+      return runPermissionControlTurn(executor, () =>
+        startTurnWithPrompt(service, executor, taskId, prompt, [], TAKEOVER_CONTROL_TURN_KIND)
+      )
+    },
     projectRegistry,
     taskStore,
     ensureChangeBaseline,
@@ -867,6 +911,7 @@ async function applyTakeoverControlPrompt(
   }
 }
 
+/** 统一组装窄 IPC；插件发现仅信任主窗口，并复用受限目录解析和统一脱敏。 */
 function registerIpcHandlers(): void {
   const rendererTrust = createRendererTrustOptions()
   const desktopIpcMain: DesktopIpcMain = {
@@ -890,6 +935,10 @@ function registerIpcHandlers(): void {
   }
 
   registerAgentIpcHandlers({
+    prepareChatWorkspace: () => {
+      if (!managedChatWorkspace) throw new Error('聊天工作区尚未初始化。')
+      return managedChatWorkspace.prepare()
+    },
     ipcMain: desktopIpcMain,
     assertTrustedSender,
     assertTrustedCancelTurnSender,
@@ -899,6 +948,8 @@ function registerIpcHandlers(): void {
       if (!service || !executor) return service
       return {
         getStatus: () => service.getStatus(),
+        getPermissionPreferences: () => service.getPermissionPreferences(),
+        setPlanPermissionOverride: (taskId, enabled) => service.setPlanPermissionOverride(taskId, enabled),
         getExecutionSnapshot: () => executor.getSnapshot(),
         connect: (projectId) => service.connect(projectId),
         disconnect: () => service.disconnect(),
@@ -907,11 +958,14 @@ function registerIpcHandlers(): void {
           hostBrowserService?.noteActiveTask(taskId)
           browserPluginOverlayHost?.noteActiveTask(taskId)
           const entry = await service.enterTask(taskId)
+          await service.applyPendingPermissionMode(taskId)
           await applyTakeoverControlPrompt(service, executor, taskId, true)
           return entry
         },
         startTurn: async (taskId, prompt, attachmentIds = []) =>
-          startTurnWithPrompt(service, executor, taskId, prompt, attachmentIds),
+          service.withPermissionAdmission(taskId, () =>
+            startTurnWithPrompt(service, executor, taskId, prompt, attachmentIds)
+          ),
         cancelTurn: async (request) => {
           if (typeof request === 'string') return service.cancelTurn(request)
           const cancelled = await executor.cancel(request)
@@ -956,6 +1010,16 @@ function registerIpcHandlers(): void {
         }
       }
     },
+    sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
+  })
+
+  registerPluginDiscoveryIpc({
+    ipcMain: desktopIpcMain,
+    assertTrustedSender,
+    listDiscoveries: () => listGrokPluginDiscoveries(app.getPath('userData')),
+    resolveDiscoveryDirectory: (discoveryId) =>
+      resolveGrokPluginDiscoveryDirectory(app.getPath('userData'), discoveryId),
+    openDirectory: (path) => shell.openPath(path),
     sanitizeError: (error) => redactSensitiveError(error, getKnownSecrets())
   })
 
@@ -1007,9 +1071,13 @@ function registerIpcHandlers(): void {
       const enablement = await requireGrokHomeConfig().readPluginEnablement()
       return applyPluginEnablement(detail, enablement)
     },
+    /** 启停只作用于当前 App 有效安装项，不能把用户发现项或卸载残留写回配置。 */
     setPluginEnabled: async (pluginId, enabled) => {
       if (!isRuntimePluginId(pluginId)) {
         throw new DesktopIpcFailure('invalid-input', '插件标识无效。')
+      }
+      if (!(await getGrokPlugin(app.getPath('userData'), pluginId))) {
+        throw new DesktopIpcFailure('not-found', '当前应用未安装此插件。')
       }
       const controller = requireGrokHomeConfig()
       const enablement = await controller.readPluginEnablement()

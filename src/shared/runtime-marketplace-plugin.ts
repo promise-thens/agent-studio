@@ -20,8 +20,12 @@ export interface MarketplacePluginSummary {
   name: string
   displayName: string
   description: string
-  /** config 里的源 id（如 plugin-marketplace），绝不是 git URL。 */
+  /** 来源标签：URL 匹配时来自 config，否则来自货架清单自报；绝不是 git URL。 */
   sourceName: string
+  /** 缓存实例身份只用于区分同名源，不证明官方身份或信任。 */
+  sourceId?: string
+  /** 仅表示 App config URL 与缓存 origin 精确相同，不证明官方身份、可信或未被本地改写。 */
+  sourceUrlMatched?: boolean
   installed: boolean
   skillCount?: number
   mcpCount?: number
@@ -45,6 +49,12 @@ export function parseMarketplacePluginSummary(value: unknown): MarketplacePlugin
     description: parseMarketplaceDescription(value.description),
     sourceName: value.sourceName,
     installed: value.installed
+  }
+  if (typeof value.sourceId === 'string' && /^[a-f0-9]{64}$/.test(value.sourceId)) {
+    summary.sourceId = value.sourceId
+  }
+  if (typeof value.sourceUrlMatched === 'boolean') {
+    summary.sourceUrlMatched = value.sourceUrlMatched
   }
 
   const skillCount = parseOptionalCount(value.skillCount)

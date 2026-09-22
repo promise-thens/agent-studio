@@ -34,9 +34,10 @@ onMounted(() => {
           <Warning :size="22" weight="fill" />
         </div>
         <div>
-          <h2 id="takeover-confirm-title">让 Grok 完全接管当前任务？</h2>
+          <h2 id="takeover-confirm-title">允许所有对话完全访问？</h2>
           <div id="takeover-confirm-description">
-            <p>将不再询问工具权限</p>
+            <p>此偏好适用于所有对话，重启后仍保留；运行中的任务将在空闲后应用。</p>
+            <p>将不再询问工具权限。可在输入框批准模式中切回“请求批准”关闭。</p>
             <p>桌面看不到未上报的操作</p>
             <p>命令、改文件、出网都会自己做</p>
             <p>若已启用浏览器或 Computer Use 插件，也会自己点</p>

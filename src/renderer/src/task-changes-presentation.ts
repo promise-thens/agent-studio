@@ -10,7 +10,8 @@ import type {
   TaskChangePath,
   TaskChangeRevertible,
   TaskChangeSet,
-  TaskChangeSetQueryResult
+  TaskChangeSetQueryResult,
+  TurnChangeCheckpoint
 } from '../../shared/git-review'
 import { isChangeMediaPreviewPath, isPdfAttachmentPath } from '../../shared/task-attachment'
 
@@ -52,6 +53,53 @@ export interface ChangeCardView {
   deleted: number
   files: ChangeCardFileView[]
   canRestore: boolean
+  scope?: 'current'
+}
+
+/** 检查点只有哈希和路径，历史摘要禁止携带当前 HEAD 的行数或媒体预览。 */
+export interface TurnChangeCardView extends Omit<ChangeCardView, 'added' | 'deleted' | 'scope'> {
+  taskId: string
+  turnId: string
+  scope: 'turn'
+  detail: string
+  added?: never
+  deleted?: never
+}
+
+/** 只根据检查点自身归属建立摘要；无检查点、无变化的轮次不借用当前 ChangeSet。 */
+export function presentTurnChangeCards(
+  taskId: string,
+  checkpoints: readonly TurnChangeCheckpoint[],
+  currentChangeSet?: TaskChangeSetQueryResult | null
+): Record<string, TurnChangeCardView> {
+  const cards: Record<string, TurnChangeCardView> = {}
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.taskId !== taskId || checkpoint.status === 'no-change') continue
+    const paths = [...new Set(checkpoint.affectedPaths)].sort()
+    if (!paths.length && checkpoint.status !== 'incomplete') continue
+    const restore = currentChangeSet?.taskId === taskId ? currentChangeSet.revertible : false
+    cards[checkpoint.turnId] = {
+      taskId,
+      turnId: checkpoint.turnId,
+      scope: 'turn',
+      visible: true,
+      heading: paths.length ? `本轮记录 ${paths.length} 个文件变化` : '本轮文件记录不完整',
+      detail: [
+        '仅为本轮检查点路径摘要，不含历史 Diff。',
+        checkpoint.status === 'incomplete' ? '检查点不完整，可能遗漏文件。' : '',
+        checkpoint.drift ? '检测到漂移，不能确认全部变化由本轮产生。' : ''
+      ].filter(Boolean).join(' '),
+      files: paths.map((path) => ({
+        path,
+        fileName: fileNameOf(path),
+        // 检查点不提供逐路径的可靠新增/修改/删除归因，不能从当前状态倒推。
+        attribution: 'overlap-unknown'
+      })),
+      canRestore: checkpoint.status === 'complete' && !checkpoint.drift &&
+        Boolean(restore && restore.kind === 'latest-turn' && restore.turnId === checkpoint.turnId)
+    }
+  }
+  return cards
 }
 
 export interface ChangeTreeFileView {

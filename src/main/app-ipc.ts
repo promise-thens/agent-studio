@@ -209,11 +209,16 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
     }
     return detail
   })
+  /** 只写当前 App 的有效安装项；用户只读发现 ID 不得转成 Runtime 配置。 */
   register(APP_INVOKE_CHANNELS.setPluginEnabled, async (args) => {
     const request = readRequest(args, ['pluginId', 'enabled'])
     const pluginId = readText(request, 'pluginId')
     if (!isRuntimePluginId(pluginId) || typeof request.enabled !== 'boolean') {
       throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    const installed = await dependencies.listPlugins()
+    if (!installed.some((item) => item.pluginId === pluginId && item.status !== 'invalid')) {
+      throw new DesktopIpcFailure('not-found', '未找到当前应用的有效安装插件。')
     }
     return dependencies.setPluginEnabled(pluginId, request.enabled)
   })
@@ -396,8 +401,9 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
       throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
     }
     const catalog = await dependencies.listMarketplacePlugins()
-    if (!catalog.some((item) => item.name === name)) {
-      throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    // CLI 当前只接收名称；同名多源无法绑定用户确认的来源，必须拒绝而不是猜测。
+    if (catalog.filter((item) => item.name === name).length !== 1) {
+      throw new DesktopIpcFailure('invalid-input', '插件不存在或存在同名来源，无法确认安装来源。')
     }
     await dependencies.installPlugin({ name, trust: request.trust === true })
     return null
@@ -412,6 +418,10 @@ export function registerAppIpcHandlers(dependencies: AppIpcDependencies): void {
     const pluginId = readText(request, 'pluginId')
     if (!isMarketplacePluginName(pluginId)) {
       throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
+    }
+    const installed = await dependencies.listPlugins()
+    if (!installed.some((item) => item.pluginId === pluginId)) {
+      throw new DesktopIpcFailure('not-found', '未找到当前应用的安装插件。')
     }
     await dependencies.uninstallPlugin({ pluginId })
     return null

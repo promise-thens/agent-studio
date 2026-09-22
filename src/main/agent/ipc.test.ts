@@ -119,7 +119,7 @@ function createFixture(initialStatus?: AgentRuntimeStatus): {
 describe('Agent IPC Handler', () => {
   it('只注册固定的 Agent invoke channel', () => {
     const fixture = createFixture()
-    expect([...fixture.handlers.keys()]).toEqual(Object.values(AGENT_INVOKE_CHANNELS))
+    expect([...fixture.handlers.keys()].sort()).toEqual(Object.values(AGENT_INVOKE_CHANNELS).sort())
   })
 
   it('来源拒绝发生在参数读取、目录访问和 Runtime 调用之前', async () => {
@@ -603,23 +603,18 @@ describe('Agent IPC Handler', () => {
     }
   })
 
-  it('未 confirmed 的 takeover 必须拒绝，且不得调用 Runtime', async () => {
+  it('未附 confirmed 时委托主进程持久授权判断，不由 IPC 强迫重复确认', async () => {
     const fixture = createFixture()
-
-    expect(
-      await fixture.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, {
-        taskId: 'task-1',
-        mode: 'takeover'
-      })
-    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
-    expect(
-      await fixture.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, {
-        taskId: 'task-1',
-        mode: 'takeover',
-        confirmed: false
-      })
-    ).toMatchObject({ ok: false, error: { code: 'invalid-input' } })
-    expect(fixture.runtime.setPermissionMode).not.toHaveBeenCalled()
+    const request = { taskId: 'task-1', mode: 'takeover' }
+    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, request)).toMatchObject({ ok: true })
+    expect(fixture.runtime.setPermissionMode).toHaveBeenCalledWith(request)
+    // 首次未确认仍由真实服务拒绝；错误通过窄 IPC 返回。
+    vi.mocked(fixture.runtime.setPermissionMode).mockRejectedValueOnce(
+      new AgentServiceError('invalid-input', '打开完全访问前必须确认。')
+    )
+    expect(await fixture.invoke(AGENT_INVOKE_CHANNELS.setPermissionMode, request)).toMatchObject({
+      ok: false, error: { code: 'invalid-input' }
+    })
   })
 
   it('普通 set assist 成功委托 Service', async () => {

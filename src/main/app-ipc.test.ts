@@ -487,8 +487,16 @@ describe('App IPC Handler', () => {
     expect(JSON.stringify(fixture.installPlugin.mock.calls)).not.toContain('--trust')
   })
 
-  it('卸载只接受合法 pluginId，且不把路径交给依赖', async () => {
+  it('卸载只接受当前应用安装的合法 pluginId，且不把路径交给依赖', async () => {
     const fixture = createFixture()
+    // 合法名称并不代表已安装，必须先通过当前应用库存校验。
+    expect(
+      await fixture.invoke(APP_INVOKE_CHANNELS.uninstallPlugin, {
+        pluginId: 'chrome-devtools-mcp'
+      })
+    ).toMatchObject({ ok: false, error: { code: 'not-found' } })
+    expect(fixture.uninstallPlugin).not.toHaveBeenCalled()
+    fixture.listPlugins.mockResolvedValue([{ ...pluginSummary, pluginId: 'chrome-devtools-mcp' }])
     expect(
       await fixture.invoke(APP_INVOKE_CHANNELS.uninstallPlugin, {
         pluginId: 'chrome-devtools-mcp'

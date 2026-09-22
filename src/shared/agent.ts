@@ -1,4 +1,4 @@
-import type { PermissionPromptStyle, TakeoverApplyReason } from './task-takeover'
+import type { PermissionPromptStyle, TakeoverApplyReason, TaskPermissionMode } from './task-takeover'
 
 /** Agent Studio 当前识别的 Runtime 标识；新增 Runtime 时必须先确认领域语义可复用。 */
 export type AgentRuntimeId = 'grok' | 'codex'
@@ -102,6 +102,11 @@ export interface AgentTaskRuntimeState {
   /** 关命令已发但尚未见到新的 request_permission 时，HUD 写「接管可能仍在」。 */
   takeoverMayStillBeActive?: boolean
   takeoverPendingReason?: TakeoverApplyReason
+  /** 全局已保存的期望值与当前 session 事实分离；pending/failed 不能显示成已生效。 */
+  desiredPermissionMode?: TaskPermissionMode
+  permissionApplyState?: 'applied' | 'pending' | 'failed'
+  permissionApplyMessage?: string
+  planPermissionOverride?: boolean
 }
 
 /** 一次 Turn 完成后的有限结果；身份由 AgentService 分配，协议对象不得进入共享层。 */

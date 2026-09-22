@@ -10,6 +10,7 @@ import {
 } from './controlled-acp-e2e-bootstrap'
 import {
   CONTROLLED_ACP_E2E_DIRECTORIES,
+  CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX,
   CONTROLLED_ACP_E2E_MARKER_FILE
 } from '../runtime/grok/controlled-acp-fixture'
 
@@ -32,6 +33,7 @@ describe('resolveControlledAcpE2eBootstrap', () => {
         fixture.userDataPath,
         CONTROLLED_ACP_E2E_DIRECTORIES.secondaryWorkspace
       ),
+      managedChatWorkspacePath: `${fixture.userDataPath}${CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX}`,
       markerPath: join(
         fixture.userDataPath,
         CONTROLLED_ACP_E2E_DIRECTORIES.workspace,
@@ -52,6 +54,7 @@ describe('resolveControlledAcpE2eBootstrap', () => {
   it.each([
     ['缺失场景', ['--agent-studio-controlled-acp-e2e-user-data=/tmp/unused']],
     ['未知同前缀参数', ['--agent-studio-controlled-acp-e2e-unexpected=1']],
+    ['自由托管目录参数', ['--agent-studio-controlled-acp-e2e-managed-chat-workspace=/tmp/unused']],
     ['不支持的场景', ['--agent-studio-controlled-acp-e2e-scenario=E2E:OTHER']]
   ])('%s 时失败关闭', async (_name, extraArguments) => {
     const fixture = await createFixtureRoot()
@@ -109,6 +112,25 @@ describe('resolveControlledAcpE2eBootstrap', () => {
     expect(() => resolveBootstrap(fixture.userDataPath)).toThrow(ControlledAcpE2eBootstrapError)
   })
 
+  it('托管聊天目录必须是固定派生的真实私有临时目录', async () => {
+    const fixture = await createFixtureRoot()
+    const managedWorkspace = `${fixture.userDataPath}${CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX}`
+
+    if (process.platform !== 'win32') {
+      await chmod(managedWorkspace, 0o755)
+      expect(() => resolveBootstrap(fixture.userDataPath)).toThrow(ControlledAcpE2eBootstrapError)
+      await chmod(managedWorkspace, 0o700)
+    }
+
+    const outside = await mkdtemp(
+      join(await realpath(tmpdir()), 'agent-studio-controlled-acp-e2e-managed-link-')
+    )
+    roots.push(outside)
+    await rm(managedWorkspace, { recursive: true, force: true })
+    await symlink(outside, managedWorkspace)
+    expect(() => resolveBootstrap(fixture.userDataPath)).toThrow(ControlledAcpE2eBootstrapError)
+  })
+
   it('没有受控前缀时保持普通启动路径', () => {
     expect(
       resolveControlledAcpE2eBootstrap({
@@ -125,8 +147,11 @@ describe('resolveControlledAcpE2eBootstrap', () => {
 async function createFixtureRoot(): Promise<{ userDataPath: string }> {
   const temporaryDirectory = await realpath(tmpdir())
   const userDataPath = await mkdtemp(join(temporaryDirectory, 'agent-studio-controlled-acp-e2e-'))
-  roots.push(userDataPath)
+  const managedChatWorkspace = `${userDataPath}${CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX}`
+  roots.push(userDataPath, managedChatWorkspace)
   await chmod(userDataPath, 0o700)
+  await mkdir(managedChatWorkspace, { mode: 0o700 })
+  await chmod(managedChatWorkspace, 0o700)
   await Promise.all(
     Object.values(CONTROLLED_ACP_E2E_DIRECTORIES).map(async (name) => {
       const path = join(userDataPath, name)

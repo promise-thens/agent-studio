@@ -30,7 +30,10 @@ export const AGENT_INVOKE_CHANNELS = {
   respondPermission: 'agent:respond-permission',
   respondQuestion: 'agent:respond-question',
   getAvailableCommands: 'agent:get-available-commands',
-  setPermissionMode: 'agent:set-permission-mode'
+  setPermissionMode: 'agent:set-permission-mode',
+  getPermissionPreferences: 'agent:get-permission-preferences',
+  setPlanPermissionOverride: 'agent:set-plan-permission-override',
+  prepareChatWorkspace: 'agent:prepare-chat-workspace'
 } as const
 
 export const AGENT_PUSH_CHANNELS = {
@@ -105,6 +108,12 @@ export interface AgentSetPermissionModeResult {
   controlPrompt?: '/always-approve'
 }
 
+/** 已保存的应用偏好，不代表任何 session 已经生效。 */
+export interface AgentPermissionPreferences {
+  mode: TaskPermissionMode
+  takeoverConfirmed: boolean
+}
+
 /** 主进程只用审批身份通知 Renderer 移除已失效项，不暴露 Runtime requestId。 */
 export interface AgentPermissionCancellation {
   approvalId: string
@@ -115,6 +124,9 @@ export interface AgentPermissionCancellation {
 
 /** Renderer 只能通过固定方法控制当前 Agent Runtime。 */
 export interface AgentDesktopApi {
+  getPermissionPreferences: () => Promise<DesktopIpcResult<AgentPermissionPreferences>>
+  setPlanPermissionOverride: (taskId: string, enabled: boolean) => Promise<DesktopIpcResult<AgentTaskRuntimeState>>
+  prepareChatWorkspace: () => Promise<DesktopIpcResult<import('./task-history').ProjectSummary>>
   getStatus: () => Promise<DesktopIpcResult<AgentRuntimeStatus>>
   getExecutionSnapshot: () => Promise<DesktopIpcResult<TaskExecutionSnapshot>>
   connect: (projectId: string) => Promise<DesktopIpcResult<AgentRuntimeStatus>>

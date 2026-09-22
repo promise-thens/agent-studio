@@ -26,6 +26,9 @@ export const CONTROLLED_ACP_E2E_DIRECTORIES = {
   runtimeHome: 'controlled-acp-e2e-home'
 } as const
 
+/** 托管聊天只能由已校验 userData 固定派生，禁止通过 E2E 参数传入另一条路径。 */
+export const CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX = '-chat-workspace'
+
 export const CONTROLLED_ACP_E2E_MARKER_FILE = 'permission-e2e-marker.txt'
 /** Adapter 与 fixture 分开记录固定 trace，避免跨进程并发追加破坏顺序证据。 */
 export const CONTROLLED_ACP_E2E_ADAPTER_TRACE_FILE = 'adapter-trace.jsonl'

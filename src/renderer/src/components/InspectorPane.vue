@@ -4,7 +4,12 @@ import type { PermissionAuditRecord } from '../../../shared/task-history'
 import type { TaskTimelineViewModel } from '../task-timeline-reducer'
 import type { TaskArtifactsController } from '../composables/useTaskArtifacts'
 import type { TaskChangesController } from '../composables/useTaskChanges'
-import { inspectorPlaceholderCopy, resolveInspectorTab, type InspectorTab } from '../task-inspector'
+import {
+  inspectorPlaceholderCopy,
+  resolveInspectorTab,
+  type InspectorConversationTarget,
+  type InspectorTab
+} from '../task-inspector'
 import TaskArtifactsPanel from './TaskArtifactsPanel.vue'
 import TaskChangesPanel from './TaskChangesPanel.vue'
 import InspectorPlanPane from './InspectorPlanPane.vue'
@@ -16,6 +21,8 @@ const props = withDefaults(
     activeTab: InspectorTab
     taskId?: string
     focusTurnId?: string | null
+    focusNodeId?: string | null
+    focusRequestId?: number
     timeline: TaskTimelineViewModel | null
     timelineLoading?: boolean
     permissionAudits?: readonly PermissionAuditRecord[]
@@ -30,6 +37,8 @@ const props = withDefaults(
   {
     taskId: '',
     focusTurnId: null,
+    focusNodeId: null,
+    focusRequestId: 0,
     timelineLoading: false,
     permissionAudits: () => [],
     permissionAuditCursor: null,
@@ -44,6 +53,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   loadMorePermissionAudits: []
+  focusTarget: [target: InspectorConversationTarget]
 }>()
 
 const currentTab = computed(() => resolveInspectorTab(props.activeTab))
@@ -84,6 +94,9 @@ function tabPanelId(): string {
     <InspectorTimelinePane
       v-if="currentTab === 'timeline'"
       :pane-id="paneId"
+      :focus-turn-id="focusTurnId"
+      :focus-node-id="focusNodeId"
+      :focus-request-id="focusRequestId"
       :timeline="timeline"
       :timeline-loading="timelineLoading"
       :permission-audits="permissionAudits"
@@ -91,6 +104,7 @@ function tabPanelId(): string {
       :loading-more-permission-audits="loadingMorePermissionAudits"
       :show-permission-audits="showPermissionAudits"
       @load-more-permission-audits="emit('loadMorePermissionAudits')"
+      @focus-target="emit('focusTarget', $event)"
     />
 
     <InspectorPlanPane
@@ -105,12 +119,14 @@ function tabPanelId(): string {
       :controller="changesController"
       :advertised-commands="advertisedCommands"
       :rewind-busy="rewindBusy"
+      @focus-target="emit('focusTarget', $event)"
     />
 
     <TaskArtifactsPanel
       v-else-if="showArtifactsPanel && artifactsController"
       :task-id="taskId"
       :controller="artifactsController"
+      @focus-target="emit('focusTarget', $event)"
     />
 
     <div v-else class="inspector-placeholder" role="status">

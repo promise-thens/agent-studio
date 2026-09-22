@@ -177,9 +177,7 @@ describe('插件中心三栏', () => {
 
 describe('插件主列表面', () => {
   it('空状态文案固定，启停开关调用 IPC 且失败不得乐观打勾', () => {
-    expect(PLUGIN_EMPTY_COPY).toBe(
-      '还没有已安装的插件。插件由 Grok Build 加载，本页只展示已安装项。'
-    )
+    expect(PLUGIN_EMPTY_COPY).toBe('当前应用尚无已安装插件。用户目录发现项单独展示，不会自动接入。')
     expect(pluginsPageSource).toContain('PLUGIN_EMPTY_COPY')
     expect(pluginsPageSource).toContain('window.app.listPlugins()')
     expect(pluginsPageSource).toContain('window.app.getPlugin')
@@ -196,12 +194,12 @@ describe('插件主列表面', () => {
     expect(pluginsPageSource).not.toContain('浏览目录')
   })
 
-  it('已安装空状态保留原本文案，并提供去市场看看', () => {
-    expect(PLUGIN_EMPTY_COPY).toBe(
-      '还没有已安装的插件。插件由 Grok Build 加载，本页只展示已安装项。'
-    )
+  it('已安装空状态区分用户目录发现，并提供去市场看看', () => {
+    expect(PLUGIN_EMPTY_COPY).toBe('当前应用尚无已安装插件。用户目录发现项单独展示，不会自动接入。')
     expect(PLUGIN_GO_TO_MARKETPLACE_COPY).toBe('去市场看看')
-    expect(PLUGIN_PAGE_INTRO_COPY).toBe('只展示 App grok-home 已加载项；安装由 Grok 执行。')
+    expect(PLUGIN_PAGE_INTRO_COPY).toBe(
+      '区分应用安装与用户目录发现；库存可见不代表当前会话已加载。'
+    )
     expect(pluginsPageSource).toContain('PLUGIN_EMPTY_COPY')
     expect(pluginsPageSource).toContain('PLUGIN_GO_TO_MARKETPLACE_COPY')
     expect(pluginsPageSource).toContain('PLUGIN_PAGE_INTRO_COPY')

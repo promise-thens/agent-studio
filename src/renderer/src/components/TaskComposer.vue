@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import {
   PhListChecks as ListChecks,
   PhPaperclip as Paperclip,
@@ -33,7 +33,11 @@ import {
 } from '../../../shared/agent-pointer-overlay'
 import { isPlanCommandAdvertised, type ComposerPlanMode } from '../../../shared/session-plan-mode'
 import { resolveComposerPlanStatusCopy, resolveComposerPlanSwitch } from '../composer-plan-mode'
-import type { ComposerContextUsagePresentation } from '../task-composer-actions'
+import {
+  resolveComposerAddMenuFocusIndex,
+  type ComposerAddMenuNavigationKey,
+  type ComposerContextUsagePresentation
+} from '../task-composer-actions'
 import ModelSelector from './ModelSelector.vue'
 import SlashCommandPalette from './SlashCommandPalette.vue'
 import TaskPermissionModeMenu from './TaskPermissionModeMenu.vue'
@@ -55,6 +59,8 @@ const props = defineProps<{
   modelBusy?: boolean
   modelDisabled?: boolean
   permissionMode?: TaskPermissionMode
+  takeoverConfirmed?: boolean
+  permissionBusy?: boolean
   takeoverApplied?: boolean
   takeoverMayStillBeActive?: boolean
   setPermissionMode: (mode: TaskPermissionMode) => Promise<void>
@@ -63,7 +69,7 @@ const props = defineProps<{
   /** 仅 Grok Runtime 可在未广告命令时启用受控 Plan 路径。 */
   planAvailable?: boolean
   setPlanMode: (mode: ComposerPlanMode) => Promise<void>
-  /** Runtime 上报的上下文用量；有对话 Turn 时即使还没快照也会先给 0k。 */
+  /** Runtime 上报的上下文用量；无可信样本时明确显示未知。 */
   contextUsage?: ComposerContextUsagePresentation | null
   runtimeCommands?: AgentAvailableCommand[]
   attachments?: Array<{
@@ -106,6 +112,51 @@ const pendingTakeover = ref(false)
 const takeoverConfirmBusy = ref(false)
 const takeoverConfirmError = ref('')
 const showAddMenu = ref(false)
+const addMenuTrigger = ref<HTMLButtonElement | null>(null)
+const addMenuPanel = ref<HTMLElement | null>(null)
+const usageDetailsId = `${useId()}-context-usage`
+const usageHovered = ref(false)
+const usageFocused = ref(false)
+const usageDismissed = ref(false)
+const showUsageDetails = computed(
+  () =>
+    Boolean(props.contextUsage) &&
+    !usageDismissed.value &&
+    (usageHovered.value || usageFocused.value)
+)
+
+function handleUsagePointerEnter(): void {
+  usageHovered.value = true
+  usageDismissed.value = false
+}
+
+function handleUsagePointerLeave(): void {
+  usageHovered.value = false
+  usageDismissed.value = false
+}
+
+function handleUsageFocus(): void {
+  usageFocused.value = true
+}
+
+function handleUsageBlur(): void {
+  usageFocused.value = false
+  usageDismissed.value = false
+}
+
+/** Esc 只关闭详情，不触发工作台级快捷键或清空草稿。 */
+function dismissUsageDetails(): void {
+  usageDismissed.value = true
+}
+
+watch(
+  () => props.contextUsage,
+  () => {
+    usageHovered.value = false
+    usageFocused.value = false
+    usageDismissed.value = false
+  }
+)
 
 const planSwitch = computed(() =>
   resolveComposerPlanSwitch({
@@ -154,33 +205,80 @@ async function togglePlanMode(): Promise<void> {
   const next: ComposerPlanMode = (props.planMode ?? 'normal') === 'plan' ? 'normal' : 'plan'
   try {
     await props.setPlanMode(next)
-    showAddMenu.value = false
+    closeAddMenu(true)
   } catch {
     // App 已写入错误；本地不得乐观拨开关。
   }
 }
 
-function toggleAddMenu(): void {
-  if (addMenuDisabled.value) return
-  showAddMenu.value = !showAddMenu.value
+/** 只返回当前菜单中可操作的按钮，disabled 项不进入方向键循环。 */
+function getEnabledAddMenuItems(): HTMLButtonElement[] {
+  if (!addMenuPanel.value) return []
+  return Array.from(
+    addMenuPanel.value.querySelectorAll<HTMLButtonElement>(
+      '[role="menuitem"], [role="menuitemcheckbox"]'
+    )
+  ).filter((item) => !item.disabled)
 }
 
-function closeAddMenu(): void {
+async function toggleAddMenu(): Promise<void> {
+  if (addMenuDisabled.value) return
+  if (showAddMenu.value) {
+    closeAddMenu()
+    return
+  }
+  showAddMenu.value = true
+  await nextTick()
+  getEnabledAddMenuItems()[0]?.focus()
+}
+
+/** Esc 关闭后把焦点还给触发器；鼠标点外部时保留浏览器自然焦点。 */
+function closeAddMenu(returnFocus = false): void {
   showAddMenu.value = false
+  if (!returnFocus) return
+  // 等菜单项从 DOM 卸载后再恢复焦点，避免焦点短暂落到已删除节点。
+  void nextTick(() => addMenuTrigger.value?.focus())
+}
+
+/** 点击上传附件：关闭添加菜单并向外部派发选择附件事件 */
+function handlePickAttachments(): void {
+  closeAddMenu()
+  emit('pick-attachments')
+}
+
+/** 添加菜单采用标准 menu 键盘导航，且只在本菜单内消费这些按键。 */
+function handleAddMenuKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeAddMenu(true)
+    return
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const items = getEnabledAddMenuItems()
+  const currentIndex = items.findIndex((item) => item === document.activeElement)
+  const nextIndex = resolveComposerAddMenuFocusIndex(
+    event.key as ComposerAddMenuNavigationKey,
+    currentIndex,
+    items.length
+  )
+  if (nextIndex !== null) items[nextIndex]?.focus()
 }
 
 function handleDocumentPointerdown(event: PointerEvent): void {
   const target = event.target
-  if (!(target instanceof Node)) return
-  if (!(target as Element).closest('.composer-add-menu')) closeAddMenu()
+  if (!(target instanceof Element)) return
+  if (!target.closest('.composer-add-menu')) closeAddMenu()
 }
 
 onMounted(() => document.addEventListener('pointerdown', handleDocumentPointerdown))
 onBeforeUnmount(() => document.removeEventListener('pointerdown', handleDocumentPointerdown))
 
+/** 全局确认只询问一次；运行中允许提交待应用偏好，不借用模型切换锁。 */
 async function handlePermissionModeSelect(mode: TaskPermissionMode): Promise<void> {
-  if (props.modelBusy || props.modelDisabled) return
-  if (mode === 'takeover' && props.permissionMode !== 'takeover') {
+  if (props.permissionBusy || props.modelDisabled) return
+  if (mode === 'takeover' && !props.takeoverConfirmed) {
     takeoverConfirmError.value = ''
     pendingTakeover.value = true
     return
@@ -334,7 +432,8 @@ function handleComposerKeydown(event: KeyboardEvent): void {
   }
   if (event.key === 'Escape' && showAddMenu.value) {
     event.preventDefault()
-    closeAddMenu()
+    event.stopPropagation()
+    closeAddMenu(true)
     return
   }
 
@@ -468,8 +567,8 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
             @error="emit('modelError', $event)"
           />
           <TaskPermissionModeMenu
-            :mode="permissionMode ?? 'assist'"
-            :busy="modelBusy"
+            :mode="permissionMode ?? 'ask'"
+            :busy="permissionBusy"
             :disabled="modelDisabled"
             :takeover-applied="takeoverApplied === true"
             :takeover-may-still-be-active="takeoverMayStillBeActive === true"
@@ -477,6 +576,7 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
           />
           <div class="composer-add-menu">
             <button
+              ref="addMenuTrigger"
               type="button"
               class="composer-add-trigger"
               :class="{ 'is-plan': planSwitch.pressed }"
@@ -485,36 +585,47 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
               :aria-expanded="showAddMenu"
               aria-controls="composer-add-panel"
               aria-haspopup="menu"
-              :aria-pressed="planSwitch.pressed"
               :disabled="addMenuDisabled"
               @click="toggleAddMenu"
             >
               <span aria-hidden="true">＋</span>
             </button>
-            <div v-if="showAddMenu" id="composer-add-panel" class="composer-add-panel" role="menu">
+            <div
+              v-if="showAddMenu"
+              id="composer-add-panel"
+              ref="addMenuPanel"
+              class="composer-add-panel"
+              role="menu"
+              aria-label="添加能力"
+              @keydown="handleAddMenuKeydown"
+            >
               <button
                 type="button"
                 class="composer-add-item"
-                role="menuitem"
+                role="menuitemcheckbox"
                 :class="{ 'is-plan': planSwitch.pressed }"
                 :disabled="planSwitch.disabled"
-                :aria-pressed="planSwitch.pressed"
+                :aria-checked="planSwitch.pressed"
                 :title="planSwitch.title"
                 @click="togglePlanMode"
               >
                 <ListChecks :size="15" weight="fill" />
                 <span>
                   <strong>{{ planSwitch.pressed ? '关闭计划模式' : '计划模式' }}</strong>
-                  <small>{{ planSwitch.pressed ? '下一轮继续使用普通模式' : '让 Grok 先拆解并确认计划' }}</small>
+                  <small>{{
+                    planSwitch.pressed ? '下一轮继续使用普通模式' : '让 Grok 先拆解并确认计划'
+                  }}</small>
                 </span>
-                <span v-if="planSwitch.pressed" class="composer-add-check" aria-hidden="true">●</span>
+                <span v-if="planSwitch.pressed" class="composer-add-check" aria-hidden="true"
+                  >●</span
+                >
               </button>
               <button
                 type="button"
                 class="composer-add-item"
                 role="menuitem"
                 :disabled="addMenuDisabled"
-                @click="closeAddMenu(); emit('pick-attachments')"
+                @click="handlePickAttachments"
               >
                 <Paperclip :size="15" />
                 <span>
@@ -529,20 +640,50 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
           }}</span>
         </div>
         <div class="composer-actions">
-          <span
+          <button
             v-if="contextUsage"
+            type="button"
             class="composer-usage"
             :title="contextUsage.title"
             :aria-label="contextUsage.ariaLabel"
+            :aria-describedby="showUsageDetails ? usageDetailsId : undefined"
+            :aria-expanded="showUsageDetails"
+            @mouseenter="handleUsagePointerEnter"
+            @mouseleave="handleUsagePointerLeave"
+            @focus="handleUsageFocus"
+            @blur="handleUsageBlur"
+            @keydown.esc.stop.prevent="dismissUsageDetails"
           >
-            <span class="composer-usage-meter" aria-hidden="true">
-              <span
-                class="composer-usage-meter-fill"
-                :style="{ width: `${contextUsage.percentage}%` }"
-              />
+            <!-- 纯净圆环进度指示器：中心无数字，保持视觉清爽优雅 -->
+            <span
+              class="composer-usage-ring"
+              :class="{ 'is-unknown': contextUsage.percentage === null }"
+              aria-hidden="true"
+            >
+              <svg viewBox="0 0 36 36">
+                <circle class="composer-usage-ring-track" cx="18" cy="18" r="14" pathLength="100" />
+                <circle
+                  class="composer-usage-ring-value"
+                  cx="18"
+                  cy="18"
+                  r="14"
+                  pathLength="100"
+                  :stroke-dasharray="`${contextUsage.percentage ?? 0} 100`"
+                />
+              </svg>
             </span>
-            <span class="composer-usage-copy">{{ contextUsage.compactLabel }}</span>
-          </span>
+            <!-- 悬浮用量卡片：对齐图3的居中精致卡片视觉 -->
+            <span
+              v-if="showUsageDetails"
+              :id="usageDetailsId"
+              class="composer-usage-details"
+              role="tooltip"
+            >
+              <span class="composer-usage-card-title">背景信息窗口：</span>
+              <strong class="composer-usage-card-headline">{{ contextUsage.cardHeadline }}</strong>
+              <span class="composer-usage-card-subline">{{ contextUsage.cardTokenDetail }}</span>
+            </span>
+          </button>
           <span
             v-if="composerHudCopy"
             class="composer-takeover-hud no-drag"
@@ -617,3 +758,146 @@ defineExpose({ focus, focusStop, openPermissionModeFromSlash })
     />
   </footer>
 </template>
+
+<style scoped>
+.composer {
+  container-type: inline-size;
+}
+
+/* 上下文用量按钮容器：圆形微交互与平滑过渡 */
+.composer-usage {
+  position: relative;
+  display: inline-grid;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  max-width: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--text-3);
+  background: transparent;
+  cursor: help;
+  transition: all 0.15s ease;
+}
+
+.composer-usage:hover,
+.composer-usage:focus-visible,
+.composer-usage[aria-expanded='true'] {
+  border-color: color-mix(in srgb, var(--border-strong) 65%, transparent);
+  color: var(--text-1);
+  background: color-mix(in srgb, var(--surface-3) 60%, transparent);
+  outline: none;
+}
+
+.composer-usage:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+/* 纯净环形进度指示器：中心无数字，线条纤细精致 */
+.composer-usage-ring {
+  position: relative;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+}
+
+.composer-usage-ring svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  transform: rotate(-90deg);
+}
+
+.composer-usage-ring circle {
+  fill: none;
+  stroke-width: 3.2;
+}
+
+.composer-usage-ring-track {
+  stroke: color-mix(in srgb, var(--border-strong) 75%, transparent);
+}
+
+.composer-usage-ring-value {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.2s ease;
+}
+
+.composer-usage-ring.is-unknown .composer-usage-ring-value {
+  stroke: var(--text-3);
+  stroke-dasharray: 5 7;
+}
+
+/* 悬浮用量详情卡片：对照图3圆润精致卡片设计 */
+.composer-usage-details {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 175px;
+  padding: 12px 18px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-soft);
+  color: var(--text-2);
+  text-align: center;
+  background: var(--surface-overlay);
+  box-shadow:
+    0 10px 30px -4px rgba(0, 0, 0, 0.35),
+    0 4px 12px rgba(0, 0, 0, 0.15);
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* 浅色主题卡片表面与阴影微调 */
+:global(html[data-theme='light']) .composer-usage-details {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow:
+    0 8px 24px -4px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+/* 卡片顶部标题：如「背景信息窗口：」 */
+.composer-usage-card-title {
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  line-height: 1.3;
+  margin-bottom: 3px;
+  opacity: 0.9;
+}
+
+/* 卡片主数据行：如「14% 已用（剩余 86%）」 */
+.composer-usage-card-headline {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--text-1);
+  line-height: 1.35;
+  margin-bottom: 3px;
+  letter-spacing: -0.01em;
+}
+
+/* 卡片副数据行：如「已用 35k 标记，共 258k」 */
+.composer-usage-card-subline {
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  line-height: 1.3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-usage-ring-value {
+    transition: none;
+  }
+}
+</style>

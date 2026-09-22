@@ -6,6 +6,7 @@ import {
   type HostBrowserSettings
 } from '../../../shared/host-browser'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
+import { reportSettingsPaneState, type SettingsPaneState } from '../settings-dialog-interaction'
 import {
   HOST_BROWSER_AGENT_PERMISSION_COLUMNS,
   HOST_BROWSER_AGENT_PERMISSION_OPTIONS,
@@ -69,6 +70,7 @@ const props = withDefaults(
   }>(),
   { runtimeBusy: false }
 )
+const emit = defineEmits<{ state: [value: SettingsPaneState] }>()
 
 type BooleanSettingKey =
   | 'showFullUrl'
@@ -86,9 +88,24 @@ const settings = ref<HostBrowserSettings>(
 const blacklistDraft = ref('')
 const saving = ref(false)
 const errorMessage = ref('')
+const blacklistErrorMessage = ref('')
 const statusMessage = ref('')
 const lastCookieSyncAt = ref<string | null>(null)
 const lastSyncCopy = computed(() => formatHostBrowserLastCookieSync(lastCookieSyncAt.value))
+const blacklistDirty = computed(
+  () =>
+    loadState.value === 'ready' &&
+    blacklistDraft.value !== formatHostBrowserSyncBlacklist(settings.value.syncBlacklist)
+)
+reportSettingsPaneState(
+  () => ({
+    dirty: blacklistDirty.value,
+    saving: saving.value,
+    error: loadError.value || blacklistErrorMessage.value || errorMessage.value,
+    message: statusMessage.value
+  }),
+  (state) => emit('state', state)
+)
 
 const masterSwitchDisabled = computed(() =>
   resolveHostBrowserMasterSwitchDisabled({
@@ -112,9 +129,11 @@ onMounted(() => {
   void loadExtensionStatus()
 })
 
+/** 其它即时项的确认结果不能覆盖正在编辑的黑名单草稿。 */
 function applySettings(next: HostBrowserSettings): void {
+  const preserveDraft = blacklistDirty.value
   settings.value = cloneHostBrowserSettingsView(next)
-  blacklistDraft.value = formatHostBrowserSyncBlacklist(next.syncBlacklist)
+  if (!preserveDraft) blacklistDraft.value = formatHostBrowserSyncBlacklist(next.syncBlacklist)
 }
 
 async function loadSettings(): Promise<void> {
@@ -160,11 +179,13 @@ async function savePatch(patch: Partial<Omit<HostBrowserSettings, 'enabled'>>): 
   try {
     const state = unwrapDesktopIpcResult(await window.app.setHostBrowserSettings(patch))
     applySettings(state)
+    if (patch.syncBlacklist) {
+      blacklistDraft.value = formatHostBrowserSyncBlacklist(state.syncBlacklist)
+    }
     statusMessage.value = HOST_BROWSER_SETTING_SAVED_COPY
     return true
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error)
-    blacklistDraft.value = formatHostBrowserSyncBlacklist(settings.value.syncBlacklist)
     return false
   } finally {
     saving.value = false
@@ -218,29 +239,49 @@ async function onAgentPermissionChange(
   if (!ok) revertHostBrowserSelect(target, settings.value.agentPermissions[key])
 }
 
+/** 编辑草稿撤下过期成功消息，失败或无效输入不会回滚用户正文。 */
 function onBlacklistInput(event: Event): void {
   const target = event.target
   if (!(target instanceof HTMLTextAreaElement)) return
   blacklistDraft.value = target.value
+  // 用户把非法草稿改回合法内容时立刻撤下校验错误；即使等于已保存值、保存按钮禁用，也不能残留假失败。
+  if (blacklistErrorMessage.value && parseHostBrowserSyncBlacklistDraft(target.value) !== null) {
+    blacklistErrorMessage.value = ''
+  }
+  statusMessage.value = ''
 }
 
 async function onBlacklistCommit(): Promise<void> {
   if (preferenceDisabled.value) return
   const parsed = parseHostBrowserSyncBlacklistDraft(blacklistDraft.value)
   if (!parsed) {
-    errorMessage.value = HOST_BROWSER_SYNC_BLACKLIST_INVALID_COPY
+    blacklistErrorMessage.value = HOST_BROWSER_SYNC_BLACKLIST_INVALID_COPY
+    errorMessage.value = ''
     statusMessage.value = ''
     return
   }
+  blacklistErrorMessage.value = ''
   const current = settings.value.syncBlacklist
   if (
     parsed.length === current.length &&
     parsed.every((origin, index) => origin === current[index])
   ) {
     blacklistDraft.value = formatHostBrowserSyncBlacklist(current)
+    // 合法草稿与已保存内容等价时也算重试成功，撤下此前校验失败的提示。
+    errorMessage.value = ''
+    statusMessage.value = HOST_BROWSER_SETTING_SAVED_COPY
     return
   }
   await savePatch({ syncBlacklist: parsed })
+}
+
+/** 明确丢弃只恢复本地草稿，不调用保存 API。 */
+function discardBlacklist(): void {
+  if (saving.value) return
+  blacklistDraft.value = formatHostBrowserSyncBlacklist(settings.value.syncBlacklist)
+  blacklistErrorMessage.value = ''
+  errorMessage.value = ''
+  statusMessage.value = ''
 }
 
 async function loadExtensionStatus(): Promise<void> {
@@ -312,7 +353,9 @@ async function onClearData(): Promise<void> {
     </div>
     <div v-else class="browser-groups" :aria-busy="saving ? 'true' : undefined">
       <p v-if="saving" class="status" role="status">{{ HOST_BROWSER_SETTING_SAVING_COPY }}</p>
-      <p v-else-if="errorMessage" class="error" role="alert">{{ errorMessage }}</p>
+      <p v-else-if="errorMessage" id="host-browser-setting-error" class="error" role="alert">
+        {{ errorMessage }}
+      </p>
       <p v-else-if="statusMessage" class="success" role="status">{{ statusMessage }}</p>
 
       <fieldset class="browser-field" :disabled="masterSwitchDisabled">
@@ -472,14 +515,45 @@ async function onClearData(): Promise<void> {
             :value="blacklistDraft"
             :disabled="preferenceDisabled"
             :aria-label="HOST_BROWSER_SYNC_BLACKLIST_LABEL"
-            aria-describedby="host-browser-sync-blacklist-hint"
+            :aria-invalid="Boolean(blacklistErrorMessage)"
+            :aria-describedby="
+              blacklistErrorMessage
+                ? 'host-browser-sync-blacklist-hint host-browser-sync-blacklist-error'
+                : 'host-browser-sync-blacklist-hint'
+            "
             @input="onBlacklistInput"
-            @blur="onBlacklistCommit"
           />
         </label>
         <p id="host-browser-sync-blacklist-hint" class="hint">
           {{ HOST_BROWSER_SYNC_BLACKLIST_HINT }}
         </p>
+        <p
+          v-if="blacklistErrorMessage"
+          id="host-browser-sync-blacklist-error"
+          class="error"
+          role="alert"
+        >
+          {{ blacklistErrorMessage }}
+        </p>
+        <div class="blacklist-actions">
+          <button
+            class="hub-primary"
+            type="button"
+            :disabled="preferenceDisabled || !blacklistDirty"
+            @click="onBlacklistCommit"
+          >
+            保存黑名单
+          </button>
+          <button
+            class="hub-secondary"
+            type="button"
+            :disabled="preferenceDisabled || !blacklistDirty"
+            @click="discardBlacklist"
+          >
+            放弃
+          </button>
+          <span class="hint">黑名单编辑后保存；其它选项更改后自动保存。</span>
+        </div>
         <label class="toggle-row" for="host-browser-cookie-sync">
           <input
             id="host-browser-cookie-sync"
@@ -649,6 +723,24 @@ header p,
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
+}
+
+.blacklist-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+@container settings-content (max-width: 560px) {
+  .control-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .select-control {
+    width: 100%;
+  }
 }
 
 .status {

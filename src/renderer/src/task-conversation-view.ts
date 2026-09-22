@@ -35,6 +35,31 @@ export interface ConversationScrollIntent {
   pointerTracking: boolean
 }
 
+export type ConversationFocusAction =
+  'idle' | 'focus' | 'load-more' | 'wait' | 'unavailable' | 'node-unavailable'
+
+/**
+ * Inspector 定位历史轮次时最多自动翻一页；若已经加载完全部历史，明确返回不可用。
+ * 仍有更早历史但本次已自动翻页时保留手动入口，避免后台连续翻页抢走用户阅读位置。
+ */
+export function resolveConversationFocusAction(input: {
+  requested: boolean
+  loaded: boolean
+  hasMoreTurns: boolean
+  loadingMoreTurns: boolean
+  autoLoadRequested: boolean
+  nodeRequested?: boolean
+  nodeLoaded?: boolean
+}): ConversationFocusAction {
+  if (!input.requested) return 'idle'
+  if (input.loaded) {
+    return input.nodeRequested && !input.nodeLoaded ? 'node-unavailable' : 'focus'
+  }
+  if (input.loadingMoreTurns) return 'wait'
+  if (!input.hasMoreTurns) return 'unavailable'
+  return input.autoLoadRequested ? 'wait' : 'load-more'
+}
+
 /**
  * 用户滚轮/触控/拖条永远以当前位置为准。
  * 内容增高或程序化贴底触发的 layout scroll 不得把贴底误判成上翻，也不得吞掉下一次用户滚动。

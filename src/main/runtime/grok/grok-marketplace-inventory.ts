@@ -1,4 +1,5 @@
-import { promises as fs } from 'node:fs'
+import { constants, promises as fs, type BigIntStats } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { getManagedGrokHome } from '../../provider/grok-provider-config'
 import {
@@ -6,10 +7,13 @@ import {
   type MarketplacePluginSummary
 } from '../../../shared/runtime-marketplace-plugin'
 import { isPathInside } from './grok-shared-memory'
+import { readInstalledPluginRegistry } from './grok-plugin-inventory-discovery'
+import {
+  readMarketplaceSourceUrlMatches,
+  type MarketplaceSourceUrlMatch
+} from './grok-marketplace-sources'
 
 const MARKETPLACE_CACHE_DIR = 'marketplace-cache'
-const INSTALLED_PLUGINS_DIR = 'installed-plugins'
-const INSTALLED_REGISTRY_FILE = 'registry.json'
 const MARKETPLACE_JSON = join('.grok-plugin', 'marketplace.json')
 const PLUGIN_INDEX_JSON = join('.grok-plugin', 'plugin-index.json')
 const MAX_JSON_BYTES = 64 * 1024
@@ -45,12 +49,16 @@ export async function listGrokMarketplacePlugins(
   }
 
   const installedNames = await readInstalledCatalogNames(grokHome)
+  // 这里只记录两个本地 URL 是否相同；不得据此宣称来源官方、可信或未经改写。
+  const sources = await readMarketplaceSourceUrlMatches(grokHome, entries)
   const summaries: MarketplacePluginSummary[] = []
 
   for (const entryName of entries) {
     const sourceCanonical = await resolveDirectoryInside(grokHome, join(cacheRoot, entryName))
     if (!sourceCanonical) continue
-    summaries.push(...(await readSourceCatalog(grokHome, sourceCanonical, installedNames)))
+    const matches = sources.filter((source) => source.cacheDirectory === entryName)
+    const source = matches.length === 1 ? matches[0] : undefined
+    summaries.push(...(await readSourceCatalog(grokHome, sourceCanonical, installedNames, source)))
   }
 
   return summaries.sort((left, right) => {
@@ -89,33 +97,14 @@ async function resolveManagedGrokHome(userDataPath: string): Promise<string | nu
 }
 
 /**
- * 从 installed-plugins/registry.json 收集「货架名」集合。
- * 只认 marketplace.plugin_subdir 精确相等，或 plugins 键精确相等；禁止用前缀去猜。
- * 不读取、不返回 registry 的 path / source_url_or_path。
+ * 只有通过目录与清单验证的 App 注册项才算安装。
+ * 来源 URL 和市场名一起精确匹配，绝不让用户插件或另一个同名源顶替。
  */
 async function readInstalledCatalogNames(grokHome: string): Promise<Set<string>> {
-  const installedRoot = await resolveDirectoryInside(
-    grokHome,
-    join(grokHome, INSTALLED_PLUGINS_DIR)
-  )
-  if (!installedRoot) return new Set()
-
-  const json = await readJsonInside(grokHome, join(installedRoot, INSTALLED_REGISTRY_FILE))
-  if (json.kind !== 'ok') return new Set()
-  if (json.value.version !== 1 || !isPlainRecord(json.value.repos)) return new Set()
-
   const names = new Set<string>()
-  for (const repoValue of Object.values(json.value.repos)) {
-    if (!isPlainRecord(repoValue)) continue
-    const marketplace = isPlainRecord(repoValue.marketplace) ? repoValue.marketplace : null
-    const pluginSubdir = marketplace?.plugin_subdir
-    if (typeof pluginSubdir === 'string' && pluginSubdir.length > 0) {
-      names.add(pluginSubdir)
-    }
-    if (isPlainRecord(repoValue.plugins)) {
-      for (const pluginId of Object.keys(repoValue.plugins)) {
-        if (pluginId.length > 0) names.add(pluginId)
-      }
+  for (const entry of (await readInstalledPluginRegistry(grokHome)).entries) {
+    if (entry.marketplace) {
+      names.add(JSON.stringify([entry.marketplace.sourceUrl, entry.marketplace.pluginName]))
     }
   }
   return names
@@ -123,12 +112,14 @@ async function readInstalledCatalogNames(grokHome: string): Promise<Set<string>>
 
 /**
  * 读取单个市场源的 marketplace.json，并用可选 plugin-index.json 填计数。
- * 源 name 取 json.name（如 xai-official），绝不用 git URL 或目录 hash。
+ * URL 匹配时使用 App 配置中的 name；未匹配时只展示清单自报名。
+ * 匹配只用于消歧与安装记录关联，不构成官方或信任证明。
  */
 async function readSourceCatalog(
   grokHome: string,
   sourceCanonical: string,
-  installedNames: ReadonlySet<string>
+  installedNames: ReadonlySet<string>,
+  matchedSource?: MarketplaceSourceUrlMatch
 ): Promise<MarketplacePluginSummary[]> {
   const marketplace = await readJsonInside(grokHome, join(sourceCanonical, MARKETPLACE_JSON))
   if (marketplace.kind !== 'ok') return []
@@ -137,7 +128,8 @@ async function readSourceCatalog(
   }
   if (!Array.isArray(marketplace.value.plugins)) return []
 
-  const sourceName = marketplace.value.name
+  const sourceName = matchedSource?.sourceName ?? marketplace.value.name
+  const sourceId = createHash('sha256').update(sourceCanonical).digest('hex')
   const index = await readPluginIndex(grokHome, sourceCanonical)
   const summaries: MarketplacePluginSummary[] = []
 
@@ -149,7 +141,12 @@ async function readSourceCatalog(
       displayName: pluginValue.name,
       description: pluginValue.description,
       sourceName,
-      installed: installedNames.has(pluginValue.name),
+      sourceId,
+      sourceUrlMatched: Boolean(matchedSource),
+      installed: Boolean(
+        matchedSource &&
+        installedNames.has(JSON.stringify([matchedSource.gitUrl, pluginValue.name]))
+      ),
       ...counts
     })
     if (parsed) summaries.push(parsed)
@@ -183,21 +180,60 @@ async function readPluginIndex(
   return counts
 }
 
-/** JSON 的 realpath 必须在 grok-home 内；超限、非对象或逃逸都当无效，避免把外部清单读进 DTO。 */
+/**
+ * JSON 的 realpath 必须在 grok-home 内；打开后再复核 canonical path 与 dev/ino。
+ * 超限、非对象、路径换绑或逃逸都当无效，避免把外部清单读进 DTO。
+ */
 async function readJsonInside(grokHome: string, filePath: string): Promise<JsonRead> {
   const resolved = await realpathExisting(filePath)
   if (resolved.kind === 'missing') return { kind: 'missing' }
   if (resolved.kind === 'invalid') return { kind: 'invalid' }
   if (!isPathInside(grokHome, resolved.canonical)) return { kind: 'invalid' }
 
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined
   try {
-    const stats = await fs.stat(resolved.canonical)
-    if (!stats.isFile() || stats.size > MAX_JSON_BYTES) return { kind: 'invalid' }
-    const parsed: unknown = JSON.parse(await fs.readFile(resolved.canonical, 'utf8'))
+    handle = await fs.open(
+      resolved.canonical,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    )
+    const stats = await handle.stat({ bigint: true })
+    if (!stats.isFile() || stats.size > BigInt(MAX_JSON_BYTES)) return { kind: 'invalid' }
+    if (!(await pathStillNamesOpenedFile(grokHome, resolved.canonical, stats))) {
+      return { kind: 'invalid' }
+    }
+    const bytes = Buffer.alloc(MAX_JSON_BYTES + 1)
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0)
+    if (bytesRead > MAX_JSON_BYTES) return { kind: 'invalid' }
+    const parsed: unknown = JSON.parse(bytes.subarray(0, bytesRead).toString('utf8'))
     if (!isPlainRecord(parsed)) return { kind: 'invalid' }
     return { kind: 'ok', value: parsed }
   } catch {
     return { kind: 'invalid' }
+  } finally {
+    await handle?.close()
+  }
+}
+
+/** 复核已打开文件仍由同一路径指向且留在 grok-home，避免 realpath 后被换绑。 */
+async function pathStillNamesOpenedFile(
+  grokHome: string,
+  path: string,
+  openedStat: BigIntStats
+): Promise<boolean> {
+  try {
+    const [canonical, currentStat] = await Promise.all([
+      fs.realpath(path),
+      fs.lstat(path, { bigint: true })
+    ])
+    return (
+      canonical === path &&
+      isPathInside(grokHome, canonical) &&
+      !currentStat.isSymbolicLink() &&
+      currentStat.dev === openedStat.dev &&
+      currentStat.ino === openedStat.ino
+    )
+  } catch {
+    return false
   }
 }
 

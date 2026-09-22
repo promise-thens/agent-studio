@@ -18,6 +18,7 @@ import {
   nextPinnedConversationScrollTop,
   nextProgrammaticFollowFlag,
   resolveConversationEmptyCopy,
+  resolveConversationFocusAction,
   resolveConversationScrollSource,
   resolveConversationStickyQuestion,
   shouldHoldPinnedFollow,
@@ -25,7 +26,7 @@ import {
   type ConversationScrollIntent,
   type ConversationScrollInteraction
 } from '../task-conversation-view'
-import type { ChangeCardView } from '../task-changes-presentation'
+import type { ChangeCardView, TurnChangeCardView } from '../task-changes-presentation'
 import ConversationTurn from './ConversationTurn.vue'
 import PermissionPrompt from './PermissionPrompt.vue'
 import QuestionPrompt from './QuestionPrompt.vue'
@@ -48,6 +49,12 @@ const props = withDefaults(
     question?: AgentQuestionRequest | null
     questionPending?: boolean
     changeCard?: ChangeCardView | null
+    turnChangeCards?: Record<string, TurnChangeCardView>
+    checkpointsError?: string
+    /** Inspector 的定位请求；尚未加载的轮次在后续模型更新后重试。 */
+    focusTurnId?: string | null
+    focusNodeId?: string | null
+    focusRequestId?: number
     restoreBusy?: boolean
     planMode?: ComposerPlanMode
     /** App 共享时钟，用来刷新活动 Turn 的耗时。 */
@@ -65,13 +72,18 @@ const props = withDefaults(
     question: null,
     questionPending: false,
     changeCard: null,
+    turnChangeCards: () => ({}),
+    checkpointsError: '',
+    focusTurnId: null,
+    focusNodeId: null,
+    focusRequestId: 0,
     restoreBusy: false,
     planMode: 'normal',
     clockTick: 0
   }
 )
 
-defineEmits<{
+const emit = defineEmits<{
   loadMoreTurns: []
   loadMoreEvents: [turnId: string]
   retryConnect: []
@@ -81,7 +93,9 @@ defineEmits<{
   reviewChanges: []
   restoreChanges: []
   reviewFile: [path: string]
+  retryChanges: []
   openPlan: [turnId: string]
+  openTool: [turnId: string, nodeId: string]
 }>()
 
 const messageList = ref<HTMLElement | null>(null)
@@ -96,6 +110,97 @@ let scrollIntent: ConversationScrollIntent = {
 let programmaticFollow = false
 /** 已预告但未产生 scroll 时，用双 rAF 解除 pending，避免冻住贴底。 */
 let pendingUserScrollIdleId = 0
+let focusedRequest = ''
+let autoLoadedFocusRequest = ''
+const focusUnavailable = ref('')
+
+/**
+ * 不拼接带用户数据的选择器；定位后解除贴底，避免流式事件抢回阅读位置。
+ * 目标尚未载入时每次请求只自动翻一页，防止连续分页抢占主列。
+ */
+function focusRequestedTurn(): void {
+  const turnId = props.focusTurnId
+  if (!turnId || !messageList.value) {
+    focusUnavailable.value = ''
+    return
+  }
+  const request = `${props.conversationKey}:${turnId}:${props.focusRequestId}`
+  if (focusedRequest === request) return
+  const target = Array.from(
+    messageList.value.querySelectorAll<HTMLElement>('[data-conversation-turn-id]')
+  ).find((element) => element.dataset.conversationTurnId === turnId)
+  const nodeLoaded =
+    !props.focusNodeId ||
+    Boolean(
+      target &&
+      Array.from(target.querySelectorAll<HTMLElement>('[data-conversation-node-id]')).some(
+        (element) => element.dataset.conversationNodeId === props.focusNodeId
+      )
+    )
+  const action = resolveConversationFocusAction({
+    requested: true,
+    loaded: Boolean(target),
+    hasMoreTurns: props.hasMoreTurns,
+    loadingMoreTurns: props.loadingMoreTurns,
+    autoLoadRequested: autoLoadedFocusRequest === request,
+    nodeRequested: Boolean(props.focusNodeId),
+    nodeLoaded
+  })
+  if (action === 'load-more') {
+    autoLoadedFocusRequest = request
+    focusUnavailable.value = ''
+    emit('loadMoreTurns')
+    return
+  }
+  if (action === 'unavailable') {
+    focusUnavailable.value = '无法定位到对应轮次；当前 Task 已没有更早历史。'
+    return
+  }
+  if (action === 'node-unavailable') {
+    focusUnavailable.value = '已定位到对应轮次，但对应工具节点当前不可用。'
+    pinnedToBottom = false
+    cancelPendingUserScrollIdle()
+    programmaticFollow = false
+    target?.scrollIntoView({ block: 'start', behavior: 'instant' })
+    return
+  }
+  if (!target || action !== 'focus') {
+    focusUnavailable.value = ''
+    return
+  }
+  focusUnavailable.value = ''
+  pinnedToBottom = false
+  cancelPendingUserScrollIdle()
+  programmaticFollow = false
+  target.scrollIntoView({ block: 'start', behavior: 'instant' })
+  focusedRequest = request
+}
+
+/** ConversationTurn 已带真实轮次与节点身份，这里只做类型化透传。 */
+function forwardOpenTool(turnId: string, nodeId: string): void {
+  emit('openTool', turnId, nodeId)
+}
+
+watch(
+  () => [
+    props.focusTurnId,
+    props.focusRequestId,
+    props.conversationKey,
+    props.hasMoreTurns,
+    props.loadingMoreTurns,
+    props.model?.turns.map((turn) => turn.turnId).join('\0'),
+    props.model?.turns.find((turn) => turn.turnId === props.focusTurnId)?.nodes
+  ],
+  () => {
+    if (!props.focusTurnId) {
+      focusedRequest = ''
+      autoLoadedFocusRequest = ''
+      focusUnavailable.value = ''
+    }
+    void nextTick(focusRequestedTurn)
+  },
+  { immediate: true, flush: 'post' }
+)
 
 /** 只把队首审批插进对应 Turn，避免每轮都复制一张权限卡。 */
 function permissionForTurn(
@@ -227,11 +332,17 @@ function scrollToLatestIfPinned(): void {
 watch(
   () => props.conversationKey,
   () => {
+    focusedRequest = ''
+    autoLoadedFocusRequest = ''
+    focusUnavailable.value = ''
     pinnedToBottom = true
     cancelPendingUserScrollIdle()
     scrollIntent = { pendingUserScroll: false, pointerTracking: scrollIntent.pointerTracking }
     programmaticFollow = false
-    void nextTick(scrollToLatestIfPinned)
+    void nextTick(() => {
+      focusRequestedTurn()
+      scrollToLatestIfPinned()
+    })
   }
 )
 
@@ -267,6 +378,10 @@ watch(
       {{ loadingMoreTurns ? '正在加载…' : '加载更早轮次' }}
     </button>
 
+    <p v-if="focusUnavailable" class="conversation-error" role="status">
+      {{ focusUnavailable }}
+    </p>
+
     <div v-if="loading && !model?.turns.length" class="conversation-empty" role="status">
       正在加载对话…
     </div>
@@ -275,7 +390,7 @@ watch(
     </div>
 
     <article
-      v-for="(turn, index) in model?.turns ?? []"
+      v-for="turn in model?.turns ?? []"
       :key="`${turn.taskId}:${turn.turnId}`"
       class="conversation-turn"
       :data-conversation-turn-id="turn.turnId"
@@ -292,23 +407,42 @@ watch(
         :has-more-events="eventAfterSequenceByTurn?.[turn.turnId] != null"
         :loading-more-events="loadingEventTurnIds?.includes(turn.turnId) ?? false"
         :clock-tick="clockTick"
+        :focus-node-id="focusTurnId === turn.turnId ? focusNodeId : null"
+        :focus-request-id="focusRequestId"
         @respond-permission="$emit('respondPermission', $event)"
         @respond-question="$emit('respondQuestion', $event)"
         @cancel-turn="$emit('cancelTurn')"
         @load-more-events="$emit('loadMoreEvents', $event)"
         @open-plan="$emit('openPlan', $event)"
+        @open-tool="forwardOpenTool"
       />
 
       <TaskChangeCard
-        v-if="changeCard && index === (model?.turns.length ?? 0) - 1"
+        v-if="turnChangeCards[turn.turnId]?.taskId === turn.taskId"
         :task-id="turn.taskId"
-        :model="changeCard"
+        :model="turnChangeCards[turn.turnId]"
         :restore-busy="restoreBusy"
         @review="$emit('reviewChanges')"
         @restore="$emit('restoreChanges')"
         @review-file="$emit('reviewFile', $event)"
       />
     </article>
+
+    <!-- 当前工作区快照不归入任何历史轮，旧数据缺检查点也不能猜测归属。 -->
+    <TaskChangeCard
+      v-if="changeCard?.visible && model?.taskId"
+      :key="model.taskId"
+      :task-id="model.taskId"
+      :model="changeCard"
+      :restore-busy="restoreBusy"
+      @review="$emit('reviewChanges')"
+      @restore="$emit('restoreChanges')"
+      @review-file="$emit('reviewFile', $event)"
+    />
+    <p v-if="checkpointsError" class="conversation-error" role="status">
+      轮次文件记录读取失败：{{ checkpointsError }}
+      <button type="button" @click="$emit('retryChanges')">重试</button>
+    </p>
 
     <div v-if="unmatchedPermission" class="conversation-turn">
       <PermissionPrompt

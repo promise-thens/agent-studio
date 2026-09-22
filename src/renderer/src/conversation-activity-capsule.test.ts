@@ -13,10 +13,44 @@ import type {
 } from './conversation-turn-view'
 import {
   extractCapsuleActionVerb,
+  findCapsuleItemForNode,
   groupConversationBlocks,
   isCapsuleProcessBlock,
+  resolveActivityCapsuleExpansion,
   type ConversationActivityCapsuleBlock
 } from './conversation-activity-capsule'
+
+/** 定位必须沿真实节点身份找到合并项，标题相同不能作为归属证据。 */
+describe('胶囊展开与工具定位', () => {
+  it('默认随执行收束，用户明确展开或收起后保留选择', () => {
+    expect(resolveActivityCapsuleExpansion('in_progress', null)).toBe(true)
+    expect(resolveActivityCapsuleExpansion('completed', null)).toBe(false)
+    expect(resolveActivityCapsuleExpansion('failed', null)).toBe(false)
+    expect(resolveActivityCapsuleExpansion('completed', true)).toBe(true)
+    expect(resolveActivityCapsuleExpansion('in_progress', false)).toBe(false)
+  })
+
+  it('定位合并读取的第二个真实工具，拒绝相似标题与无效 ID', () => {
+    const merged = makeToolBlock('first', '读了 2 个文件', 'completed', 2)
+    merged.tools = ['tool-first', 'tool-second'].map((nodeId) => ({
+      kind: 'tool',
+      nodeId,
+      taskId: 'task-1',
+      turnId: 'turn-1',
+      source: 'agent-event',
+      toolCallId: nodeId,
+      title: '相同的工具标题',
+      status: 'completed'
+    }))
+    const items = [makeThoughtBlock('thought'), merged]
+    expect(findCapsuleItemForNode(items, 'tool-second')).toBe(merged)
+    expect(findCapsuleItemForNode(items, 'tool-first')).toBe(merged)
+    expect(findCapsuleItemForNode(items, 'thought-thought')).toBe(items[0])
+    expect(findCapsuleItemForNode(items, '相同的工具标题')).toBeUndefined()
+    expect(findCapsuleItemForNode(items, '')).toBeUndefined()
+    expect(findCapsuleItemForNode(items, 'unknown')).toBeUndefined()
+  })
+})
 
 function makeToolBlock(
   id: string,

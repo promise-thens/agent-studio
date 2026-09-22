@@ -7,8 +7,28 @@ import {
   isAskUserToolTitle,
   isConversationWaitingForEvent,
   resolveConversationActivityHint,
-  resolveConversationStep
+  resolveConversationStep,
+  shouldShowConversationStatus
 } from './conversation-progress'
+
+/** 完成正文不重复状态大卡，异常和仍待用户操作的事实不能被视觉收束隐藏。 */
+describe('对话状态层级', () => {
+  it('正常完成轮隐藏重复头部，运行、停止、失败和异常历史保持可见', () => {
+    expect(shouldShowConversationStatus({ status: 'completed' })).toBe(false)
+    for (const status of [
+      'running',
+      'waiting-permission',
+      'failed',
+      'cancelled',
+      'interrupted'
+    ] as const) {
+      expect(shouldShowConversationStatus({ status })).toBe(true)
+    }
+    expect(shouldShowConversationStatus({ status: 'completed', historyTruncated: true })).toBe(true)
+    expect(shouldShowConversationStatus({ status: 'completed', statusConflict: true })).toBe(true)
+    expect(shouldShowConversationStatus({ status: 'completed' }, true)).toBe(true)
+  })
+})
 
 function toolNode(
   title: string,

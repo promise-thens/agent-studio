@@ -5,6 +5,10 @@
 > 定位：在现有 `GrokAcpAdapter` 最小闭环之上，按真实 Grok ACP 方言补齐验证、恢复、审批可解释性和 Client 能力广告
 > 产品愿景仍以 [product-vision.md](../../../product-vision.md) 为准；本目录不改 Runtime × Provider × Capability 分层
 
+## 2026-09-20 当前轮补充消息
+
+[GACP-07](gacp-07-active-turn-interjection.md) 对应问题清单 1.6。用户要求执行中补充当前轮，不接受排队下一轮替代。本机 Grok 1.0.34 有 `x.ai/interject` 等静态证据，但 ACP 请求契约与同轮消费尚未验证；先以隔离本地 Mock Provider 证明，再接入产品。计划待批准，不代表功能已支持，不阻塞 P0-23 明确缺陷修复。
+
 ## 1. 为什么单独开这个目录
 
 P0-05 已经把 `GrokAgentBridge` 收成 `GrokAcpAdapter`，P0-01 至 P0-08 把产品身份、事件、权限和单槽执行立住了。当前（2026-08-18 夜间）**P0-09 执行时间线真机验收已受限关闭**。
@@ -138,6 +142,7 @@ P0-08 的真实 Grok 活动退出与重启 `interrupted` 已在 2026-08-18 Windo
 | [gacp-04-grok-acp-dialect-compat.md](gacp-04-grok-acp-dialect-compat.md) | 启动参数、握手、set_model、环境白名单 |
 | [gacp-05-client-capability-advertisement.md](gacp-05-client-capability-advertisement.md) | 只有实现后才广告的 Client 能力 |
 | [gacp-06-subagent-timeline.md](gacp-06-subagent-timeline.md) | 子 Agent 嵌套卡片；皮肤跟 P0-10A |
+| [gacp-07-active-turn-interjection.md](gacp-07-active-turn-interjection.md) | 当前轮补充：先冻结 Grok 扩展契约，再接入同轮确认与展示 |
 | [P0-10A](../p0-10a-claude-desktop-workbench-ui.md) | 整站按 Claude Code Desktop 便捷度大修 |
 | [P0-10C](../p0-10c-grok-host-surfaces.md) | Grok 宿主表面：命令板、插件整页 |
 | [P0-10D](../p0-10d-grok-memory-and-mcp.md) | 设置：记忆浏览、MCP 交给 Grok |

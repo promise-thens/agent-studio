@@ -13,6 +13,7 @@ import {
   moveInspectorCardRect,
   resolveInspectorTab,
   type InspectorCardRect,
+  type InspectorConversationTarget,
   type InspectorTab
 } from '../task-inspector'
 import InspectorPaneGrid from './InspectorPaneGrid.vue'
@@ -28,6 +29,8 @@ const props = withDefaults(
     docked?: boolean
     taskId?: string
     focusTurnId?: string | null
+    focusNodeId?: string | null
+    focusRequestId?: number
     timeline: TaskTimelineViewModel | null
     timelineLoading?: boolean
     permissionAudits?: readonly PermissionAuditRecord[]
@@ -45,6 +48,8 @@ const props = withDefaults(
     docked: false,
     taskId: '',
     focusTurnId: null,
+    focusNodeId: null,
+    focusRequestId: 0,
     timelineLoading: false,
     permissionAudits: () => [],
     permissionAuditCursor: null,
@@ -63,6 +68,7 @@ const emit = defineEmits<{
   'update:activeTab': [tab: InspectorTab]
   'update:docked': [docked: boolean]
   loadMorePermissionAudits: []
+  focusTarget: [target: InspectorConversationTarget]
 }>()
 
 const currentTab = computed(() => resolveInspectorTab(props.activeTab))
@@ -74,32 +80,40 @@ const expanded = ref(false)
 const splitEnabled = ref(false)
 const secondaryTab = ref<InspectorTab>('changes')
 const compactRect = ref<InspectorCardRect | null>(null)
+const viewportRevision = ref(0)
+let composerObserver: ResizeObserver | null = null
 let dragOrigin: { pointerId: number; x: number; y: number; left: number; top: number } | null = null
 
 const cardStyle = computed(() => {
+  void viewportRevision.value
   if (props.docked || cardLeft.value == null || cardTop.value == null) return undefined
+  const viewport = readViewport()
   const style: Record<string, string> = {
     left: `${cardLeft.value}px`,
     top: `${cardTop.value}px`,
-    right: 'auto'
+    right: 'auto',
+    maxWidth: `${Math.max(1, viewport.width - INSPECTOR_CARD_MARGIN * 2)}px`,
+    maxHeight: `${Math.max(1, viewport.height - INSPECTOR_CARD_MARGIN * 2)}px`
   }
   if (expanded.value) {
-    const viewport = readViewport()
     style.width = `${Math.max(1, viewport.width - INSPECTOR_CARD_MARGIN * 2)}px`
     style.height = `${Math.max(1, viewport.height - INSPECTOR_CARD_MARGIN * 2)}px`
   }
   return style
 })
 
+/** 以真实工作区与输入区几何避让，长草稿和附件展开时不覆盖发送入口。 */
 function readViewport(): { width: number; height: number } {
   const parent = cardRef.value?.offsetParent
   const baseWidth = parent instanceof HTMLElement ? parent.clientWidth : window.innerWidth
   const baseHeight = parent instanceof HTMLElement ? parent.clientHeight : window.innerHeight
   // 扣除右侧避让宽度（如内置浏览器占用的宽度），使 Inspector 局限在中间对话列内，绝不遮挡右侧浏览器
-  const effectiveWidth = Math.max(320, baseWidth - (props.rightOffset ?? 0))
+  const effectiveWidth = Math.max(1, baseWidth - (props.rightOffset ?? 0))
   // 全屏展开态独占工作区，拉满整个高度，不需要避让底部输入框；只有普通悬浮态才扣除底部输入框高度，避免拖拽重叠
-  const effectiveBottomOffset = expanded.value ? 0 : 100
-  const effectiveHeight = Math.max(320, baseHeight - effectiveBottomOffset)
+  const composer = parent instanceof HTMLElement ? parent.querySelector('.composer-wrap') : null
+  const composerHeight = composer?.getBoundingClientRect().height ?? 100
+  const effectiveBottomOffset = expanded.value ? 0 : composerHeight
+  const effectiveHeight = Math.max(1, baseHeight - effectiveBottomOffset)
   return { width: effectiveWidth, height: effectiveHeight }
 }
 
@@ -289,6 +303,7 @@ function toggleSplit(): void {
 }
 
 function onWindowResize(): void {
+  viewportRevision.value += 1
   if (props.open) clampCurrent()
 }
 
@@ -329,11 +344,17 @@ watch(
 
 onMounted(() => {
   window.addEventListener('resize', onWindowResize)
+  const composer = document.querySelector('.composer-wrap')
+  if (composer) {
+    composerObserver = new ResizeObserver(onWindowResize)
+    composerObserver.observe(composer)
+  }
   if (props.open && !props.docked) void nextTick(placeDefault)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', onWindowResize)
+  composerObserver?.disconnect()
 })
 
 function selectTab(tab: InspectorTab): void {
@@ -386,6 +407,8 @@ function selectTab(tab: InspectorTab): void {
       :split="splitEnabled"
       :task-id="taskId"
       :focus-turn-id="focusTurnId"
+      :focus-node-id="focusNodeId"
+      :focus-request-id="focusRequestId"
       :timeline="timeline"
       :timeline-loading="timelineLoading"
       :permission-audits="permissionAudits"
@@ -399,6 +422,7 @@ function selectTab(tab: InspectorTab): void {
       @update:primary-tab="selectTab"
       @update:secondary-tab="secondaryTab = $event"
       @load-more-permission-audits="emit('loadMorePermissionAudits')"
+      @focus-target="emit('focusTarget', $event)"
     />
   </aside>
 </template>

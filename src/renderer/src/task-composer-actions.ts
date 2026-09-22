@@ -23,6 +23,9 @@ export interface TaskComposerSendInput {
   restoreReason?: string
   providerConfigured: boolean
   projectSelectionPending: boolean
+  /** Project 连接与新 Task 创建尚未完成时，按钮必须等真实身份稳定后再发送。 */
+  projectConnectionPending?: boolean
+  taskCreationPending?: boolean
   turnTiming: boolean
   promptSubmissionPending: boolean
   promptCapabilityAvailable: boolean
@@ -136,6 +139,25 @@ export const COMPOSER_COMPACT_ALWAYS_VISIBLE = [
   'send-or-stop'
 ] as const
 
+export type ComposerAddMenuNavigationKey = 'ArrowDown' | 'ArrowUp' | 'Home' | 'End'
+
+/** 为添加菜单计算下一个可聚焦项；上下方向循环，Home/End 直达边界。 */
+export function resolveComposerAddMenuFocusIndex(
+  key: ComposerAddMenuNavigationKey,
+  currentIndex: number,
+  itemCount: number
+): number | null {
+  if (!Number.isInteger(itemCount) || itemCount <= 0) return null
+  if (key === 'Home') return 0
+  if (key === 'End') return itemCount - 1
+  if (currentIndex < 0 || currentIndex >= itemCount) {
+    return key === 'ArrowUp' ? itemCount - 1 : 0
+  }
+  return key === 'ArrowDown'
+    ? (currentIndex + 1) % itemCount
+    : (currentIndex - 1 + itemCount) % itemCount
+}
+
 export interface ComposerChrome {
   action: 'send' | 'stop'
   modelBusy: boolean
@@ -180,10 +202,18 @@ export interface ComposerContextUsagePresentation {
   label: string
   /** Composer 常驻展示的紧凑用量，例如 24.3k / 500k。 */
   compactLabel: string
-  percentage: number
+  /** 仅圆环夹紧到 100；null 表示无法确定占比，不是真实零。 */
+  percentage: number | null
   percentLabel: string
   title: string
   ariaLabel: string
+  usedLabel: string
+  limitLabel: string
+  sourceLabel: string
+  /** 卡片主标题（对齐图3），如「14% 已用（剩余 86%）」或「0.6% 已用（剩余 99.4%）」。 */
+  cardHeadline: string
+  /** 卡片副明细（对齐图3），如「已用 35k 标记，共 258k」。 */
+  cardTokenDetail: string
 }
 
 /** 把 token 数收成 Composer 能放下的短标签，不改真实 used/limit。 */
@@ -202,51 +232,76 @@ export function formatContextUsageCount(value: number, peerLimit = 0): string {
   return `${millions.toFixed(1).replace(/\.0$/, '')}M`
 }
 
-/** 将 Runtime 真实上下文用量转换成常驻花片，不做本地 Token 估算。 */
-export function resolveComposerContextUsagePresentation(
-  usage: AgentContextUsage | null | undefined
-): ComposerContextUsagePresentation | null {
-  if (!usage) return null
-  const label = resolveComposerContextUsage(usage)
-  if (!label) return null
-
-  const percentage =
-    usage.limitTokens > 0
-      ? Math.min(100, Math.max(0, Math.round((usage.usedTokens / usage.limitTokens) * 1000) / 10))
-      : 0
-  const percentLabel = `${percentage}%`
-  return {
-    label,
-    compactLabel: `${formatContextUsageCount(usage.usedTokens, usage.limitTokens)} / ${formatContextUsageCount(usage.limitTokens)}`,
-    percentage,
-    percentLabel,
-    title: `上下文用量：${usage.usedTokens}/${usage.limitTokens} tokens（${percentLabel}）`,
-    ariaLabel: `上下文已使用 ${usage.usedTokens} / ${usage.limitTokens} tokens，占 ${percentLabel}`
-  }
+/** 圆环空间有限；真实正数不足 1% 时显示 `<1`，避免四舍五入冒充 0。 */
+export function formatComposerContextUsageRingLabel(percentage: number | null): string {
+  if (percentage === null || !Number.isFinite(percentage)) return '?'
+  if (percentage > 0 && percentage < 1) return '<1'
+  return String(Math.round(percentage))
 }
 
-const COMPOSER_CONTEXT_TERMINAL_STATUSES = new Set([
-  'completed',
-  'failed',
-  'cancelled',
-  'interrupted'
-])
+/** 只投影 Runtime 上下文样本；缺失上限不能推导占比，详情保留超限事实。 */
+export function resolveComposerContextUsagePresentation(
+  usage: AgentContextUsage | null | undefined
+): ComposerContextUsagePresentation {
+  const used =
+    usage?.scope === 'context' && Number.isFinite(usage.usedTokens) && usage.usedTokens >= 0
+      ? usage.usedTokens
+      : null
+  const limit =
+    usage?.scope === 'context' && Number.isFinite(usage.limitTokens) && usage.limitTokens > 0
+      ? usage.limitTokens
+      : null
+  const ratio = used !== null && limit !== null ? (used / limit) * 100 : null
+  const percent = ratio !== null && Number.isFinite(ratio) ? Math.round(ratio * 10) / 10 : null
+  const percentLabel = percent === null ? '未知' : `${percent}%`
+  const usedLabel = used === null ? '未提供' : String(used)
+  const limitLabel = limit === null ? '未提供有效上限' : String(limit)
+  const label = used === null && limit === null ? '未知' : `${usedLabel}/${limitLabel}`
 
-/** 新 session 第一轮往往还没有 signals.json，不能把花片整颗藏到第二次发送。 */
-function pendingComposerContextUsagePresentation(): ComposerContextUsagePresentation {
+  // 计算卡片主标题与标记明细（对标图3精美卡片视觉）
+  let cardHeadline = '用量统计中...'
+  let cardTokenDetail = '容量尚未同步'
+
+  if (percent !== null) {
+    if (percent > 100) {
+      cardHeadline = `${percentLabel} 已用（已超限）`
+    } else {
+      const remainingPercent = Math.max(0, Math.round((100 - percent) * 10) / 10)
+      cardHeadline = `${percentLabel} 已用（剩余 ${remainingPercent}%）`
+    }
+  }
+
+  if (used !== null && limit !== null) {
+    const usedCompact = formatContextUsageCount(used, limit)
+    const limitCompact = formatContextUsageCount(limit)
+    cardTokenDetail = `已用 ${usedCompact} 标记，共 ${limitCompact}`
+  } else if (used !== null) {
+    cardTokenDetail = `已用 ${formatContextUsageCount(used)} 标记`
+  }
+
   return {
-    label: '0',
-    compactLabel: '0k',
-    percentage: 0,
-    percentLabel: '0%',
-    title: '上下文用量：0 tokens',
-    ariaLabel: '上下文已使用 0 tokens'
+    label,
+    compactLabel:
+      used === null || limit === null
+        ? '未知'
+        : `${formatContextUsageCount(used, limit)} / ${formatContextUsageCount(limit)}`,
+    percentage: percent === null ? null : Math.min(100, percent),
+    percentLabel,
+    title: `上下文用量：${label} tokens（${percentLabel}）`,
+    ariaLabel: `上下文已使用 ${usedLabel} / ${limitLabel} tokens，占 ${percentLabel}`,
+    usedLabel,
+    limitLabel,
+    sourceLabel: usage
+      ? 'Runtime · usage(scope=context) 最近可信样本，非实时计费统计'
+      : 'Runtime 尚未提供上下文用量',
+    cardHeadline,
+    cardTokenDetail
   }
 }
 
 /**
- * 新对话第一次发送时 signals 经常还不存在，Composer 仍要露出 0k。
- * 若已有窗口上限但首轮未结束，只把 used 显示成 0，避免把记忆基线当成用户消耗。
+ * 首轮的记忆基线同样占用上下文，不清零、不累计，也不跨 Task 缓存。
+ * 较早轮次只提供最近已知值，明确说明并非当前轮实时采样。
  */
 export function presentComposerContextUsage(
   timeline:
@@ -261,17 +316,11 @@ export function presentComposerContextUsage(
 ): ComposerContextUsagePresentation | null {
   if (!timeline?.turns.length) return null
   const usage = pickLatestContextUsage(timeline)
-  if (!usage) return pendingComposerContextUsagePresentation()
-  // 单执行槽下，只要已经出现更晚的 Turn，就说明更早一轮已经结束；历史 record
-  // 可能还没回填终态，不能把这段真实上下文用量误判成首轮基线并清零。
-  const hasFinishedTurn =
-    timeline.turns.length > 1 ||
-    timeline.turns.some(
-      (turn) => turn.status != null && COMPOSER_CONTEXT_TERMINAL_STATUSES.has(turn.status)
-    )
-  return resolveComposerContextUsagePresentation(
-    hasFinishedTurn ? usage : { ...usage, usedTokens: 0 }
-  )
+  const presentation = resolveComposerContextUsagePresentation(usage)
+  if (usage && !timeline.turns.at(-1)?.usage.contextSamples.includes(usage)) {
+    presentation.sourceLabel = 'Runtime · 较早轮次的最近可信样本，当前轮尚未更新'
+  }
+  return presentation
 }
 
 /** 从最近一轮往前找最后一条可展示的上下文用量。 */
@@ -283,9 +332,18 @@ export function pickLatestContextUsage(
 ): AgentContextUsage | null {
   if (!timeline?.turns.length) return null
   for (let index = timeline.turns.length - 1; index >= 0; index -= 1) {
-    const sample = timeline.turns[index]?.usage.contextSamples.at(-1)
-    if (sample && Number.isFinite(sample.usedTokens) && Number.isFinite(sample.limitTokens)) {
-      return sample
+    const samples = timeline.turns[index]?.usage.contextSamples ?? []
+    for (let sampleIndex = samples.length - 1; sampleIndex >= 0; sampleIndex -= 1) {
+      const sample = samples[sampleIndex]
+      if (
+        sample.scope === 'context' &&
+        Number.isFinite(sample.usedTokens) &&
+        sample.usedTokens >= 0 &&
+        Number.isFinite(sample.limitTokens) &&
+        sample.limitTokens >= 0
+      ) {
+        return sample
+      }
     }
   }
   return null
@@ -320,6 +378,8 @@ export function evaluateTaskComposerSend(input: TaskComposerSendInput): TaskComp
   return {
     canSend:
       !input.projectSelectionPending &&
+      !input.projectConnectionPending &&
+      !input.taskCreationPending &&
       input.restore !== 'unavailable' &&
       Boolean(input.providerConfigured) &&
       !isForeignExecutionBlockingSend(input.activeExecution, input.selectedTaskId) &&
@@ -335,6 +395,8 @@ export function evaluateTaskComposerSend(input: TaskComposerSendInput): TaskComp
 /** UI 提示；connecting 只解释状态，不作为发送门禁。 */
 export function resolveComposerDisabledMessage(input: TaskComposerSendInput): string {
   if (input.projectSelectionPending) return '正在切换 Project，请稍候。'
+  if (input.projectConnectionPending) return '正在准备项目，请稍候。'
+  if (input.taskCreationPending) return '正在创建对话，请稍候。'
   if (input.restore === 'unavailable') {
     return input.restoreReason || input.projectExecutionReason || '当前只能查看历史。'
   }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AgentPermissionDecision, AgentPermissionRequest } from '../../../shared/agent'
 import type { AgentQuestionRequest } from '../../../shared/agent-question'
 import type { AgentRespondQuestionRequest } from '../../../shared/agent-ipc'
@@ -18,6 +18,7 @@ import {
   isConversationWaitingForEvent,
   resolveConversationActivityHint,
   resolveConversationStep,
+  shouldShowConversationStatus,
   turnLastActivityAt
 } from '../conversation-progress'
 import { describeHistoryTruncation } from '../../../shared/task-history'
@@ -48,6 +49,10 @@ const props = withDefaults(
     loadingMoreEvents?: boolean
     /** App 共享时钟；只用于活动 Turn 的实时耗时与事件静默提示。 */
     clockTick?: number
+    /** Inspector 反向定位的真实 Timeline nodeId。 */
+    focusNodeId?: string | null
+    /** 同一节点允许重复定位。 */
+    focusRequestId?: number
   }>(),
   {
     variant: 'conversation',
@@ -60,7 +65,9 @@ const props = withDefaults(
     active: false,
     hasMoreEvents: false,
     loadingMoreEvents: false,
-    clockTick: 0
+    clockTick: 0,
+    focusNodeId: null,
+    focusRequestId: 0
   }
 )
 
@@ -70,7 +77,13 @@ defineEmits<{
   cancelTurn: []
   loadMoreEvents: [turnId: string]
   openPlan: [turnId: string]
+  openTool: [turnId: string, nodeId: string]
 }>()
+
+const turnRoot = ref<HTMLElement | null>(null)
+const waitingForUser = computed(
+  () => Boolean(props.permission) || Boolean(props.question) || props.hasPendingQuestion
+)
 
 /** 主列走完整对话块；检查器只留过程缩略，避免再当主界面。 */
 const blocks = computed(() => {
@@ -102,8 +115,7 @@ const displayBlocks = computed(() => {
   return groupConversationBlocks(blocks.value, {
     isTurnActive: props.active,
     turnStatus: props.turn.status,
-    waitingForUser:
-      Boolean(props.permission) || Boolean(props.question) || props.hasPendingQuestion,
+    waitingForUser: waitingForUser.value,
     clockTick: effectiveClockTick.value
   })
 })
@@ -167,6 +179,31 @@ const activeThoughtNodeId = computed(
 )
 const statusLabel = computed(() => conversationStatusLabel(props.turn.status))
 const truncationCopy = computed(() => describeHistoryTruncation(props.turn.truncationReason))
+const showTurnStatus = computed(() =>
+  shouldShowConversationStatus(props.turn, waitingForUser.value)
+)
+
+/** 节点到达后再定位；用 dataset 精确比对，避免把用户数据拼进选择器。 */
+async function focusRequestedNode(): Promise<void> {
+  const nodeId = props.focusNodeId
+  if (!nodeId || props.variant !== 'conversation') return
+  await nextTick()
+  const anchor = Array.from(
+    turnRoot.value?.querySelectorAll<HTMLElement>('[data-conversation-node-id]') ?? []
+  ).find((element) => element.dataset.conversationNodeId === nodeId)
+  const target =
+    anchor?.closest<HTMLElement>('[data-conversation-node-anchor]') ??
+    anchor?.closest<HTMLElement>('.activity-capsule-item') ??
+    anchor
+  target?.focus({ preventScroll: true })
+  target?.scrollIntoView({ block: 'center', behavior: 'instant' })
+}
+
+watch(
+  () => [props.focusNodeId, props.focusRequestId, props.turn.nodes] as const,
+  () => void focusRequestedNode(),
+  { immediate: true, flush: 'post' }
+)
 
 function mergedReadFiles(block: ConversationToolBlock): string[] {
   if (!block.mergedReadCount || block.mergedReadCount < 2) return []
@@ -175,9 +212,9 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
 </script>
 
 <template>
-  <div class="conversation-blocks" :data-variant="variant">
+  <div ref="turnRoot" class="conversation-blocks" :data-variant="variant">
     <header
-      v-if="variant === 'conversation'"
+      v-if="variant === 'conversation' && showTurnStatus"
       class="conversation-turn-meta"
       :data-status="turn.status"
       :data-waiting="waitingForEvent ? 'true' : undefined"
@@ -206,7 +243,14 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
 
     <template v-for="block in displayBlocks" :key="block.nodeId">
       <!-- 方案 1：现代 Agent 过程胶囊卡片（包含连续思考、工具调用与静默审计） -->
-      <ActivityCapsule v-if="block.kind === 'activity-capsule'" :capsule="block" :active="active" />
+      <ActivityCapsule
+        v-if="block.kind === 'activity-capsule'"
+        :capsule="block"
+        :active="active"
+        :focus-node-id="focusNodeId"
+        :focus-request-id="focusRequestId"
+        @open-tool="$emit('openTool', turn.turnId, $event)"
+      />
 
       <div v-if="block.kind === 'user'" class="conversation-user" data-kind="user">
         <p v-if="block.text">{{ block.text }}</p>
@@ -259,25 +303,72 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
         <PlanChecklist :entries="block.entries" :active="block.defaultExpanded" />
       </details>
 
-      <ConversationEditDiff
+      <div
         v-else-if="block.kind === 'tool' && block.editDiffs?.length"
-        :label="block.label"
-        :status="block.status"
-        :edits="block.editDiffs"
-        :warning="block.warning"
-      />
+        class="conversation-node-anchor"
+        :data-conversation-node-id="block.nodeId"
+        data-conversation-node-anchor
+        :data-focused="block.tools.some((tool) => tool.nodeId === focusNodeId) ? 'true' : undefined"
+        tabindex="-1"
+      >
+        <span
+          v-for="tool in block.tools"
+          :key="`anchor:${tool.nodeId}`"
+          class="conversation-hidden-node-anchor"
+          :data-conversation-node-id="tool.nodeId"
+          aria-hidden="true"
+        />
+        <ConversationEditDiff
+          :label="block.label"
+          :status="block.status"
+          :edits="block.editDiffs"
+          :warning="block.warning"
+        />
+        <button
+          v-if="variant === 'conversation'"
+          type="button"
+          class="conversation-tool-open"
+          :title="`在检查器中查看：${block.label}`"
+          @click="$emit('openTool', turn.turnId, block.nodeId)"
+        >
+          在检查器中查看
+        </button>
+      </div>
 
-      <ToolRow
+      <div
         v-else-if="block.kind === 'tool'"
-        class="conversation-process-step"
+        class="conversation-process-step conversation-node-anchor"
         data-process-kind="tool"
-        :label="block.label"
-        :status="block.status"
-        :files="mergedReadFiles(block)"
-        :detail="block.detail"
-        :warning="block.warning"
-        :execution="block.execution"
-      />
+        :data-conversation-node-id="block.nodeId"
+        data-conversation-node-anchor
+        :data-focused="block.tools.some((tool) => tool.nodeId === focusNodeId) ? 'true' : undefined"
+        tabindex="-1"
+      >
+        <span
+          v-for="tool in block.tools"
+          :key="`anchor:${tool.nodeId}`"
+          class="conversation-hidden-node-anchor"
+          :data-conversation-node-id="tool.nodeId"
+          aria-hidden="true"
+        />
+        <ToolRow
+          :label="block.label"
+          :status="block.status"
+          :files="mergedReadFiles(block)"
+          :detail="block.detail"
+          :warning="block.warning"
+          :execution="block.execution"
+        />
+        <button
+          v-if="variant === 'conversation'"
+          type="button"
+          class="conversation-tool-open"
+          :title="`在检查器中查看：${block.label}`"
+          @click="$emit('openTool', turn.turnId, block.nodeId)"
+        >
+          在检查器中查看
+        </button>
+      </div>
 
       <SubagentCard
         v-else-if="block.kind === 'subagent' && shouldMountSubagentCard(block)"
@@ -353,3 +444,39 @@ function mergedReadFiles(block: ConversationToolBlock): string[] {
     />
   </div>
 </template>
+
+<style scoped>
+.conversation-node-anchor {
+  position: relative;
+  border-radius: var(--radius-soft);
+}
+
+.conversation-node-anchor[data-focused='true'] {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 2px;
+}
+
+.conversation-hidden-node-anchor {
+  display: none;
+}
+
+.conversation-tool-open {
+  display: block;
+  margin: 3px 8px 0 auto;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-3);
+  background: transparent;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.conversation-tool-open:hover,
+.conversation-tool-open:focus-visible {
+  color: var(--text-1);
+  background: var(--surface-3);
+  outline: 1px solid var(--border-strong);
+}
+</style>

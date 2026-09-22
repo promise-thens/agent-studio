@@ -20,7 +20,11 @@ import {
   shouldCloseTaskMenuOnPointerDown,
   type TaskMenuPlacement
 } from '../task-list-overflow'
-import { resolveProjectAccordionToggle, tasksForExpandedProject } from '../task-navigation'
+import {
+  resolveProjectAccordionToggle,
+  tasksForExpandedProject,
+  type NewChatGate
+} from '../task-navigation'
 import type { WorkbenchPrimaryView } from '../workbench-primary-view'
 import TaskList from './TaskList.vue'
 
@@ -34,8 +38,7 @@ const props = withDefaults(
     selectedTaskId: string
     activeExecution: Pick<TaskExecutionDto, 'taskId' | 'state'> | null
     taskListLoadState: WorkbenchLoadState
-    newChatDisabled?: boolean
-    newChatDisabledReason?: string
+    newChatGate: (projectId: string) => NewChatGate
     historyNavigationDisabled?: boolean
     historyNavigationDisabledReason?: string
     mutationActionsDisabled?: boolean
@@ -50,8 +53,6 @@ const props = withDefaults(
     primaryView?: WorkbenchPrimaryView
   }>(),
   {
-    newChatDisabled: false,
-    newChatDisabledReason: '',
     historyNavigationDisabled: false,
     historyNavigationDisabledReason: '',
     mutationActionsDisabled: false,
@@ -332,6 +333,7 @@ onBeforeUnmount(() => {
         class="project-block"
         :class="{ 'is-expanded': isExpanded(project.projectId) }"
       >
+        <p v-if="project.kind === 'managed-chat'" class="tree-hint">托管聊天</p>
         <div class="project-header-row">
           <button
             class="project-header"
@@ -342,14 +344,15 @@ onBeforeUnmount(() => {
             }"
             type="button"
             :disabled="historyNavigationDisabled"
-            :title="project.canonicalRoot"
+            :title="project.kind === 'managed-chat' ? '由 Agent Studio 管理的聊天工作区' : project.canonicalRoot"
             :aria-expanded="isExpanded(project.projectId)"
             @click="toggleProject(project.projectId)"
           >
             <CaretDown class="caret" :class="{ open: isExpanded(project.projectId) }" :size="12" />
-            <FolderOpen v-if="isExpanded(project.projectId)" class="project-folder" :size="14" />
+            <NotePencil v-if="project.kind === 'managed-chat'" class="project-folder" :size="14" />
+            <FolderOpen v-else-if="isExpanded(project.projectId)" class="project-folder" :size="14" />
             <Folder v-else class="project-folder" :size="14" />
-            <strong>{{ project.displayName }}</strong>
+            <strong>{{ project.kind === 'managed-chat' ? '聊天' : project.displayName }}</strong>
             <span v-if="runningTaskCountByProjectId[project.projectId]" class="run-count">
               {{ runningTaskCountByProjectId[project.projectId] }}
             </span>
@@ -361,14 +364,15 @@ onBeforeUnmount(() => {
             v-if="isExpanded(project.projectId)"
             class="icon-button"
             type="button"
-            :disabled="newChatDisabled"
-            :title="newChatDisabledReason || '新对话'"
+            :disabled="newChatGate(project.projectId).disabled"
+            :title="newChatGate(project.projectId).reason || '新对话'"
             aria-label="新对话"
             @click="emit('newChat', project.projectId)"
           >
             <NotePencil :size="15" />
           </button>
           <button
+            v-if="project.kind !== 'managed-chat'"
             class="icon-button project-action-button"
             type="button"
             :disabled="mutationActionsDisabled"

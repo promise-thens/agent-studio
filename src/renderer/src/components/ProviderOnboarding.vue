@@ -16,6 +16,7 @@ import type {
   ProviderTestResult
 } from '../../../shared/provider'
 import BrandMark from './BrandMark.vue'
+import { reportSettingsPaneState, type SettingsPaneState } from '../settings-dialog-interaction'
 
 type LoadingAction = 'models' | 'save' | 'clear' | null
 type FieldName = 'baseUrl' | 'apiKey' | 'modelId'
@@ -40,6 +41,7 @@ const emit = defineEmits<{
   saved: [summary: ProviderConfigSummary]
   cancelled: []
   cleared: []
+  state: [value: SettingsPaneState]
 }>()
 
 const baseUrl = ref(props.initialSummary?.baseUrl ?? '')
@@ -52,6 +54,27 @@ const loading = ref<LoadingAction>(null)
 const errors = ref<FieldErrors>({})
 const notice = ref<{ tone: 'error' | 'success'; message: string } | null>(null)
 const confirmingClear = ref(false)
+// 基线不包含明文 Key；新输入的 Key 只以是否非空参与 dirty 判断。
+const savedFields = ref({
+  baseUrl: baseUrl.value,
+  authMode: authMode.value,
+  modelId: modelId.value
+})
+const dirty = computed(() =>
+  baseUrl.value !== savedFields.value.baseUrl ||
+  authMode.value !== savedFields.value.authMode ||
+  modelId.value !== savedFields.value.modelId ||
+  apiKey.value.length > 0
+)
+reportSettingsPaneState(
+  () => ({
+    dirty: dirty.value,
+    saving: loading.value !== null,
+    error: Object.values(errors.value).find(Boolean) || (notice.value?.tone === 'error' ? notice.value.message : ''),
+    message: !dirty.value && notice.value?.tone === 'success' ? notice.value.message : ''
+  }),
+  (state) => emit('state', state)
+)
 
 const isBusy = computed(() => loading.value !== null)
 const selectedModel = computed(() => models.value.find((model) => model.modelId === modelId.value))
@@ -174,6 +197,11 @@ async function submitProvider(): Promise<void> {
     })
 
     apiKey.value = ''
+    savedFields.value = {
+      baseUrl: baseUrl.value,
+      authMode: authMode.value,
+      modelId: modelId.value
+    }
     notice.value = { tone: 'success', message: '连接验证通过，配置已保存到本机。' }
     emit('saved', summary)
   } catch (error) {
@@ -300,7 +328,7 @@ function hasSameOrigin(left: string, right?: string): boolean {
             :aria-invalid="Boolean(errors.baseUrl)"
             :aria-describedby="
               errors.baseUrl
-                ? 'provider-url-error'
+                ? `provider-url-error${usesHttp ? ' provider-http-warning' : ''}`
                 : usesHttp
                   ? 'provider-http-warning provider-url-media-hint'
                   : 'provider-url-media-hint'
@@ -310,7 +338,7 @@ function hasSameOrigin(left: string, right?: string): boolean {
           <small v-if="errors.baseUrl" id="provider-url-error" class="field-error">
             {{ errors.baseUrl }}
           </small>
-          <small v-else-if="usesHttp" id="provider-http-warning" class="http-warning" role="status">
+          <small v-if="usesHttp" id="provider-http-warning" class="http-warning" role="status">
             <WarningCircle :size="14" weight="fill" />
             <span>HTTP 连接未加密，API Key 和请求内容可能被截获。请仅连接你信任的服务。</span>
           </small>
@@ -327,6 +355,7 @@ function hasSameOrigin(left: string, right?: string): boolean {
               <input
                 v-model="authMode"
                 type="radio"
+                name="provider-auth"
                 value="bearer"
                 :disabled="isBusy"
                 @change="models = []"
@@ -337,6 +366,7 @@ function hasSameOrigin(left: string, right?: string): boolean {
               <input
                 v-model="authMode"
                 type="radio"
+                name="provider-auth"
                 value="none"
                 :disabled="isBusy"
                 @change="models = []"
@@ -515,6 +545,30 @@ function hasSameOrigin(left: string, right?: string): boolean {
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+}
+
+/* 设置内沿用统一阅读字号，按实际内容宽度折叠操作区。 */
+.embedded :is(input, select, .field > span, legend, .model-field strong, button) {
+  font-size: 13px;
+}
+
+.embedded :is(.field small, .model-field small, .form-notice, .form-footer p) {
+  font-size: 12px;
+}
+
+.embedded :is(.model-field header, .form-footer, .footer-links) {
+  flex-wrap: wrap;
+}
+
+.embedded :is(.field, .model-field, input, select) {
+  min-width: 0;
+}
+
+@container settings-content (max-width: 560px) {
+  .embedded .form-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .onboarding-panel {

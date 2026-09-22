@@ -14,6 +14,7 @@ import type { TaskExecutionSnapshot } from '../../src/shared/task-execution'
 import {
   CONTROLLED_ACP_E2E_DIRECTORIES,
   CONTROLLED_ACP_E2E_FIXTURE_TRACE_FILE,
+  CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX,
   CONTROLLED_ACP_E2E_MARKER_FILE,
   type ControlledAcpFixtureScenario
 } from '../../src/main/runtime/grok/controlled-acp-fixture'
@@ -39,6 +40,7 @@ export interface ControlledLayout {
   root: string
   workspace: string
   secondaryWorkspace: string
+  managedChatWorkspace: string
   traceDirectory: string
   barrierDirectory: string
   runtimeHomeDirectory: string
@@ -116,7 +118,7 @@ export async function launchControlledScenario(
         await provider.close().catch(() => undefined)
         // 进程仍存活时保留隔离 profile 供诊断，绝不边运行边删除其 userData。
         if (stopped && !isProcessRunning(child)) {
-          await rm(layout.root, { recursive: true, force: true }).catch(() => undefined)
+          await removeControlledLayout(layout.root).catch(() => undefined)
         }
       }
     }
@@ -126,7 +128,7 @@ export async function launchControlledScenario(
     await provider.close().catch(() => undefined)
     // 启动中途失败也不能删除仍被 Electron 使用的 profile，且清理错误不得覆盖原始启动异常。
     if (stopped && (!child || !isProcessRunning(child))) {
-      await rm(layout.root, { recursive: true, force: true }).catch(() => undefined)
+      await removeControlledLayout(layout.root).catch(() => undefined)
     }
     throw error
   }
@@ -339,9 +341,13 @@ export async function expectControlledMarker(
 
 /** 临时目录布局与 Main bootstrap 固定契约一致，额外注册第二 Project 供纯历史导航验证。 */
 async function createControlledLayout(): Promise<ControlledLayout> {
-  const temporaryDirectory = await realpath(tmpdir())
+  // macOS 的 Unix Socket 路径上限很短；系统 TMPDIR 位于 /var/folders 时会让浏览器 MCP 在 Task 创建前启动失败。
+  const temporaryDirectory = await realpath(process.platform === 'darwin' ? '/tmp' : tmpdir())
   const root = await mkdtemp(join(temporaryDirectory, 'agent-studio-controlled-acp-e2e-'))
+  const managedChatWorkspace = `${root}${CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX}`
   await chmod(root, 0o700)
+  await mkdir(managedChatWorkspace, { mode: 0o700 })
+  await chmod(managedChatWorkspace, 0o700)
   await Promise.all(
     Object.values(CONTROLLED_ACP_E2E_DIRECTORIES).map(async (name) => {
       const directory = join(root, name)
@@ -357,11 +363,23 @@ async function createControlledLayout(): Promise<ControlledLayout> {
     root,
     workspace,
     secondaryWorkspace: join(root, CONTROLLED_ACP_E2E_DIRECTORIES.secondaryWorkspace),
+    managedChatWorkspace,
     traceDirectory: join(root, CONTROLLED_ACP_E2E_DIRECTORIES.trace),
     barrierDirectory: join(root, CONTROLLED_ACP_E2E_DIRECTORIES.barriers),
     runtimeHomeDirectory: join(root, CONTROLLED_ACP_E2E_DIRECTORIES.runtimeHome),
     markerPath
   }
+}
+
+/** 只清理本次 mkdtemp 根与其固定派生托管目录，禁止递归扩大到共同临时父目录。 */
+async function removeControlledLayout(root: string): Promise<void> {
+  await Promise.all([
+    rm(root, { recursive: true, force: true }),
+    rm(`${root}${CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX}`, {
+      recursive: true,
+      force: true
+    })
+  ])
 }
 
 /** 受控 Electron 不继承宿主 HOME 或 Provider 环境，只保留桌面启动必要变量。 */

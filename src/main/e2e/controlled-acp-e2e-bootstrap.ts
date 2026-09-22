@@ -5,6 +5,7 @@ import type { ProviderConfigInput } from '../../shared/provider'
 import {
   CONTROLLED_ACP_E2E_DIRECTORIES,
   CONTROLLED_ACP_E2E_FIXTURE_FILE,
+  CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX,
   CONTROLLED_ACP_E2E_MARKER_FILE,
   CONTROLLED_ACP_E2E_MODEL_ID,
   CONTROLLED_ACP_E2E_SCENARIOS,
@@ -24,6 +25,7 @@ export interface ControlledAcpE2eBootstrap {
   readonly userDataPath: string
   readonly workspacePath: string
   readonly secondaryWorkspacePath: string
+  readonly managedChatWorkspacePath: string
   readonly markerPath: string
   readonly providerConfig: ProviderConfigInput
   readonly fixture: ControlledAcpFixtureLaunch
@@ -71,6 +73,10 @@ export function resolveControlledAcpE2eBootstrap(
     userDataPath,
     CONTROLLED_ACP_E2E_DIRECTORIES.secondaryWorkspace
   )
+  const managedChatWorkspacePath = assertManagedChatWorkspaceDirectory(
+    userDataPath,
+    options.temporaryDirectory ?? tmpdir()
+  )
   const traceDirectory = assertDirectChildDirectory(
     userDataPath,
     CONTROLLED_ACP_E2E_DIRECTORIES.trace
@@ -92,6 +98,7 @@ export function resolveControlledAcpE2eBootstrap(
     userDataPath,
     workspacePath,
     secondaryWorkspacePath,
+    managedChatWorkspacePath,
     markerPath,
     providerConfig: {
       baseUrl: `http://127.0.0.1:${providerPort}/v1`,
@@ -157,6 +164,28 @@ function assertDirectChildDirectory(parent: string, name: string): string {
   const expected = join(parent, name)
   const canonical = canonicalDirectory(expected, true)
   if (canonical !== expected || dirname(canonical) !== parent) {
+    throw new ControlledAcpE2eBootstrapError()
+  }
+  return canonical
+}
+
+/**
+ * 托管聊天目录必须与 userData 同处系统临时目录，且只能使用生产代码约定的固定后缀。
+ * 该路径不对应任何命令行参数，避免受控开关扩张为自由 cwd 注入入口。
+ */
+function assertManagedChatWorkspaceDirectory(
+  userDataPath: string,
+  temporaryDirectory: string
+): string {
+  const canonicalTemporaryDirectory = canonicalDirectory(temporaryDirectory)
+  const expected = `${userDataPath}${CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX}`
+  const canonical = canonicalDirectory(expected, true)
+  if (
+    canonical !== expected ||
+    dirname(canonical) !== canonicalTemporaryDirectory ||
+    basename(canonical) !==
+      `${basename(userDataPath)}${CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX}`
+  ) {
     throw new ControlledAcpE2eBootstrapError()
   }
   return canonical

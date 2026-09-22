@@ -222,7 +222,12 @@ async function runScenario(context) {
 /** 长任务只等待固定 barrier，供窗口 reload、Task/Project 浏览和后台终态测试使用。 */
 async function runLongRunningScenario(context) {
   await context.trace({ event: 'long-running-waiting' })
-  await waitForBarrier(context.barrierDirectory, 'long-running-release', context.signal)
+  try {
+    await waitForBarrier(context.barrierDirectory, 'long-running-release', context.signal)
+  } catch (error) {
+    // 取消 barrier 是正常协议终态；其他文件系统错误仍应使夹具失败。
+    if (!context.signal.aborted) throw error
+  }
   return context.signal.aborted ? 'cancelled' : 'end_turn'
 }
 

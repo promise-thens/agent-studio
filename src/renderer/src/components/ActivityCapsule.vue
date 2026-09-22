@@ -6,27 +6,42 @@
  * 彻底消除过去竖直糖葫芦轨道与一排排重复的“已完成”标签。
  */
 
-import { ref } from 'vue'
-import type {
-  CapsuleInnerBlock,
-  ConversationActivityCapsuleBlock
+import { computed, nextTick, ref, watch } from 'vue'
+import {
+  findCapsuleItemForNode,
+  resolveActivityCapsuleExpansion,
+  type CapsuleInnerBlock,
+  type ConversationActivityCapsuleBlock
 } from '../conversation-activity-capsule'
 
 const props = defineProps<{
   capsule: ConversationActivityCapsuleBlock
   /** 当前轮次是否处于活跃执行中 */
   active?: boolean
+  /** Inspector 反向定位时只接受真实 Timeline nodeId。 */
+  focusNodeId?: string | null
+  /** 同一节点允许重复触发定位。 */
+  focusRequestId?: number
 }>()
 
-// 完成态默认收起，进行中态默认展开以便用户直观感知当前执行进度
-const isOpen = ref(props.capsule.status === 'in_progress')
+const emit = defineEmits<{
+  openTool: [nodeId: string]
+}>()
+
+const root = ref<HTMLElement | null>(null)
+// null 表示跟随执行状态；用户点过后保留其明确选择。
+const userExpanded = ref<boolean | null>(null)
+const isOpen = computed(() =>
+  resolveActivityCapsuleExpansion(props.capsule.status, userExpanded.value)
+)
+const focusedItem = computed(() => findCapsuleItemForNode(props.capsule.items, props.focusNodeId))
 
 // 跟踪展开查看详情的单项节点 ID 集合（例如长命令的参数或输出）
 const expandedItemKeys = ref<Set<string>>(new Set())
 
 /** 切换胶囊主体的展开/收起状态 */
 function toggleOpen(): void {
-  isOpen.value = !isOpen.value
+  userExpanded.value = !isOpen.value
 }
 
 /** 切换具体某一步骤的详细信息（参数、标准输出、长正则等） */
@@ -38,15 +53,36 @@ function toggleItemDetail(nodeId: string): void {
   }
 }
 
-/** 提取合并读取的文件路径列表 */
-function getMergedFileList(item: CapsuleInnerBlock): readonly string[] {
+/** 提取合并读取的真实节点与文件路径，定位时不能丢掉 nodeId。 */
+function getMergedFiles(item: CapsuleInnerBlock): readonly { nodeId: string; label: string }[] {
   if (item.kind !== 'tool' || !item.mergedReadCount || item.mergedReadCount < 2) return []
-  return item.tools.map((t) => t.title.replace(/^(?:读取|读了|读文件[:：]?\s*)/, ''))
+  return item.tools.map((tool) => ({
+    nodeId: tool.nodeId,
+    label: tool.title.replace(/^(?:读取|读了|读文件[:：]?\s*)/, '')
+  }))
 }
+
+/** Inspector 可重复请求同一节点；先展开胶囊，再把真实所属项带回视野。 */
+watch(
+  () => [props.focusNodeId, props.focusRequestId, props.capsule.nodeId] as const,
+  async () => {
+    const item = focusedItem.value
+    if (!item) return
+    userExpanded.value = true
+    await nextTick()
+    const target = Array.from(
+      root.value?.querySelectorAll<HTMLElement>('[data-capsule-item-node-id]') ?? []
+    ).find((element) => element.dataset.capsuleItemNodeId === item.nodeId)
+    target?.focus({ preventScroll: true })
+    target?.scrollIntoView({ block: 'center', behavior: 'instant' })
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
   <div
+    ref="root"
     class="activity-capsule"
     :data-status="capsule.status"
     :data-expanded="isOpen ? 'true' : undefined"
@@ -92,7 +128,13 @@ function getMergedFileList(item: CapsuleInnerBlock): readonly string[] {
         </template>
         <template v-else>
           <span class="activity-capsule-title">
-            {{ capsule.status === 'cancelled' ? '已停止' : `已执行 ${capsule.totalCount} 项操作` }}
+            {{
+              capsule.status === 'failed'
+                ? '执行失败'
+                : capsule.status === 'cancelled'
+                  ? '已停止'
+                  : `已执行 ${capsule.totalCount} 项操作`
+            }}
             <span v-if="capsule.actionsSummary.length" class="activity-capsule-subtitle">
               （{{ capsule.actionsSummary.join('、') }}）
             </span>
@@ -115,7 +157,21 @@ function getMergedFileList(item: CapsuleInnerBlock): readonly string[] {
           :key="item.nodeId"
           class="activity-capsule-item"
           :data-kind="item.kind"
+          :data-capsule-item-node-id="item.nodeId"
+          :data-conversation-node-id="item.nodeId"
+          :data-focused="focusedItem === item ? 'true' : undefined"
+          tabindex="-1"
         >
+          <!-- 合并工具额外保留每个真实节点锚点，外层定位无需猜标题。 -->
+          <template v-if="item.kind === 'tool'">
+            <span
+              v-for="tool in item.tools"
+              :key="`anchor:${tool.nodeId}`"
+              class="activity-capsule-node-anchor"
+              :data-conversation-node-id="tool.nodeId"
+              aria-hidden="true"
+            />
+          </template>
           <!-- 极简浅灰微圆点（4px） -->
           <span class="activity-capsule-item-bullet" aria-hidden="true" />
 
@@ -128,6 +184,8 @@ function getMergedFileList(item: CapsuleInnerBlock): readonly string[] {
                 role="button"
                 tabindex="0"
                 @click="toggleItemDetail(item.nodeId)"
+                @keydown.enter.prevent="toggleItemDetail(item.nodeId)"
+                @keydown.space.prevent="toggleItemDetail(item.nodeId)"
               >
                 <span class="activity-capsule-item-label">{{ item.summary }}</span>
                 <span class="activity-capsule-item-view-hint">
@@ -150,10 +208,12 @@ function getMergedFileList(item: CapsuleInnerBlock): readonly string[] {
             <template v-else-if="item.kind === 'tool'">
               <div
                 class="activity-capsule-item-main"
-                :class="{ 'has-detail': Boolean(item.detail || getMergedFileList(item).length) }"
+                :class="{ 'has-detail': Boolean(item.detail || getMergedFiles(item).length) }"
                 role="button"
                 tabindex="0"
                 @click="toggleItemDetail(item.nodeId)"
+                @keydown.enter.prevent="toggleItemDetail(item.nodeId)"
+                @keydown.space.prevent="toggleItemDetail(item.nodeId)"
               >
                 <span class="activity-capsule-item-label">{{ item.label }}</span>
                 <span v-if="item.warning" class="activity-capsule-item-warning">{{
@@ -173,7 +233,7 @@ function getMergedFileList(item: CapsuleInnerBlock): readonly string[] {
 
                 <span
                   v-if="
-                    (item.detail || getMergedFileList(item).length) &&
+                    (item.detail || getMergedFiles(item).length) &&
                     !expandedItemKeys.has(item.nodeId)
                   "
                   class="activity-capsule-item-view-hint"
@@ -181,13 +241,30 @@ function getMergedFileList(item: CapsuleInnerBlock): readonly string[] {
                   详情
                 </span>
               </div>
+              <button
+                type="button"
+                class="activity-capsule-item-open"
+                title="在检查器中查看此工具"
+                :aria-label="`在检查器中查看：${item.label}`"
+                @click="emit('openTool', item.nodeId)"
+              >
+                检查器
+              </button>
 
               <!-- 合并读取文件列表 -->
               <ul
-                v-if="getMergedFileList(item).length && expandedItemKeys.has(item.nodeId)"
+                v-if="getMergedFiles(item).length && expandedItemKeys.has(item.nodeId)"
                 class="activity-capsule-files-list"
               >
-                <li v-for="file in getMergedFileList(item)" :key="file">{{ file }}</li>
+                <li v-for="file in getMergedFiles(item)" :key="file.nodeId">
+                  <button
+                    type="button"
+                    :title="`在检查器中查看：${file.label}`"
+                    @click="emit('openTool', file.nodeId)"
+                  >
+                    {{ file.label }}
+                  </button>
+                </li>
               </ul>
 
               <!-- 长命令、入参或详细输出展开块 -->
@@ -202,3 +279,47 @@ function getMergedFileList(item: CapsuleInnerBlock): readonly string[] {
     </div>
   </div>
 </template>
+
+<style scoped>
+.activity-capsule-item[data-focused='true'] {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 2px;
+}
+
+.activity-capsule-node-anchor {
+  display: none;
+}
+
+.activity-capsule-item-open,
+.activity-capsule-files-list button {
+  border: 0;
+  color: var(--text-3);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.activity-capsule-item-open {
+  display: block;
+  margin: 2px 0 0 auto;
+  padding: 2px 4px;
+  border-radius: 6px;
+  font-size: var(--text-xs);
+}
+
+.activity-capsule-item-open:hover,
+.activity-capsule-item-open:focus-visible,
+.activity-capsule-files-list button:hover,
+.activity-capsule-files-list button:focus-visible {
+  color: var(--text-1);
+  background: var(--surface-3);
+  outline: 1px solid var(--border-strong);
+}
+
+.activity-capsule-files-list button {
+  width: 100%;
+  padding: 2px 4px;
+  text-align: left;
+}
+</style>

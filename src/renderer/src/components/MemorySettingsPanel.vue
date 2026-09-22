@@ -28,6 +28,7 @@ import {
   type MemoryProjectGroup
 } from '../memory-settings'
 import AssistantMarkdown from './AssistantMarkdown.vue'
+import { reportSettingsPaneState, type SettingsPaneState } from '../settings-dialog-interaction'
 
 // 组件属性声明：传入当前选中的任务ID、Grok 动作是否可用以及项目路径提示
 const props = defineProps<{
@@ -39,6 +40,7 @@ const props = defineProps<{
 // 组件事件声明：向外通知表单脏状态以及触发对话命令
 const emit = defineEmits<{
   dirty: [value: boolean]
+  state: [value: SettingsPaneState]
   'start-turn': [command: string]
 }>()
 
@@ -58,6 +60,7 @@ const savedDraft = ref('')
 const saving = ref(false)
 const statusMessage = ref('')
 const toggling = ref(false)
+const opening = ref(false)
 // 记录展开状态的项目 key 列表
 const expandedProjectKeys = ref<string[]>([])
 /** 默认渲染 Markdown；点击编辑时才切换为源码输入框。 */
@@ -99,6 +102,16 @@ const editorSubtitle = computed(() => {
 
 // 监听脏状态变化并通知父容器
 watch(dirty, (value) => emit('dirty', value))
+reportSettingsPaneState(
+  () => ({
+    dirty: dirty.value,
+    saving: saving.value || toggling.value || opening.value,
+    error: errorMessage.value,
+    message: statusMessage.value
+  }),
+  (state) => emit('state', state)
+)
+watch(draft, () => { statusMessage.value = '' })
 // 监听项目路径切换时重新刷新列表
 watch(
   () => props.projectHint,
@@ -139,11 +152,15 @@ async function loadAll(): Promise<void> {
  * 切换记忆启用开关
  */
 async function toggleEnabled(next: boolean): Promise<void> {
+  if (toggling.value || saving.value) return
   toggling.value = true
+  errorMessage.value = ''
+  statusMessage.value = ''
   try {
     const state = unwrapDesktopIpcResult(await window.app.setMemoryEnabled(next))
     enabled.value = state.enabled
     shareStatus.value = state.shareStatus
+    statusMessage.value = '记忆开关已保存。'
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error)
   } finally {
@@ -155,11 +172,14 @@ async function toggleEnabled(next: boolean): Promise<void> {
  * 打开并读取指定记忆内容
  */
 async function openMemory(memoryId: string): Promise<void> {
+  if (saving.value || opening.value) return
   if (dirty.value && !window.confirm('有未保存的更改，确定离开？')) return
-  selectedId.value = memoryId
+  opening.value = true
   statusMessage.value = ''
+  errorMessage.value = ''
   try {
     const next = unwrapDesktopIpcResult(await window.app.getMemory(memoryId))
+    selectedId.value = memoryId
     document.value = next
     draft.value = next.markdown
     savedDraft.value = next.markdown
@@ -167,6 +187,8 @@ async function openMemory(memoryId: string): Promise<void> {
     if (next.projectKey) expandProject(next.projectKey)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    opening.value = false
   }
 }
 
@@ -174,15 +196,19 @@ async function openMemory(memoryId: string): Promise<void> {
  * 保存当前正在编辑的草稿内容到磁盘
  */
 async function saveDraft(): Promise<void> {
-  if (!document.value || truncated.value || !dirty.value) return
+  if (!document.value || truncated.value || !dirty.value || saving.value || opening.value) return
   saving.value = true
+  errorMessage.value = ''
+  statusMessage.value = ''
+  const submitted = draft.value
   try {
     const saved = unwrapDesktopIpcResult(
-      await window.app.saveMemory(document.value.memoryId, draft.value)
+      await window.app.saveMemory(document.value.memoryId, submitted)
     )
     document.value = saved
     savedDraft.value = saved.markdown
-    editingSource.value = false
+    if (draft.value === submitted) draft.value = saved.markdown
+    editingSource.value = dirty.value
     statusMessage.value = '已保存到共享记忆目录。'
     await refreshList()
   } catch (error) {
@@ -196,8 +222,11 @@ async function saveDraft(): Promise<void> {
  * 放弃未保存的更改，回滚到保存状态
  */
 function discardDraft(): void {
+  if (saving.value) return
   draft.value = savedDraft.value
   editingSource.value = false
+  errorMessage.value = ''
+  statusMessage.value = ''
 }
 
 /**
@@ -219,14 +248,24 @@ function showMemorySource(): void {
  * 删除当前选中的会话摘要记忆
  */
 async function deleteSelected(): Promise<void> {
-  if (document.value?.scope !== 'session') return
-  if (!window.confirm('删除这条会话摘要？')) return
-  unwrapDesktopIpcResult(await window.app.deleteMemory(document.value.memoryId))
-  document.value = null
-  draft.value = ''
-  savedDraft.value = ''
-  selectedId.value = ''
-  await refreshList()
+  if (document.value?.scope !== 'session' || saving.value || opening.value) return
+  if (!window.confirm(dirty.value ? '删除这条会话摘要并丢弃未保存的更改？' : '删除这条会话摘要？')) return
+  saving.value = true
+  errorMessage.value = ''
+  statusMessage.value = ''
+  try {
+    unwrapDesktopIpcResult(await window.app.deleteMemory(document.value.memoryId))
+    document.value = null
+    draft.value = ''
+    savedDraft.value = ''
+    selectedId.value = ''
+    await refreshList()
+    statusMessage.value = '会话摘要已删除。'
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    saving.value = false
+  }
 }
 
 /**
@@ -300,7 +339,7 @@ onMounted(() => {
             type="button"
             role="switch"
             :aria-checked="enabled"
-            :disabled="toggling || loadState !== 'ready'"
+            :disabled="toggling || saving || loadState !== 'ready'"
             title="启用跨会话记忆"
             aria-label="启用跨会话记忆"
             @click="toggleEnabled(!enabled)"
@@ -313,7 +352,7 @@ onMounted(() => {
     </div>
 
     <!-- 加载中与错误状态提示 -->
-    <div v-if="loadState === 'loading'" class="state">正在加载记忆…</div>
+    <div v-if="loadState === 'loading'" class="state" role="status">正在加载记忆…</div>
     <div v-else-if="loadState === 'error'" class="state" role="alert">
       <p>{{ errorMessage || '记忆加载失败。' }}</p>
       <button
@@ -515,6 +554,7 @@ onMounted(() => {
                 class="text-danger delete-btn"
                 type="button"
                 title="删除会话摘要"
+                :disabled="saving || opening"
                 @click="deleteSelected"
               >
                 <Trash :size="13" />
@@ -530,8 +570,10 @@ onMounted(() => {
               v-else
               v-model="draft"
               spellcheck="false"
-              :disabled="truncated"
+              :disabled="truncated || saving || opening"
               aria-label="记忆 Markdown 源码"
+              :aria-invalid="Boolean(errorMessage)"
+              :aria-describedby="errorMessage ? 'memory-save-error' : undefined"
             />
           </div>
         </template>
@@ -589,8 +631,8 @@ onMounted(() => {
             </div>
           </div>
           <p v-else class="hint">打开一个对话后，可以让 Grok 记住、保存任务或整理。</p>
-          <p v-if="statusMessage" class="success">{{ statusMessage }}</p>
-          <p v-if="errorMessage && loadState === 'ready'" class="warning" role="alert">
+          <p v-if="statusMessage" class="success" role="status">{{ statusMessage }}</p>
+          <p v-if="errorMessage && loadState === 'ready'" id="memory-save-error" class="warning" role="alert">
             {{ errorMessage }}
           </p>
         </div>
@@ -604,9 +646,8 @@ onMounted(() => {
 .memory-pane {
   display: grid;
   min-height: 0;
-  height: 100%;
   gap: 14px;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
 }
 
 /* 顶部状态与总控区域 */
@@ -620,6 +661,7 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 .header-main {
@@ -697,7 +739,7 @@ onMounted(() => {
   display: grid;
   min-height: 0;
   overflow: hidden;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: minmax(180px, 30%) minmax(0, 1fr);
   border: 1px solid var(--border);
   border-radius: var(--radius-panel);
   background: var(--surface-1);
@@ -715,6 +757,7 @@ onMounted(() => {
   padding: 14px 10px;
   border-right: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface-1) 94%, var(--surface-0));
+  max-height: 34rem;
 }
 
 .memory-section {
@@ -891,11 +934,12 @@ onMounted(() => {
   gap: 10px;
   overflow: hidden;
   padding: 14px;
+  min-width: 0;
 }
 
 .editor-frame {
   min-height: 0;
-  flex: 1 1 0;
+  flex: 1 0 auto;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
@@ -990,8 +1034,7 @@ onMounted(() => {
 }
 
 .memory-preview {
-  min-height: 0;
-  overflow: auto;
+  min-height: 18rem;
   padding: 14px 18px 18px;
 }
 
@@ -1002,7 +1045,7 @@ onMounted(() => {
 
 textarea {
   width: 100%;
-  min-height: 0;
+  min-height: 18rem;
   height: 100%;
   padding: 14px 16px;
   border: 0;
@@ -1204,6 +1247,19 @@ textarea {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+/* 按设置内容实际宽度折叠，窄窗口不再留下难以输入的正文细栏。 */
+@container settings-content (max-width: 680px) {
+  .memory-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .memory-list {
+    max-height: 12rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

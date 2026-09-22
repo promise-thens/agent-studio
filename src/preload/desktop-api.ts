@@ -99,6 +99,8 @@ import {
   type TaskDesktopApi
 } from '../shared/task-ipc'
 import { ATTACHMENT_LIMITS } from '../shared/task-attachment'
+import type { PluginDiscoveryDesktopApi } from '../shared/runtime-plugin-discovery'
+import { createPluginDiscoveryApi } from './plugin-discovery-api'
 
 export interface NarrowIpcRenderer {
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
@@ -367,6 +369,13 @@ function parseTaskRuntimeState(payload: unknown): AgentTaskRuntimeState | null {
     takeoverEnabled: payload.takeoverEnabled === true,
     permissionPromptStyle: payload.permissionPromptStyle === 'ask' ? 'ask' : 'assist',
     takeoverApplied: payload.takeoverApplied === true,
+    ...(isOneOf(payload.desiredPermissionMode, ['ask', 'assist', 'takeover'] as const)
+      ? { desiredPermissionMode: payload.desiredPermissionMode } : {}),
+    ...(isOneOf(payload.permissionApplyState, ['applied', 'pending', 'failed'] as const)
+      ? { permissionApplyState: payload.permissionApplyState } : {}),
+    ...(readBoundedText(payload.permissionApplyMessage, MAX_EVENT_FIELD_BYTES)
+      ? { permissionApplyMessage: String(payload.permissionApplyMessage) } : {}),
+    ...(payload.planPermissionOverride === true ? { planPermissionOverride: true } : {}),
     ...(activeTurnId ? { activeTurnId } : {}),
     ...(lastTurnId ? { lastTurnId } : {}),
     ...(takeoverUpdatedAt ? { takeoverUpdatedAt } : {}),
@@ -821,6 +830,9 @@ function parseConversationEntryState(value: unknown): ConversationEntryState | n
 /** 创建不暴露 channel 或 Electron event 的中性 Agent API。 */
 export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesktopApi {
   return {
+    getPermissionPreferences: () => ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getPermissionPreferences) as ReturnType<AgentDesktopApi['getPermissionPreferences']>,
+    setPlanPermissionOverride: (taskId, enabled) => ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.setPlanPermissionOverride, { taskId, enabled }) as ReturnType<AgentDesktopApi['setPlanPermissionOverride']>,
+    prepareChatWorkspace: () => ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.prepareChatWorkspace) as ReturnType<AgentDesktopApi['prepareChatWorkspace']>,
     getStatus: () =>
       ipcRenderer.invoke(AGENT_INVOKE_CHANNELS.getStatus) as Promise<
         DesktopIpcResult<AgentRuntimeStatus>
@@ -972,9 +984,12 @@ export function createAgentDesktopApi(ipcRenderer: NarrowIpcRenderer): AgentDesk
   }
 }
 
-/** 创建只包含 Project 注册、历史清理、外观偏好和插件查询/安装的 App API。 */
-export function createAppDesktopApi(ipcRenderer: NarrowIpcRenderer): AppDesktopApi {
+/** 创建 App 窄 API，插件发现复用独立过滤桥接，不重复暴露通道。 */
+export function createAppDesktopApi(
+  ipcRenderer: NarrowIpcRenderer
+): AppDesktopApi & PluginDiscoveryDesktopApi {
   return {
+    ...createPluginDiscoveryApi(ipcRenderer),
     chooseProject: () =>
       ipcRenderer.invoke(APP_INVOKE_CHANNELS.chooseProject) as ReturnType<
         AppDesktopApi['chooseProject']

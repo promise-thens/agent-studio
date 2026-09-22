@@ -1,8 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
@@ -48,6 +48,7 @@ import {
 import {
   CONTROLLED_ACP_E2E_DIRECTORIES,
   CONTROLLED_ACP_E2E_FIXTURE_FILE,
+  CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX,
   type ControlledAcpFixtureLaunch
 } from './controlled-acp-fixture'
 import {
@@ -3724,18 +3725,31 @@ describe('Gemini 工具 schema 兼容代理', () => {
 })
 
 describe('Grok Runtime 受控 E2E fixture spawn', () => {
-  it('fixture spawn 使用独立 argv 与 ELECTRON_RUN_AS_NODE，不含生产 --no-auto-update', async () => {
+  it.each([
+    ['固定主工作区', false],
+    ['固定派生托管聊天目录', true]
+  ] as const)('%s 使用独立 argv 与 ELECTRON_RUN_AS_NODE', async (_name, useManagedWorkspace) => {
     const userDataPath = await realpath(
       await mkdtemp(join(tmpdir(), 'grok-controlled-fixture-spawn-'))
     )
-    const workspace = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.workspace)
+    const primaryWorkspace = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.workspace)
+    const managedWorkspace = `${userDataPath}${CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX}`
+    const workspace = useManagedWorkspace ? managedWorkspace : primaryWorkspace
     const traceDirectory = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.trace)
     const barrierDirectory = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.barriers)
     const runtimeHomeDirectory = join(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.runtimeHome)
+    await chmod(userDataPath, 0o700)
     await Promise.all(
-      [workspace, traceDirectory, barrierDirectory, runtimeHomeDirectory].map((dir) =>
-        mkdir(dir, { recursive: true })
-      )
+      [
+        primaryWorkspace,
+        managedWorkspace,
+        traceDirectory,
+        barrierDirectory,
+        runtimeHomeDirectory
+      ].map(async (dir) => {
+        await mkdir(dir, { recursive: true, mode: 0o700 })
+        await chmod(dir, 0o700)
+      })
     )
 
     const repositoryRootPath = await realpath(process.cwd())
@@ -3811,8 +3825,38 @@ describe('Grok Runtime 受控 E2E fixture spawn', () => {
       })
       expect(captured!.options.env).not.toHaveProperty(AGENT_STUDIO_MODEL_API_KEY_ENV)
       expect(captured!.options.env).not.toHaveProperty('PATH')
+
+      if (useManagedWorkspace) {
+        const rejectedSpawn = vi.fn(() => createFakeSpawnChild())
+        const rejectedAdapter = new GrokAcpAdapter(
+          {
+            onStatus: () => undefined,
+            onEvent: () => undefined,
+            onPermission: () => undefined,
+            onPermissionCancelled: () => undefined,
+            onAvailableCommands: () => undefined
+          },
+          {
+            userDataPath,
+            getProviderConfig: () => providerConfig(),
+            getClientVersion: () => '0.1.0-test',
+            redactText: redactFakeText,
+            controlledFixture: launch,
+            spawnControlledProcess: rejectedSpawn
+          }
+        )
+        const rejectedInternal = rejectedAdapter as unknown as GrokAcpAdapterTestAccess
+        vi.spyOn(rejectedInternal, 'initializeConnection').mockResolvedValue(true)
+        await expect(
+          rejectedAdapter.connect(join(dirname(userDataPath), 'uncontrolled-chat-workspace'))
+        ).rejects.toThrow('无法启动受控 ACP Runtime Electron E2E。')
+        expect(rejectedSpawn).not.toHaveBeenCalled()
+      }
     } finally {
-      await rm(userDataPath, { recursive: true, force: true })
+      await Promise.all([
+        rm(userDataPath, { recursive: true, force: true }),
+        rm(managedWorkspace, { recursive: true, force: true })
+      ])
     }
   })
 })

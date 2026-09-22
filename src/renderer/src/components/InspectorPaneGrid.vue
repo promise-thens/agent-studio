@@ -3,7 +3,7 @@ import type { PermissionAuditRecord } from '../../../shared/task-history'
 import type { TaskTimelineViewModel } from '../task-timeline-reducer'
 import type { TaskArtifactsController } from '../composables/useTaskArtifacts'
 import type { TaskChangesController } from '../composables/useTaskChanges'
-import type { InspectorTab } from '../task-inspector'
+import type { InspectorConversationTarget, InspectorTab } from '../task-inspector'
 import InspectorPane from './InspectorPane.vue'
 import InspectorToolbar from './InspectorToolbar.vue'
 
@@ -14,6 +14,8 @@ withDefaults(
     split: boolean
     taskId?: string
     focusTurnId?: string | null
+    focusNodeId?: string | null
+    focusRequestId?: number
     timeline: TaskTimelineViewModel | null
     timelineLoading?: boolean
     permissionAudits?: readonly PermissionAuditRecord[]
@@ -28,6 +30,8 @@ withDefaults(
   {
     taskId: '',
     focusTurnId: null,
+    focusNodeId: null,
+    focusRequestId: 0,
     timelineLoading: false,
     permissionAudits: () => [],
     permissionAuditCursor: null,
@@ -44,6 +48,7 @@ const emit = defineEmits<{
   'update:primaryTab': [tab: InspectorTab]
   'update:secondaryTab': [tab: InspectorTab]
   loadMorePermissionAudits: []
+  focusTarget: [target: InspectorConversationTarget]
 }>()
 
 function loadMorePermissionAudits(): void {
@@ -63,6 +68,8 @@ function loadMorePermissionAudits(): void {
         :active-tab="primaryTab"
         :task-id="taskId"
         :focus-turn-id="focusTurnId"
+        :focus-node-id="focusNodeId"
+        :focus-request-id="focusRequestId"
         :timeline="timeline"
         :timeline-loading="timelineLoading"
         :permission-audits="permissionAudits"
@@ -74,6 +81,7 @@ function loadMorePermissionAudits(): void {
         :advertised-commands="advertisedCommands"
         :rewind-busy="rewindBusy"
         @load-more-permission-audits="loadMorePermissionAudits"
+        @focus-target="emit('focusTarget', $event)"
       />
     </div>
 
@@ -94,6 +102,8 @@ function loadMorePermissionAudits(): void {
         :active-tab="secondaryTab"
         :task-id="taskId"
         :focus-turn-id="focusTurnId"
+        :focus-node-id="focusNodeId"
+        :focus-request-id="focusRequestId"
         :timeline="timeline"
         :timeline-loading="timelineLoading"
         :permission-audits="permissionAudits"
@@ -105,6 +115,7 @@ function loadMorePermissionAudits(): void {
         :advertised-commands="advertisedCommands"
         :rewind-busy="rewindBusy"
         @load-more-permission-audits="loadMorePermissionAudits"
+        @focus-target="emit('focusTarget', $event)"
       />
     </div>
   </div>

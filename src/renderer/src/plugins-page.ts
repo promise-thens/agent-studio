@@ -2,11 +2,11 @@ import type { AppInstallPluginRequest, AppUninstallPluginRequest } from '../../s
 import type { MarketplacePluginSummary } from '../../shared/runtime-marketplace-plugin'
 import type { RuntimePluginDetail, RuntimePluginSummary } from '../../shared/runtime-plugin'
 
-export const PLUGIN_EMPTY_COPY = '还没有已安装的插件。插件由 Grok Build 加载，本页只展示已安装项。'
+export const PLUGIN_EMPTY_COPY = '当前应用尚无已安装插件。用户目录发现项单独展示，不会自动接入。'
 
 export const PLUGIN_ENABLE_TOGGLE_HINT = '启用或停用插件，下一 session 生效'
 
-export const PLUGIN_PAGE_INTRO_COPY = '只展示 App grok-home 已加载项；安装由 Grok 执行。'
+export const PLUGIN_PAGE_INTRO_COPY = '区分应用安装与用户目录发现；库存可见不代表当前会话已加载。'
 
 export const PLUGIN_GO_TO_MARKETPLACE_COPY = '去市场看看'
 

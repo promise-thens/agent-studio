@@ -118,6 +118,67 @@ async function createStore(
 }
 
 describe('TaskStore', () => {
+  it('连续控制回合和重启不抢占首条真实消息标题，失败和 slash 消息仍可命名', async () => {
+    const { store, registry } = await createStore()
+    for (const turnId of ['control-1', 'control-2']) {
+      await store.admitExecutionTurn({
+        taskId: 'task-1', turnId, executionId: `execution-${turnId}`,
+        environmentId: store.getTaskRecord('task-1').environment.environmentId,
+        promptDisplayText: GROK_TAKEOVER_CONTROL_PROMPT,
+        turnKind: TAKEOVER_CONTROL_TURN_KIND,
+        model: { modelId: 'mock' }
+      })
+      await store.commitExecutionTerminal(
+        { taskId: 'task-1', turnId, executionId: `execution-${turnId}` },
+        { state: 'completed', endedAt: new Date().toISOString() }
+      )
+      expect(store.getTaskRecord('task-1').title).toBe('新任务')
+    }
+    const restarted = new TaskStore({ projectRegistry: registry })
+    await restarted.initialize()
+    await restarted.createTurn({
+      taskId: 'task-1', turnId: 'user-1', promptDisplayText: '/help 帮我解释',
+      model: { modelId: 'mock' }
+    })
+    await restarted.finishTurn('task-1', 'user-1', 'failed')
+    expect(restarted.getTaskRecord('task-1')).toMatchObject({
+      title: '/help 帮我解释', titleSource: 'user-message', turnCount: 3
+    })
+    const again = new TaskStore({ projectRegistry: registry })
+    await again.initialize()
+    expect(again.getTaskRecord('task-1').title).toBe('/help 帮我解释')
+  })
+
+  it('首轮前手动命名不会被附件或真实消息覆盖', async () => {
+    const { store, registry } = await createStore()
+    await store.renameTask('task-1', '我的标题')
+    const restarted = new TaskStore({ projectRegistry: registry })
+    await restarted.initialize()
+    await restarted.createTurn({
+      taskId: 'task-1', turnId: 'attachment-1', promptDisplayText: '附件：image.png',
+      attachmentIds: ['attachment-id'], model: { modelId: 'mock' }
+    })
+    expect(restarted.getTaskRecord('task-1')).toMatchObject({
+      title: '我的标题', titleSource: 'manual'
+    })
+  })
+
+  it('未知来源的旧污染标题不自动覆盖', async () => {
+    const { registry, project } = await createStore()
+    const path = join(registry.getProjectDirectory(project.projectId), 'tasks/task-1/task.json')
+    const record = JSON.parse(await readFile(path, 'utf8'))
+    delete record.titleSource
+    record.title = GROK_TAKEOVER_CONTROL_PROMPT
+    await writeFile(path, JSON.stringify(record))
+    const restarted = new TaskStore({ projectRegistry: registry })
+    await restarted.initialize()
+    await restarted.createTurn({
+      taskId: 'task-1', turnId: 'user-1', promptDisplayText: '用户消息',
+      model: { modelId: 'mock' }
+    })
+    expect(restarted.getTaskRecord('task-1').title).toBe(GROK_TAKEOVER_CONTROL_PROMPT)
+  })
+
   it('新建 Task 默认未接管，且不写 takeoverUpdatedAt', async () => {
     const { store } = await createStore()
     const record = store.getTaskRecord('task-1')

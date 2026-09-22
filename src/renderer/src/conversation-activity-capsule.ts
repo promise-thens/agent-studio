@@ -54,6 +54,30 @@ export interface GroupConversationBlocksOptions {
   clockTick?: number
 }
 
+/** 用户尚未明确选择时跟随执行状态；一旦手动展开或收起，就保留其阅读选择。 */
+export function resolveActivityCapsuleExpansion(
+  status: CapsuleStatus,
+  userExpanded: boolean | null
+): boolean {
+  return userExpanded ?? status === 'in_progress'
+}
+
+/**
+ * 只沿 Timeline 的真实 nodeId 定位胶囊项。
+ * 合并读取仍保留每个原始工具节点，禁止使用相似标题猜测目标。
+ */
+export function findCapsuleItemForNode(
+  items: readonly CapsuleInnerBlock[],
+  nodeId: string | null | undefined
+): CapsuleInnerBlock | undefined {
+  if (!nodeId) return undefined
+  return items.find(
+    (item) =>
+      item.nodeId === nodeId ||
+      (item.kind === 'tool' && item.tools.some((tool) => tool.nodeId === nodeId))
+  )
+}
+
 const STOPPED_TURN_STATES = new Set<TaskExecutionState | 'pending'>([
   'cancelling',
   'cancelled',

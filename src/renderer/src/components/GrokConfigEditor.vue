@@ -18,6 +18,7 @@ import { matchGrokConfigHint, type GrokConfigHint } from '../../../shared/grok-c
 import { useGrokSandboxSettings } from '../composables/useGrokSandboxSettings'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
 import { parseTomlCursor } from '../grok-config-cursor'
+import { reportSettingsPaneState, type SettingsPaneState } from '../settings-dialog-interaction'
 import {
   GROK_SANDBOX_DIRTY_TITLE,
   GROK_SANDBOX_INTRO,
@@ -39,6 +40,7 @@ const props = withDefaults(
 // 向外通知配置草稿是否变脏（未保存修改）
 const emit = defineEmits<{
   dirty: [value: boolean]
+  state: [value: SettingsPaneState]
 }>()
 
 // 页面加载状态及错误信息
@@ -98,6 +100,16 @@ const unknownHint = computed(() => {
 
 // 监听脏状态并向父容器同步
 watch(dirty, (value) => emit('dirty', value))
+reportSettingsPaneState(
+  () => ({
+    dirty: dirty.value,
+    saving: saving.value || sandbox.saving.value,
+    error: parseError.value || errorMessage.value || sandbox.errorMessage.value,
+    message: saveMessage.value || sandbox.statusMessage.value
+  }),
+  (state) => emit('state', state)
+)
+watch(text, () => { saveMessage.value = '' }, { flush: 'sync' })
 
 /**
  * 加载并初始化 Grok 配置文件与沙箱档位
@@ -127,9 +139,11 @@ async function saveConfig(): Promise<void> {
   saving.value = true
   parseError.value = ''
   saveMessage.value = ''
+  // 只把实际提交的文本记为基线，异步完成时不能把后续编辑误记为已保存。
+  const submitted = text.value
   try {
-    unwrapDesktopIpcResult(await window.app.saveGrokConfig(text.value))
-    savedText.value = text.value
+    unwrapDesktopIpcResult(await window.app.saveGrokConfig(submitted))
+    savedText.value = submitted
     saveMessage.value = '已保存。空闲时会重载 Grok，使 context_window 等原生配置立即生效。'
     await sandbox.reloadFromSaved()
   } catch (error) {
@@ -177,6 +191,7 @@ function onSandboxChange(event: Event): void {
  * 放弃所有未保存的文本编辑修改，回滚到基线状态
  */
 function discardChanges(): void {
+  if (saving.value || sandbox.saving.value) return
   text.value = savedText.value
   parseError.value = ''
   saveMessage.value = ''
@@ -224,7 +239,7 @@ onMounted(() => {
     </header>
 
     <!-- 加载中状态展示 -->
-    <div v-if="loadState === 'loading'" class="state">正在读取配置…</div>
+    <div v-if="loadState === 'loading'" class="state" role="status">正在读取配置…</div>
     <!-- 加载失败错误重试提示 -->
     <div v-else-if="loadState === 'error'" class="state" role="alert">
       <p>{{ errorMessage || '读取配置失败。' }}</p>
@@ -348,7 +363,10 @@ onMounted(() => {
               ref="textarea"
               v-model="text"
               spellcheck="false"
+              :disabled="saving || sandbox.saving.value"
               aria-label="Grok config.toml 编辑器"
+              :aria-invalid="Boolean(parseError)"
+              :aria-describedby="parseError ? 'grok-config-save-error' : undefined"
               @click="updateCursor"
               @keyup="updateCursor"
               @select="updateCursor"
@@ -357,19 +375,19 @@ onMounted(() => {
 
           <!-- 保存与解析反馈栏 -->
           <div v-if="parseError || saveMessage" class="config-footer">
-            <p v-if="parseError" class="error" role="alert">{{ parseError }}</p>
+            <p v-if="parseError" id="grok-config-save-error" class="error" role="alert">{{ parseError }}</p>
             <p v-else class="success" role="status">{{ saveMessage }}</p>
           </div>
         </div>
 
         <!-- 右侧当前字段智能文档检查器 -->
-        <aside class="hint-pane" aria-live="polite">
-          <div class="hint-header">
+        <details class="hint-pane">
+          <summary class="hint-header">
             <Info :size="13" class="hint-icon" />
-            <p class="hint-kicker">当前字段</p>
-          </div>
+            <span class="hint-kicker">当前字段说明</span>
+          </summary>
 
-          <div class="hint-body">
+          <div class="hint-body" aria-live="polite">
             <!-- 识别出已知配置项的详细说明 -->
             <template v-if="cursorHint">
               <div class="hint-item">
@@ -403,7 +421,7 @@ onMounted(() => {
               <p>把光标放到某个键或表上，这里会显示中文说明。</p>
             </div>
           </div>
-        </aside>
+        </details>
       </div>
     </div>
   </section>
@@ -415,9 +433,7 @@ onMounted(() => {
   display: grid;
   gap: 12px;
   min-height: 0;
-  height: 100%;
-  overflow: auto;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
 }
 
 /* 顶部 Header：消除免责声明感 */
@@ -493,7 +509,7 @@ onMounted(() => {
 .config-stack {
   display: grid;
   min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
   gap: 12px;
 }
 
@@ -645,7 +661,7 @@ onMounted(() => {
   display: grid;
   min-height: 12rem;
   overflow: hidden;
-  grid-template-columns: minmax(0, 1fr) clamp(250px, 28%, 320px);
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 28%);
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface-1);
@@ -665,7 +681,7 @@ onMounted(() => {
   display: grid;
   min-width: 0;
   min-height: 0;
-  flex: 1 1 0;
+  flex: 1 0 auto;
   overflow: hidden;
   grid-template-rows: auto minmax(0, 1fr);
   background: var(--surface-2);
@@ -677,6 +693,7 @@ onMounted(() => {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+  flex-wrap: wrap;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface-2) 96%, var(--surface-1));
@@ -719,7 +736,7 @@ onMounted(() => {
 textarea {
   width: 100%;
   min-width: 0;
-  min-height: 0;
+  min-height: 20rem;
   height: 100%;
   padding: 14px;
   border: 0;
@@ -750,12 +767,13 @@ textarea {
 .hint-pane {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
   padding: 14px 16px;
   background: color-mix(in srgb, var(--surface-1) 94%, var(--surface-0));
+}
+
+/* 宽栏持续展示说明，窄栏保留原生 details 键盘展开能力。 */
+.hint-pane:not([open]) > .hint-body {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 .hint-header {
@@ -764,6 +782,7 @@ textarea {
   gap: 6px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border);
+  cursor: pointer;
 }
 
 .hint-icon {
@@ -783,6 +802,7 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding-top: 10px;
 }
 
 .hint-item {
@@ -889,6 +909,24 @@ textarea {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+@container settings-content (max-width: 680px) {
+  .config-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .editor-column {
+    border-right: 0;
+  }
+
+  .hint-pane {
+    border-top: 1px solid var(--border);
+  }
+
+  .hint-pane:not([open]) > .hint-body {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -19,7 +19,7 @@
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
-    "test": "vitest run --exclude 'tests/e2e/**'",
+    "test": "vitest run --exclude 'tests/e2e/**' --exclude 'autoTest/**/*.spec.ts'",
     "test:lifecycle:e2e": "electron-vite build && playwright test --config tests/e2e/playwright.lifecycle.config.ts",
     "test:permission:e2e": "electron-vite build && playwright test --config tests/e2e/playwright.permission.config.ts",
     "test:gacp01:observe": "electron-vite build && playwright test --config tests/e2e/playwright.gacp01.config.ts",

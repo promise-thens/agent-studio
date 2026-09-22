@@ -21,6 +21,9 @@ import type {
   AgentRuntimeTurnResult
 } from './agent-runtime-adapter'
 import { AgentRuntimeAdapterError } from './agent-runtime-adapter'
+import { PermissionPreferences } from './permission-preferences'
+import { TaskExecutor } from './task-executor'
+import type { TaskExecutionSnapshot } from '../../shared/task-execution'
 import { AgentService, AgentServiceError, type AgentServiceOptions } from './agent-service'
 import { OperationGate } from './operation-gate'
 import { TaskExecutionController } from './task-execution-controller'
@@ -31,6 +34,140 @@ import { PermissionBroker } from '../security/permission-broker'
 import { createLocalEnvironmentId } from '../security/permission-policy'
 
 const WORKSPACE = '/tmp/agent-studio-project'
+
+describe('应用级权限准入', () => {
+  it('当前轮不变；终态后抢发等待槽释放与降权控制成功，Plan 不改全局偏好', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'global-permission-'))
+    try {
+      const preferences = new PermissionPreferences(root)
+      await preferences.set('takeover', true)
+      const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+      let active = false
+      let state = 'running'
+      const released = deferred<void>()
+      const control = deferred<'completed'>()
+      const runControl = vi.fn(() => control.promise)
+      const executor = {
+        hasActiveExecution: () => active,
+        getSnapshot: () => ({ execution: { state } }) as TaskExecutionSnapshot,
+        waitForTerminal: () => released.promise
+      } as unknown as TaskExecutor
+      const service = new AgentService(adapter, new TaskExecutionController(), {
+        permissionPreferences: preferences, taskExecutor: executor, runPermissionControlTurn: runControl
+      })
+      const task = await service.createTask(WORKSPACE)
+      service.handleAvailableCommands({ taskId: task.taskId, revision: 1, commands: [{ name: 'always-approve', description: '' }] })
+      active = true
+      const saved = await service.setPermissionMode({ taskId: task.taskId, mode: 'ask' })
+      expect(saved.task).toMatchObject({ desiredPermissionMode: 'ask', takeoverEnabled: true, permissionApplyState: 'pending' })
+      expect(adapter.cancelTurn).not.toHaveBeenCalled()
+      expect(runControl).not.toHaveBeenCalled()
+      state = 'completed'
+      const start = vi.fn(async () => 'accepted')
+      const admission = service.withPermissionAdmission(task.taskId, start)
+      await Promise.resolve()
+      expect(start).not.toHaveBeenCalled()
+      active = false
+      released.resolve()
+      await vi.waitFor(() => expect(runControl).toHaveBeenCalledTimes(1))
+      expect(start).not.toHaveBeenCalled()
+      expect(service.getTaskRuntimeState(task.taskId).takeoverEnabled).toBe(true)
+      control.resolve('completed')
+      await expect(admission).resolves.toBe('accepted')
+      expect(service.getTaskRuntimeState(task.taskId)).toMatchObject({ takeoverEnabled: false, permissionApplyState: 'applied' })
+      await service.setPermissionMode({ taskId: task.taskId, mode: 'takeover' })
+      await service.setPlanPermissionOverride(task.taskId, true)
+      expect(await service.getPermissionPreferences()).toMatchObject({ mode: 'takeover' })
+      expect(service.getTaskRuntimeState(task.taskId)).toMatchObject({ planPermissionOverride: true, takeoverEnabled: false })
+      await service.setPlanPermissionOverride(task.taskId, false)
+      expect(service.getTaskRuntimeState(task.taskId).takeoverEnabled).toBe(true)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['approve-plan', 'abandon-plan'])('%s 退出只登记，槽释放后恢复且不取消当前轮', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'plan-exit-'))
+    try {
+      const preferences = new PermissionPreferences(root)
+      await preferences.set('takeover', true)
+      const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+      let active = false
+      const runControl = vi.fn(async () => 'completed' as const)
+      const executor = { hasActiveExecution: () => active } as unknown as TaskExecutor
+      const service = new AgentService(adapter, new TaskExecutionController(), {
+        permissionPreferences: preferences, taskExecutor: executor, runPermissionControlTurn: runControl
+      })
+      const task = await service.createTask(WORKSPACE)
+      service.handleAvailableCommands({ taskId: task.taskId, revision: 1, commands: [{ name: 'always-approve', description: '' }] })
+      await service.setPlanPermissionOverride(task.taskId, true)
+      active = true
+      const pending = await service.setPlanPermissionOverride(task.taskId, false)
+      expect(pending).toMatchObject({ planPermissionOverride: false, takeoverEnabled: false, permissionApplyState: 'pending' })
+      await service.applyPendingPermissionMode(task.taskId)
+      expect(runControl).toHaveBeenCalledTimes(1)
+      expect(adapter.cancelTurn).not.toHaveBeenCalled()
+      active = false
+      await service.applyPendingPermissionMode(task.taskId)
+      expect(runControl).toHaveBeenCalledTimes(2)
+      expect(service.getTaskRuntimeState(task.taskId)).toMatchObject({ planPermissionOverride: false, takeoverEnabled: true, permissionApplyState: 'applied' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('完全访问重选必须显式撤销 Plan；撤销失败保留覆盖并阻断发送', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'plan-exit-failed-'))
+    try {
+      const preferences = new PermissionPreferences(root)
+      await preferences.set('takeover', true)
+      const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+      const runControl = vi.fn(async (): Promise<'completed' | 'failed'> => 'completed')
+      const service = new AgentService(adapter, new TaskExecutionController(), {
+        permissionPreferences: preferences, runPermissionControlTurn: runControl
+      })
+      const task = await service.createTask(WORKSPACE)
+      service.handleAvailableCommands({ taskId: task.taskId, revision: 1, commands: [{ name: 'always-approve', description: '' }] })
+      await service.setPlanPermissionOverride(task.taskId, true)
+      await service.setPermissionMode({ taskId: task.taskId, mode: 'takeover', confirmed: true })
+      expect(service.getTaskRuntimeState(task.taskId).planPermissionOverride).toBe(true)
+      await service.setPlanPermissionOverride(task.taskId, false)
+      expect(service.getTaskRuntimeState(task.taskId)).toMatchObject({ planPermissionOverride: false, takeoverEnabled: true })
+      await service.setPlanPermissionOverride(task.taskId, true)
+      runControl.mockResolvedValue('failed')
+      await expect(service.setPlanPermissionOverride(task.taskId, false)).rejects.toThrow('未成功完成')
+      expect(service.getTaskRuntimeState(task.taskId)).toMatchObject({ planPermissionOverride: true, takeoverEnabled: false, permissionApplyState: 'failed' })
+      const start = vi.fn(async () => undefined)
+      await expect(service.withPermissionAdmission(task.taskId, start)).rejects.toThrow('不确定')
+      expect(start).not.toHaveBeenCalled()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('控制失败阻断下一轮且不重复 toggle；新对话读取持久化低权限', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'global-permission-failed-'))
+    try {
+      const preferences = new PermissionPreferences(root)
+      await preferences.set('takeover', true)
+      const adapter = new FakeRuntimeAdapter({ resume: true, load: true })
+      const runControl = vi.fn(async () => 'failed' as const)
+      const service = new AgentService(adapter, new TaskExecutionController(), { permissionPreferences: preferences, runPermissionControlTurn: runControl })
+      const task = await service.createTask(WORKSPACE)
+      service.handleAvailableCommands({ taskId: task.taskId, revision: 1, commands: [{ name: 'always-approve', description: '' }] })
+      const result = await service.setPermissionMode({ taskId: task.taskId, mode: 'ask' })
+      expect(result.task.permissionApplyState).toBe('failed')
+      const start = vi.fn(async () => undefined)
+      await expect(service.withPermissionAdmission(task.taskId, start)).rejects.toThrow('不确定')
+      expect(start).not.toHaveBeenCalled()
+      expect(runControl).toHaveBeenCalledTimes(1)
+      const next = await service.createTask(WORKSPACE)
+      expect(next).toMatchObject({ desiredPermissionMode: 'ask', takeoverEnabled: false, permissionPromptStyle: 'ask' })
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('AgentService Task / Turn 编排', () => {
   it('同 Task 连续 Turn 复用 session，Task A → B → A 时恢复 A 原会话', async () => {

@@ -1,4 +1,4 @@
-﻿import { resolve } from 'path'
+import { resolve } from 'path'
 import { defineConfig } from 'electron-vite'
 import vue from '@vitejs/plugin-vue'
 
@@ -42,7 +42,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve('src/preload/index.ts'),
-          overlay: resolve('src/preload/overlay.ts')
+          overlay: resolve('src/preload/overlay.ts'),
+          'browser-focus-overlay': resolve('src/preload/browser-focus-overlay.ts')
         }
       }
     }
@@ -64,7 +65,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve('src/renderer/index.html'),
-          overlay: resolve('src/renderer/overlay.html')
+          overlay: resolve('src/renderer/overlay.html'),
+          'browser-focus-overlay': resolve('src/renderer/browser-focus-overlay.html')
         }
       }
     }

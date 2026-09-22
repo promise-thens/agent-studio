@@ -15,7 +15,9 @@ import {
   permissionSnapshotFromMode,
   readPermissionPromptStyle,
   readTakeoverSnapshot,
-  resolveTakeoverApply
+  resolveTakeoverApply,
+  taskPermissionModeFromSnapshot,
+  type TaskPermissionMode
 } from '../../shared/task-takeover'
 import type {
   ConversationEntryState,
@@ -53,7 +55,8 @@ import type {
   AgentRespondPermissionRequest,
   AgentRespondQuestionRequest,
   AgentSetPermissionModeRequest,
-  AgentSetPermissionModeResult
+  AgentSetPermissionModeResult,
+  AgentPermissionPreferences
 } from '../../shared/agent-ipc'
 import type { AgentQuestionRequest } from '../../shared/agent-question'
 import { parseAgentQuestionResponse } from '../../shared/agent-question'
@@ -62,6 +65,7 @@ import type { PermissionBroker } from '../security/permission-broker'
 import { createLocalEnvironmentId } from '../security/permission-policy'
 import { TaskAttachmentError, type TaskAttachmentInbox } from './task-attachment-inbox'
 import { ATTACHMENT_LIMITS, type TaskAttachmentDescriptor } from '../../shared/task-attachment'
+import type { PermissionPreferences } from './permission-preferences'
 
 const MAX_WORKSPACE_BYTES = 4 * 1024
 const MAX_PROMPT_BYTES = 64 * 1024
@@ -95,6 +99,10 @@ export class AgentServiceError extends Error {
 }
 
 export interface AgentServiceOptions {
+  /** 应用级偏好由主进程组装；测试用无持久化服务可省略。 */
+  permissionPreferences?: PermissionPreferences
+  /** 必须等待控制回合终态和执行槽释放，不能只返回入队成功。 */
+  runPermissionControlTurn?: (taskId: string, prompt: string) => Promise<AgentTurnOutcome>
   createId?: () => string
   now?: () => string
   projectRegistry?: ProjectRegistry
@@ -149,6 +157,12 @@ function cloneTask(task: AgentTaskRecord): AgentTaskRuntimeState {
     ...(task.lastTurnId ? { lastTurnId: task.lastTurnId } : {}),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+    ...(task.desiredPermissionMode ? { desiredPermissionMode: task.desiredPermissionMode } : {}),
+    ...(task.permissionApplyState ? { permissionApplyState: task.permissionApplyState } : {}),
+    ...(task.permissionApplyMessage ? { permissionApplyMessage: task.permissionApplyMessage } : {}),
+    // 显式传递 false，Renderer 才能区分已退出与没有权限快照。
+    ...(typeof task.planPermissionOverride === 'boolean'
+      ? { planPermissionOverride: task.planPermissionOverride } : {}),
     // 缺省展示未接管 + assist；applied 仅在明确为真时拷贝。
     takeoverEnabled: task.takeoverEnabled === true,
     permissionPromptStyle: task.permissionPromptStyle === 'ask' ? 'ask' : 'assist',
@@ -184,6 +198,9 @@ function mapOutcomeToExecutionState(outcome: AgentTurnOutcome): AgentExecutionSt
  * 活动执行槽仍只委托 TaskExecutionController；Task/Turn 历史由可选 TaskStore 持久化。
  */
 export class AgentService {
+  private permissionQueue: Promise<unknown> = Promise.resolve()
+  /** 失败的 toggle 结果不确定时不可盲目重发，必须重新建立已知模式的 session。 */
+  private readonly uncertainPermissionTasks = new Set<string>()
   private readonly tasks = new Map<string, AgentTaskRecord>()
   private readonly allocatedTaskIds = new Set<string>()
   private readonly availableCommands = new Map<string, AgentAvailableCommandSnapshot>()
@@ -232,7 +249,7 @@ export class AgentService {
   constructor(
     private readonly adapter: AgentRuntimeAdapter,
     private readonly executionController: TaskExecutionController,
-    options: AgentServiceOptions = {}
+    private readonly options: AgentServiceOptions = {}
   ) {
     this.createId = options.createId ?? randomUUID
     this.now = options.now ?? (() => new Date().toISOString())
@@ -348,6 +365,8 @@ export class AgentService {
         throw new AgentServiceError('invalid-state', '活动 Turn 执行期间不能创建新 Task。')
       }
       this.assertRuntimeReady(validatedWorkspace)
+      const preference = await this.options.permissionPreferences?.read()
+      const initialMode = preference?.mode ?? 'assist'
       const taskId = this.allocateTaskId()
       // 必须在等待 createSession 前登记：否则期间到达的命令快照会因未知 taskId 被丢掉。
       this.pendingAvailableCommandTaskIds.add(taskId)
@@ -356,7 +375,8 @@ export class AgentService {
           this.adapter.createSession({
             workspace: validatedWorkspace,
             taskId,
-            mcpServers: await this.resolveMcpServers(taskId)
+            mcpServers: await this.resolveMcpServers(taskId),
+            ...(initialMode === 'takeover' ? { takeoverEnabled: true } : {})
           })
         )
         this.assertOperationLeaseCurrent(lease)
@@ -372,9 +392,10 @@ export class AgentService {
           state: 'pending',
           createdAt: observedAt,
           updatedAt: observedAt,
-          takeoverEnabled: false,
-          permissionPromptStyle: 'assist',
-          takeoverApplied: false,
+          takeoverEnabled: initialMode === 'takeover',
+          permissionPromptStyle: initialMode === 'ask' ? 'ask' : 'assist',
+          takeoverApplied: initialMode === 'takeover',
+          ...(preference ? { desiredPermissionMode: initialMode, permissionApplyState: 'applied' as const } : {}),
           session
         }
         if (this.taskStore && task.projectId) {
@@ -406,6 +427,7 @@ export class AgentService {
         }
         this.tasks.set(taskId, task)
         this.selectedTaskId = taskId
+        if (preference) await this.persistPermissionMode(task)
         return cloneTask(task)
       } catch (error) {
         this.availableCommands.delete(taskId)
@@ -665,6 +687,26 @@ export class AgentService {
   async setPermissionMode(
     request: AgentSetPermissionModeRequest
   ): Promise<AgentSetPermissionModeResult> {
+    if (this.options.permissionPreferences) {
+      return this.enqueuePermissionOperation(async () => {
+        const task = this.requireTask(request.taskId)
+        const preference = await this.options.permissionPreferences!.set(request.mode, request.confirmed)
+        for (const current of this.tasks.values()) {
+          current.desiredPermissionMode = preference.mode
+          current.permissionApplyState = 'pending'
+          current.permissionApplyMessage = '已保存到所有对话；当前轮不变，空闲后生效。'
+          this.publishTaskRuntimeState(current)
+        }
+        // 正在执行时不触碰有效模式，否则权限回调会在同一轮中途改变行为。
+        if (!this.isPermissionModeLocked()) await this.applyGlobalPermissionMode(task)
+        return {
+          task: cloneTask(task),
+          decision: task.permissionApplyState === 'applied'
+            ? { kind: 'noop' }
+            : { kind: 'defer-next-session', reason: 'busy' }
+        }
+      })
+    }
     const task = this.requireTask(request.taskId)
     if (!isTaskPermissionMode(request.mode)) {
       throw new AgentServiceError('invalid-input', '批准模式无效。')
@@ -739,6 +781,129 @@ export class AgentService {
       task: cloneTask(task),
       decision,
       ...(decision.kind === 'send-command' ? { controlPrompt: GROK_TAKEOVER_CONTROL_PROMPT } : {})
+    }
+  }
+
+  /** 权限修改、Plan 临时降权和发送共用串行准入，防止终态后抢发旧高权限。 */
+  private enqueuePermissionOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.permissionQueue.catch(() => undefined).then(operation)
+    this.permissionQueue = next
+    return next
+  }
+
+  /** Renderer 只读取全局枚举与确认标记，不涉及 Runtime 或磁盘路径。 */
+  async getPermissionPreferences(): Promise<AgentPermissionPreferences> {
+    const preference = await this.options.permissionPreferences?.read()
+    return { mode: preference?.mode ?? 'ask', takeoverConfirmed: preference?.takeoverConfirmed ?? false }
+  }
+
+  /** 正式 startTurn 的组装层必须包在这里；内部控制回合不能再次进入此队列。 */
+  async withPermissionAdmission<T>(taskId: string, start: () => Promise<T>): Promise<T> {
+    return this.enqueuePermissionOperation(async () => {
+      // 终态事件已发布但 after 检查点尚未写完时，必须等槽释放，不能抢跑旧高权限。
+      const execution = this.taskExecutor?.getSnapshot().execution
+      if (execution && isTerminalExecutionState(execution.state)) {
+        await this.taskExecutor?.waitForTerminal()
+      }
+      if (this.isPermissionModeLocked()) {
+        throw new AgentServiceError('invalid-state', '当前执行尚未结束，请稍候。')
+      }
+      await this.ensureTaskSessionForTurn(taskId)
+      const task = this.requireTask(taskId)
+      if (this.options.permissionPreferences) {
+        await this.applyGlobalPermissionMode(task)
+        if (task.permissionApplyState !== 'applied') {
+          throw new AgentServiceError('invalid-state', task.permissionApplyMessage ?? '权限尚未生效，请重试。')
+        }
+      }
+      return start()
+    })
+  }
+
+  /** 终态释放执行槽或进入历史后调用；失败只更新快照，下一轮仍由准入门禁阻断。 */
+  async applyPendingPermissionMode(taskId: string): Promise<void> {
+    await this.enqueuePermissionOperation(async () => {
+      if (!this.options.permissionPreferences || this.isPermissionModeLocked()) return
+      const task = this.requireTask(taskId)
+      if (!this.isTaskSessionActive(task)) return
+      await this.applyGlobalPermissionMode(task)
+    })
+  }
+
+  /** Plan 是 session 临时低权限，不写全局偏好；退出后恢复所有对话共用的选择。 */
+  async setPlanPermissionOverride(taskId: string, enabled: boolean): Promise<AgentTaskRuntimeState> {
+    return this.enqueuePermissionOperation(async () => {
+      if (typeof enabled !== 'boolean' || (enabled && this.isPermissionModeLocked())) {
+        throw new AgentServiceError('invalid-state', '请在空闲时开启 Plan。')
+      }
+      const task = this.requireTask(taskId)
+      const previous = task.planPermissionOverride
+      task.planPermissionOverride = enabled
+      // 审批期间仅登记退出意图，不改变本轮有效权限；槽释放后由既有准入队列恢复。
+      if (this.isPermissionModeLocked()) {
+        task.permissionApplyState = 'pending'
+        task.permissionApplyMessage = '已登记退出 Plan；当前轮不变，空闲后恢复全局权限。'
+        this.publishTaskRuntimeState(task)
+        return cloneTask(task)
+      }
+      await this.applyGlobalPermissionMode(task)
+      if (task.permissionApplyState !== 'applied') {
+        task.planPermissionOverride = previous
+        this.publishTaskRuntimeState(task)
+        throw new AgentServiceError('invalid-state', task.permissionApplyMessage ?? 'Plan 权限未生效。')
+      }
+      return cloneTask(task)
+    })
+  }
+
+  /** 只在空闲修改运行态；控制回合完成之前保留旧实际权限，失败禁止继续发送。 */
+  private async applyGlobalPermissionMode(task: AgentTaskRecord): Promise<void> {
+    const preference = await this.options.permissionPreferences?.read()
+    if (!preference) return
+    const mode: TaskPermissionMode =
+      task.planPermissionOverride && preference.mode === 'takeover' ? 'ask' : preference.mode
+    task.desiredPermissionMode = preference.mode
+    task.permissionApplyState = 'pending'
+    try {
+      if (!this.isTaskSessionActive(task)) {
+        task.permissionApplyMessage = '已保存；进入此对话后应用。'
+        return
+      }
+      if (this.uncertainPermissionTasks.has(task.taskId)) {
+        throw new Error('上次权限控制结果不确定，请重新连接后重试；不会重复发送 toggle。')
+      }
+      const desired = permissionSnapshotFromMode(mode, task.permissionPromptStyle)
+      const applied = this.isTakeoverCurrentlyApplied(task)
+      if (desired.takeoverEnabled !== applied) {
+        if (!this.options.runPermissionControlTurn ||
+            !this.getAvailableCommands(task.taskId).commands.some((item) => item.name === 'always-approve')) {
+          throw new Error('当前 session 未提供权限切换命令；权限未生效，发送已暂停。')
+        }
+        // 入队后任何失败都可能已经执行过 toggle，禁止无证据重试相同命令。
+        this.uncertainPermissionTasks.add(task.taskId)
+        const outcome = await this.options.runPermissionControlTurn(task.taskId, GROK_TAKEOVER_CONTROL_PROMPT)
+        if (outcome !== 'completed') {
+          throw new Error('权限控制回合未成功完成，发送已暂停。')
+        }
+        this.uncertainPermissionTasks.delete(task.taskId)
+      }
+      const changed = taskPermissionModeFromSnapshot(task) !== mode
+      task.takeoverEnabled = desired.takeoverEnabled
+      task.takeoverApplied = desired.takeoverEnabled
+      task.permissionPromptStyle = desired.permissionPromptStyle
+      delete task.takeoverMayStillBeActive
+      delete task.takeoverPendingReason
+      await this.persistPermissionMode(task)
+      task.permissionApplyState = 'applied'
+      delete task.permissionApplyMessage
+      if (changed) await this.recordTakeoverToggleAudit(task, desired.takeoverEnabled)
+    } catch (error) {
+      task.permissionApplyState = 'failed'
+      task.permissionApplyMessage = error instanceof Error
+        ? this.redactText(error.message)
+        : '权限应用失败，发送已暂停。'
+    } finally {
+      this.publishTaskRuntimeState(task)
     }
   }
 
@@ -1054,6 +1219,8 @@ export class AgentService {
    * 此处不把 applied 置 true。
    */
   beginTakeoverControlPrompt(taskId: string): string | null {
+    // 全局偏好只能走终态确认的串行准入，旧“入队即 applied”补发器不得同时 toggle。
+    if (this.options.permissionPreferences) return null
     const task = this.tasks.get(taskId)
     if (!task || task.takeoverEnabled !== true || task.takeoverApplied === true) return null
     // 本 session 已发出过 toggle，禁止因 applied 被误清而再发一次把接管关掉。
@@ -1382,13 +1549,17 @@ export class AgentService {
 
   /** 丢掉失效 RuntimeSessionRef，在同一 taskId 上 createSession 并写回 TaskStore。 */
   private async rebuildTaskSession(task: AgentTaskRecord, lease?: OperationLease): Promise<void> {
+    const preference = await this.options.permissionPreferences?.read()
+    const mode = preference
+      ? task.planPermissionOverride && preference.mode === 'takeover' ? 'ask' : preference.mode
+      : taskPermissionModeFromSnapshot(task)
     const session = await this.runAdapterOperation(async () =>
       this.adapter.createSession({
         workspace: task.workspace,
         taskId: task.taskId,
         mcpServers: await this.resolveMcpServers(task.taskId),
         // resume 失败后开新 session 必须带 yoloMode；仅快照为 true 时才传该键。
-        ...(task.takeoverEnabled === true ? { takeoverEnabled: true } : {})
+        ...(mode === 'takeover' ? { takeoverEnabled: true } : {})
       })
     )
     this.assertOperationLeaseCurrent(lease)
@@ -1404,7 +1575,16 @@ export class AgentService {
       )
     }
     this.selectedTaskId = task.taskId
-    if (task.takeoverEnabled === true) {
+    if (preference) {
+      Object.assign(task, permissionSnapshotFromMode(mode, task.permissionPromptStyle))
+      task.desiredPermissionMode = preference.mode
+      task.permissionApplyState = 'applied'
+      task.takeoverApplied = mode === 'takeover'
+      delete task.permissionApplyMessage
+      delete task.takeoverMayStillBeActive
+      this.uncertainPermissionTasks.delete(task.taskId)
+      await this.persistPermissionMode(task)
+    } else if (task.takeoverEnabled === true) {
       // 新 session 已带 yoloMode；禁止再发 /always-approve（它是 toggle）。
       task.takeoverApplied = true
       delete task.takeoverPendingReason

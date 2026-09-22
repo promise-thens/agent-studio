@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
+import { reportSettingsPaneState, type SettingsPaneState } from '../settings-dialog-interaction'
 import {
   GROK_HOOKS_EMPTY_COPY,
   GROK_HOOKS_ERROR_COPY,
@@ -15,6 +16,16 @@ import {
 const loadState = ref<'loading' | 'ready' | 'error'>('loading')
 const errorMessage = ref('')
 const hookRows = ref<GrokHookRowView[]>([])
+const emit = defineEmits<{ state: [value: SettingsPaneState] }>()
+reportSettingsPaneState(
+  () => ({
+    dirty: false,
+    saving: false,
+    error: errorMessage.value,
+    message: loadState.value === 'loading' ? GROK_HOOKS_LOADING_COPY : '只读库存，不在设置中执行 Hooks。'
+  }),
+  (state) => emit('state', state)
+)
 
 /** 只读库存：走 listHooks，Renderer 不读磁盘、不执行钩子。 */
 async function loadHooks(): Promise<void> {
@@ -85,9 +96,7 @@ onMounted(() => {
   display: grid;
   gap: 12px;
   min-height: 0;
-  height: 100%;
-  overflow: hidden;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
 }
 
 header h3,
@@ -111,7 +120,6 @@ header p,
 .hooks-body {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
   padding: 12px 14px;
   border: 1px solid var(--border);
   border-radius: 14px;

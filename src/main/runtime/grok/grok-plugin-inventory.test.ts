@@ -185,7 +185,7 @@ describe('Grok 插件库存扫描', () => {
     ])
   })
 
-  it('无 plugin.json 时用目录名；name 回退；servers 形状可识别', async () => {
+  it('无清单目录不进入安装库存；已有清单保留 name 回退和 servers 兼容', async () => {
     const userDataPath = await createUserData()
     const root = await pluginsRoot(userDataPath)
 
@@ -211,17 +211,9 @@ describe('Grok 插件库存扫描', () => {
         skillCount: 0,
         mcpCount: 1,
         hookCount: 0
-      },
-      {
-        pluginId: 'plain-dir',
-        displayName: 'plain-dir',
-        status: 'enabled',
-        scope: 'user',
-        skillCount: 0,
-        mcpCount: 0,
-        hookCount: 0
       }
     ])
+    expect(await getGrokPlugin(userDataPath, 'plain-dir')).toBeNull()
 
     const namedDetail = await getGrokPlugin(userDataPath, 'named-only')
     expect(namedDetail?.mcpNames).toEqual(['search'])
@@ -234,6 +226,7 @@ describe('Grok 插件库存扫描', () => {
     const root = await pluginsRoot(userDataPath)
     const pluginDir = join(root, 'cap-plugin')
     await mkdir(pluginDir)
+    await writeJson(join(pluginDir, 'plugin.json'), { name: 'cap-plugin' })
 
     const oversize = `s${'x'.repeat(128)}`
     await writeSkill(pluginDir, oversize)
@@ -472,7 +465,14 @@ description: 把长文压成要点
     const grokHome = getManagedGrokHome(userDataPath)
     const pluginDir = join(grokHome, 'installed-plugins', 'plain-market')
     await mkdir(pluginDir, { recursive: true })
-    await writeJson(join(pluginDir, 'plugin.json'), { displayName: '市场插件' })
+    await writeJson(join(pluginDir, 'plugin.json'), {
+      name: 'plain-market',
+      displayName: '市场插件'
+    })
+    await writeJson(join(grokHome, 'installed-plugins', 'registry.json'), {
+      version: 1,
+      repos: { 'plain-market': { plugins: { 'plain-market': {} } } }
+    })
 
     const listed = await listGrokPlugins(userDataPath)
     expect(listed).toEqual([
@@ -537,18 +537,8 @@ description: 把长文压成要点
     })
 
     const listed = await listGrokPlugins(userDataPath)
-    expect(listed).toEqual([
-      {
-        pluginId: 'escaped',
-        displayName: 'escaped',
-        status: 'invalid',
-        scope: MANAGED_GROK_PLUGIN_SCOPE,
-        skillCount: 0,
-        mcpCount: 0,
-        hookCount: 0,
-        version: '9.9.9'
-      }
-    ])
+    expect(listed).toEqual([])
+    expect(await getGrokPlugin(userDataPath, 'escaped')).toBeNull()
     expectNoLeak(listed, [outsidePlugin, outsideRoot, userDataPath, '不该读取'])
   })
 })

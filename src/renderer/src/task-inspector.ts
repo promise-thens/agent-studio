@@ -13,6 +13,12 @@ import type {
 /** 检查器只保留全局审阅域；Turn 内子任务留在对话主列。 */
 export type InspectorTab = 'timeline' | 'plan' | 'changes' | 'terminal' | 'artifacts'
 
+/** Inspector 与主对话之间只传事实身份，不复制节点内容或执行状态。 */
+export interface InspectorConversationTarget {
+  turnId: string
+  nodeId?: string | null
+}
+
 export interface InspectorTabDefinition {
   id: InspectorTab
   label: string

@@ -12,6 +12,7 @@ import {
   type AgentRespondQuestionRequest,
   type AgentSetPermissionModeRequest,
   type AgentSetPermissionModeResult,
+  type AgentPermissionPreferences,
   type AgentStartTurnRequest
 } from '../../shared/agent-ipc'
 import {
@@ -41,6 +42,8 @@ const MAX_TASK_ID_BYTES = 4 * 1024
 const MAX_REQUEST_ID_BYTES = 4 * 1024
 
 export interface AgentIpcRuntime {
+  getPermissionPreferences?: () => Promise<AgentPermissionPreferences>
+  setPlanPermissionOverride?: (taskId: string, enabled: boolean) => Promise<AgentTaskRuntimeState>
   getStatus: () => AgentRuntimeStatus
   getExecutionSnapshot?: () => TaskExecutionSnapshot
   connect: (projectId: string) => Promise<AgentRuntimeStatus>
@@ -66,6 +69,8 @@ export interface AgentIpcRuntime {
 }
 
 export interface AgentIpcDependencies {
+  /** 主进程持有托管 cwd；Renderer 不得提交任何路径。 */
+  prepareChatWorkspace?: () => Promise<import('../../shared/task-history').ProjectSummary>
   ipcMain: DesktopIpcMain
   assertTrustedSender: (event: TrustedIpcInvokeEvent) => void
   /**
@@ -226,9 +231,7 @@ function readSetPermissionModeRequest(args: unknown[]): AgentSetPermissionModeRe
   if (request.confirmed !== undefined && typeof request.confirmed !== 'boolean') {
     throw new DesktopIpcFailure('invalid-input', '请求参数无效。')
   }
-  if (mode === 'takeover' && request.confirmed !== true) {
-    throw new DesktopIpcFailure('invalid-input', '打开完全接管前必须确认。')
-  }
+  // 是否已确认由主进程持久偏好判断；旧服务仍会拒绝未确认的首次授权。
   return {
     taskId: readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES),
     mode,
@@ -306,6 +309,28 @@ function registerResultHandler<T>(
  * 每次调用都先校验来源和请求边界，再委托唯一 AgentService。
  */
 export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): void {
+  /** 固定空参数入口，托管目录根完全由主进程决定。 */
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.prepareChatWorkspace, (args) => {
+    assertNoArguments(args)
+    if (!dependencies.prepareChatWorkspace) throw new DesktopIpcFailure('operation-failed', '聊天工作区尚未初始化。')
+    return dependencies.prepareChatWorkspace()
+  })
+  /** 已保存选择与 session 实际权限必须分开读取。 */
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.getPermissionPreferences, (args) => {
+    assertNoArguments(args)
+    const agent = requireAgent(dependencies.getAgent)
+    if (!agent.getPermissionPreferences) throw new DesktopIpcFailure('operation-failed', '权限偏好尚未初始化。')
+    return agent.getPermissionPreferences()
+  })
+  /** Plan 临时降权同样校验主窗口与布尔参数，禁止改写全局选择。 */
+  registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.setPlanPermissionOverride, (args) => {
+    const request = readRequest(args, ['taskId', 'enabled'])
+    const taskId = readRequiredString(request, 'taskId', MAX_TASK_ID_BYTES)
+    if (typeof request.enabled !== 'boolean') throw new DesktopIpcFailure('invalid-input', 'Plan 状态无效。')
+    const agent = requireAgent(dependencies.getAgent)
+    if (!agent.setPlanPermissionOverride) throw new DesktopIpcFailure('operation-failed', 'Plan 权限尚未初始化。')
+    return agent.setPlanPermissionOverride(taskId, request.enabled)
+  })
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.getStatus, (args) => {
     assertNoArguments(args)
     return requireAgent(dependencies.getAgent).getStatus()
@@ -412,7 +437,6 @@ export function registerAgentIpcHandlers(dependencies: AgentIpcDependencies): vo
   registerResultHandler(dependencies, AGENT_INVOKE_CHANNELS.setPermissionMode, async (args) => {
     const request = readSetPermissionModeRequest(args)
     const agent = requireAgent(dependencies.getAgent)
-    assertPromptState(agent.getStatus())
     return agent.setPermissionMode(request)
   })
 }

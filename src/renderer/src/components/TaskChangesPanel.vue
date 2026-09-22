@@ -11,6 +11,7 @@ import {
   type TurnRewindSelection
 } from '../../../shared/turn-rewind-preview'
 import type { TaskChangesController } from '../composables/useTaskChanges'
+import type { InspectorConversationTarget } from '../task-inspector'
 import {
   attributionLabel,
   canRestoreLatestTurn,
@@ -44,6 +45,10 @@ const props = withDefaults(
     rewindBusy: false
   }
 )
+
+const emit = defineEmits<{
+  focusTarget: [target: InspectorConversationTarget]
+}>()
 
 const {
   changeSet,
@@ -104,6 +109,11 @@ const incompletePaths = computed(() =>
 const canRestore = computed(() =>
   changeSet.value ? canRestoreLatestTurn(changeSet.value.revertible) : false
 )
+/** 只有主进程明确证明为 latest-turn 的变更，才允许返回所属对话轮次。 */
+const latestTurnId = computed(() => {
+  const revertible = changeSet.value?.revertible
+  return revertible && revertible.kind === 'latest-turn' ? revertible.turnId : null
+})
 /** 对话状态由命令快照 + 空闲/忙碌推导；文件状态沿用 latest-turn 预览，不新开 IPC。 */
 const rewindPreview = computed(() =>
   buildTurnRewindPreview({
@@ -186,16 +196,27 @@ function onConfirmRewind(selection: TurnRewindSelection): void {
           {{ formatChangeLineDelta(card.added, card.deleted) }}
         </span>
       </div>
-      <button
-        class="icon-button"
-        type="button"
-        title="重新加载变更"
-        aria-label="重新加载变更"
-        :disabled="loading"
-        @click="reload()"
-      >
-        <ArrowClockwise :size="14" />
-      </button>
+      <div class="changes-toolbar-actions">
+        <button
+          v-if="latestTurnId"
+          class="secondary-button"
+          type="button"
+          :title="`回到最新可恢复变更所属轮次：${latestTurnId}`"
+          @click="emit('focusTarget', { turnId: latestTurnId })"
+        >
+          回到该轮
+        </button>
+        <button
+          class="icon-button"
+          type="button"
+          title="重新加载变更"
+          aria-label="重新加载变更"
+          :disabled="loading"
+          @click="reload()"
+        >
+          <ArrowClockwise :size="14" />
+        </button>
+      </div>
     </header>
 
     <p v-if="loading && !changeSet" class="changes-state" role="status">正在加载变更…</p>

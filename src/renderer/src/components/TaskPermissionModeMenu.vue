@@ -36,6 +36,7 @@ const menu = ref<HTMLElement | null>(null)
 const isOpen = ref(false)
 const activeIndex = ref(0)
 const selecting = ref(false)
+const menuStyle = ref<Record<string, string>>({})
 
 const isDisabled = computed(() => props.busy || props.disabled || selecting.value)
 const currentCopy = computed(() => TASK_PERMISSION_MODE_COPY[props.mode])
@@ -52,8 +53,14 @@ watch(
   }
 )
 
-onMounted(() => document.addEventListener('pointerdown', handleOutsideClick))
-onBeforeUnmount(() => document.removeEventListener('pointerdown', handleOutsideClick))
+onMounted(() => {
+  document.addEventListener('pointerdown', handleOutsideClick)
+  window.addEventListener('resize', updateMenuGeometry)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', handleOutsideClick)
+  window.removeEventListener('resize', updateMenuGeometry)
+})
 
 function toggleMenu(): void {
   if (isDisabled.value) return
@@ -64,6 +71,8 @@ function toggleMenu(): void {
 async function openMenu(edge?: 'first' | 'last'): Promise<void> {
   if (isDisabled.value) return
   isOpen.value = true
+  await nextTick()
+  updateMenuGeometry()
   const selectedIndex = TASK_PERMISSION_MODES.indexOf(props.mode)
   activeIndex.value =
     edge === 'first'
@@ -77,6 +86,20 @@ async function openMenu(edge?: 'first' | 'last'): Promise<void> {
 function closeMenu(restoreFocus = false): void {
   isOpen.value = false
   if (restoreFocus) void nextTick(() => trigger.value?.focus())
+}
+
+/** 与模型菜单共用 Composer 几何边界，避免批准菜单在窄聊天列里越出右侧。 */
+function updateMenuGeometry(): void {
+  if (!isOpen.value || !root.value) return
+  const container = root.value.closest('.composer')
+  if (!(container instanceof HTMLElement)) return
+  const containerRect = container.getBoundingClientRect()
+  const rootRect = root.value.getBoundingClientRect()
+  const width = Math.max(1, Math.min(330, containerRect.width - 16))
+  const minLeft = containerRect.left + 8 - rootRect.left
+  const maxLeft = containerRect.right - 8 - width - rootRect.left
+  const left = Math.min(Math.max(0, minLeft), maxLeft)
+  menuStyle.value = { width: `${width}px`, left: `${left}px` }
 }
 
 function chooseMode(mode: TaskPermissionMode): void {
@@ -164,6 +187,7 @@ function handleOutsideClick(event: PointerEvent): void {
       :id="`${id}-menu`"
       ref="menu"
       class="permission-mode-panel"
+      :style="menuStyle"
       role="dialog"
       aria-label="应如何批准操作？"
       @keydown="handleMenuKeydown"
@@ -261,7 +285,7 @@ function handleOutsideClick(event: PointerEvent): void {
   bottom: calc(100% + 7px);
   left: 0;
   z-index: 12;
-  width: min(330px, calc(100vw - 42px));
+  width: 330px;
   overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-soft);

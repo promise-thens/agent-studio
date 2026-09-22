@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, promises as fs } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, join, resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import * as acp from '@agentclientprotocol/sdk'
@@ -105,6 +105,7 @@ import {
 import {
   CONTROLLED_ACP_E2E_DIRECTORIES,
   CONTROLLED_ACP_E2E_FIXTURE_FILE,
+  CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX,
   CONTROLLED_ACP_E2E_SCENARIOS,
   CONTROLLED_ACP_E2E_ADAPTER_TRACE_FILE,
   type ControlledAcpFixtureLaunch
@@ -2939,11 +2940,7 @@ async function assertControlledFixtureLaunch(
   if (resolve(launch.userDataPath) !== resolve(userDataPath)) {
     throw new Error('invalid-controlled-fixture')
   }
-  await assertControlledFixtureDirectory(
-    userDataPath,
-    workspace,
-    CONTROLLED_ACP_E2E_DIRECTORIES.workspace
-  )
+  await assertControlledFixtureWorkspace(userDataPath, workspace)
   await assertControlledFixtureDirectory(
     userDataPath,
     launch.traceDirectory,
@@ -2994,6 +2991,55 @@ async function assertControlledFixtureLaunch(
   }
 }
 
+/** 受控 Runtime cwd 只允许固定主工作区或 userData 同级的固定托管聊天目录。 */
+async function assertControlledFixtureWorkspace(
+  userDataPath: string,
+  workspace: string
+): Promise<void> {
+  const resolvedWorkspace = resolve(workspace)
+  const mainWorkspace = resolve(userDataPath, CONTROLLED_ACP_E2E_DIRECTORIES.workspace)
+  if (resolvedWorkspace === mainWorkspace) {
+    await assertControlledFixtureDirectory(
+      userDataPath,
+      workspace,
+      CONTROLLED_ACP_E2E_DIRECTORIES.workspace
+    )
+    return
+  }
+
+  const resolvedUserData = resolve(userDataPath)
+  const managedWorkspace = `${resolvedUserData}${CONTROLLED_ACP_E2E_MANAGED_CHAT_WORKSPACE_SUFFIX}`
+  if (resolvedWorkspace !== managedWorkspace) throw new Error('invalid-controlled-fixture')
+
+  const [temporaryDirectory, userDataStats, workspaceStats] = await Promise.all([
+    fs.realpath(tmpdir()),
+    fs.lstat(resolvedUserData),
+    fs.lstat(managedWorkspace)
+  ])
+  if (
+    !userDataStats.isDirectory() ||
+    userDataStats.isSymbolicLink() ||
+    !isControlledFixtureOwnerPrivate(userDataStats.mode) ||
+    !workspaceStats.isDirectory() ||
+    workspaceStats.isSymbolicLink() ||
+    !isControlledFixtureOwnerPrivate(workspaceStats.mode)
+  ) {
+    throw new Error('invalid-controlled-fixture')
+  }
+  const [canonicalUserData, canonicalWorkspace] = await Promise.all([
+    fs.realpath(resolvedUserData),
+    fs.realpath(managedWorkspace)
+  ])
+  if (
+    canonicalUserData !== resolvedUserData ||
+    canonicalWorkspace !== managedWorkspace ||
+    dirname(canonicalUserData) !== temporaryDirectory ||
+    dirname(canonicalWorkspace) !== temporaryDirectory
+  ) {
+    throw new Error('invalid-controlled-fixture')
+  }
+}
+
 /** 临时目录必须是 userData 的固定直接子目录，拒绝符号链接和跨目录描述符。 */
 async function assertControlledFixtureDirectory(
   userDataPath: string,
@@ -3023,6 +3069,11 @@ async function assertControlledFixtureDirectory(
   if (canonicalDirectory !== join(canonicalUserData, expectedName)) {
     throw new Error('invalid-controlled-fixture')
   }
+}
+
+/** Unix 测试目录不得向 group/other 开放；Windows 继续由 ACL 与当前用户上下文约束。 */
+function isControlledFixtureOwnerPrivate(mode: number): boolean {
+  return process.platform === 'win32' || (mode & 0o077) === 0
 }
 
 function isControlledFixtureScenario(

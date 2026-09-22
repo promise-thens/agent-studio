@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { promises as fs } from 'node:fs'
+import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getManagedGrokHome } from '../../provider/grok-provider-config'
 import { listGrokMarketplacePlugins } from './grok-marketplace-inventory'
 
@@ -41,6 +42,7 @@ async function createTemporaryDirectory(prefix: string): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(
     temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true }))
   )
@@ -102,6 +104,35 @@ async function writeMarketplaceSource(
   return sourceDir
 }
 
+/** 写入 App 自己的来源配置；测试不读取用户 ~/.grok。 */
+async function writeMarketplaceConfig(
+  grokHome: string,
+  sources: ReadonlyArray<{ sourceName: string; gitUrl: string }>
+): Promise<void> {
+  await mkdir(grokHome, { recursive: true })
+  const text = sources
+    .map((source) =>
+      [
+        '[[marketplace.sources]]',
+        `name = ${JSON.stringify(source.sourceName)}`,
+        `git = ${JSON.stringify(source.gitUrl)}`
+      ].join('\n')
+    )
+    .join('\n\n')
+  await writeFile(join(grokHome, 'config.toml'), `${text}\n`, 'utf8')
+}
+
+/** 只写本地 Git 配置夹具，不初始化仓库、不访问网络。 */
+async function writeMarketplaceOrigin(
+  grokHome: string,
+  cacheDirectory: string,
+  gitUrl: string
+): Promise<void> {
+  const gitDirectory = join(grokHome, 'marketplace-cache', cacheDirectory, '.git')
+  await mkdir(gitDirectory, { recursive: true })
+  await writeFile(join(gitDirectory, 'config'), `[remote "origin"]\n  url = ${gitUrl}\n`, 'utf8')
+}
+
 function buildMarketplacePlugins(names: readonly string[]): Array<{
   name: string
   description: string
@@ -120,6 +151,26 @@ function buildMarketplacePlugins(names: readonly string[]): Array<{
 }
 
 describe('Grok 市场货架只读扫描', () => {
+  it('自报官方名不取得信任；URL 匹配只陈述本地配置事实', async () => {
+    const userDataPath = await createUserData()
+    const home = getManagedGrokHome(userDataPath)
+    for (const directory of ['first', 'second']) {
+      await writeMarketplaceSource(home, directory, {
+        name: 'xai-official',
+        plugins: [{ name: 'demo' }]
+      })
+    }
+    await writeMarketplaceConfig(home, [{ sourceName: 'matched-source', gitUrl: FIXTURE_GIT_URL }])
+    await writeMarketplaceOrigin(home, 'second', FIXTURE_GIT_URL)
+
+    const listed = await listGrokMarketplacePlugins(userDataPath)
+    expect(listed).toHaveLength(2)
+    expect(new Set(listed.map((item) => item.sourceId)).size).toBe(2)
+    expect(listed.every((item) => !item.installed && !('official' in item))).toBe(true)
+    expect(listed.filter((item) => item.sourceUrlMatched)).toHaveLength(1)
+    expect(listed.find((item) => item.sourceUrlMatched)?.sourceName).toBe('matched-source')
+  })
+
   it('marketplace-cache 不存在时返回空列表，且不创建目录', async () => {
     const userDataPath = await createUserData()
     const grokHome = getManagedGrokHome(userDataPath)
@@ -253,7 +304,7 @@ describe('Grok 市场货架只读扫描', () => {
     if (!(await symlinkOrSkip(skip, outsideSource, join(cacheRoot, 'escaped-source')))) return
 
     const listed = await listGrokMarketplacePlugins(userDataPath)
-    expect(listed).toEqual([
+    expect(listed).toMatchObject([
       {
         name: 'figma',
         displayName: 'figma',
@@ -273,6 +324,30 @@ describe('Grok 市场货架只读扫描', () => {
       'stolen-market',
       '不该读取'
     ])
+  })
+
+  it('货架 JSON 打开后若同一路径换成另一 inode，则拒绝该来源', async () => {
+    const userDataPath = await createUserData()
+    const grokHome = getManagedGrokHome(userDataPath)
+    const sourceDirectory = await writeMarketplaceSource(grokHome, 'cache', {
+      name: 'catalog',
+      plugins: [{ name: 'demo' }]
+    })
+    const marketplacePath = join(sourceDirectory, '.grok-plugin', 'marketplace.json')
+    const originalOpen = fs.open.bind(fs)
+    let replaced = false
+    vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof fs.open>) => {
+      const handle = await originalOpen(...args)
+      if (!replaced && args[0] === marketplacePath) {
+        await rename(marketplacePath, `${marketplacePath}.opened`)
+        await writeJson(marketplacePath, { name: 'replaced', plugins: [{ name: 'other' }] })
+        replaced = true
+      }
+      return handle
+    })
+
+    await expect(listGrokMarketplacePlugins(userDataPath)).resolves.toEqual([])
+    expect(replaced).toBe(true)
   })
 
   it('chrome-devtools 经 plugin_subdir 标已装，禁止用 chrome-devtools-mcp 前缀去猜', async () => {
@@ -301,6 +376,7 @@ describe('Grok 市场货架只读扫描', () => {
 
     const hashedDir = join(grokHome, 'installed-plugins', 'chrome-devtools-mcp-2df60288')
     await mkdir(hashedDir, { recursive: true })
+    await writeJson(join(hashedDir, 'plugin.json'), { name: 'chrome-devtools-mcp' })
     await writeJson(join(grokHome, 'installed-plugins', 'registry.json'), {
       version: 1,
       repos: {
@@ -330,8 +406,19 @@ describe('Grok 市场货架只读扫描', () => {
       }
     })
 
+    const unmatched = await listGrokMarketplacePlugins(userDataPath)
+    expect(unmatched.every((item) => !item.installed && !item.sourceUrlMatched)).toBe(true)
+    expect(unmatched.every((item) => !('official' in item) && !('sourceVerified' in item))).toBe(
+      true
+    )
+    await writeMarketplaceConfig(grokHome, [
+      { sourceName: 'xai-official', gitUrl: REGISTRY_SOURCE_URL }
+    ])
+    await writeMarketplaceOrigin(grokHome, '9f3a2c1b0e8d', REGISTRY_SOURCE_URL)
     const listed = await listGrokMarketplacePlugins(userDataPath)
-    expect(listed).toEqual([
+    expect(listed.every((item) => item.sourceUrlMatched)).toBe(true)
+    expect(listed.every((item) => !('official' in item) && !('sourceVerified' in item))).toBe(true)
+    expect(listed).toMatchObject([
       {
         name: 'chrome-devtools',
         displayName: 'chrome-devtools',
@@ -351,7 +438,7 @@ describe('Grok 市场货架只读扫描', () => {
         displayName: 'linear',
         description: 'Issue tracker helper.',
         sourceName: 'xai-official',
-        installed: true
+        installed: false
       }
     ])
     expectNoLeak(listed, [

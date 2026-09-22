@@ -14,6 +14,7 @@ import type { ProviderRuntimeConfig } from './provider/provider-config-store'
 import { DesktopIpcFailure, toDesktopIpcError } from './security/ipc-sender-validation'
 
 type AppDeletionDependencies = {
+  setPluginEnabled(pluginId: string, enabled: boolean): Promise<{ pluginId: string; enabled: boolean }>
   removeProject(projectId: string): Promise<void>
   deleteProjectHistory(projectId: string, token: string): Promise<void>
   installPlugin(input: { name: string; trust: boolean }): Promise<null>
@@ -105,6 +106,13 @@ const mocks = vi.hoisted(() => {
   return {
     ready,
     resolveReady,
+    pluginDiscoveryDependencies: undefined as
+      | Parameters<typeof import('./plugin-discovery-ipc').registerPluginDiscoveryIpc>[0]
+      | undefined,
+    getGrokPlugin: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => null),
+    listDiscoveries: vi.fn(async () => ({ items: [], sources: [] })),
+    resolveDiscoveryDirectory: vi.fn(async () => '/tmp/fake-plugin'),
+    openPath: vi.fn(async () => ''),
     appDeletionDependencies: undefined as AppDeletionDependencies | undefined,
     grokHomeConfig: {
       read: vi.fn(async () => ''),
@@ -422,7 +430,7 @@ vi.mock('electron', () => {
       decryptString: vi.fn((value: Buffer) => value.toString()),
       getSelectedStorageBackend: vi.fn(() => 'keychain')
     },
-    shell: { openExternal: vi.fn(async () => undefined) },
+    shell: { openExternal: vi.fn(async () => undefined), openPath: mocks.openPath },
     clipboard: {
       readImage: vi.fn(() => ({ isEmpty: () => true, toPNG: () => Buffer.alloc(0) })),
       read: vi.fn(() => '')
@@ -595,6 +603,19 @@ vi.mock('./runtime/grok/grok-plugin-cli', () => ({
   runGrokPlugin: mocks.runGrokPlugin,
   ensureGrokMarketplaceSource: mocks.ensureGrokMarketplaceSource,
   uninstallManagedGrokPlugin: mocks.uninstallManagedGrokPlugin
+}))
+vi.mock('./runtime/grok/grok-plugin-inventory', () => ({
+  getGrokPlugin: mocks.getGrokPlugin,
+  listGrokPlugins: vi.fn(async () => [])
+}))
+vi.mock('./runtime/grok/grok-plugin-inventory-discovery', () => ({
+  listGrokPluginDiscoveries: mocks.listDiscoveries,
+  resolveGrokPluginDiscoveryDirectory: mocks.resolveDiscoveryDirectory
+}))
+vi.mock('./plugin-discovery-ipc', () => ({
+  registerPluginDiscoveryIpc: vi.fn((dependencies) => {
+    mocks.pluginDiscoveryDependencies = dependencies
+  })
 }))
 vi.mock('./runtime/grok/grok-marketplace-inventory', () => ({
   listGrokMarketplacePlugins: vi.fn(async () => [])
@@ -827,6 +848,35 @@ describe('Main 删除与权限失效编排', () => {
     mocks.grokHomeConfig.apply.mockClear()
     mocks.grokHomeConfig.readSandboxProfile.mockReset()
     mocks.grokHomeConfig.readSandboxProfile.mockResolvedValue('off')
+  })
+
+  it('插件发现接入当前 App 根、受限定位、系统打开和统一脱敏', async () => {
+    const dependencies = mocks.pluginDiscoveryDependencies!
+    expect(dependencies).toBeDefined()
+    expect(dependencies.assertTrustedSender).toBeTypeOf('function')
+    await expect(dependencies.listDiscoveries()).resolves.toEqual({ items: [], sources: [] })
+    expect(mocks.listDiscoveries).toHaveBeenCalledWith('/tmp/agent-studio-index-test')
+    await expect(dependencies.resolveDiscoveryDirectory('user:plugins:demo')).resolves.toBe('/tmp/fake-plugin')
+    expect(mocks.resolveDiscoveryDirectory).toHaveBeenCalledWith(
+      '/tmp/agent-studio-index-test', 'user:plugins:demo'
+    )
+    await dependencies.openDirectory('/tmp/fake-plugin')
+    expect(mocks.openPath).toHaveBeenCalledWith('/tmp/fake-plugin')
+    mocks.providerState.runtimeConfig.apiKey = 'fake-discovery-secret'
+    expect(dependencies.sanitizeError(new Error('fake-discovery-secret'))).not.toContain('fake-discovery-secret')
+  })
+
+  it.each([true, false])('拒绝对非当前 App 有效安装项写启停配置：%s', async (enabled) => {
+    mocks.getGrokPlugin.mockResolvedValueOnce(null)
+    await expect(mocks.appDeletionDependencies!.setPluginEnabled('user-only', enabled)).rejects.toMatchObject({ code: 'not-found' })
+    expect(mocks.getGrokPlugin).toHaveBeenLastCalledWith('/tmp/agent-studio-index-test', 'user-only')
+    expect(mocks.grokHomeConfig.apply).not.toHaveBeenCalled()
+  })
+
+  it('当前 App 有效安装项通过查询后才写启用配置', async () => {
+    mocks.getGrokPlugin.mockResolvedValueOnce({ pluginId: 'app-plugin' })
+    await expect(mocks.appDeletionDependencies!.setPluginEnabled('app-plugin', true)).resolves.toEqual({ pluginId: 'app-plugin', enabled: true })
+    expect(mocks.grokHomeConfig.apply).toHaveBeenCalledWith({ pluginsEnabled: ['app-plugin'], pluginsDisabled: [] })
   })
 
   it('组装层把 GitReviewService 交给 task:* 只读审阅 IPC', () => {

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'none';" />
+    <title>浏览器专注输入</title>
+    <style>
+      /* 全局禁止原生滚动条与溢出滚动，彻底杜绝 macOS 原生大黑粗滚动条 */
+      html,
+      body,
+      #app {
+        overflow: hidden !important;
+      }
+      ::-webkit-scrollbar {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+      }
+      * {
+        scrollbar-width: none !important;
+        -ms-overflow-style: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 独立受控投影，不挂载主工作台或第二个 Runtime。 -->
+    <div id="app"></div>
+    <script type="module" src="/src/browser-focus-overlay.ts"></script>
+  </body>
+</html>

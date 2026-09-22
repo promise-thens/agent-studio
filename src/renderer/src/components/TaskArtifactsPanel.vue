@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { PhArrowClockwise as ArrowClockwise } from '@phosphor-icons/vue'
 import type { TaskArtifactsController } from '../composables/useTaskArtifacts'
+import type { InspectorConversationTarget } from '../task-inspector'
 import {
   artifactAvailabilityLabel,
   artifactKindLabel,
@@ -16,6 +17,10 @@ import ArtifactViewer from './ArtifactViewer.vue'
 const props = defineProps<{
   taskId: string
   controller: TaskArtifactsController
+}>()
+
+const emit = defineEmits<{
+  focusTarget: [target: InspectorConversationTarget]
 }>()
 
 const {
@@ -44,16 +49,27 @@ const selected = computed(
         <strong>产物</strong>
         <span>{{ items.length }}</span>
       </div>
-      <button
-        class="icon-button"
-        type="button"
-        title="刷新产物"
-        aria-label="刷新产物"
-        :disabled="loading"
-        @click="reload()"
-      >
-        <ArrowClockwise :size="16" />
-      </button>
+      <div class="task-artifacts-toolbar-actions">
+        <button
+          v-if="selected"
+          class="secondary-button"
+          type="button"
+          :title="`回到产物所属对话轮次：${selected.turnId}`"
+          @click="emit('focusTarget', { turnId: selected.turnId })"
+        >
+          回到对话
+        </button>
+        <button
+          class="icon-button"
+          type="button"
+          title="刷新产物"
+          aria-label="刷新产物"
+          :disabled="loading"
+          @click="reload()"
+        >
+          <ArrowClockwise :size="16" />
+        </button>
+      </div>
     </header>
 
     <p v-if="loading" class="artifact-viewer-state" role="status">正在加载产物…</p>

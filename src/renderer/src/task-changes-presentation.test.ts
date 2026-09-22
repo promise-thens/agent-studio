@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import type { FileDiffResult } from '../../shared/git-review'
+import type { FileDiffResult, TurnChangeCheckpoint } from '../../shared/git-review'
 import type { TaskChangePath, TaskChangeSetQueryResult } from '../../shared/git-review'
 import {
   baselineWarning,
@@ -20,6 +20,7 @@ import {
   omittedLabel,
   parseUnifiedDiff,
   presentChangeCard,
+  presentTurnChangeCards,
   presentChangeFileTree,
   presentChangeSetSummary,
   presentFileDiffRows,
@@ -288,6 +289,29 @@ describe('Diff 行解析与状态横幅', () => {
 })
 
 describe('对话变更卡', () => {
+  it('按稳定轮次保留路径摘要，第二轮无变化不继承，分页顺序不改变归属', () => {
+    const checkpoint = (turnId: string, affectedPaths: string[]): TurnChangeCheckpoint => ({
+      schemaVersion: 1, taskId: 'task-1', turnId, environmentId: 'env-1',
+      capturedBeforeAt: '2026-09-20T00:00:00Z', status: affectedPaths.length ? 'complete' : 'no-change',
+      beforePaths: [], afterPaths: [], affectedPaths
+    })
+    const checkpoints = [checkpoint('turn-1', ['a.ts']), checkpoint('turn-2', []), checkpoint('turn-3', ['a.ts', 'b.ts'])]
+    const cards = presentTurnChangeCards('task-1', checkpoints)
+    expect(Object.keys(cards)).toEqual(['turn-1', 'turn-3'])
+    expect(cards['turn-1'].files.map(file => file.path)).toEqual(['a.ts'])
+    expect(cards['turn-3'].files.map(file => file.path)).toEqual(['a.ts', 'b.ts'])
+    expect(cards['turn-1'].added).toBeUndefined()
+    expect(cards['turn-1'].files[0].added).toBeUndefined()
+    expect(cards['turn-1'].canRestore).toBe(false)
+    expect(presentTurnChangeCards('task-1', [...checkpoints].reverse())).toEqual(cards)
+    expect(presentTurnChangeCards('task-2', checkpoints)).toEqual({})
+    expect(presentTurnChangeCards('task-1', [])).toEqual({})
+    const drift = presentTurnChangeCards('task-1', [{ ...checkpoints[0], drift: 'external', status: 'incomplete' }])
+    expect(drift['turn-1'].detail).toContain('漂移')
+    expect(drift['turn-1'].detail).toContain('不完整')
+    expect(drift['turn-1'].canRestore).toBe(false)
+  })
+
   it('只收本 Task 路径，合计 +/-，pre-existing 与未知不进卡片', () => {
     const card = presentChangeCard(
       changeSet({

@@ -12,7 +12,8 @@ import type {
   FileDiffResult,
   LatestTurnRestorePreview,
   LatestTurnRestoreResult,
-  TaskChangeSetQueryResult
+  TaskChangeSetQueryResult,
+  TurnChangeCheckpoint
 } from '../../../shared/git-review'
 import type { DesktopIpcResult } from '../../../shared/ipc-result'
 import {
@@ -21,10 +22,11 @@ import {
 } from '../../../shared/turn-rewind-execute'
 import type { TurnRewindPreview, TurnRewindSelection } from '../../../shared/turn-rewind-preview'
 import { unwrapDesktopIpcResult } from '../desktop-ipc-result'
-import { restoreAppliedNotice } from '../task-changes-presentation'
+import { presentTurnChangeCards, restoreAppliedNotice, type TurnChangeCardView } from '../task-changes-presentation'
 
 export interface TaskChangesQueryApi {
   getChangeSet: (taskId: string) => Promise<DesktopIpcResult<TaskChangeSetQueryResult>>
+  listTurnCheckpoints?: (taskId: string) => Promise<DesktopIpcResult<TurnChangeCheckpoint[]>>
   getFileDiff: (taskId: string, path: string) => Promise<DesktopIpcResult<FileDiffResult>>
   getCommandEvidence: (
     taskId: string,
@@ -43,6 +45,8 @@ interface QuerySlot<T> {
 
 export interface TaskChangesController {
   changeSet: Ref<TaskChangeSetQueryResult | null>
+  turnChangeCards: ComputedRef<Record<string, TurnChangeCardView>>
+  checkpointsError: Ref<string>
   loading: Ref<boolean>
   errorMessage: Ref<string>
   selectedPath: Ref<string>
@@ -72,6 +76,7 @@ export interface TaskChangesController {
 function defaultApi(): TaskChangesQueryApi {
   return {
     getChangeSet: (taskId) => window.task.getChangeSet(taskId),
+    listTurnCheckpoints: (taskId) => window.task.listTurnCheckpoints(taskId),
     getFileDiff: (taskId, path) => window.task.getFileDiff(taskId, path),
     getCommandEvidence: (taskId, commandId) => window.task.getCommandEvidence(taskId, commandId),
     previewLatestTurnRestore: (taskId) => window.task.previewLatestTurnRestore(taskId),
@@ -103,6 +108,11 @@ export function useTaskChanges(
   api: TaskChangesQueryApi = defaultApi()
 ): TaskChangesController {
   const changeSet = ref<TaskChangeSetQueryResult | null>(null)
+  const checkpoints = ref<TurnChangeCheckpoint[]>([])
+  const checkpointsError = ref('')
+  const turnChangeCards = computed(() =>
+    presentTurnChangeCards(toValue(taskId), checkpoints.value, changeSet.value)
+  )
   const loading = ref(Boolean(toValue(taskId)))
   const errorMessage = ref('')
   const selectedPath = ref('')
@@ -142,7 +152,12 @@ export function useTaskChanges(
   /** 丢弃过期请求，避免切 Task 后把旧快照写进新面板。 */
   async function loadChangeSet(id: string, keepSelection: boolean): Promise<void> {
     const generation = ++changeSetGeneration
-    if (!keepSelection) resetSelection()
+    if (!keepSelection) {
+      resetSelection()
+      changeSet.value = null
+      checkpoints.value = []
+    }
+    checkpointsError.value = ''
     if (!id) {
       changeSet.value = null
       loading.value = false
@@ -151,6 +166,7 @@ export function useTaskChanges(
     }
     loading.value = true
     errorMessage.value = ''
+    const checkpointRequest = loadCheckpoints(id, generation)
     try {
       const result = unwrapDesktopIpcResult(await api.getChangeSet(id))
       if (disposed || generation !== changeSetGeneration) return
@@ -160,7 +176,22 @@ export function useTaskChanges(
       changeSet.value = null
       errorMessage.value = readErrorMessage(error)
     } finally {
+      await checkpointRequest
       if (!disposed && generation === changeSetGeneration) loading.value = false
+    }
+  }
+
+  /** 检查点失败不阻塞当前工作区审阅；代际校验防止切 Task 后旧响应污染新摘要。 */
+  async function loadCheckpoints(id: string, generation: number): Promise<void> {
+    if (!api.listTurnCheckpoints) return
+    try {
+      const result = unwrapDesktopIpcResult(await api.listTurnCheckpoints(id))
+      if (disposed || generation !== changeSetGeneration) return
+      checkpoints.value = result.filter((checkpoint) => checkpoint.taskId === id)
+    } catch (error) {
+      if (disposed || generation !== changeSetGeneration) return
+      checkpoints.value = []
+      checkpointsError.value = readErrorMessage(error)
     }
   }
 
@@ -397,11 +428,13 @@ export function useTaskChanges(
     (id) => {
       void loadChangeSet(id, false)
     },
-    { immediate: true }
+    { immediate: true, flush: 'sync' }
   )
 
   return {
     changeSet,
+    turnChangeCards,
+    checkpointsError,
     loading,
     errorMessage,
     selectedPath,

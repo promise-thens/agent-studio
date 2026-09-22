@@ -129,6 +129,19 @@ export function conversationStatusLabel(status: TurnTimelineViewModel['status'])
   }
 }
 
+/**
+ * 正常完成轮已经由正文与过程摘要表达结果，不再重复占一整块状态头。
+ * 活动态、异常终态、历史截断/冲突以及仍待用户操作的轮次必须继续显式展示。
+ */
+export function shouldShowConversationStatus(
+  turn: Pick<TurnTimelineViewModel, 'status'> &
+    Partial<Pick<TurnTimelineViewModel, 'historyTruncated' | 'statusConflict'>>,
+  waitingForUser = false
+): boolean {
+  if (waitingForUser || turn.historyTruncated || turn.statusConflict) return true
+  return turn.status !== 'completed'
+}
+
 /** 从已投影节点中找出用户真正关心的“当前在做什么”。 */
 export function resolveConversationStep(nodes: readonly TaskTimelineNode[]): string {
   // 静默授权被 reducer 排到所有事件之后，不能抢走计划和工具的当前步骤。

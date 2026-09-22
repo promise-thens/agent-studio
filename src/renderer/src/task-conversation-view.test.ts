@@ -14,6 +14,7 @@ import {
   nextProgrammaticFollowFlag,
   resolveConversationConnectFailure,
   resolveConversationEmptyCopy,
+  resolveConversationFocusAction,
   resolveConversationScrollSource,
   resolveConversationStickyQuestion,
   shouldHoldPinnedFollow,
@@ -42,6 +43,56 @@ function turn(
 }
 
 describe('对话滚动与折叠', () => {
+  it('Inspector 定位只自动翻一页，历史耗尽后明确不可用', () => {
+    expect(
+      resolveConversationFocusAction({
+        requested: true,
+        loaded: false,
+        hasMoreTurns: true,
+        loadingMoreTurns: false,
+        autoLoadRequested: false
+      })
+    ).toBe('load-more')
+    expect(
+      resolveConversationFocusAction({
+        requested: true,
+        loaded: false,
+        hasMoreTurns: true,
+        loadingMoreTurns: false,
+        autoLoadRequested: true
+      })
+    ).toBe('wait')
+    expect(
+      resolveConversationFocusAction({
+        requested: true,
+        loaded: false,
+        hasMoreTurns: false,
+        loadingMoreTurns: false,
+        autoLoadRequested: true
+      })
+    ).toBe('unavailable')
+    expect(
+      resolveConversationFocusAction({
+        requested: true,
+        loaded: true,
+        hasMoreTurns: false,
+        loadingMoreTurns: false,
+        autoLoadRequested: true
+      })
+    ).toBe('focus')
+    expect(
+      resolveConversationFocusAction({
+        requested: true,
+        loaded: true,
+        hasMoreTurns: false,
+        loadingMoreTurns: false,
+        autoLoadRequested: true,
+        nodeRequested: true,
+        nodeLoaded: false
+      })
+    ).toBe('node-unavailable')
+  })
+
   it('只有接近底部时才跟随最新活动 Turn', () => {
     expect(
       isConversationPinnedToBottom({ scrollTop: 920, clientHeight: 80, scrollHeight: 1000 })

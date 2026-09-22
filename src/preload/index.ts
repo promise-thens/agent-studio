@@ -1,3 +1,4 @@
+import { createBrowserFocusOwnerApi } from './browser-focus-api'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   createAgentDesktopApi,
@@ -21,6 +22,7 @@ export function exposeDesktopApis(
     throw new Error('Agent Studio 需要启用 contextIsolation。')
   }
 
+  exposeInMainWorld('browserFocus', createBrowserFocusOwnerApi(renderer))
   exposeInMainWorld('agent', createAgentDesktopApi(renderer))
   exposeInMainWorld('app', createAppDesktopApi(renderer))
   exposeInMainWorld('task', createTaskDesktopApi(renderer, getPathForFile))

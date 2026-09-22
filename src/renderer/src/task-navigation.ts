@@ -1,5 +1,10 @@
+import type { AgentRuntimeState } from '../../shared/agent'
 import type { TaskExecutionDto } from '../../shared/task-execution'
-import type { HistoryExecutionState, TaskHistorySummary } from '../../shared/task-history'
+import type {
+  HistoryExecutionState,
+  ProjectSummary,
+  TaskHistorySummary
+} from '../../shared/task-history'
 
 /** 与 activeExecution 非终态对齐：排队、运行、待审批、停止中都算活动项。 */
 const LIVE_TASK_STATES = new Set<string>(['queued', 'running', 'waiting-permission', 'cancelling'])
@@ -188,6 +193,62 @@ export function countProjectLiveTasks(
     return listed + 1
   }
   return listed
+}
+
+export interface NewChatGate {
+  disabled: boolean
+  reason: string
+}
+
+export interface NewChatGateInput {
+  targetProject: ProjectSummary | null | undefined
+  runtimeState: AgentRuntimeState
+  runtimeBusy: boolean
+  providerConfigured: boolean
+  projectSelectionPending: boolean
+  projectConnectionPending: boolean
+  taskCreationPending: boolean
+  connectCapabilityAvailable: boolean
+  connectCapabilityReason?: string
+  createSessionCapabilityAvailable: boolean
+  createSessionCapabilityReason?: string
+}
+
+/**
+ * “新对话”按目标 Project 判定；idle/error 允许由显式动作发起连接，
+ * busy/connecting 和活动执行仍守住唯一执行槽，不能借切项目绕过。
+ */
+export function resolveNewChatGate(input: NewChatGateInput): NewChatGate {
+  if (input.projectSelectionPending || input.projectConnectionPending) {
+    return { disabled: true, reason: '正在准备项目' }
+  }
+  if (input.taskCreationPending) return { disabled: true, reason: '正在创建对话' }
+  if (input.runtimeBusy || input.runtimeState === 'busy' || input.runtimeState === 'connecting') {
+    return { disabled: true, reason: 'Runtime 正在执行或连接中，暂时不能创建新对话。' }
+  }
+  if (!input.providerConfigured) return { disabled: true, reason: '请先配置 Provider。' }
+
+  const project = input.targetProject
+  if (!project) return { disabled: true, reason: '目标 Project 不存在或已被移除。' }
+  if (project.status !== 'active') {
+    return { disabled: true, reason: '该 Project 已从列表移除，仅保留历史。' }
+  }
+  if (project.availability.state !== 'available') {
+    return { disabled: true, reason: project.availability.message }
+  }
+  if (!input.connectCapabilityAvailable) {
+    return {
+      disabled: true,
+      reason: input.connectCapabilityReason || '当前 Runtime 暂时不能连接。'
+    }
+  }
+  if (!input.createSessionCapabilityAvailable) {
+    return {
+      disabled: true,
+      reason: input.createSessionCapabilityReason || '当前 Runtime 暂时不能创建新对话。'
+    }
+  }
+  return { disabled: false, reason: '' }
 }
 
 /** 新对话：先创建产品 Task，再走同一条 selectTask / enterTask 路径。 */

@@ -4,11 +4,13 @@ import {
   COMPOSER_COMPACT_MIN_WIDTH_PX,
   canSendWhileConversationRestoring,
   evaluateTaskComposerSend,
+  formatComposerContextUsageRingLabel,
   isForeignExecutionBlockingSend,
   pickLatestContextUsage,
   presentComposerContextUsage,
   resolveCancelTurnRequest,
   resolveComposerAction,
+  resolveComposerAddMenuFocusIndex,
   resolveComposerChrome,
   resolveComposerContextUsage,
   resolveComposerContextUsagePresentation,
@@ -29,6 +31,18 @@ const runningExecution = {
   state: 'running' as const,
   model: { modelId: 'grok-code', displayName: '  Code Fast  ' }
 }
+
+describe('添加能力菜单键盘导航', () => {
+  it('方向键循环，Home/End 直达边界，缺少当前项时选择对应端点', () => {
+    expect(resolveComposerAddMenuFocusIndex('ArrowDown', 0, 2)).toBe(1)
+    expect(resolveComposerAddMenuFocusIndex('ArrowDown', 1, 2)).toBe(0)
+    expect(resolveComposerAddMenuFocusIndex('ArrowUp', 0, 2)).toBe(1)
+    expect(resolveComposerAddMenuFocusIndex('ArrowUp', -1, 2)).toBe(1)
+    expect(resolveComposerAddMenuFocusIndex('Home', 1, 2)).toBe(0)
+    expect(resolveComposerAddMenuFocusIndex('End', 0, 2)).toBe(1)
+    expect(resolveComposerAddMenuFocusIndex('ArrowDown', 0, 0)).toBeNull()
+  })
+})
 
 describe('模型标签', () => {
   it('只使用真实 displayName 或原样 modelId，不加 Grok · 前缀', () => {
@@ -118,6 +132,30 @@ describe('发送与停止身份', () => {
         runtimeConnected: true
       }).canSend
     ).toBe(false)
+  })
+
+  it('切换 Runtime 或创建新对话期间禁用发送，避免草稿撞上未完成的 Task 身份', () => {
+    const ready = {
+      prompt: '立即发送',
+      selectedTaskId: 'task-a',
+      activeExecution: null,
+      restore: 'ready' as const,
+      providerConfigured: true,
+      projectSelectionPending: false,
+      turnTiming: false,
+      promptSubmissionPending: false,
+      promptCapabilityAvailable: true,
+      runtimeConnected: true
+    }
+
+    expect(evaluateTaskComposerSend({ ...ready, projectConnectionPending: true })).toEqual({
+      canSend: false,
+      reason: '正在准备项目，请稍候。'
+    })
+    expect(evaluateTaskComposerSend({ ...ready, taskCreationPending: true })).toEqual({
+      canSend: false,
+      reason: '正在创建对话，请稍候。'
+    })
   })
 
   it('只有附件没有正文时也可以发送', () => {
@@ -220,7 +258,7 @@ describe('发送与停止身份', () => {
         usedTokens: 120,
         limitTokens: 4096
       })
-    ).toEqual({
+    ).toMatchObject({
       label: '120/4096',
       compactLabel: '120 / 4.1k',
       percentage: 2.9,
@@ -235,7 +273,7 @@ describe('发送与停止身份', () => {
         limitTokens: 4096
       })?.percentage
     ).toBe(100)
-    expect(resolveComposerContextUsagePresentation(null)).toBeNull()
+    expect(resolveComposerContextUsagePresentation(null)?.percentage).toBeNull()
     expect(
       resolveComposerContextUsagePresentation({
         scope: 'context',
@@ -248,7 +286,7 @@ describe('发送与停止身份', () => {
     })
   })
 
-  it('新对话已有 Turn 但还没有用量快照时，Composer 仍显示 0k，不等第二次发送', () => {
+  it('新对话尚无快照时标为未知，不能冒充真实零', () => {
     expect(presentComposerContextUsage(null)).toBeNull()
     expect(presentComposerContextUsage({ turns: [] })).toBeNull()
     expect(
@@ -256,18 +294,18 @@ describe('发送与停止身份', () => {
         turns: [{ status: 'running', usage: { contextSamples: [] } }]
       })
     ).toMatchObject({
-      compactLabel: '0k',
-      label: '0',
-      percentage: 0
+      compactLabel: '未知',
+      label: '未知',
+      percentage: null
     })
     expect(
       presentComposerContextUsage({
         turns: [{ status: 'completed', usage: { contextSamples: [] } }]
       })?.compactLabel
-    ).toBe('0k')
+    ).toBe('未知')
   })
 
-  it('新对话首轮尚未完成时，Composer 把基线 used 显示成 0k，只保留窗口上限', () => {
+  it('首轮保留包含记忆基线的真实上下文样本，不冒充累计消耗', () => {
     const baseline = {
       scope: 'context' as const,
       usedTokens: 142000,
@@ -283,9 +321,9 @@ describe('发送与停止身份', () => {
         ]
       })
     ).toMatchObject({
-      compactLabel: '0k / 500k',
-      label: '0/500000',
-      percentage: 0
+      compactLabel: '142k / 500k',
+      label: '142000/500000',
+      percentage: 28.4
     })
     expect(
       presentComposerContextUsage({
@@ -296,7 +334,7 @@ describe('发送与停止身份', () => {
           }
         ]
       })?.compactLabel
-    ).toBe('0k / 500k')
+    ).toBe('142k / 500k')
     expect(
       presentComposerContextUsage({
         turns: [
@@ -310,6 +348,93 @@ describe('发送与停止身份', () => {
       compactLabel: '142k / 500k',
       label: '142000/500000'
     })
+  })
+
+  it('真实零、无效上限和超限分别展示，圆环夹紧但详情不截断比例', () => {
+    const sample = { scope: 'context' as const, usedTokens: 0, limitTokens: 100 }
+    expect(resolveComposerContextUsagePresentation(sample)?.percentLabel).toBe('0%')
+    expect(resolveComposerContextUsagePresentation({ ...sample, limitTokens: 0 })).toMatchObject({
+      percentage: null,
+      percentLabel: '未知',
+      usedLabel: '0'
+    })
+    expect(resolveComposerContextUsagePresentation({ ...sample, usedTokens: 150 })).toMatchObject({
+      percentage: 100,
+      percentLabel: '150%'
+    })
+    for (const usedTokens of [-1, NaN, Infinity]) {
+      expect(
+        resolveComposerContextUsagePresentation({ ...sample, usedTokens })?.percentage
+      ).toBeNull()
+    }
+  })
+
+  it('小于 1% 的真实占用不在圆环中显示成零', () => {
+    for (const usedTokens of [1, 4]) {
+      const presentation = resolveComposerContextUsagePresentation({
+        scope: 'context',
+        usedTokens,
+        limitTokens: 1000
+      })
+      expect(presentation.percentage).toBe(usedTokens / 10)
+      expect(presentation.percentLabel).toBe(`${usedTokens / 10}%`)
+      expect(formatComposerContextUsageRingLabel(presentation.percentage)).toBe('<1')
+    }
+    expect(formatComposerContextUsageRingLabel(0)).toBe('0')
+    expect(formatComposerContextUsageRingLabel(null)).toBe('?')
+  })
+
+  it('卡片主副标题正确格式化为对标图3的友好美观展示', () => {
+    // 典型场景：35k / 258k
+    const normal = resolveComposerContextUsagePresentation({
+      scope: 'context',
+      usedTokens: 35000,
+      limitTokens: 258000
+    })
+    expect(normal.cardHeadline).toBe('13.6% 已用（剩余 86.4%）')
+    expect(normal.cardTokenDetail).toBe('已用 35k 标记，共 258k')
+
+    // 小比例场景：2985 / 500000
+    const small = resolveComposerContextUsagePresentation({
+      scope: 'context',
+      usedTokens: 2985,
+      limitTokens: 500000
+    })
+    expect(small.cardHeadline).toBe('0.6% 已用（剩余 99.4%）')
+    expect(small.cardTokenDetail).toBe('已用 3k 标记，共 500k')
+
+    // 超限场景
+    const overflow = resolveComposerContextUsagePresentation({
+      scope: 'context',
+      usedTokens: 150,
+      limitTokens: 100
+    })
+    expect(overflow.cardHeadline).toBe('150% 已用（已超限）')
+    expect(overflow.cardTokenDetail).toBe('已用 150 标记，共 100')
+
+    // 空/未知场景
+    const empty = resolveComposerContextUsagePresentation(null)
+    expect(empty.cardHeadline).toBe('用量统计中...')
+    expect(empty.cardTokenDetail).toBe('容量尚未同步')
+  })
+
+  it('跳过坏样本回看可信样本，旧轮样本明确提示非实时，切任务不缓存', () => {
+    const sample = { scope: 'context' as const, usedTokens: 20, limitTokens: 100 }
+    expect(
+      pickLatestContextUsage({
+        turns: [{ usage: { contextSamples: [sample, { ...sample, usedTokens: NaN }] } }]
+      })
+    ).toEqual(sample)
+    expect(
+      presentComposerContextUsage({
+        turns: [{ usage: { contextSamples: [sample] } }, { usage: { contextSamples: [] } }]
+      })?.sourceLabel
+    ).toContain('较早轮次')
+    expect(
+      presentComposerContextUsage({
+        turns: [{ usage: { contextSamples: [] } }]
+      })?.percentage
+    ).toBeNull()
   })
 
   it('第二轮执行期间上一轮终态尚未回填时，Composer 不把真实用量清零', () => {
